@@ -645,9 +645,8 @@ pub struct InheritedBuilder<'tcx> {
 
 impl Inherited<'_, 'tcx> {
     pub fn build(tcx: TyCtxt<'tcx>, def_id: DefId) -> InheritedBuilder<'tcx> {
-        let hir_id_root = if def_id.is_local() {
-            let hir_id = tcx.hir().as_local_hir_id(def_id).unwrap();
-            DefId::local(hir_id.owner)
+        let hir_id_root = if let Some(def_id) = def_id.as_local() {
+            tcx.hir().local_def_id_to_hir_id(def_id).owner.to_def_id()
         } else {
             def_id
         };
@@ -967,7 +966,7 @@ fn typeck_tables_of(tcx: TyCtxt<'_>, def_id: DefId) -> &ty::TypeckTables<'_> {
 
     // Consistency check our TypeckTables instance can hold all ItemLocalIds
     // it will need to hold.
-    assert_eq!(tables.local_id_root, Some(DefId::local(id.owner)));
+    assert_eq!(tables.local_id_root, Some(id.owner.to_def_id()));
 
     tables
 }

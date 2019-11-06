@@ -139,8 +139,21 @@ impl DefId {
     }
 
     #[inline]
-    pub fn to_local(self) -> LocalDefId {
-        LocalDefId::from_def_id(self)
+    pub fn as_local(self) -> Option<LocalDefId> {
+        if self.is_local() {
+            Some(LocalDefId {
+                index: self.index,
+            })
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    pub fn assert_local(self) -> LocalDefId {
+        self.as_local().unwrap_or_else(|| {
+            bug!("DefId::assert_local: `{:?}` isn't local", self)
+        })
     }
 
     pub fn describe_as_module(&self, tcx: TyCtxt<'_>) -> String {
@@ -161,21 +174,17 @@ impl rustc_serialize::UseSpecializedDecodable for DefId {}
 /// few cases where we know that only DefIds from the local crate are expected
 /// and a DefId from a different crate would signify a bug somewhere. This
 /// is when LocalDefId comes in handy.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct LocalDefId(DefIndex);
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct LocalDefId {
+    pub index: DefIndex,
+}
 
 impl LocalDefId {
-    #[inline]
-    pub fn from_def_id(def_id: DefId) -> LocalDefId {
-        assert!(def_id.is_local());
-        LocalDefId(def_id.index)
-    }
-
     #[inline]
     pub fn to_def_id(self) -> DefId {
         DefId {
             krate: LOCAL_CRATE,
-            index: self.0
+            index: self.index
         }
     }
 }

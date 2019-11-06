@@ -1398,7 +1398,7 @@ impl EncodeContext<'tcx> {
             let tcx = self.tcx;
             Some(self.lazy(tcx.hir().krate().items.values().filter_map(|item| {
                 if item.attrs.iter().any(|attr| is_proc_macro_attr(attr)) {
-                    Some(item.hir_id.owner)
+                    Some(item.hir_id.owner.index)
                 } else {
                     None
                 }
@@ -1495,8 +1495,8 @@ impl EncodeContext<'tcx> {
             .into_iter()
             .map(|(trait_def_id, mut impls)| {
                 // Bring everything into deterministic order for hashing
-                impls.sort_by_cached_key(|&def_index| {
-                    tcx.hir().definitions().def_path_hash(def_index)
+                impls.sort_by_cached_key(|&index| {
+                    tcx.hir().definitions().def_path_hash(LocalDefId { index })
                 });
 
                 TraitImpls {

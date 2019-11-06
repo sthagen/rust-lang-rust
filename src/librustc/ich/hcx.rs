@@ -1,5 +1,5 @@
 use crate::hir;
-use crate::hir::def_id::{DefId, DefIndex};
+use crate::hir::def_id::{DefId, LocalDefId};
 use crate::hir::map::DefPathHash;
 use crate::hir::map::definitions::Definitions;
 use crate::ich::{self, CachingSourceMapView, Fingerprint};
@@ -131,16 +131,16 @@ impl<'a> StableHashingContext<'a> {
 
     #[inline]
     pub fn def_path_hash(&self, def_id: DefId) -> DefPathHash {
-        if def_id.is_local() {
-            self.definitions.def_path_hash(def_id.index)
+        if let Some(def_id) = def_id.as_local() {
+            self.definitions.def_path_hash(def_id)
         } else {
             self.cstore.def_path_hash(def_id)
         }
     }
 
     #[inline]
-    pub fn local_def_path_hash(&self, def_index: DefIndex) -> DefPathHash {
-        self.definitions.def_path_hash(def_index)
+    pub fn local_def_path_hash(&self, def_id: LocalDefId) -> DefPathHash {
+        self.definitions.def_path_hash(def_id)
     }
 
     #[inline]
