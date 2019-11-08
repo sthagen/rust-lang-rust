@@ -15,12 +15,14 @@
 #![feature(box_patterns)]
 #![feature(box_syntax)]
 #![feature(nll)]
+#![feature(matches_macro)]
 
 #![recursion_limit="256"]
 
 #[macro_use]
 extern crate rustc;
 
+mod array_into_iter;
 mod error_codes;
 mod nonstandard_style;
 mod redundant_semicolon;
@@ -56,6 +58,7 @@ use types::*;
 use unused::*;
 use non_ascii_idents::*;
 use rustc::lint::internal::*;
+use array_into_iter::ArrayIntoIter;
 
 /// Useful for other parts of the compiler.
 pub use builtin::SoftLints;
@@ -130,6 +133,8 @@ macro_rules! late_lint_passes {
             // FIXME: Turn the computation of types which implement Debug into a query
             // and change this to a module lint pass
             MissingDebugImplementations: MissingDebugImplementations::default(),
+
+            ArrayIntoIter: ArrayIntoIter,
         ]);
     )
 }

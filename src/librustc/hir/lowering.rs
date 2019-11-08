@@ -66,7 +66,7 @@ use syntax::ptr::P as AstP;
 use syntax::ast::*;
 use syntax::errors;
 use syntax::print::pprust;
-use syntax::parse::token::{self, Nonterminal, Token};
+use syntax::token::{self, Nonterminal, Token};
 use syntax::tokenstream::{TokenStream, TokenTree};
 use syntax::sess::ParseSess;
 use syntax::source_map::{respan, ExpnData, ExpnKind, DesugaringKind, Spanned};
@@ -1216,7 +1216,7 @@ impl<'a> LoweringContext<'a> {
                                     ImplTraitContext::disallowed(),
                                 ),
                                 unsafety: this.lower_unsafety(f.unsafety),
-                                abi: f.abi,
+                                abi: this.lower_abi(f.abi),
                                 decl: this.lower_fn_decl(&f.decl, None, false, None),
                                 param_names: this.lower_fn_params_to_names(&f.decl),
                             }))
