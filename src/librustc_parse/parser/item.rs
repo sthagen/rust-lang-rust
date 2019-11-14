@@ -14,12 +14,15 @@ use syntax::ThinVec;
 use syntax::token;
 use syntax::tokenstream::{TokenTree, TokenStream};
 use syntax::source_map::{self, respan, Span};
+use syntax::struct_span_err;
 use syntax_pos::BytePos;
 use syntax_pos::symbol::{kw, sym};
 
+use rustc_error_codes::*;
+
 use log::debug;
 use std::mem;
-use errors::{PResult, Applicability, DiagnosticBuilder, DiagnosticId, StashKey};
+use errors::{PResult, Applicability, DiagnosticBuilder, StashKey};
 
 /// Whether the type alias or associated type is a concrete type or an opaque type.
 #[derive(Debug)]
@@ -842,10 +845,11 @@ impl<'a> Parser<'a> {
                 if let token::DocComment(_) = self.token.kind {
                     if self.look_ahead(1,
                     |tok| tok == &token::CloseDelim(token::Brace)) {
-                        self.diagnostic().struct_span_err_with_code(
+                        struct_span_err!(
+                            self.diagnostic(),
                             self.token.span,
+                            E0584,
                             "found a documentation comment that doesn't document anything",
-                            DiagnosticId::Error("E0584".into()),
                         )
                         .help(
                             "doc comments must come before what they document, maybe a \
@@ -1742,14 +1746,25 @@ impl<'a> Parser<'a> {
     }
 
     fn report_invalid_macro_expansion_item(&self) {
+        let has_close_delim = self.sess.source_map()
+            .span_to_snippet(self.prev_span)
+            .map(|s| s.ends_with(")") || s.ends_with("]"))
+            .unwrap_or(false);
+        let right_brace_span = if has_close_delim {
+            // it's safe to peel off one character only when it has the close delim
+            self.prev_span.with_lo(self.prev_span.hi() - BytePos(1))
+        } else {
+            self.sess.source_map().next_point(self.prev_span)
+        };
+
         self.struct_span_err(
             self.prev_span,
             "macros that expand to items must be delimited with braces or followed by a semicolon",
         ).multipart_suggestion(
             "change the delimiters to curly braces",
             vec![
-                (self.prev_span.with_hi(self.prev_span.lo() + BytePos(1)), String::from(" {")),
-                (self.prev_span.with_lo(self.prev_span.hi() - BytePos(1)), '}'.to_string()),
+                (self.prev_span.with_hi(self.prev_span.lo() + BytePos(1)), "{".to_string()),
+                (right_brace_span, '}'.to_string()),
             ],
             Applicability::MaybeIncorrect,
         ).span_suggestion(

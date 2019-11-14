@@ -6,7 +6,6 @@ use rustc::traits::{self, ObligationCauseCode};
 use rustc::ty::{self, Ty, TyCtxt, GenericParamDefKind, TypeFoldable, ToPredicate};
 use rustc::ty::subst::{Subst, InternalSubsts};
 use rustc::util::nodemap::{FxHashSet, FxHashMap};
-use rustc::mir::interpret::ConstValue;
 use rustc::middle::lang_items;
 use rustc::infer::opaque_types::may_define_opaque_type;
 
@@ -14,10 +13,12 @@ use syntax::ast;
 use syntax::feature_gate::{self, GateIssue};
 use syntax_pos::Span;
 use syntax::symbol::sym;
-use errors::{DiagnosticBuilder, DiagnosticId};
+use errors::DiagnosticBuilder;
 
 use rustc::hir::itemlikevisit::ParItemLikeVisitor;
 use rustc::hir;
+
+use rustc_error_codes::*;
 
 /// Helper type of a temporary returned by `.for_item(...)`.
 /// This is necessary because we can't write the following bound:
@@ -536,7 +537,7 @@ fn check_where_clauses<'tcx, 'fcx>(
             }
 
             fn visit_const(&mut self, c: &'tcx ty::Const<'tcx>) -> bool {
-                if let ConstValue::Param(param) = c.val {
+                if let ty::ConstKind::Param(param) = c.val {
                     self.params.insert(param.index);
                 }
                 c.super_visit_with(self)
@@ -705,7 +706,7 @@ fn check_opaque_types<'fcx, 'tcx>(
                                 }
 
                                 ty::subst::GenericArgKind::Const(ct) => match ct.val {
-                                    ConstValue::Param(_) => {}
+                                    ty::ConstKind::Param(_) => {}
                                     _ => {
                                         tcx.sess
                                             .struct_span_err(
@@ -846,12 +847,13 @@ fn check_method_receiver<'fcx, 'tcx>(
 }
 
 fn e0307(fcx: &FnCtxt<'fcx, 'tcx>, span: Span, receiver_ty: Ty<'_>) {
-    fcx.tcx.sess.diagnostic().struct_span_err(
+    struct_span_err!(
+        fcx.tcx.sess.diagnostic(),
         span,
-        &format!("invalid `self` parameter type: {:?}", receiver_ty)
+        E0307,
+        "invalid `self` parameter type: {:?}", receiver_ty,
     ).note("type of `self` must be `Self` or a type that dereferences to it")
     .help(HELP_FOR_SELF_TYPE)
-    .code(DiagnosticId::Error("E0307".into()))
     .emit();
 }
 
