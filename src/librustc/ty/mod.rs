@@ -71,6 +71,7 @@ pub use self::sty::BoundRegion::*;
 pub use self::sty::InferTy::*;
 pub use self::sty::RegionKind::*;
 pub use self::sty::TyKind::*;
+pub use crate::ty::diagnostics::*;
 
 pub use self::binding::BindingMode;
 pub use self::binding::BindingMode::*;
@@ -122,6 +123,7 @@ mod instance;
 mod structural_impls;
 mod structural_match;
 mod sty;
+mod diagnostics;
 
 // Data types
 
@@ -549,37 +551,6 @@ impl<'tcx> Eq for TyS<'tcx> {}
 impl<'tcx> Hash for TyS<'tcx> {
     fn hash<H: Hasher>(&self, s: &mut H) {
         (self as *const TyS<'_>).hash(s)
-    }
-}
-
-impl<'tcx> TyS<'tcx> {
-    pub fn is_primitive_ty(&self) -> bool {
-        match self.kind {
-            Bool |
-            Char |
-            Int(_) |
-            Uint(_) |
-            Float(_) |
-            Infer(InferTy::IntVar(_)) |
-            Infer(InferTy::FloatVar(_)) |
-            Infer(InferTy::FreshIntTy(_)) |
-            Infer(InferTy::FreshFloatTy(_)) => true,
-            Ref(_, x, _) => x.is_primitive_ty(),
-            _ => false,
-        }
-    }
-
-    pub fn is_suggestable(&self) -> bool {
-        match self.kind {
-            Opaque(..) |
-            FnDef(..) |
-            FnPtr(..) |
-            Dynamic(..) |
-            Closure(..) |
-            Infer(..) |
-            Projection(..) => false,
-            _ => true,
-        }
     }
 }
 
@@ -1952,17 +1923,17 @@ pub struct FieldDef {
 ///
 /// These are all interned (by `intern_adt_def`) into the `adt_defs` table.
 ///
-/// The initialism *"Adt"* stands for an [*algebraic data type (ADT)*][adt].
+/// The initialism *ADT* stands for an [*algebraic data type (ADT)*][adt].
 /// This is slightly wrong because `union`s are not ADTs.
 /// Moreover, Rust only allows recursive data types through indirection.
 ///
 /// [adt]: https://en.wikipedia.org/wiki/Algebraic_data_type
 pub struct AdtDef {
-    /// `DefId` of the struct, enum or union item.
+    /// The `DefId` of the struct, enum or union item.
     pub did: DefId,
     /// Variants of the ADT. If this is a struct or union, then there will be a single variant.
     pub variants: IndexVec<self::layout::VariantIdx, VariantDef>,
-    /// Flags of the ADT (e.g. is this a struct? is this non-exhaustive?)
+    /// Flags of the ADT (e.g., is this a struct? is this non-exhaustive?).
     flags: AdtFlags,
     /// Repr options provided by the user.
     pub repr: ReprOptions,
@@ -1983,7 +1954,7 @@ impl Ord for AdtDef {
 }
 
 impl PartialEq for AdtDef {
-    // AdtDef are always interned and this is part of TyS equality
+    // `AdtDef`s are always interned, and this is part of `TyS` equality.
     #[inline]
     fn eq(&self, other: &Self) -> bool { ptr::eq(self, other) }
 }
@@ -2004,7 +1975,6 @@ impl<'tcx> rustc_serialize::UseSpecializedEncodable for &'tcx AdtDef {
 }
 
 impl<'tcx> rustc_serialize::UseSpecializedDecodable for &'tcx AdtDef {}
-
 
 impl<'a> HashStable<StableHashingContext<'a>> for AdtDef {
     fn hash_stable(&self, hcx: &mut StableHashingContext<'a>, hasher: &mut StableHasher) {
