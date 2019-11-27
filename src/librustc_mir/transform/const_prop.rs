@@ -30,7 +30,7 @@ use crate::interpret::{
     self, InterpCx, ScalarMaybeUndef, Immediate, OpTy,
     StackPopCleanup, LocalValue, LocalState, AllocId, Frame,
     Allocation, MemoryKind, ImmTy, Pointer, Memory, PlaceTy,
-    Operand as InterpOperand,
+    Operand as InterpOperand, intern_const_alloc_recursive,
 };
 use crate::const_eval::error_to_const_error;
 use crate::transform::{MirPass, MirSource};
@@ -144,8 +144,7 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for ConstPropMachine {
         _ecx: &mut InterpCx<'mir, 'tcx, Self>,
         _instance: ty::Instance<'tcx>,
         _args: &[OpTy<'tcx>],
-        _dest: Option<PlaceTy<'tcx>>,
-        _ret: Option<BasicBlock>,
+        _ret: Option<(PlaceTy<'tcx>, BasicBlock)>,
         _unwind: Option<BasicBlock>,
     ) -> InterpResult<'tcx, Option<&'mir Body<'tcx>>> {
         Ok(None)
@@ -155,8 +154,8 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for ConstPropMachine {
         _ecx: &mut InterpCx<'mir, 'tcx, Self>,
         fn_val: !,
         _args: &[OpTy<'tcx>],
-        _dest: Option<PlaceTy<'tcx>>,
-        _ret: Option<BasicBlock>,
+        _ret: Option<(PlaceTy<'tcx>, BasicBlock)>,
+        _unwind: Option<BasicBlock>
     ) -> InterpResult<'tcx> {
         match fn_val {}
     }
@@ -166,8 +165,7 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for ConstPropMachine {
         _span: Span,
         _instance: ty::Instance<'tcx>,
         _args: &[OpTy<'tcx>],
-        _dest: Option<PlaceTy<'tcx>>,
-        _ret: Option<BasicBlock>,
+        _ret: Option<(PlaceTy<'tcx>, BasicBlock)>,
         _unwind: Option<BasicBlock>
     ) -> InterpResult<'tcx> {
         throw_unsup_format!("calling intrinsics isn't supported in ConstProp");
@@ -649,9 +647,9 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
     }
 
     fn should_const_prop(&mut self, op: OpTy<'tcx>) -> bool {
-        if self.tcx.sess.opts.debugging_opts.mir_opt_level >= 2 {
-            return true;
-        } else if self.tcx.sess.opts.debugging_opts.mir_opt_level == 0 {
+        let mir_opt_level = self.tcx.sess.opts.debugging_opts.mir_opt_level;
+
+        if mir_opt_level == 0 {
             return false;
         }
 
@@ -661,6 +659,14 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
             interpret::Operand::Immediate(Immediate::ScalarPair(ScalarMaybeUndef::Scalar(l),
                                                                 ScalarMaybeUndef::Scalar(r))) =>
                 l.is_bits() && r.is_bits(),
+            interpret::Operand::Indirect(_) if mir_opt_level >= 2 => {
+                intern_const_alloc_recursive(
+                    &mut self.ecx,
+                    None,
+                    op.assert_mem_place()
+                ).expect("failed to intern alloc");
+                true
+            },
             _ => false
         }
     }
