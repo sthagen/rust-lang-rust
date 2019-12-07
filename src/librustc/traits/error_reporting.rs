@@ -363,11 +363,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             return None
         };
 
-        if tcx.has_attr(impl_def_id, sym::rustc_on_unimplemented) {
-            Some(impl_def_id)
-        } else {
-            None
-        }
+        tcx.has_attr(impl_def_id, sym::rustc_on_unimplemented).then_some(impl_def_id)
     }
 
     fn describe_generator(&self, body_id: hir::BodyId) -> Option<&'static str> {
@@ -2214,6 +2210,10 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         }
 
         let span = self.tcx.def_span(generator_did);
+        // Do not ICE on closure typeck (#66868).
+        if let None = self.tcx.hir().as_local_hir_id(generator_did) {
+            return false;
+        }
         let tables = self.tcx.typeck_tables_of(generator_did);
         debug!("note_obligation_cause_for_async_await: generator_did={:?} span={:?} ",
                generator_did, span);
