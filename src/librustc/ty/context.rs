@@ -8,6 +8,7 @@ use crate::session::Session;
 use crate::session::config::{BorrowckMode, OutputFilenames};
 use crate::session::config::CrateType;
 use crate::middle;
+use crate::middle::lang_items::PanicLocationLangItem;
 use crate::hir::{self, TraitCandidate, HirId, ItemKind, ItemLocalId, Node};
 use crate::hir::def::{Res, DefKind, Export};
 use crate::hir::def_id::{CrateNum, DefId, DefIndex, LOCAL_CRATE};
@@ -22,7 +23,7 @@ use crate::middle::cstore::EncodedMetadata;
 use crate::middle::lang_items;
 use crate::middle::resolve_lifetime::{self, ObjectLifetimeDefault};
 use crate::middle::stability;
-use crate::mir::{BodyCache, Field, interpret, Local, Place, PlaceElem, ProjectionKind, Promoted};
+use crate::mir::{BodyAndCache, Field, interpret, Local, Place, PlaceElem, ProjectionKind, Promoted};
 use crate::mir::interpret::{ConstValue, Allocation, Scalar};
 use crate::ty::subst::{GenericArg, InternalSubsts, SubstsRef, Subst};
 use crate::ty::ReprOptions;
@@ -1083,17 +1084,17 @@ impl<'tcx> TyCtxt<'tcx> {
         &self.hir_map
     }
 
-    pub fn alloc_steal_mir(self, mir: BodyCache<'tcx>) -> &'tcx Steal<BodyCache<'tcx>> {
+    pub fn alloc_steal_mir(self, mir: BodyAndCache<'tcx>) -> &'tcx Steal<BodyAndCache<'tcx>> {
         self.arena.alloc(Steal::new(mir))
     }
 
-    pub fn alloc_steal_promoted(self, promoted: IndexVec<Promoted, BodyCache<'tcx>>) ->
-        &'tcx Steal<IndexVec<Promoted, BodyCache<'tcx>>> {
+    pub fn alloc_steal_promoted(self, promoted: IndexVec<Promoted, BodyAndCache<'tcx>>) ->
+        &'tcx Steal<IndexVec<Promoted, BodyAndCache<'tcx>>> {
         self.arena.alloc(Steal::new(promoted))
     }
 
-    pub fn intern_promoted(self, promoted: IndexVec<Promoted, BodyCache<'tcx>>) ->
-        &'tcx IndexVec<Promoted, BodyCache<'tcx>> {
+    pub fn intern_promoted(self, promoted: IndexVec<Promoted, BodyAndCache<'tcx>>) ->
+        &'tcx IndexVec<Promoted, BodyAndCache<'tcx>> {
         self.arena.alloc(promoted)
     }
 
@@ -1587,6 +1588,15 @@ impl<'tcx> TyCtxt<'tcx> {
     /// Currently, only NVPTX* targets need it.
     pub fn has_strict_asm_symbol_naming(&self) -> bool {
         self.sess.target.target.arch.contains("nvptx")
+    }
+
+    /// Returns `&'static core::panic::Location<'static>`.
+    pub fn caller_location_ty(&self) -> Ty<'tcx> {
+        self.mk_imm_ref(
+            self.lifetimes.re_static,
+            self.type_of(self.require_lang_item(PanicLocationLangItem, None))
+                .subst(*self, self.mk_substs([self.lifetimes.re_static.into()].iter())),
+        )
     }
 }
 
