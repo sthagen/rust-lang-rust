@@ -9,12 +9,12 @@ use crate::session::Session;
 use crate::util::nodemap::FxHashMap;
 use errors::{Applicability, DiagnosticBuilder};
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
+use rustc_span::source_map::MultiSpan;
+use rustc_span::symbol::{sym, Symbol};
 use syntax::ast;
 use syntax::attr;
 use syntax::feature_gate;
 use syntax::print::pprust;
-use syntax::source_map::MultiSpan;
-use syntax::symbol::{sym, Symbol};
 
 use rustc_error_codes::*;
 
@@ -155,7 +155,7 @@ pub struct LintLevelsBuilder<'a> {
 
 pub struct BuilderPush {
     prev: u32,
-    pub(super) changed: bool,
+    pub changed: bool,
 }
 
 impl<'a> LintLevelsBuilder<'a> {
