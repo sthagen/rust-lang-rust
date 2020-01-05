@@ -19,6 +19,7 @@ use crate::{Module, ModuleData, ModuleKind, NameBinding, NameBindingKind, Segmen
 use rustc::bug;
 use rustc::hir::def::{self, *};
 use rustc::hir::def_id::{DefId, CRATE_DEF_INDEX, LOCAL_CRATE};
+use rustc::hir::exports::Export;
 use rustc::middle::cstore::CrateStore;
 use rustc::ty;
 use rustc_metadata::creader::LoadedMacro;
@@ -472,11 +473,7 @@ impl<'a, 'b> BuildReducedGraphVisitor<'a, 'b> {
 
                         self.r
                             .session
-                            .struct_span_warn(item.span, "`$crate` may not be imported")
-                            .note(
-                                "`use $crate;` was erroneously allowed and \
-                                   will become a hard error in a future release",
-                            )
+                            .struct_span_err(item.span, "`$crate` may not be imported")
                             .emit();
                     }
                 }
