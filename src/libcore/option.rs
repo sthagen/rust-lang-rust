@@ -187,10 +187,7 @@ impl<T> Option<T> {
     #[inline]
     #[stable(feature = "rust1", since = "1.0.0")]
     pub fn is_some(&self) -> bool {
-        match *self {
-            Some(_) => true,
-            None => false,
-        }
+        matches!(*self, Some(_))
     }
 
     /// Returns `true` if the option is a [`None`] value.
@@ -341,6 +338,7 @@ impl<T> Option<T> {
     /// x.expect("the world is ending"); // panics with `the world is ending`
     /// ```
     #[inline]
+    #[track_caller]
     #[stable(feature = "rust1", since = "1.0.0")]
     pub fn expect(self, msg: &str) -> T {
         match self {
@@ -374,6 +372,7 @@ impl<T> Option<T> {
     /// assert_eq!(x.unwrap(), "air"); // fails
     /// ```
     #[inline]
+    #[track_caller]
     #[stable(feature = "rust1", since = "1.0.0")]
     pub fn unwrap(self) -> T {
         match self {
@@ -1015,6 +1014,7 @@ impl<T: fmt::Debug> Option<T> {
     /// }
     /// ```
     #[inline]
+    #[track_caller]
     #[unstable(feature = "option_expect_none", reason = "newly added", issue = "62633")]
     pub fn expect_none(self, msg: &str) {
         if let Some(val) = self {
@@ -1057,6 +1057,7 @@ impl<T: fmt::Debug> Option<T> {
     /// }
     /// ```
     #[inline]
+    #[track_caller]
     #[unstable(feature = "option_unwrap_none", reason = "newly added", issue = "62633")]
     pub fn unwrap_none(self) {
         if let Some(val) = self {
@@ -1184,6 +1185,7 @@ impl<T, E> Option<Result<T, E>> {
 // This is a separate function to reduce the code size of .expect() itself.
 #[inline(never)]
 #[cold]
+#[track_caller]
 fn expect_failed(msg: &str) -> ! {
     panic!("{}", msg)
 }
@@ -1191,6 +1193,7 @@ fn expect_failed(msg: &str) -> ! {
 // This is a separate function to reduce the code size of .expect_none() itself.
 #[inline(never)]
 #[cold]
+#[track_caller]
 fn expect_none_failed(msg: &str, value: &dyn fmt::Debug) -> ! {
     panic!("{}: {:?}", msg, value)
 }

@@ -1,4 +1,4 @@
-use rustc::hir::intravisit;
+use rustc::hir::map::Map;
 use rustc::lint::builtin::{SAFE_PACKED_BORROWS, UNUSED_UNSAFE};
 use rustc::mir::visit::{MutatingUseContext, PlaceContext, Visitor};
 use rustc::mir::*;
@@ -9,11 +9,13 @@ use rustc_data_structures::fx::FxHashSet;
 use rustc_errors::struct_span_err;
 use rustc_hir as hir;
 use rustc_hir::def_id::DefId;
+use rustc_hir::intravisit;
 use rustc_hir::Node;
 use rustc_span::symbol::{sym, Symbol};
 
 use std::ops::Bound;
 
+use crate::const_eval::{is_const_fn, is_min_const_fn};
 use crate::util;
 
 use rustc_error_codes::*;
@@ -475,7 +477,9 @@ struct UnusedUnsafeVisitor<'a> {
 }
 
 impl<'a, 'tcx> intravisit::Visitor<'tcx> for UnusedUnsafeVisitor<'a> {
-    fn nested_visit_map<'this>(&'this mut self) -> intravisit::NestedVisitorMap<'this, 'tcx> {
+    type Map = Map<'tcx>;
+
+    fn nested_visit_map<'this>(&'this mut self) -> intravisit::NestedVisitorMap<'this, Self::Map> {
         intravisit::NestedVisitorMap::None
     }
 
@@ -523,7 +527,7 @@ fn unsafety_check_result(tcx: TyCtxt<'_>, def_id: DefId) -> UnsafetyCheckResult 
     let id = tcx.hir().as_local_hir_id(def_id).unwrap();
     let (const_context, min_const_fn) = match tcx.hir().body_owner_kind(id) {
         hir::BodyOwnerKind::Closure => (false, false),
-        hir::BodyOwnerKind::Fn => (tcx.is_const_fn(def_id), tcx.is_min_const_fn(def_id)),
+        hir::BodyOwnerKind::Fn => (is_const_fn(tcx, def_id), is_min_const_fn(tcx, def_id)),
         hir::BodyOwnerKind::Const | hir::BodyOwnerKind::Static(_) => (true, false),
     };
     let mut checker = UnsafetyChecker::new(const_context, min_const_fn, body, tcx, param_env);
