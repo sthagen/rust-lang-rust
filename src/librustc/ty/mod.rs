@@ -26,8 +26,8 @@ use crate::ty::layout::VariantIdx;
 use crate::ty::subst::{InternalSubsts, Subst, SubstsRef};
 use crate::ty::util::{Discr, IntTypeExt};
 use crate::ty::walk::TypeWalker;
-use crate::util::captures::Captures;
 use arena::SyncDroplessArena;
+use rustc_data_structures::captures::Captures;
 use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::fx::FxIndexMap;
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
@@ -807,13 +807,6 @@ pub struct UpvarBorrow<'tcx> {
 
 pub type UpvarListMap = FxHashMap<DefId, FxIndexMap<hir::HirId, UpvarId>>;
 pub type UpvarCaptureMap<'tcx> = FxHashMap<UpvarId, UpvarCapture<'tcx>>;
-
-#[derive(Copy, Clone, TypeFoldable)]
-pub struct ClosureUpvar<'tcx> {
-    pub res: Res,
-    pub span: Span,
-    pub ty: Ty<'tcx>,
-}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum IntVarValue {
