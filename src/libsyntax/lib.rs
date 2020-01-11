@@ -18,7 +18,6 @@
 #![recursion_limit = "256"]
 
 use ast::AttrId;
-pub use errors;
 use rustc_data_structures::sync::Lock;
 use rustc_index::bit_set::GrowableBitSet;
 use rustc_span::edition::{Edition, DEFAULT_EDITION};
@@ -76,13 +75,8 @@ pub mod ast;
 pub mod attr;
 pub mod entry;
 pub mod expand;
-pub mod feature_gate {
-    mod check;
-    pub use check::{check_attribute, check_crate, feature_err, feature_err_issue, get_features};
-}
 pub mod mut_visit;
 pub mod ptr;
-pub mod show_span;
 pub use rustc_session::parse as sess;
 pub mod token;
 pub mod tokenstream;
@@ -93,8 +87,6 @@ pub mod print {
     pub mod pp;
     pub mod pprust;
 }
-
-pub mod early_buffered_lints;
 
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
 

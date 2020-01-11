@@ -192,9 +192,6 @@ declare_features! (
     /// Allows using the `unadjusted` ABI; perma-unstable.
     (active, abi_unadjusted, "1.16.0", None, None),
 
-    /// Allows identifying crates that contain sanitizer runtimes.
-    (active, sanitizer_runtime, "1.17.0", None, None),
-
     /// Used to identify crates that contain the profiler runtime.
     (active, profiler_runtime, "1.18.0", None, None),
 
@@ -533,6 +530,9 @@ declare_features! (
 
     /// Allows the use of `#[cfg(sanitize = "option")]`; set when -Zsanitizer is used.
     (active, cfg_sanitize, "1.41.0", Some(39699), None),
+
+    /// Allows using `..X`, `..=X`, `...X`, and `X..` as a pattern.
+    (active, half_open_range_patterns, "1.41.0", Some(67264), None),
 
     /// Allows using `&mut` in constant functions.
     (active, const_mut_refs, "1.41.0", Some(57349), None),

@@ -51,7 +51,6 @@ pub enum Error {
         secondary_path: String,
     },
     UselessDocComment,
-    InclusiveRangeWithNoEnd,
 }
 
 impl Error {
@@ -100,11 +99,6 @@ impl Error {
                     "doc comments must come before what they document, maybe a comment was \
                           intended with `//`?",
                 );
-                err
-            }
-            Error::InclusiveRangeWithNoEnd => {
-                let mut err = struct_span_err!(handler, sp, E0586, "inclusive range with no end",);
-                err.help("inclusive ranges must be bounded at the end (`..=b` or `a..=b`)");
                 err
             }
         }
@@ -265,10 +259,7 @@ impl<'a> Parser<'a> {
             };
             (
                 format!("expected one of {}, found {}", expect, actual),
-                (
-                    self.sess.source_map().next_point(self.prev_span),
-                    format!("expected one of {}", short_expect),
-                ),
+                (self.prev_span.shrink_to_hi(), format!("expected one of {}", short_expect)),
             )
         } else if expected.is_empty() {
             (
@@ -278,7 +269,7 @@ impl<'a> Parser<'a> {
         } else {
             (
                 format!("expected {}, found {}", expect, actual),
-                (self.sess.source_map().next_point(self.prev_span), format!("expected {}", expect)),
+                (self.prev_span.shrink_to_hi(), format!("expected {}", expect)),
             )
         };
         self.last_unexpected_token_span = Some(self.token.span);
@@ -809,7 +800,7 @@ impl<'a> Parser<'a> {
             _ if self.prev_span == DUMMY_SP => (self.token.span, self.token.span),
             // EOF, don't want to point at the following char, but rather the last token.
             (token::Eof, None) => (self.prev_span, self.token.span),
-            _ => (self.sess.source_map().next_point(self.prev_span), self.token.span),
+            _ => (self.prev_span.shrink_to_hi(), self.token.span),
         };
         let msg = format!(
             "expected `{}`, found {}",
@@ -1132,7 +1123,7 @@ impl<'a> Parser<'a> {
                     err.span_label(sp, "unclosed delimiter");
                 }
                 err.span_suggestion_short(
-                    self.sess.source_map().next_point(self.prev_span),
+                    self.prev_span.shrink_to_hi(),
                     &format!("{} may belong here", delim.to_string()),
                     delim.to_string(),
                     Applicability::MaybeIncorrect,

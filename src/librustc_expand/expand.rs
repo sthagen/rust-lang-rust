@@ -5,6 +5,8 @@ use crate::mbe::macro_rules::annotate_err_with_kind;
 use crate::placeholders::{placeholder, PlaceholderExpander};
 use crate::proc_macro::collect_derives;
 
+use rustc_data_structures::sync::Lrc;
+use rustc_errors::{Applicability, FatalError, PResult};
 use rustc_feature::Features;
 use rustc_parse::configure;
 use rustc_parse::parser::Parser;
@@ -16,20 +18,16 @@ use rustc_span::{FileName, Span, DUMMY_SP};
 use syntax::ast::{self, AttrItem, Block, Ident, LitKind, NodeId, PatKind, Path};
 use syntax::ast::{ItemKind, MacArgs, MacStmtStyle, StmtKind};
 use syntax::attr::{self, is_builtin_attr, HasAttrs};
-use syntax::feature_gate::{self, feature_err};
 use syntax::mut_visit::*;
 use syntax::print::pprust;
 use syntax::ptr::P;
-use syntax::sess::ParseSess;
+use syntax::sess::{feature_err, ParseSess};
 use syntax::token;
 use syntax::tokenstream::{TokenStream, TokenTree};
 use syntax::util::map_in_place::MapInPlace;
 use syntax::visit::{self, Visitor};
 
-use errors::{Applicability, FatalError, PResult};
 use smallvec::{smallvec, SmallVec};
-
-use rustc_data_structures::sync::Lrc;
 use std::io::ErrorKind;
 use std::ops::DerefMut;
 use std::path::PathBuf;
@@ -1063,7 +1061,7 @@ impl<'a, 'b> InvocationCollector<'a, 'b> {
     fn check_attributes(&mut self, attrs: &[ast::Attribute]) {
         let features = self.cx.ecfg.features.unwrap();
         for attr in attrs.iter() {
-            feature_gate::check_attribute(attr, self.cx.parse_sess, features);
+            rustc_ast_passes::feature_gate::check_attribute(attr, self.cx.parse_sess, features);
             validate_attr::check_meta(self.cx.parse_sess, attr);
 
             // macros are expanded before any lint passes so this warning has to be hardcoded

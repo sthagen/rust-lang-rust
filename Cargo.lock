@@ -3346,17 +3346,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustc_asan"
-version = "0.0.0"
-dependencies = [
- "alloc",
- "build_helper",
- "cmake",
- "compiler_builtins",
- "core",
-]
-
-[[package]]
 name = "rustc_ast_lowering"
 version = "0.0.0"
 dependencies = [
@@ -3375,6 +3364,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustc_ast_passes"
+version = "0.0.0"
+dependencies = [
+ "log",
+ "rustc_data_structures",
+ "rustc_error_codes",
+ "rustc_errors",
+ "rustc_feature",
+ "rustc_parse",
+ "rustc_session",
+ "rustc_span",
+ "syntax",
+]
+
+[[package]]
 name = "rustc_builtin_macros"
 version = "0.0.0"
 dependencies = [
@@ -3386,6 +3390,7 @@ dependencies = [
  "rustc_expand",
  "rustc_feature",
  "rustc_parse",
+ "rustc_session",
  "rustc_span",
  "rustc_target",
  "smallvec 1.0.0",
@@ -3539,11 +3544,13 @@ name = "rustc_expand"
 version = "0.0.0"
 dependencies = [
  "log",
+ "rustc_ast_passes",
  "rustc_data_structures",
  "rustc_errors",
  "rustc_feature",
  "rustc_lexer",
  "rustc_parse",
+ "rustc_session",
  "rustc_span",
  "serialize",
  "smallvec 1.0.0",
@@ -3613,6 +3620,7 @@ dependencies = [
  "rustc",
  "rustc-rayon",
  "rustc_ast_lowering",
+ "rustc_ast_passes",
  "rustc_builtin_macros",
  "rustc_codegen_llvm",
  "rustc_codegen_ssa",
@@ -3630,6 +3638,7 @@ dependencies = [
  "rustc_plugin_impl",
  "rustc_privacy",
  "rustc_resolve",
+ "rustc_session",
  "rustc_span",
  "rustc_target",
  "rustc_traits",
@@ -3654,6 +3663,7 @@ dependencies = [
  "log",
  "rustc",
  "rustc_data_structures",
+ "rustc_errors",
  "rustc_feature",
  "rustc_hir",
  "rustc_index",
@@ -3671,17 +3681,6 @@ dependencies = [
  "build_helper",
  "cc",
  "libc",
-]
-
-[[package]]
-name = "rustc_lsan"
-version = "0.0.0"
-dependencies = [
- "alloc",
- "build_helper",
- "cmake",
- "compiler_builtins",
- "core",
 ]
 
 [[package]]
@@ -3746,17 +3745,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustc_msan"
-version = "0.0.0"
-dependencies = [
- "alloc",
- "build_helper",
- "cmake",
- "compiler_builtins",
- "core",
-]
-
-[[package]]
 name = "rustc_parse"
 version = "0.0.0"
 dependencies = [
@@ -3767,6 +3755,7 @@ dependencies = [
  "rustc_errors",
  "rustc_feature",
  "rustc_lexer",
+ "rustc_session",
  "rustc_span",
  "smallvec 1.0.0",
  "syntax",
@@ -3785,7 +3774,7 @@ dependencies = [
  "rustc_feature",
  "rustc_hir",
  "rustc_index",
- "rustc_parse",
+ "rustc_session",
  "rustc_span",
  "rustc_target",
  "syntax",
@@ -3865,6 +3854,7 @@ dependencies = [
  "log",
  "num_cpus",
  "rustc_data_structures",
+ "rustc_error_codes",
  "rustc_errors",
  "rustc_feature",
  "rustc_fs_util",
@@ -3926,17 +3916,6 @@ dependencies = [
  "rustc_target",
  "smallvec 1.0.0",
  "syntax",
-]
-
-[[package]]
-name = "rustc_tsan"
-version = "0.0.0"
-dependencies = [
- "alloc",
- "build_helper",
- "cmake",
- "compiler_builtins",
- "core",
 ]
 
 [[package]]
@@ -4300,10 +4279,6 @@ dependencies = [
  "panic_unwind",
  "profiler_builtins",
  "rand 0.7.0",
- "rustc_asan",
- "rustc_lsan",
- "rustc_msan",
- "rustc_tsan",
  "unwind",
  "wasi 0.9.0+wasi-snapshot-preview1",
 ]

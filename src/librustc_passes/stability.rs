@@ -1,16 +1,17 @@
 //! A pass that annotates every item and method with its stability level,
 //! propagating default levels lexically from parent to children ast nodes.
 
-use errors::struct_span_err;
 use rustc::hir::map::Map;
 use rustc::lint;
 use rustc::middle::privacy::AccessLevels;
 use rustc::middle::stability::{DeprecationEntry, Index};
+use rustc::session::parse::feature_err;
 use rustc::session::Session;
 use rustc::traits::misc::can_type_implement_copy;
 use rustc::ty::query::Providers;
 use rustc::ty::TyCtxt;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
+use rustc_errors::struct_span_err;
 use rustc_hir as hir;
 use rustc_hir::def::{DefKind, Res};
 use rustc_hir::def_id::{DefId, CRATE_DEF_INDEX, LOCAL_CRATE};
@@ -20,7 +21,6 @@ use rustc_span::symbol::{sym, Symbol};
 use rustc_span::Span;
 use syntax::ast::Attribute;
 use syntax::attr::{self, Stability};
-use syntax::feature_gate::feature_err;
 
 use std::cmp::Ordering;
 use std::mem::replace;

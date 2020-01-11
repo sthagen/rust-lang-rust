@@ -21,16 +21,12 @@
 //! If you define a new `LateLintPass`, you will also need to add it to the
 //! `late_lint_methods!` invocation in `lib.rs`.
 
-use std::fmt::Write;
-
-use lint::{EarlyContext, EarlyLintPass, LateLintPass, LintPass};
-use lint::{LateContext, LintArray, LintContext};
 use rustc::hir::map::Map;
-use rustc::lint;
-use rustc::lint::FutureIncompatibleInfo;
+use rustc::lint::{self, EarlyContext, EarlyLintPass, LateContext, LateLintPass, LintContext};
 use rustc::traits::misc::can_type_implement_copy;
 use rustc::ty::{self, layout::VariantIdx, Ty, TyCtxt};
 use rustc_data_structures::fx::FxHashSet;
+use rustc_errors::{Applicability, DiagnosticBuilder};
 use rustc_feature::Stability;
 use rustc_feature::{deprecated_attributes, AttributeGate, AttributeTemplate, AttributeType};
 use rustc_hir as hir;
@@ -38,21 +34,21 @@ use rustc_hir::def::{DefKind, Res};
 use rustc_hir::def_id::DefId;
 use rustc_hir::{GenericParamKind, PatKind};
 use rustc_hir::{HirIdSet, Node};
+use rustc_session::lint::FutureIncompatibleInfo;
 use rustc_span::edition::Edition;
 use rustc_span::source_map::Spanned;
 use rustc_span::symbol::{kw, sym, Symbol};
 use rustc_span::{BytePos, Span};
 use syntax::ast::{self, Expr};
 use syntax::attr::{self, HasAttrs};
-use syntax::errors::{Applicability, DiagnosticBuilder};
 use syntax::print::pprust::{self, expr_to_string};
-use syntax::ptr::P;
 use syntax::tokenstream::{TokenStream, TokenTree};
 use syntax::visit::FnKind;
 
 use crate::nonstandard_style::{method_context, MethodLateContext};
 
 use log::debug;
+use std::fmt::Write;
 
 // hardwired lints from librustc
 pub use lint::builtin::*;
@@ -1309,11 +1305,13 @@ impl EarlyLintPass for EllipsisInclusiveRangePatterns {
 
         /// If `pat` is a `...` pattern, return the start and end of the range, as well as the span
         /// corresponding to the ellipsis.
-        fn matches_ellipsis_pat(pat: &ast::Pat) -> Option<(&P<Expr>, &P<Expr>, Span)> {
+        fn matches_ellipsis_pat(pat: &ast::Pat) -> Option<(Option<&Expr>, &Expr, Span)> {
             match &pat.kind {
-                PatKind::Range(a, b, Spanned { span, node: RangeEnd::Included(DotDotDot), .. }) => {
-                    Some((a, b, *span))
-                }
+                PatKind::Range(
+                    a,
+                    Some(b),
+                    Spanned { span, node: RangeEnd::Included(DotDotDot) },
+                ) => Some((a.as_deref(), b, *span)),
                 _ => None,
             }
         }
@@ -1328,11 +1326,16 @@ impl EarlyLintPass for EllipsisInclusiveRangePatterns {
             let suggestion = "use `..=` for an inclusive range";
             if parenthesise {
                 self.node_id = Some(pat.id);
+                let end = expr_to_string(&end);
+                let replace = match start {
+                    Some(start) => format!("&({}..={})", expr_to_string(&start), end),
+                    None => format!("&(..={})", end),
+                };
                 let mut err = cx.struct_span_lint(ELLIPSIS_INCLUSIVE_RANGE_PATTERNS, pat.span, msg);
                 err.span_suggestion(
                     pat.span,
                     suggestion,
-                    format!("&({}..={})", expr_to_string(&start), expr_to_string(&end)),
+                    replace,
                     Applicability::MachineApplicable,
                 );
                 err.emit();

@@ -1,21 +1,18 @@
-use lint::{EarlyContext, LateContext, LintArray, LintContext};
-use lint::{EarlyLintPass, LateLintPass, LintPass};
-use rustc::lint;
 use rustc::lint::builtin::UNUSED_ATTRIBUTES;
+use rustc::lint::{EarlyContext, EarlyLintPass, LateContext, LateLintPass, LintContext};
 use rustc::ty::adjustment;
 use rustc::ty::{self, Ty};
 use rustc_data_structures::fx::FxHashMap;
+use rustc_errors::{pluralize, Applicability};
 use rustc_feature::{AttributeType, BuiltinAttribute, BUILTIN_ATTRIBUTE_MAP};
 use rustc_hir as hir;
 use rustc_hir::def::{DefKind, Res};
 use rustc_hir::def_id::DefId;
-
 use rustc_span::symbol::Symbol;
 use rustc_span::symbol::{kw, sym};
 use rustc_span::{BytePos, Span};
 use syntax::ast;
 use syntax::attr;
-use syntax::errors::{pluralize, Applicability};
 use syntax::print::pprust;
 use syntax::util::parser;
 

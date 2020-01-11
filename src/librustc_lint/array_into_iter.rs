@@ -1,10 +1,9 @@
-use crate::lint::{LateContext, LateLintPass, LintArray, LintContext, LintPass};
-use rustc::lint::FutureIncompatibleInfo;
+use rustc::lint::{FutureIncompatibleInfo, LateContext, LateLintPass, LintContext};
 use rustc::ty;
 use rustc::ty::adjustment::{Adjust, Adjustment};
+use rustc_errors::Applicability;
 use rustc_hir as hir;
 use rustc_span::symbol::sym;
-use syntax::errors::Applicability;
 
 declare_lint! {
     pub ARRAY_INTO_ITER,

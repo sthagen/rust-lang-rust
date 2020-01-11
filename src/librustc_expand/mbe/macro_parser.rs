@@ -85,7 +85,7 @@ use syntax::sess::ParseSess;
 use syntax::token::{self, DocComment, Nonterminal, Token};
 use syntax::tokenstream::TokenStream;
 
-use errors::{FatalError, PResult};
+use rustc_errors::{FatalError, PResult};
 use rustc_span::Span;
 use smallvec::{smallvec, SmallVec};
 
@@ -696,7 +696,7 @@ pub(super) fn parse(
                         if parser.token.span.is_dummy() {
                             parser.token.span
                         } else {
-                            sess.source_map().next_point(parser.token.span)
+                            parser.token.span.shrink_to_hi()
                         },
                     ),
                     "missing tokens in macro arguments",

@@ -1,4 +1,3 @@
-use super::diagnostics::Error;
 use super::pat::{GateOr, PARAM_EXPECTED};
 use super::{BlockMode, Parser, PathStyle, PrevTokenKind, Restrictions, TokenType};
 use super::{SemiColonMode, SeqSep, TokenExpectType};
@@ -1646,7 +1645,7 @@ impl<'a> Parser<'a> {
                             //   |      |
                             //   |      parsed until here as `"y" & X`
                             err.span_suggestion_short(
-                                cm.next_point(arm_start_span),
+                                arm_start_span.shrink_to_hi(),
                                 "missing a comma here to end this `match` arm",
                                 ",".to_owned(),
                                 Applicability::MachineApplicable,
@@ -1967,7 +1966,8 @@ impl<'a> Parser<'a> {
         limits: RangeLimits,
     ) -> PResult<'a, ExprKind> {
         if end.is_none() && limits == RangeLimits::Closed {
-            Err(self.span_fatal_err(self.token.span, Error::InclusiveRangeWithNoEnd))
+            self.error_inclusive_range_with_no_end(self.token.span);
+            Ok(ExprKind::Err)
         } else {
             Ok(ExprKind::Range(start, end, limits))
         }

@@ -20,10 +20,10 @@ use crate::constrained_generic_params as cgp;
 use crate::lint;
 use crate::middle::resolve_lifetime as rl;
 use crate::middle::weak_lang_items;
-use errors::{struct_span_err, Applicability, StashKey};
 use rustc::hir::map::Map;
 use rustc::middle::codegen_fn_attrs::{CodegenFnAttrFlags, CodegenFnAttrs};
 use rustc::mir::mono::Linkage;
+use rustc::session::parse::feature_err;
 use rustc::traits;
 use rustc::ty::query::Providers;
 use rustc::ty::subst::GenericArgKind;
@@ -34,6 +34,7 @@ use rustc::ty::{self, AdtKind, Const, DefIdTree, ToPolyTraitRef, Ty, TyCtxt};
 use rustc::ty::{ReprOptions, ToPredicate};
 use rustc_data_structures::captures::Captures;
 use rustc_data_structures::fx::FxHashMap;
+use rustc_errors::{struct_span_err, Applicability, StashKey};
 use rustc_hir as hir;
 use rustc_hir::def::{CtorKind, DefKind, Res};
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
@@ -45,7 +46,6 @@ use rustc_target::spec::abi;
 use syntax::ast;
 use syntax::ast::{Ident, MetaItemKind};
 use syntax::attr::{list_contains_name, mark_used, InlineAttr, OptimizeAttr};
-use syntax::feature_gate;
 
 use rustc_error_codes::*;
 
@@ -255,7 +255,7 @@ impl Visitor<'tcx> for CollectItemTypesVisitor<'tcx> {
 fn bad_placeholder_type(
     tcx: TyCtxt<'tcx>,
     mut spans: Vec<Span>,
-) -> errors::DiagnosticBuilder<'tcx> {
+) -> rustc_errors::DiagnosticBuilder<'tcx> {
     spans.sort();
     let mut err = struct_span_err!(
         tcx.sess,
@@ -1537,7 +1537,7 @@ fn type_of(tcx: TyCtxt<'_>, def_id: DefId) -> Ty<'_> {
                         _ => None,
                     };
                     if let Some(unsupported_type) = err {
-                        feature_gate::feature_err(
+                        feature_err(
                             &tcx.sess.parse_sess,
                             sym::const_compare_raw_pointers,
                             hir_ty.span,
@@ -2633,7 +2633,7 @@ fn from_target_feature(
                 None => true,
             };
             if !allowed && id.is_local() {
-                feature_gate::feature_err(
+                feature_err(
                     &tcx.sess.parse_sess,
                     feature_gate.unwrap(),
                     item.span(),
