@@ -14,6 +14,7 @@ use rustc::mir::{
     SourceInfo, SourceScope, SourceScopeData, Statement, StatementKind, Terminator, TerminatorKind,
     UnOp, RETURN_PLACE,
 };
+use rustc::traits::TraitQueryMode;
 use rustc::ty::layout::{
     HasDataLayout, HasTyCtxt, LayoutError, LayoutOf, Size, TargetDataLayout, TyLayout,
 };
@@ -29,9 +30,9 @@ use syntax::ast::Mutability;
 
 use crate::const_eval::error_to_const_error;
 use crate::interpret::{
-    self, intern_const_alloc_recursive, AllocId, Allocation, Frame, ImmTy, Immediate, InterpCx,
-    LocalState, LocalValue, Memory, MemoryKind, OpTy, Operand as InterpOperand, PlaceTy, Pointer,
-    ScalarMaybeUndef, StackPopCleanup,
+    self, intern_const_alloc_recursive, AllocId, Allocation, Frame, ImmTy, Immediate, InternKind,
+    InterpCx, LocalState, LocalValue, Memory, MemoryKind, OpTy, Operand as InterpOperand, PlaceTy,
+    Pointer, ScalarMaybeUndef, StackPopCleanup,
 };
 use crate::transform::{MirPass, MirSource};
 
@@ -71,6 +72,46 @@ impl<'tcx> MirPass<'tcx> for ConstProp {
         // computing their layout.
         if is_generator {
             trace!("ConstProp skipped for generator {:?}", source.def_id());
+            return;
+        }
+
+        // Check if it's even possible to satisfy the 'where' clauses
+        // for this item.
+        // This branch will never be taken for any normal function.
+        // However, it's possible to `#!feature(trivial_bounds)]` to write
+        // a function with impossible to satisfy clauses, e.g.:
+        // `fn foo() where String: Copy {}`
+        //
+        // We don't usually need to worry about this kind of case,
+        // since we would get a compilation error if the user tried
+        // to call it. However, since we can do const propagation
+        // even without any calls to the function, we need to make
+        // sure that it even makes sense to try to evaluate the body.
+        // If there are unsatisfiable where clauses, then all bets are
+        // off, and we just give up.
+        //
+        // Note that we use TraitQueryMode::Canonical here, which causes
+        // us to treat overflow like any other error. This is because we
+        // are "speculatively" evaluating this item with the default substs.
+        // While this usually succeeds, it may fail with tricky impls
+        // (e.g. the typenum crate). Const-propagation is fundamentally
+        // "best-effort", and does not affect correctness in any way.
+        // Therefore, it's perfectly fine to just "give up" if we're
+        // unable to check the bounds with the default substs.
+        //
+        // False negatives (failing to run const-prop on something when we actually
+        // could) are fine. However, false positives (running const-prop on
+        // an item with unsatisfiable bounds) can lead to us generating invalid
+        // MIR.
+        if !tcx.substitute_normalize_and_test_predicates((
+            source.def_id(),
+            InternalSubsts::identity_for_item(tcx, source.def_id()),
+            TraitQueryMode::Canonical,
+        )) {
+            trace!(
+                "ConstProp skipped for item with unsatisfiable predicates: {:?}",
+                source.def_id()
+            );
             return;
         }
 
@@ -726,7 +767,7 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
             )) => l.is_bits() && r.is_bits(),
             interpret::Operand::Indirect(_) if mir_opt_level >= 2 => {
                 let mplace = op.assert_mem_place(&self.ecx);
-                intern_const_alloc_recursive(&mut self.ecx, None, mplace, false)
+                intern_const_alloc_recursive(&mut self.ecx, InternKind::ConstProp, mplace, false)
                     .expect("failed to intern alloc");
                 true
             }
