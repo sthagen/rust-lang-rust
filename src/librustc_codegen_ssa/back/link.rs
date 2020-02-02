@@ -1,7 +1,7 @@
 use rustc::middle::cstore::{EncodedMetadata, LibSource, NativeLibrary, NativeLibraryKind};
 use rustc::middle::dependency_format::Linkage;
 use rustc::session::config::{
-    self, DebugInfo, OutputFilenames, OutputType, PrintRequest, Sanitizer,
+    self, CFGuard, DebugInfo, OutputFilenames, OutputType, PrintRequest, Sanitizer,
 };
 use rustc::session::search_paths::PathKind;
 /// For all the linkers we support, and information they might
@@ -1294,6 +1294,10 @@ fn link_args<'a, B: ArchiveBuilder<'a>>(
         cmd.pgo_gen();
     }
 
+    if sess.opts.debugging_opts.control_flow_guard != CFGuard::Disabled {
+        cmd.control_flow_guard();
+    }
+
     // FIXME (#2397): At some point we want to rpath our guesses as to
     // where extern libraries might live, based on the
     // addl_lib_search_paths
@@ -1719,7 +1723,7 @@ pub fn add_upstream_native_libraries(
 
 pub fn relevant_lib(sess: &Session, lib: &NativeLibrary) -> bool {
     match lib.cfg {
-        Some(ref cfg) => syntax::attr::cfg_matches(cfg, &sess.parse_sess, None),
+        Some(ref cfg) => rustc_attr::cfg_matches(cfg, &sess.parse_sess, None),
         None => true,
     }
 }

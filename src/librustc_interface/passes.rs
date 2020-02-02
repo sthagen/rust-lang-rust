@@ -40,7 +40,6 @@ use rustc_span::FileName;
 use rustc_traits;
 use rustc_typeck as typeck;
 use syntax::mut_visit::MutVisitor;
-use syntax::util::node_count::NodeCounter;
 use syntax::{self, ast, visit};
 
 use rustc_serialize::json;
@@ -49,7 +48,7 @@ use tempfile::Builder as TempFileBuilder;
 use std::any::Any;
 use std::cell::RefCell;
 use std::ffi::OsString;
-use std::io::{self, Write};
+use std::io::{self, BufWriter, Write};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::{env, fs, iter, mem};
@@ -83,7 +82,7 @@ pub fn parse<'a>(sess: &'a Session, input: &Input) -> PResult<'a, ast::Crate> {
 }
 
 fn count_nodes(krate: &ast::Crate) -> usize {
-    let mut counter = NodeCounter::new();
+    let mut counter = rustc_ast_passes::node_count::NodeCounter::new();
     visit::walk_crate(&mut counter, krate);
     counter.count
 }
@@ -575,7 +574,7 @@ fn write_out_deps(
             });
         }
 
-        let mut file = fs::File::create(&deps_filename)?;
+        let mut file = BufWriter::new(fs::File::create(&deps_filename)?);
         for path in out_filenames {
             writeln!(file, "{}: {}\n", path.display(), files.join(" "))?;
         }
