@@ -3,7 +3,7 @@ use rustc::mir::{
     FakeReadCause, Local, LocalDecl, LocalInfo, LocalKind, Location, Operand, Place, PlaceRef,
     ProjectionElem, Rvalue, Statement, StatementKind, TerminatorKind, VarBindingForm,
 };
-use rustc::traits::error_reporting::suggest_constraining_type_param;
+use rustc::traits::error_reporting::suggestions::suggest_constraining_type_param;
 use rustc::ty::{self, Ty};
 use rustc_data_structures::fx::FxHashSet;
 use rustc_errors::{Applicability, DiagnosticBuilder};
@@ -217,12 +217,14 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                         tcx.hir().get_generics(tcx.closure_base_def_id(self.mir_def_id))
                     {
                         suggest_constraining_type_param(
+                            tcx,
                             generics,
                             &mut err,
                             &param.name.as_str(),
                             "Copy",
                             tcx.sess.source_map(),
                             span,
+                            None,
                         );
                     }
                 }
@@ -395,14 +397,20 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
 
             (BorrowKind::Mut { .. }, BorrowKind::Mut { .. }) => {
                 first_borrow_desc = "first ";
-                self.cannot_mutably_borrow_multiply(
+                let mut err = self.cannot_mutably_borrow_multiply(
                     span,
                     &desc_place,
                     &msg_place,
                     issued_span,
                     &msg_borrow,
                     None,
-                )
+                );
+                self.suggest_split_at_mut_if_applicable(
+                    &mut err,
+                    &place,
+                    &issued_borrow.borrowed_place,
+                );
+                err
             }
 
             (BorrowKind::Unique, BorrowKind::Unique) => {
@@ -545,6 +553,23 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         );
 
         err
+    }
+
+    fn suggest_split_at_mut_if_applicable(
+        &self,
+        err: &mut DiagnosticBuilder<'_>,
+        place: &Place<'tcx>,
+        borrowed_place: &Place<'tcx>,
+    ) {
+        match (&place.projection[..], &borrowed_place.projection[..]) {
+            ([ProjectionElem::Index(_)], [ProjectionElem::Index(_)]) => {
+                err.help(
+                    "consider using `.split_at_mut(position)` or similar method to obtain \
+                     two mutable non-overlapping sub-slices",
+                );
+            }
+            _ => {}
+        }
     }
 
     /// Returns the description of the root place for a conflicting borrow and the full
