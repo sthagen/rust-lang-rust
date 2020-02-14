@@ -22,14 +22,14 @@ use rustc_session::parse::ParseSess;
 use rustc_span::source_map::respan;
 use rustc_span::symbol::{kw, sym, Symbol};
 use rustc_span::{FileName, Span, DUMMY_SP};
-use syntax::ast::{self, AttrStyle, AttrVec, CrateSugar, Extern, Ident, Unsafety, DUMMY_NODE_ID};
-use syntax::ast::{IsAsync, MacArgs, MacDelimiter, Mutability, StrLit, Visibility, VisibilityKind};
+use syntax::ast::DUMMY_NODE_ID;
+use syntax::ast::{self, AttrStyle, AttrVec, Const, CrateSugar, Extern, Ident, Unsafe};
+use syntax::ast::{Async, MacArgs, MacDelimiter, Mutability, StrLit, Visibility, VisibilityKind};
 use syntax::ptr::P;
 use syntax::token::{self, DelimToken, Token, TokenKind};
 use syntax::tokenstream::{self, DelimSpan, TokenStream, TokenTree, TreeAndJoint};
 use syntax::util::comments::{doc_comment_style, strip_doc_comment_decoration};
 
-use std::borrow::Cow;
 use std::path::PathBuf;
 use std::{cmp, mem, slice};
 
@@ -108,7 +108,7 @@ pub struct Parser<'a> {
     pub prev_span: Span,
     restrictions: Restrictions,
     /// Used to determine the path to externally loaded source files.
-    pub(super) directory: Directory<'a>,
+    pub(super) directory: Directory,
     /// `true` to parse sub-modules in other files.
     // Public for rustfmt usage.
     pub recurse_into_file_modules: bool,
@@ -370,7 +370,7 @@ impl<'a> Parser<'a> {
     pub fn new(
         sess: &'a ParseSess,
         tokens: TokenStream,
-        directory: Option<Directory<'a>>,
+        directory: Option<Directory>,
         recurse_into_file_modules: bool,
         desugar_doc_comments: bool,
         subparser_name: Option<&'static str>,
@@ -385,7 +385,7 @@ impl<'a> Parser<'a> {
             restrictions: Restrictions::empty(),
             recurse_into_file_modules,
             directory: Directory {
-                path: Cow::from(PathBuf::new()),
+                path: PathBuf::new(),
                 ownership: DirectoryOwnership::Owned { relative: None },
             },
             root_module_name: None,
@@ -413,7 +413,7 @@ impl<'a> Parser<'a> {
                 &sess.source_map().lookup_char_pos(parser.token.span.lo()).file.unmapped_path
             {
                 if let Some(directory_path) = path.parent() {
-                    parser.directory.path = Cow::from(directory_path.to_path_buf());
+                    parser.directory.path = directory_path.to_path_buf();
                 }
             }
         }
@@ -570,6 +570,11 @@ impl<'a> Parser<'a> {
     /// Otherwise, eats it.
     fn expect_keyword(&mut self, kw: Symbol) -> PResult<'a, ()> {
         if !self.eat_keyword(kw) { self.unexpected() } else { Ok(()) }
+    }
+
+    /// Is the given keyword `kw` followed by a non-reserved identifier?
+    fn is_kw_followed_by_ident(&self, kw: Symbol) -> bool {
+        self.token.is_keyword(kw) && self.look_ahead(1, |t| t.is_ident() && !t.is_reserved_ident())
     }
 
     fn check_or_expected(&mut self, ok: bool, typ: TokenType) -> bool {
@@ -954,17 +959,23 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses asyncness: `async` or nothing.
-    fn parse_asyncness(&mut self) -> IsAsync {
+    fn parse_asyncness(&mut self) -> Async {
         if self.eat_keyword(kw::Async) {
-            IsAsync::Async { closure_id: DUMMY_NODE_ID, return_impl_trait_id: DUMMY_NODE_ID }
+            let span = self.prev_span;
+            Async::Yes { span, closure_id: DUMMY_NODE_ID, return_impl_trait_id: DUMMY_NODE_ID }
         } else {
-            IsAsync::NotAsync
+            Async::No
         }
     }
 
     /// Parses unsafety: `unsafe` or nothing.
-    fn parse_unsafety(&mut self) -> Unsafety {
-        if self.eat_keyword(kw::Unsafe) { Unsafety::Unsafe } else { Unsafety::Normal }
+    fn parse_unsafety(&mut self) -> Unsafe {
+        if self.eat_keyword(kw::Unsafe) { Unsafe::Yes(self.prev_span) } else { Unsafe::No }
+    }
+
+    /// Parses constness: `const` or nothing.
+    fn parse_constness(&mut self) -> Const {
+        if self.eat_keyword(kw::Const) { Const::Yes(self.prev_span) } else { Const::No }
     }
 
     /// Parses mutability (`mut` or nothing).
@@ -1264,19 +1275,6 @@ impl<'a> Parser<'a> {
                 }
             },
             Err(None) => None,
-        }
-    }
-
-    /// We are parsing `async fn`. If we are on Rust 2015, emit an error.
-    fn ban_async_in_2015(&self, async_span: Span) {
-        if async_span.rust_2015() {
-            struct_span_err!(
-                self.diagnostic(),
-                async_span,
-                E0670,
-                "`async fn` is not permitted in the 2015 edition",
-            )
-            .emit();
         }
     }
 

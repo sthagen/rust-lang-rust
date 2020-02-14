@@ -1161,6 +1161,10 @@ impl<'tcx> TyCtxt<'tcx> {
         for (k, v) in resolutions.trait_map {
             let hir_id = hir.node_to_hir_id(k);
             let map = trait_map.entry(hir_id.owner).or_default();
+            let v = v
+                .into_iter()
+                .map(|tc| tc.map_import_ids(|id| hir.definitions().node_to_hir_id(id)))
+                .collect();
             map.insert(hir_id.local_id, StableVec::new(v));
         }
 
@@ -1608,7 +1612,7 @@ pub mod tls {
 
     use crate::dep_graph::TaskDeps;
     use crate::ty::query;
-    use rustc_data_structures::sync::{self, Lock, Lrc};
+    use rustc_data_structures::sync::{self, Lock};
     use rustc_data_structures::thin_vec::ThinVec;
     use rustc_data_structures::OnDrop;
     use rustc_errors::Diagnostic;
@@ -1633,7 +1637,7 @@ pub mod tls {
 
         /// The current query job, if any. This is updated by `JobOwner::start` in
         /// `ty::query::plumbing` when executing a query.
-        pub query: Option<Lrc<query::QueryJob<'tcx>>>,
+        pub query: Option<query::QueryJobId>,
 
         /// Where to store diagnostics for the current query job, if any.
         /// This is updated by `JobOwner::start` in `ty::query::plumbing` when executing a query.

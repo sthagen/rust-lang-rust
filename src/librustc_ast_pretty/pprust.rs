@@ -1269,6 +1269,7 @@ impl<'a> State<'a> {
                 self.print_where_clause(&generics.where_clause);
                 self.s.word(" ");
                 self.bopen();
+                self.print_inner_attributes(&item.attrs);
                 for trait_item in trait_items {
                     self.print_assoc_item(trait_item);
                 }
@@ -2449,7 +2450,7 @@ impl<'a> State<'a> {
         }
     }
 
-    crate fn print_asyncness(&mut self, asyncness: ast::IsAsync) {
+    crate fn print_asyncness(&mut self, asyncness: ast::Async) {
         if asyncness.is_async() {
             self.word_nbsp("async");
         }
@@ -2686,7 +2687,7 @@ impl<'a> State<'a> {
     crate fn print_ty_fn(
         &mut self,
         ext: ast::Extern,
-        unsafety: ast::Unsafety,
+        unsafety: ast::Unsafe,
         decl: &ast::FnDecl,
         name: Option<ast::Ident>,
         generic_params: &[ast::GenericParam],
@@ -2733,12 +2734,8 @@ impl<'a> State<'a> {
     crate fn print_fn_header_info(&mut self, header: ast::FnHeader, vis: &ast::Visibility) {
         self.s.word(visibility_qualified(vis, ""));
 
-        match header.constness.node {
-            ast::Constness::NotConst => {}
-            ast::Constness::Const => self.word_nbsp("const"),
-        }
-
-        self.print_asyncness(header.asyncness.node);
+        self.print_constness(header.constness);
+        self.print_asyncness(header.asyncness);
         self.print_unsafety(header.unsafety);
 
         match header.ext {
@@ -2756,17 +2753,17 @@ impl<'a> State<'a> {
         self.s.word("fn")
     }
 
-    crate fn print_unsafety(&mut self, s: ast::Unsafety) {
+    crate fn print_unsafety(&mut self, s: ast::Unsafe) {
         match s {
-            ast::Unsafety::Normal => {}
-            ast::Unsafety::Unsafe => self.word_nbsp("unsafe"),
+            ast::Unsafe::No => {}
+            ast::Unsafe::Yes(_) => self.word_nbsp("unsafe"),
         }
     }
 
-    crate fn print_constness(&mut self, s: ast::Constness) {
+    crate fn print_constness(&mut self, s: ast::Const) {
         match s {
-            ast::Constness::Const => self.word_nbsp("const"),
-            ast::Constness::NotConst => {}
+            ast::Const::No => {}
+            ast::Const::Yes(_) => self.word_nbsp("const"),
         }
     }
 

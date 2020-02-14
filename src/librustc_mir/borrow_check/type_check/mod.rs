@@ -9,9 +9,9 @@ use rustc::infer::canonical::QueryRegionConstraints;
 use rustc::infer::outlives::env::RegionBoundPairs;
 use rustc::infer::type_variable::{TypeVariableOrigin, TypeVariableOriginKind};
 use rustc::infer::{InferCtxt, InferOk, LateBoundRegionConversionTime, NLLRegionVariableOrigin};
-use rustc::mir::interpret::PanicInfo;
 use rustc::mir::tcx::PlaceTy;
 use rustc::mir::visit::{NonMutatingUseContext, PlaceContext, Visitor};
+use rustc::mir::AssertKind;
 use rustc::mir::*;
 use rustc::traits::query::type_op;
 use rustc::traits::query::type_op::custom::CustomTypeOp;
@@ -32,7 +32,6 @@ use rustc_hir as hir;
 use rustc_hir::def_id::DefId;
 use rustc_index::vec::{Idx, IndexVec};
 use rustc_span::{Span, DUMMY_SP};
-use syntax::ast;
 
 use crate::dataflow::generic::ResultsCursor;
 use crate::dataflow::move_paths::MoveData;
@@ -1563,7 +1562,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                     span_mirbug!(self, term, "bad Assert ({:?}, not bool", cond_ty);
                 }
 
-                if let PanicInfo::BoundsCheck { ref len, ref index } = *msg {
+                if let AssertKind::BoundsCheck { ref len, ref index } = *msg {
                     if len.ty(body, tcx) != tcx.types.usize {
                         span_mirbug!(self, len, "bounds-check length non-usize {:?}", len)
                     }
@@ -1938,7 +1937,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                                                 tcx.mk_substs_trait(ty, &[]),
                                             ),
                                         }),
-                                        ast::Constness::NotConst,
+                                        hir::Constness::NotConst,
                                     ),
                                 ),
                                 &traits::SelectionError::Unimplemented,
@@ -2579,7 +2578,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
         self.prove_predicates(
             Some(ty::Predicate::Trait(
                 trait_ref.to_poly_trait_ref().to_poly_trait_predicate(),
-                ast::Constness::NotConst,
+                hir::Constness::NotConst,
             )),
             locations,
             category,

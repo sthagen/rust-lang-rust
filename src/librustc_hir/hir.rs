@@ -16,10 +16,10 @@ use rustc_span::source_map::{SourceMap, Spanned};
 use rustc_span::symbol::{kw, sym, Symbol};
 use rustc_span::{MultiSpan, Span, DUMMY_SP};
 use rustc_target::spec::abi::Abi;
-use syntax::ast::{self, AsmDialect, CrateSugar, Ident, Name, NodeId};
+use syntax::ast::{self, AsmDialect, CrateSugar, Ident, Name};
 use syntax::ast::{AttrVec, Attribute, FloatTy, IntTy, Label, LitKind, StrStyle, UintTy};
 pub use syntax::ast::{BorrowKind, ImplPolarity, IsAuto};
-pub use syntax::ast::{CaptureBy, Constness, Movability, Mutability, Unsafety};
+pub use syntax::ast::{CaptureBy, Movability, Mutability};
 use syntax::node_id::NodeMap;
 use syntax::tokenstream::TokenStream;
 use syntax::util::parser::ExprPrecedence;
@@ -2109,18 +2109,8 @@ impl ImplicitSelfKind {
     }
 }
 
-#[derive(
-    Copy,
-    Clone,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    HashStable_Generic,
-    Ord,
-    RustcEncodable,
-    RustcDecodable,
-    Debug
-)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, RustcEncodable, RustcDecodable, Debug)]
+#[derive(HashStable_Generic)]
 pub enum IsAsync {
     Async,
     NotAsync,
@@ -2389,6 +2379,38 @@ pub struct Item<'hir> {
     pub span: Span,
 }
 
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[derive(RustcEncodable, RustcDecodable, HashStable_Generic)]
+pub enum Unsafety {
+    Unsafe,
+    Normal,
+}
+
+impl Unsafety {
+    pub fn prefix_str(&self) -> &'static str {
+        match self {
+            Self::Unsafe => "unsafe ",
+            Self::Normal => "",
+        }
+    }
+}
+
+impl fmt::Display for Unsafety {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match *self {
+            Self::Unsafe => "unsafe",
+            Self::Normal => "normal",
+        })
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[derive(RustcEncodable, RustcDecodable, HashStable_Generic)]
+pub enum Constness {
+    Const,
+    NotConst,
+}
+
 #[derive(Copy, Clone, RustcEncodable, RustcDecodable, Debug, HashStable_Generic)]
 pub struct FnHeader {
     pub unsafety: Unsafety,
@@ -2586,13 +2608,24 @@ pub type CaptureModeMap = NodeMap<CaptureBy>;
 // has length > 0 if the trait is found through an chain of imports, starting with the
 // import/use statement in the scope where the trait is used.
 #[derive(Clone, Debug)]
-pub struct TraitCandidate {
+pub struct TraitCandidate<ID = HirId> {
     pub def_id: DefId,
-    pub import_ids: SmallVec<[NodeId; 1]>,
+    pub import_ids: SmallVec<[ID; 1]>,
+}
+
+impl<ID> TraitCandidate<ID> {
+    pub fn map_import_ids<F, T>(self, f: F) -> TraitCandidate<T>
+    where
+        F: Fn(ID) -> T,
+    {
+        let TraitCandidate { def_id, import_ids } = self;
+        let import_ids = import_ids.into_iter().map(f).collect();
+        TraitCandidate { def_id, import_ids }
+    }
 }
 
 // Trait method resolution
-pub type TraitMap = NodeMap<Vec<TraitCandidate>>;
+pub type TraitMap<ID = HirId> = NodeMap<Vec<TraitCandidate<ID>>>;
 
 // Map from the NodeId of a glob import to a list of items which are actually
 // imported.
