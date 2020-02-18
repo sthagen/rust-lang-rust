@@ -9,7 +9,6 @@ mod simplify;
 pub mod types;
 pub mod utils;
 
-use rustc::infer::region_constraints::{Constraint, RegionConstraintData};
 use rustc::middle::lang_items;
 use rustc::middle::resolve_lifetime as rl;
 use rustc::middle::stability;
@@ -22,6 +21,7 @@ use rustc_hir as hir;
 use rustc_hir::def::{CtorKind, DefKind, Res};
 use rustc_hir::def_id::{CrateNum, DefId, CRATE_DEF_INDEX};
 use rustc_index::vec::{Idx, IndexVec};
+use rustc_infer::infer::region_constraints::{Constraint, RegionConstraintData};
 use rustc_mir::const_eval::is_min_const_fn;
 use rustc_span::hygiene::MacroKind;
 use rustc_span::symbol::{kw, sym};
@@ -43,7 +43,7 @@ use utils::*;
 
 pub use utils::{get_auto_trait_and_blanket_impls, krate, register_res};
 
-pub use self::types::FunctionRetTy::*;
+pub use self::types::FnRetTy::*;
 pub use self::types::ItemEnum::*;
 pub use self::types::SelfTy::*;
 pub use self::types::Type::*;
@@ -1001,8 +1001,8 @@ impl<'tcx> Clean<FnDecl> for (DefId, ty::PolyFnSig<'tcx>) {
     }
 }
 
-impl Clean<FunctionRetTy> for hir::FunctionRetTy<'_> {
-    fn clean(&self, cx: &DocContext<'_>) -> FunctionRetTy {
+impl Clean<FnRetTy> for hir::FnRetTy<'_> {
+    fn clean(&self, cx: &DocContext<'_>) -> FnRetTy {
         match *self {
             Self::Return(ref typ) => Return(typ.clean(cx)),
             Self::DefaultReturn(..) => DefaultReturn,

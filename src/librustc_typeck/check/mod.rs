@@ -92,17 +92,9 @@ use crate::middle::lang_items;
 use crate::namespace::Namespace;
 use rustc::hir::map::blocks::FnLikeNode;
 use rustc::hir::map::Map;
-use rustc::infer::canonical::{Canonical, OriginalQueryValues, QueryResponse};
-use rustc::infer::error_reporting::TypeAnnotationNeeded::E0282;
-use rustc::infer::opaque_types::OpaqueTypeDecl;
-use rustc::infer::type_variable::{TypeVariableOrigin, TypeVariableOriginKind};
-use rustc::infer::unify_key::{ConstVariableOrigin, ConstVariableOriginKind};
-use rustc::infer::{self, InferCtxt, InferOk, InferResult};
 use rustc::middle::region;
 use rustc::mir::interpret::ConstValue;
 use rustc::session::parse::feature_err;
-use rustc::traits::error_reporting::recursive_type_with_infinite_size_error;
-use rustc::traits::{self, ObligationCause, ObligationCauseCode, TraitEngine};
 use rustc::ty::adjustment::{
     Adjust, Adjustment, AllowTwoPhase, AutoBorrow, AutoBorrowMutability, PointerCast,
 };
@@ -126,6 +118,14 @@ use rustc_hir::intravisit::{self, NestedVisitorMap, Visitor};
 use rustc_hir::itemlikevisit::ItemLikeVisitor;
 use rustc_hir::{ExprKind, GenericArg, HirIdMap, Item, ItemKind, Node, PatKind, QPath};
 use rustc_index::vec::Idx;
+use rustc_infer::infer::canonical::{Canonical, OriginalQueryValues, QueryResponse};
+use rustc_infer::infer::error_reporting::TypeAnnotationNeeded::E0282;
+use rustc_infer::infer::opaque_types::OpaqueTypeDecl;
+use rustc_infer::infer::type_variable::{TypeVariableOrigin, TypeVariableOriginKind};
+use rustc_infer::infer::unify_key::{ConstVariableOrigin, ConstVariableOriginKind};
+use rustc_infer::infer::{self, InferCtxt, InferOk, InferResult, TyCtxtInferExt};
+use rustc_infer::traits::error_reporting::recursive_type_with_infinite_size_error;
+use rustc_infer::traits::{self, ObligationCause, ObligationCauseCode, TraitEngine};
 use rustc_span::hygiene::DesugaringKind;
 use rustc_span::source_map::{original_sp, DUMMY_SP};
 use rustc_span::symbol::{kw, sym, Ident};
@@ -5153,7 +5153,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         // Only suggest changing the return type for methods that
         // haven't set a return type at all (and aren't `fn main()` or an impl).
         match (&fn_decl.output, found.is_suggestable(), can_suggest, expected.is_unit()) {
-            (&hir::FunctionRetTy::DefaultReturn(span), true, true, true) => {
+            (&hir::FnRetTy::DefaultReturn(span), true, true, true) => {
                 err.span_suggestion(
                     span,
                     "try adding a return type",
@@ -5162,18 +5162,18 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 );
                 true
             }
-            (&hir::FunctionRetTy::DefaultReturn(span), false, true, true) => {
+            (&hir::FnRetTy::DefaultReturn(span), false, true, true) => {
                 err.span_label(span, "possibly return type missing here?");
                 true
             }
-            (&hir::FunctionRetTy::DefaultReturn(span), _, false, true) => {
+            (&hir::FnRetTy::DefaultReturn(span), _, false, true) => {
                 // `fn main()` must return `()`, do not suggest changing return type
                 err.span_label(span, "expected `()` because of default return type");
                 true
             }
             // expectation was caused by something else, not the default return
-            (&hir::FunctionRetTy::DefaultReturn(_), _, _, false) => false,
-            (&hir::FunctionRetTy::Return(ref ty), _, _, _) => {
+            (&hir::FnRetTy::DefaultReturn(_), _, _, false) => false,
+            (&hir::FnRetTy::Return(ref ty), _, _, _) => {
                 // Only point to return type if the expected type is the return type, as if they
                 // are not, the expectation must have been caused by something else.
                 debug!("suggest_missing_return_type: return type {:?} node {:?}", ty, ty.kind);
