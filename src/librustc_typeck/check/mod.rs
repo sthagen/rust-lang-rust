@@ -89,7 +89,6 @@ pub mod writeback;
 
 use crate::astconv::{AstConv, PathSeg};
 use crate::middle::lang_items;
-use crate::namespace::Namespace;
 use rustc::hir::map::blocks::FnLikeNode;
 use rustc::hir::map::Map;
 use rustc::middle::region;
@@ -1972,19 +1971,16 @@ fn check_impl_items_against_trait<'tcx>(
     // Check existing impl methods to see if they are both present in trait
     // and compatible with trait signature
     for impl_item in impl_items() {
+        let namespace = impl_item.kind.namespace();
         let ty_impl_item = tcx.associated_item(tcx.hir().local_def_id(impl_item.hir_id));
         let ty_trait_item = tcx
             .associated_items(impl_trait_ref.def_id)
-            .iter()
-            .find(|ac| {
-                Namespace::from(&impl_item.kind) == Namespace::from(ac.kind)
-                    && tcx.hygienic_eq(ty_impl_item.ident, ac.ident, impl_trait_ref.def_id)
-            })
+            .find_by_name_and_namespace(tcx, ty_impl_item.ident, namespace, impl_trait_ref.def_id)
             .or_else(|| {
                 // Not compatible, but needed for the error message
                 tcx.associated_items(impl_trait_ref.def_id)
-                    .iter()
-                    .find(|ac| tcx.hygienic_eq(ty_impl_item.ident, ac.ident, impl_trait_ref.def_id))
+                    .filter_by_name(tcx, ty_impl_item.ident, impl_trait_ref.def_id)
+                    .next()
             });
 
         // Check that impl definition matches trait definition
@@ -2088,7 +2084,7 @@ fn check_impl_items_against_trait<'tcx>(
     let mut missing_items = Vec::new();
     let mut invalidated_items = Vec::new();
     let associated_type_overridden = overridden_associated_type.is_some();
-    for trait_item in tcx.associated_items(impl_trait_ref.def_id) {
+    for trait_item in tcx.associated_items(impl_trait_ref.def_id).in_definition_order() {
         let is_implemented = trait_def
             .ancestors(tcx, impl_id)
             .leaf_def(tcx, trait_item.ident, trait_item.kind)
@@ -3843,17 +3839,58 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                                  error_code: &str,
                                  c_variadic: bool,
                                  sugg_unit: bool| {
+            let (span, start_span, args) = match &expr.kind {
+                hir::ExprKind::Call(hir::Expr { span, .. }, args) => (*span, *span, &args[..]),
+                hir::ExprKind::MethodCall(path_segment, span, args) => (
+                    *span,
+                    // `sp` doesn't point at the whole `foo.bar()`, only at `bar`.
+                    path_segment
+                        .args
+                        .and_then(|args| args.args.iter().last())
+                        // Account for `foo.bar::<T>()`.
+                        .map(|arg| {
+                            // Skip the closing `>`.
+                            tcx.sess
+                                .source_map()
+                                .next_point(tcx.sess.source_map().next_point(arg.span()))
+                        })
+                        .unwrap_or(*span),
+                    &args[1..], // Skip the receiver.
+                ),
+                k => span_bug!(sp, "checking argument types on a non-call: `{:?}`", k),
+            };
+            let arg_spans = if args.is_empty() {
+                // foo()
+                // ^^^-- supplied 0 arguments
+                // |
+                // expected 2 arguments
+                vec![tcx.sess.source_map().next_point(start_span).with_hi(sp.hi())]
+            } else {
+                // foo(1, 2, 3)
+                // ^^^ -  -  - supplied 3 arguments
+                // |
+                // expected 2 arguments
+                args.iter().map(|arg| arg.span).collect::<Vec<Span>>()
+            };
+
             let mut err = tcx.sess.struct_span_err_with_code(
-                sp,
+                span,
                 &format!(
                     "this function takes {}{} but {} {} supplied",
                     if c_variadic { "at least " } else { "" },
-                    potentially_plural_count(expected_count, "parameter"),
-                    potentially_plural_count(arg_count, "parameter"),
+                    potentially_plural_count(expected_count, "argument"),
+                    potentially_plural_count(arg_count, "argument"),
                     if arg_count == 1 { "was" } else { "were" }
                 ),
                 DiagnosticId::Error(error_code.to_owned()),
             );
+            let label = format!("supplied {}", potentially_plural_count(arg_count, "argument"));
+            for (i, span) in arg_spans.into_iter().enumerate() {
+                err.span_label(
+                    span,
+                    if arg_count == 0 || i + 1 == arg_count { &label } else { "" },
+                );
+            }
 
             if let Some(def_s) = def_span.map(|sp| tcx.sess.source_map().def_span(sp)) {
                 err.span_label(def_s, "defined here");
@@ -3870,11 +3907,11 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 );
             } else {
                 err.span_label(
-                    sp,
+                    span,
                     format!(
                         "expected {}{}",
                         if c_variadic { "at least " } else { "" },
-                        potentially_plural_count(expected_count, "parameter")
+                        potentially_plural_count(expected_count, "argument")
                     ),
                 );
             }
@@ -5224,7 +5261,13 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 // Check for `Future` implementations by constructing a predicate to
                 // prove: `<T as Future>::Output == U`
                 let future_trait = self.tcx.lang_items().future_trait().unwrap();
-                let item_def_id = self.tcx.associated_items(future_trait)[0].def_id;
+                let item_def_id = self
+                    .tcx
+                    .associated_items(future_trait)
+                    .in_definition_order()
+                    .nth(0)
+                    .unwrap()
+                    .def_id;
                 let predicate =
                     ty::Predicate::Projection(ty::Binder::bind(ty::ProjectionPredicate {
                         // `<T as Future>::Output`
@@ -5622,8 +5665,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
         self.tcx.sess.span_err(
             span,
-            "this function can only be invoked \
-                                      directly, not through a function pointer",
+            "this function can only be invoked directly, not through a function pointer",
         );
     }
 
