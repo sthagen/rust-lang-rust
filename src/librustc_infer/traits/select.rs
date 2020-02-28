@@ -532,20 +532,15 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             }
 
             ty::Predicate::ConstEvaluatable(def_id, substs) => {
-                if !(obligation.param_env, substs).has_local_value() {
-                    match self.tcx().const_eval_resolve(
-                        obligation.param_env,
-                        def_id,
-                        substs,
-                        None,
-                        None,
-                    ) {
-                        Ok(_) => Ok(EvaluatedToOk),
-                        Err(_) => Ok(EvaluatedToErr),
-                    }
-                } else {
-                    // Inference variables still left in param_env or substs.
-                    Ok(EvaluatedToAmbig)
+                match self.tcx().const_eval_resolve(
+                    obligation.param_env,
+                    def_id,
+                    substs,
+                    None,
+                    None,
+                ) {
+                    Ok(_) => Ok(EvaluatedToOk),
+                    Err(_) => Ok(EvaluatedToErr),
                 }
             }
         }
@@ -3202,7 +3197,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                     obligation.predicate.def_id(),
                     obligation.recursion_depth + 1,
                     a_last.expect_ty(),
-                    &[b_last.into()],
+                    &[b_last],
                 ));
             }
 

@@ -1519,7 +1519,7 @@ impl<'tcx> TerminatorKind<'tcx> {
                 values
                     .iter()
                     .map(|&u| {
-                        ty::Const::from_scalar(tcx, Scalar::from_uint(u, size).into(), switch_ty)
+                        ty::Const::from_scalar(tcx, Scalar::from_uint(u, size), switch_ty)
                             .to_string()
                             .into()
                     })
@@ -2044,6 +2044,15 @@ impl<'tcx> Operand<'tcx> {
         match *self {
             Operand::Copy(_) | Operand::Constant(_) => self.clone(),
             Operand::Move(place) => Operand::Copy(place),
+        }
+    }
+
+    /// Returns the `Place` that is the target of this `Operand`, or `None` if this `Operand` is a
+    /// constant.
+    pub fn place(&self) -> Option<&Place<'tcx>> {
+        match self {
+            Operand::Copy(place) | Operand::Move(place) => Some(place),
+            Operand::Constant(_) => None,
         }
     }
 }
