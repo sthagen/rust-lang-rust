@@ -4,19 +4,24 @@ use super::{FollowedByType, Parser, PathStyle};
 
 use crate::maybe_whole;
 
+use rustc_ast::ast::{self, AttrStyle, AttrVec, Attribute, Ident, DUMMY_NODE_ID};
+use rustc_ast::ast::{AssocItem, AssocItemKind, ForeignItemKind, Item, ItemKind};
+use rustc_ast::ast::{
+    Async, Const, Defaultness, IsAuto, PathSegment, Unsafe, UseTree, UseTreeKind,
+};
+use rustc_ast::ast::{
+    BindingMode, Block, FnDecl, FnSig, Mac, MacArgs, MacDelimiter, Param, SelfKind,
+};
+use rustc_ast::ast::{EnumDef, Generics, StructField, TraitRef, Ty, TyKind, Variant, VariantData};
+use rustc_ast::ast::{FnHeader, ForeignItem, Mutability, Visibility, VisibilityKind};
+use rustc_ast::ptr::P;
+use rustc_ast::token;
+use rustc_ast::tokenstream::{DelimSpan, TokenStream, TokenTree};
 use rustc_ast_pretty::pprust;
 use rustc_errors::{struct_span_err, Applicability, PResult, StashKey};
+use rustc_span::edition::Edition;
 use rustc_span::source_map::{self, Span};
 use rustc_span::symbol::{kw, sym, Symbol};
-use syntax::ast::{self, AttrStyle, AttrVec, Attribute, Ident, DUMMY_NODE_ID};
-use syntax::ast::{AssocItem, AssocItemKind, ForeignItemKind, Item, ItemKind};
-use syntax::ast::{Async, Const, Defaultness, IsAuto, PathSegment, Unsafe, UseTree, UseTreeKind};
-use syntax::ast::{BindingMode, Block, FnDecl, FnSig, Mac, MacArgs, MacDelimiter, Param, SelfKind};
-use syntax::ast::{EnumDef, Generics, StructField, TraitRef, Ty, TyKind, Variant, VariantData};
-use syntax::ast::{FnHeader, ForeignItem, Mutability, Visibility, VisibilityKind};
-use syntax::ptr::P;
-use syntax::token;
-use syntax::tokenstream::{DelimSpan, TokenStream, TokenTree};
 
 use log::debug;
 use std::mem;
@@ -636,7 +641,7 @@ impl<'a> Parser<'a> {
     }
 
     pub fn parse_trait_item(&mut self) -> PResult<'a, Option<Option<P<AssocItem>>>> {
-        self.parse_assoc_item(|t| t.span.rust_2018())
+        self.parse_assoc_item(|edition| edition >= Edition::Edition2018)
     }
 
     /// Parses associated items.
@@ -1380,7 +1385,7 @@ impl<'a> Parser<'a> {
 /// The parsing configuration used to parse a parameter list (see `parse_fn_params`).
 ///
 /// The function decides if, per-parameter `p`, `p` must have a pattern or just a type.
-type ReqName = fn(&token::Token) -> bool;
+type ReqName = fn(Edition) -> bool;
 
 /// Parsing of functions and methods.
 impl<'a> Parser<'a> {
@@ -1536,7 +1541,7 @@ impl<'a> Parser<'a> {
 
         let is_name_required = match self.token.kind {
             token::DotDotDot => false,
-            _ => req_name(&self.normalized_token),
+            _ => req_name(self.normalized_token.span.edition()),
         };
         let (pat, ty) = if is_name_required || self.is_named_param() {
             debug!("parse_param_general parse_pat (is_name_required:{})", is_name_required);

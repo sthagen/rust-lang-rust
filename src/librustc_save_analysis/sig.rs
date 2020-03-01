@@ -29,9 +29,9 @@ use crate::{id_from_def_id, id_from_node_id, SaveContext};
 
 use rls_data::{SigElement, Signature};
 
+use rustc_ast::ast::{self, Extern, NodeId};
 use rustc_ast_pretty::pprust;
 use rustc_hir::def::{DefKind, Res};
-use syntax::ast::{self, Extern, NodeId};
 
 pub fn item_signature(item: &ast::Item, scx: &SaveContext<'_, '_>) -> Option<Signature> {
     if !scx.config.signatures {
@@ -430,7 +430,7 @@ impl Sig for ast::Item {
                 sig.text.push_str(" = ");
                 let ty = match ty {
                     Some(ty) => ty.make(offset + sig.text.len(), id, scx)?,
-                    None => Err("Ty")?,
+                    None => return Err("Ty"),
                 };
                 sig.text.push_str(&ty.text);
                 sig.text.push(';');

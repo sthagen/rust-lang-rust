@@ -11,6 +11,7 @@ use rustc::ty::fold::TypeVisitor;
 use rustc::ty::query::Providers;
 use rustc::ty::subst::InternalSubsts;
 use rustc::ty::{self, GenericParamDefKind, TraitRef, Ty, TyCtxt, TypeFoldable};
+use rustc_ast::ast::Ident;
 use rustc_attr as attr;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_errors::struct_span_err;
@@ -22,7 +23,6 @@ use rustc_hir::{AssocItemKind, HirIdSet, Node, PatKind};
 use rustc_span::hygiene::Transparency;
 use rustc_span::symbol::{kw, sym};
 use rustc_span::Span;
-use syntax::ast::Ident;
 
 use std::marker::PhantomData;
 use std::{cmp, fmt, mem};
@@ -657,7 +657,7 @@ impl EmbargoVisitor<'tcx> {
                 .map(|module_hir_id| self.tcx.hir().expect_item(module_hir_id))
             {
                 if let hir::ItemKind::Mod(m) = &item.kind {
-                    for item_id in m.item_ids.as_ref() {
+                    for item_id in m.item_ids {
                         let item = self.tcx.hir().expect_item(item_id.id);
                         let def_id = self.tcx.hir().local_def_id(item_id.id);
                         if !self.tcx.hygienic_eq(segment.ident, item.ident, def_id) {

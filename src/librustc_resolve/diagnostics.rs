@@ -4,6 +4,8 @@ use log::debug;
 use rustc::bug;
 use rustc::session::Session;
 use rustc::ty::{self, DefIdTree};
+use rustc_ast::ast::{self, Ident, Path};
+use rustc_ast::util::lev_distance::find_best_match_for_name;
 use rustc_ast_pretty::pprust;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_errors::{struct_span_err, Applicability, DiagnosticBuilder};
@@ -15,8 +17,6 @@ use rustc_span::hygiene::MacroKind;
 use rustc_span::source_map::SourceMap;
 use rustc_span::symbol::{kw, Symbol};
 use rustc_span::{BytePos, MultiSpan, Span};
-use syntax::ast::{self, Ident, Path};
-use syntax::util::lev_distance::find_best_match_for_name;
 
 use crate::imports::{ImportDirective, ImportDirectiveSubclass, ImportResolver};
 use crate::path_names_to_string;
@@ -1426,7 +1426,7 @@ crate fn show_candidates(
     // we want consistent results across executions, but candidates are produced
     // by iterating through a hash map, so make sure they are ordered:
     let mut path_strings: Vec<_> =
-        candidates.into_iter().map(|c| path_names_to_string(&c.path)).collect();
+        candidates.iter().map(|c| path_names_to_string(&c.path)).collect();
     path_strings.sort();
     path_strings.dedup();
 
