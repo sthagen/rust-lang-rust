@@ -420,25 +420,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "chalk-engine"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "17ec698a6f053a23bfbe646d9f2fde4b02abc19125595270a99e6f44ae0bdd1a"
-dependencies = [
- "chalk-macros",
- "rustc-hash",
-]
-
-[[package]]
-name = "chalk-macros"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "295635afd6853aa9f20baeb7f0204862440c0fe994c5a253d5f479dac41d047e"
-dependencies = [
- "lazy_static 0.2.11",
-]
-
-[[package]]
 name = "chrono"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2494,9 +2475,9 @@ checksum = "05da548ad6865900e60eaba7f589cc0783590a92e940c26953ff81ddbab2d677"
 
 [[package]]
 name = "polonius-engine"
-version = "0.11.0"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e478d7c38eb785c6416cbe58df12aa55d7aefa3759b6d3e044b2ed03f423cec"
+checksum = "04d8ef65e3f89ecaec9ca7cb0e0911b4617352d4494018bcf934992f03f2024c"
 dependencies = [
  "datafrog",
  "log",
@@ -3110,7 +3091,6 @@ dependencies = [
  "backtrace",
  "bitflags",
  "byteorder",
- "chalk-engine",
  "jobserver",
  "log",
  "measureme",
@@ -4144,7 +4124,6 @@ checksum = "b725dadae9fabc488df69a287f5a99c5eaf5d10853842a8a3dfac52476f544ee"
 name = "rustc_traits"
 version = "0.0.0"
 dependencies = [
- "chalk-engine",
  "log",
  "rustc",
  "rustc_ast",
