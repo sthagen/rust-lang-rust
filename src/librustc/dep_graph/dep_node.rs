@@ -111,6 +111,7 @@ macro_rules! define_dep_nodes {
     ) => (
         #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash,
                  RustcEncodable, RustcDecodable)]
+        #[allow(non_camel_case_types)]
         pub enum DepKind {
             $($variant),*
         }
@@ -173,6 +174,7 @@ macro_rules! define_dep_nodes {
 
         pub struct DepConstructor;
 
+        #[allow(non_camel_case_types)]
         impl DepConstructor {
             $(
                 #[inline(always)]
@@ -360,33 +362,9 @@ rustc_dep_node_append!([define_dep_nodes!][ <'tcx>
     [anon] TraitSelect,
 
     [] CompileCodegenUnit(Symbol),
-
-    [eval_always] Analysis(CrateNum),
 ]);
 
-pub trait RecoverKey<'tcx>: Sized {
-    fn recover(tcx: TyCtxt<'tcx>, dep_node: &DepNode) -> Option<Self>;
-}
-
-impl RecoverKey<'tcx> for CrateNum {
-    fn recover(tcx: TyCtxt<'tcx>, dep_node: &DepNode) -> Option<Self> {
-        dep_node.extract_def_id(tcx).map(|id| id.krate)
-    }
-}
-
-impl RecoverKey<'tcx> for DefId {
-    fn recover(tcx: TyCtxt<'tcx>, dep_node: &DepNode) -> Option<Self> {
-        dep_node.extract_def_id(tcx)
-    }
-}
-
-impl RecoverKey<'tcx> for DefIndex {
-    fn recover(tcx: TyCtxt<'tcx>, dep_node: &DepNode) -> Option<Self> {
-        dep_node.extract_def_id(tcx).map(|id| id.index)
-    }
-}
-
-trait DepNodeParams<'tcx>: fmt::Debug {
+pub(crate) trait DepNodeParams<'tcx>: fmt::Debug + Sized {
     const CAN_RECONSTRUCT_QUERY_KEY: bool;
 
     /// This method turns the parameters of a DepNodeConstructor into an opaque
@@ -400,6 +378,14 @@ trait DepNodeParams<'tcx>: fmt::Debug {
     fn to_debug_str(&self, _: TyCtxt<'tcx>) -> String {
         format!("{:?}", self)
     }
+
+    /// This method tries to recover the query key from the given `DepNode`,
+    /// something which is needed when forcing `DepNode`s during red-green
+    /// evaluation. The query system will only call this method if
+    /// `CAN_RECONSTRUCT_QUERY_KEY` is `true`.
+    /// It is always valid to return `None` here, in which case incremental
+    /// compilation will treat the query as having changed instead of forcing it.
+    fn recover(tcx: TyCtxt<'tcx>, dep_node: &DepNode) -> Option<Self>;
 }
 
 impl<'tcx, T> DepNodeParams<'tcx> for T
@@ -420,6 +406,10 @@ where
     default fn to_debug_str(&self, _: TyCtxt<'tcx>) -> String {
         format!("{:?}", *self)
     }
+
+    default fn recover(_: TyCtxt<'tcx>, _: &DepNode) -> Option<Self> {
+        None
+    }
 }
 
 impl<'tcx> DepNodeParams<'tcx> for DefId {
@@ -431,6 +421,10 @@ impl<'tcx> DepNodeParams<'tcx> for DefId {
 
     fn to_debug_str(&self, tcx: TyCtxt<'tcx>) -> String {
         tcx.def_path_str(*self)
+    }
+
+    fn recover(tcx: TyCtxt<'tcx>, dep_node: &DepNode) -> Option<Self> {
+        dep_node.extract_def_id(tcx)
     }
 }
 
@@ -444,6 +438,10 @@ impl<'tcx> DepNodeParams<'tcx> for DefIndex {
     fn to_debug_str(&self, tcx: TyCtxt<'tcx>) -> String {
         tcx.def_path_str(DefId::local(*self))
     }
+
+    fn recover(tcx: TyCtxt<'tcx>, dep_node: &DepNode) -> Option<Self> {
+        dep_node.extract_def_id(tcx).map(|id| id.index)
+    }
 }
 
 impl<'tcx> DepNodeParams<'tcx> for CrateNum {
@@ -456,6 +454,10 @@ impl<'tcx> DepNodeParams<'tcx> for CrateNum {
 
     fn to_debug_str(&self, tcx: TyCtxt<'tcx>) -> String {
         tcx.crate_name(*self).to_string()
+    }
+
+    fn recover(tcx: TyCtxt<'tcx>, dep_node: &DepNode) -> Option<Self> {
+        dep_node.extract_def_id(tcx).map(|id| id.krate)
     }
 }
 
