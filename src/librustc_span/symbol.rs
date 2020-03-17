@@ -453,6 +453,7 @@ symbols! {
         min_align_of,
         min_const_fn,
         min_const_unsafe_fn,
+        min_specialization,
         mips_target_feature,
         mmx_target_feature,
         module,
@@ -654,6 +655,8 @@ symbols! {
         rustc_proc_macro_decls,
         rustc_promotable,
         rustc_regions,
+        rustc_unsafe_specialization_marker,
+        rustc_specialization_trait,
         rustc_stable,
         rustc_std_internal_symbol,
         rustc_symbol_name,
@@ -853,12 +856,12 @@ impl Ident {
     }
 
     /// "Normalize" ident for use in comparisons using "item hygiene".
-    /// Identifiers with same string value become same if they came from the same "modern" macro
+    /// Identifiers with same string value become same if they came from the same macro 2.0 macro
     /// (e.g., `macro` item, but not `macro_rules` item) and stay different if they came from
-    /// different "modern" macros.
+    /// different macro 2.0 macros.
     /// Technically, this operation strips all non-opaque marks from ident's syntactic context.
-    pub fn modern(self) -> Ident {
-        Ident::new(self.name, self.span.modern())
+    pub fn normalize_to_macros_2_0(self) -> Ident {
+        Ident::new(self.name, self.span.normalize_to_macros_2_0())
     }
 
     /// "Normalize" ident for use in comparisons using "local variable hygiene".
@@ -866,8 +869,8 @@ impl Ident {
     /// macro (e.g., `macro` or `macro_rules!` items) and stay different if they came from different
     /// non-transparent macros.
     /// Technically, this operation strips all transparent marks from ident's syntactic context.
-    pub fn modern_and_legacy(self) -> Ident {
-        Ident::new(self.name, self.span.modern_and_legacy())
+    pub fn normalize_to_macro_rules(self) -> Ident {
+        Ident::new(self.name, self.span.normalize_to_macro_rules())
     }
 
     /// Convert the name to a `SymbolStr`. This is a slowish operation because

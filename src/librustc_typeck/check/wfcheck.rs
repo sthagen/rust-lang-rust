@@ -4,6 +4,7 @@ use crate::constrained_generic_params::{identify_constrained_generic_params, Par
 use rustc::middle::lang_items;
 use rustc::session::parse::feature_err;
 use rustc::ty::subst::{InternalSubsts, Subst};
+use rustc::ty::trait_def::TraitSpecializationKind;
 use rustc::ty::{
     self, AdtKind, GenericParamDefKind, ToPredicate, Ty, TyCtxt, TypeFoldable, WithConstness,
 };
@@ -248,7 +249,7 @@ pub fn check_impl_item(tcx: TyCtxt<'_>, def_id: DefId) {
     let impl_item = tcx.hir().expect_impl_item(hir_id);
 
     let method_sig = match impl_item.kind {
-        hir::ImplItemKind::Method(ref sig, _) => Some(sig),
+        hir::ImplItemKind::Fn(ref sig, _) => Some(sig),
         _ => None,
     };
 
@@ -412,7 +413,9 @@ fn check_trait(tcx: TyCtxt<'_>, item: &hir::Item<'_>) {
     let trait_def_id = tcx.hir().local_def_id(item.hir_id);
 
     let trait_def = tcx.trait_def(trait_def_id);
-    if trait_def.is_marker {
+    if trait_def.is_marker
+        || matches!(trait_def.specialization_kind, TraitSpecializationKind::Marker)
+    {
         for associated_def_id in &*tcx.associated_item_def_ids(trait_def_id) {
             struct_span_err!(
                 tcx.sess,

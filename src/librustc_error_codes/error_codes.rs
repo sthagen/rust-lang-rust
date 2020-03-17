@@ -349,8 +349,10 @@ E0623: include_str!("./error_codes/E0623.md"),
 E0624: include_str!("./error_codes/E0624.md"),
 E0626: include_str!("./error_codes/E0626.md"),
 E0627: include_str!("./error_codes/E0627.md"),
+E0628: include_str!("./error_codes/E0628.md"),
 E0631: include_str!("./error_codes/E0631.md"),
 E0633: include_str!("./error_codes/E0633.md"),
+E0634: include_str!("./error_codes/E0634.md"),
 E0635: include_str!("./error_codes/E0635.md"),
 E0636: include_str!("./error_codes/E0636.md"),
 E0637: include_str!("./error_codes/E0637.md"),
@@ -582,14 +584,12 @@ E0748: include_str!("./error_codes/E0748.md"),
 //  E0612, // merged into E0609
 //  E0613, // Removed (merged with E0609)
     E0625, // thread-local statics cannot be accessed at compile-time
-    E0628, // generators cannot have explicit parameters
     E0629, // missing 'feature' (rustc_const_unstable)
     // rustc_const_unstable attribute must be paired with stable/unstable
     // attribute
     E0630,
     E0632, // cannot provide explicit generic arguments when `impl Trait` is
            // used in argument position
-    E0634, // type has conflicting packed representaton hints
     E0640, // infer outlives requirements
 //  E0645, // trait aliases not finished
     E0657, // `impl Trait` can only capture lifetimes bound at the fn level

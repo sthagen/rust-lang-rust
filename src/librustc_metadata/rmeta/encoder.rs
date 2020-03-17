@@ -807,10 +807,10 @@ impl EncodeContext<'tcx> {
             ty::AssocKind::Method => {
                 let fn_data = if let hir::TraitItemKind::Fn(m_sig, m) = &ast_item.kind {
                     let param_names = match *m {
-                        hir::TraitMethod::Required(ref names) => {
+                        hir::TraitFn::Required(ref names) => {
                             self.encode_fn_param_names(names)
                         }
-                        hir::TraitMethod::Provided(body) => {
+                        hir::TraitFn::Provided(body) => {
                             self.encode_fn_param_names_for_body(body)
                         }
                     };
@@ -822,7 +822,7 @@ impl EncodeContext<'tcx> {
                 } else {
                     bug!()
                 };
-                EntryKind::Method(self.lazy(MethodData {
+                EntryKind::AssocFn(self.lazy(AssocFnData {
                     fn_data,
                     container,
                     has_self: trait_item.method_has_self_argument,
@@ -894,7 +894,7 @@ impl EncodeContext<'tcx> {
                 }
             }
             ty::AssocKind::Method => {
-                let fn_data = if let hir::ImplItemKind::Method(ref sig, body) = ast_item.kind {
+                let fn_data = if let hir::ImplItemKind::Fn(ref sig, body) = ast_item.kind {
                     FnData {
                         asyncness: sig.header.asyncness,
                         constness: sig.header.constness,
@@ -903,7 +903,7 @@ impl EncodeContext<'tcx> {
                 } else {
                     bug!()
                 };
-                EntryKind::Method(self.lazy(MethodData {
+                EntryKind::AssocFn(self.lazy(AssocFnData {
                     fn_data,
                     container,
                     has_self: impl_item.method_has_self_argument,
@@ -928,7 +928,7 @@ impl EncodeContext<'tcx> {
         self.encode_inferred_outlives(def_id);
         let mir = match ast_item.kind {
             hir::ImplItemKind::Const(..) => true,
-            hir::ImplItemKind::Method(ref sig, _) => {
+            hir::ImplItemKind::Fn(ref sig, _) => {
                 let generics = self.tcx.generics_of(def_id);
                 let needs_inline = (generics.requires_monomorphization(self.tcx)
                     || tcx.codegen_fn_attrs(def_id).requests_inline())
@@ -1077,12 +1077,13 @@ impl EncodeContext<'tcx> {
                 let polarity = self.tcx.impl_polarity(def_id);
                 let parent = if let Some(trait_ref) = trait_ref {
                     let trait_def = self.tcx.trait_def(trait_ref.def_id);
-                    trait_def.ancestors(self.tcx, def_id).nth(1).and_then(|node| {
-                        match node {
-                            specialization_graph::Node::Impl(parent) => Some(parent),
-                            _ => None,
-                        }
-                    })
+                    trait_def.ancestors(self.tcx, def_id).ok()
+                        .and_then(|mut an| an.nth(1).and_then(|node| {
+                            match node {
+                                specialization_graph::Node::Impl(parent) => Some(parent),
+                                _ => None,
+                            }
+                        }))
                 } else {
                     None
                 };
@@ -1114,6 +1115,7 @@ impl EncodeContext<'tcx> {
                     paren_sugar: trait_def.paren_sugar,
                     has_auto_impl: self.tcx.trait_is_auto(def_id),
                     is_marker: trait_def.is_marker,
+                    specialization_kind: trait_def.specialization_kind,
                 };
 
                 EntryKind::Trait(self.lazy(data))

@@ -305,7 +305,7 @@ enum EntryKind {
     Generator(hir::GeneratorKind),
     Trait(Lazy<TraitData>),
     Impl(Lazy<ImplData>),
-    Method(Lazy<MethodData>),
+    AssocFn(Lazy<AssocFnData>),
     AssocType(AssocContainer),
     AssocOpaqueTy(AssocContainer),
     AssocConst(AssocContainer, mir::ConstQualifs, Lazy<RenderedConst>),
@@ -343,6 +343,7 @@ struct TraitData {
     paren_sugar: bool,
     has_auto_impl: bool,
     is_marker: bool,
+    specialization_kind: ty::trait_def::TraitSpecializationKind,
 }
 
 #[derive(RustcEncodable, RustcDecodable)]
@@ -392,7 +393,7 @@ impl AssocContainer {
 }
 
 #[derive(RustcEncodable, RustcDecodable)]
-struct MethodData {
+struct AssocFnData {
     fn_data: FnData,
     container: AssocContainer,
     has_self: bool,

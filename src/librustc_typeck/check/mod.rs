@@ -816,14 +816,14 @@ fn primary_body_of(
         },
         Node::TraitItem(item) => match item.kind {
             hir::TraitItemKind::Const(ref ty, Some(body)) => Some((body, Some(ty), None, None)),
-            hir::TraitItemKind::Fn(ref sig, hir::TraitMethod::Provided(body)) => {
+            hir::TraitItemKind::Fn(ref sig, hir::TraitFn::Provided(body)) => {
                 Some((body, None, Some(&sig.header), Some(&sig.decl)))
             }
             _ => None,
         },
         Node::ImplItem(item) => match item.kind {
             hir::ImplItemKind::Const(ref ty, body) => Some((body, Some(ty), None, None)),
-            hir::ImplItemKind::Method(ref sig, body) => {
+            hir::ImplItemKind::Fn(ref sig, body) => {
                 Some((body, None, Some(&sig.header), Some(&sig.decl)))
             }
             _ => None,
@@ -1896,13 +1896,16 @@ fn check_specialization_validity<'tcx>(
 ) {
     let kind = match impl_item.kind {
         hir::ImplItemKind::Const(..) => ty::AssocKind::Const,
-        hir::ImplItemKind::Method(..) => ty::AssocKind::Method,
+        hir::ImplItemKind::Fn(..) => ty::AssocKind::Method,
         hir::ImplItemKind::OpaqueTy(..) => ty::AssocKind::OpaqueTy,
         hir::ImplItemKind::TyAlias(_) => ty::AssocKind::Type,
     };
 
-    let mut ancestor_impls = trait_def
-        .ancestors(tcx, impl_id)
+    let ancestors = match trait_def.ancestors(tcx, impl_id) {
+        Ok(ancestors) => ancestors,
+        Err(_) => return,
+    };
+    let mut ancestor_impls = ancestors
         .skip(1)
         .filter_map(|parent| {
             if parent.is_from_trait() {
@@ -2019,7 +2022,7 @@ fn check_impl_items_against_trait<'tcx>(
                         err.emit()
                     }
                 }
-                hir::ImplItemKind::Method(..) => {
+                hir::ImplItemKind::Fn(..) => {
                     let opt_trait_span = tcx.hir().span_if_local(ty_trait_item.def_id);
                     if ty_trait_item.kind == ty::AssocKind::Method {
                         compare_impl_method(
@@ -2083,16 +2086,17 @@ fn check_impl_items_against_trait<'tcx>(
 
     // Check for missing items from trait
     let mut missing_items = Vec::new();
-    for trait_item in tcx.associated_items(impl_trait_ref.def_id).in_definition_order() {
-        let is_implemented = trait_def
-            .ancestors(tcx, impl_id)
-            .leaf_def(tcx, trait_item.ident, trait_item.kind)
-            .map(|node_item| !node_item.node.is_from_trait())
-            .unwrap_or(false);
+    if let Ok(ancestors) = trait_def.ancestors(tcx, impl_id) {
+        for trait_item in tcx.associated_items(impl_trait_ref.def_id).in_definition_order() {
+            let is_implemented = ancestors
+                .leaf_def(tcx, trait_item.ident, trait_item.kind)
+                .map(|node_item| !node_item.node.is_from_trait())
+                .unwrap_or(false);
 
-        if !is_implemented && !traits::impl_is_default(tcx, impl_id) {
-            if !trait_item.defaultness.has_value() {
-                missing_items.push(*trait_item);
+            if !is_implemented && !traits::impl_is_default(tcx, impl_id) {
+                if !trait_item.defaultness.has_value() {
+                    missing_items.push(*trait_item);
+                }
             }
         }
     }
@@ -4738,9 +4742,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let node = self.tcx.hir().get(self.tcx.hir().get_parent_item(id));
         match node {
             Node::Item(&hir::Item { kind: hir::ItemKind::Fn(_, _, body_id), .. })
-            | Node::ImplItem(&hir::ImplItem {
-                kind: hir::ImplItemKind::Method(_, body_id), ..
-            }) => {
+            | Node::ImplItem(&hir::ImplItem { kind: hir::ImplItemKind::Fn(_, body_id), .. }) => {
                 let body = self.tcx.hir().body(body_id);
                 if let ExprKind::Block(block, _) = &body.value.kind {
                     return Some(block.span);
@@ -4779,7 +4781,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             }) => Some((&sig.decl, ident, true)),
             Node::ImplItem(&hir::ImplItem {
                 ident,
-                kind: hir::ImplItemKind::Method(ref sig, ..),
+                kind: hir::ImplItemKind::Fn(ref sig, ..),
                 ..
             }) => Some((&sig.decl, ident, false)),
             _ => None,
@@ -4864,11 +4866,11 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             match hir.get_if_local(def_id) {
                 Some(Node::Item(hir::Item { kind: ItemKind::Fn(.., body_id), .. }))
                 | Some(Node::ImplItem(hir::ImplItem {
-                    kind: hir::ImplItemKind::Method(_, body_id),
+                    kind: hir::ImplItemKind::Fn(_, body_id),
                     ..
                 }))
                 | Some(Node::TraitItem(hir::TraitItem {
-                    kind: hir::TraitItemKind::Fn(.., hir::TraitMethod::Provided(body_id)),
+                    kind: hir::TraitItemKind::Fn(.., hir::TraitFn::Provided(body_id)),
                     ..
                 })) => {
                     let body = hir.body(*body_id);
@@ -4939,7 +4941,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         .join(", ")
                 }
                 Some(Node::TraitItem(hir::TraitItem {
-                    kind: hir::TraitItemKind::Fn(.., hir::TraitMethod::Required(idents)),
+                    kind: hir::TraitItemKind::Fn(.., hir::TraitFn::Required(idents)),
                     ..
                 })) => {
                     sugg_call = idents
