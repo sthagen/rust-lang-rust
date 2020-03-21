@@ -1323,7 +1323,7 @@ impl<'tcx> TyCtxt<'tcx> {
     }
 
     pub fn encode_metadata(self) -> EncodedMetadata {
-        let _prof_timer = self.prof.generic_activity("generate_crate_metadata");
+        let _prof_timer = self.prof.verbose_generic_activity("generate_crate_metadata");
         self.cstore.encode_metadata(self)
     }
 
@@ -1447,11 +1447,11 @@ impl<'tcx> TyCtxt<'tcx> {
             _ => return None,
         };
 
-        return Some(FreeRegionInfo {
+        Some(FreeRegionInfo {
             def_id: suitable_region_binding_scope,
             boundregion: bound_region,
             is_impl_item,
-        });
+        })
     }
 
     pub fn return_type_impl_trait(&self, scope_def_id: DefId) -> Option<(Ty<'tcx>, Span)> {

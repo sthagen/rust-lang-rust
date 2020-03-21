@@ -1580,7 +1580,7 @@ fn check_union_fields(tcx: TyCtxt<'_>, span: Span, item_def_id: DefId) -> bool {
     } else {
         span_bug!(span, "unions must be ty::Adt, but got {:?}", item_type.kind);
     }
-    return true;
+    true
 }
 
 /// Checks that an opaque type does not contain cycles and does not use `Self` or `T::Foo`
@@ -2313,7 +2313,7 @@ fn check_representable(tcx: TyCtxt<'_>, sp: Span, item_def_id: DefId) -> bool {
         }
         Representability::Representable | Representability::ContainsRecursive => (),
     }
-    return true;
+    true
 }
 
 pub fn check_simd(tcx: TyCtxt<'_>, sp: Span, def_id: DefId) {
@@ -4837,18 +4837,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let hir = self.tcx.hir();
         let (def_id, sig) = match found.kind {
             ty::FnDef(def_id, _) => (def_id, found.fn_sig(self.tcx)),
-            ty::Closure(def_id, substs) => {
-                // We don't use `closure_sig` to account for malformed closures like
-                // `|_: [_; continue]| {}` and instead we don't suggest anything.
-                let closure_sig_ty = substs.as_closure().sig_ty(def_id, self.tcx);
-                (
-                    def_id,
-                    match closure_sig_ty.kind {
-                        ty::FnPtr(sig) => sig,
-                        _ => return false,
-                    },
-                )
-            }
+            ty::Closure(def_id, substs) => (def_id, substs.as_closure().sig(def_id, self.tcx)),
             _ => return false,
         };
 
