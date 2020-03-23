@@ -312,6 +312,8 @@ fn configure_and_expand_inner<'a>(
             ecx.parse_sess.missing_fragment_specifiers.borrow().iter().cloned().collect();
         missing_fragment_specifiers.sort();
 
+        let recursion_limit_hit = ecx.reduced_recursion_limit.is_some();
+
         for span in missing_fragment_specifiers {
             let lint = lint::builtin::MISSING_FRAGMENT_SPECIFIER;
             let msg = "missing fragment specifier";
@@ -320,8 +322,15 @@ fn configure_and_expand_inner<'a>(
         if cfg!(windows) {
             env::set_var("PATH", &old_path);
         }
-        krate
-    });
+
+        if recursion_limit_hit {
+            // If we hit a recursion limit, exit early to avoid later passes getting overwhelmed
+            // with a large AST
+            Err(ErrorReported)
+        } else {
+            Ok(krate)
+        }
+    })?;
 
     sess.time("maybe_building_test_harness", || {
         rustc_builtin_macros::test_harness::inject(
@@ -428,12 +437,16 @@ pub fn lower_to_hir<'res, 'tcx>(
     resolver: &'res mut Resolver<'_>,
     dep_graph: &'res DepGraph,
     krate: &'res ast::Crate,
-    arena: &'tcx Arena<'tcx>,
+    arena: &'tcx rustc_ast_lowering::Arena<'tcx>,
 ) -> Crate<'tcx> {
+    // We're constructing the HIR here; we don't care what we will
+    // read, since we haven't even constructed the *input* to
+    // incr. comp. yet.
+    dep_graph.assert_ignored();
+
     // Lower AST to HIR.
     let hir_crate = rustc_ast_lowering::lower_crate(
         sess,
-        &dep_graph,
         &krate,
         resolver,
         rustc_parse::nt_to_tokenstream,
