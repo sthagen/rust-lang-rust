@@ -4,9 +4,9 @@
 //! conflicts between multiple such attributes attached to the same
 //! item.
 
-use rustc::hir::map::Map;
-use rustc::ty::query::Providers;
-use rustc::ty::TyCtxt;
+use rustc_middle::hir::map::Map;
+use rustc_middle::ty::query::Providers;
+use rustc_middle::ty::TyCtxt;
 
 use rustc_ast::ast::{Attribute, NestedMetaItem};
 use rustc_ast::attr;
@@ -151,17 +151,17 @@ impl CheckAttrVisitor<'tcx> {
                 .emit();
                 false
             }
-            Target::Fn | Target::Method(MethodKind::Inherent) => true,
-            Target::Method(_) => {
+            Target::ForeignFn => {
                 struct_span_err!(
                     self.tcx.sess,
                     *attr_span,
                     E0738,
-                    "`#[track_caller]` may not be used on trait methods",
+                    "`#[track_caller]` is not supported on foreign functions",
                 )
                 .emit();
                 false
             }
+            Target::Fn | Target::Method(..) => true,
             _ => {
                 struct_span_err!(
                     self.tcx.sess,
