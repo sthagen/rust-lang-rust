@@ -9,7 +9,8 @@ use rustc_middle::mir::interpret::{
 };
 use rustc_middle::mir::visit::Visitor;
 use rustc_middle::mir::*;
-use rustc_middle::ty::{self, layout::Size, TyCtxt, TypeFoldable, TypeVisitor};
+use rustc_middle::ty::{self, TyCtxt, TypeFoldable, TypeVisitor};
+use rustc_target::abi::Size;
 use std::collections::BTreeSet;
 use std::fmt::Display;
 use std::fmt::Write as _;
@@ -78,21 +79,21 @@ pub fn dump_mir<'tcx, F>(
 ) where
     F: FnMut(PassWhere, &mut dyn Write) -> io::Result<()>,
 {
-    if !dump_enabled(tcx, pass_name, source) {
+    if !dump_enabled(tcx, pass_name, source.def_id()) {
         return;
     }
 
     dump_matched_mir_node(tcx, pass_num, pass_name, disambiguator, source, body, extra_data);
 }
 
-pub fn dump_enabled<'tcx>(tcx: TyCtxt<'tcx>, pass_name: &str, source: MirSource<'tcx>) -> bool {
+pub fn dump_enabled<'tcx>(tcx: TyCtxt<'tcx>, pass_name: &str, def_id: DefId) -> bool {
     let filters = match tcx.sess.opts.debugging_opts.dump_mir {
         None => return false,
         Some(ref filters) => filters,
     };
     let node_path = ty::print::with_forced_impl_filename_line(|| {
         // see notes on #41697 below
-        tcx.def_path_str(source.def_id())
+        tcx.def_path_str(def_id)
     });
     filters.split('|').any(|or_filter| {
         or_filter.split('&').all(|and_filter| {

@@ -2,21 +2,21 @@
 //! All high-level functions to read from memory work on operands as sources.
 
 use std::convert::TryFrom;
+use std::fmt::Write;
 
-use super::{InterpCx, MPlaceTy, Machine, MemPlace, Place, PlaceTy};
 use rustc_hir::def::Namespace;
 use rustc_macros::HashStable;
-pub use rustc_middle::mir::interpret::ScalarMaybeUndef;
-use rustc_middle::mir::interpret::{
-    sign_extend, truncate, AllocId, ConstValue, GlobalId, InterpResult, Pointer, Scalar,
-};
-use rustc_middle::ty::layout::{
-    self, HasDataLayout, IntegerExt, LayoutOf, PrimitiveExt, Size, TyAndLayout, VariantIdx,
-};
+use rustc_middle::ty::layout::{IntegerExt, PrimitiveExt, TyAndLayout};
 use rustc_middle::ty::print::{FmtPrinter, PrettyPrinter, Printer};
 use rustc_middle::ty::Ty;
 use rustc_middle::{mir, ty};
-use std::fmt::Write;
+use rustc_target::abi::{Abi, DiscriminantKind, HasDataLayout, Integer, LayoutOf, Size};
+use rustc_target::abi::{VariantIdx, Variants};
+
+use super::{
+    from_known_layout, sign_extend, truncate, AllocId, ConstValue, GlobalId, InterpCx,
+    InterpResult, MPlaceTy, Machine, MemPlace, Place, PlaceTy, Pointer, Scalar, ScalarMaybeUndef,
+};
 
 /// An `Immediate` represents a single immediate self-contained Rust value.
 ///
@@ -203,29 +203,6 @@ impl<'tcx, Tag: Copy> ImmTy<'tcx, Tag> {
     }
 }
 
-// Use the existing layout if given (but sanity check in debug mode),
-// or compute the layout.
-#[inline(always)]
-pub(super) fn from_known_layout<'tcx>(
-    layout: Option<TyAndLayout<'tcx>>,
-    compute: impl FnOnce() -> InterpResult<'tcx, TyAndLayout<'tcx>>,
-) -> InterpResult<'tcx, TyAndLayout<'tcx>> {
-    match layout {
-        None => compute(),
-        Some(layout) => {
-            if cfg!(debug_assertions) {
-                let layout2 = compute()?;
-                assert_eq!(
-                    layout.layout, layout2.layout,
-                    "mismatch in layout of supposedly equal-layout types {:?} and {:?}",
-                    layout.ty, layout2.ty
-                );
-            }
-            Ok(layout)
-        }
-    }
-}
-
 impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
     /// Normalice `place.ptr` to a `Pointer` if this is a place and not a ZST.
     /// Can be helpful to avoid lots of `force_ptr` calls later, if this place is used a lot.
@@ -266,7 +243,7 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         };
 
         match mplace.layout.abi {
-            layout::Abi::Scalar(..) => {
+            Abi::Scalar(..) => {
                 let scalar = self.memory.get_raw(ptr.alloc_id)?.read_scalar(
                     self,
                     ptr,
@@ -274,7 +251,7 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
                 )?;
                 Ok(Some(ImmTy { imm: scalar.into(), layout: mplace.layout }))
             }
-            layout::Abi::ScalarPair(ref a, ref b) => {
+            Abi::ScalarPair(ref a, ref b) => {
                 // We checked `ptr_align` above, so all fields will have the alignment they need.
                 // We would anyway check against `ptr_align.restrict_for_offset(b_offset)`,
                 // which `ptr.offset(b_offset)` cannot possibly fail to satisfy.
@@ -464,7 +441,7 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
     // avoid allocations.
     pub fn eval_place_to_op(
         &self,
-        place: &mir::Place<'tcx>,
+        place: mir::Place<'tcx>,
         layout: Option<TyAndLayout<'tcx>>,
     ) -> InterpResult<'tcx, OpTy<'tcx, M::PointerTag>> {
         let base_op = match place.local {
@@ -498,7 +475,7 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         use rustc_middle::mir::Operand::*;
         let op = match *mir_op {
             // FIXME: do some more logic on `move` to invalidate the old location
-            Copy(ref place) | Move(ref place) => self.eval_place_to_op(place, layout)?,
+            Copy(place) | Move(place) => self.eval_place_to_op(place, layout)?,
 
             Constant(ref constant) => {
                 let val =
@@ -587,7 +564,7 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         trace!("read_discriminant_value {:#?}", rval.layout);
 
         let (discr_layout, discr_kind, discr_index) = match rval.layout.variants {
-            layout::Variants::Single { index } => {
+            Variants::Single { index } => {
                 let discr_val = rval
                     .layout
                     .ty
@@ -595,12 +572,9 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
                     .map_or(u128::from(index.as_u32()), |discr| discr.val);
                 return Ok((discr_val, index));
             }
-            layout::Variants::Multiple {
-                discr: ref discr_layout,
-                ref discr_kind,
-                discr_index,
-                ..
-            } => (discr_layout, discr_kind, discr_index),
+            Variants::Multiple { discr: ref discr_layout, ref discr_kind, discr_index, .. } => {
+                (discr_layout, discr_kind, discr_index)
+            }
         };
 
         // read raw discriminant value
@@ -610,7 +584,7 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         trace!("discr value: {:?}", raw_discr);
         // post-process
         Ok(match *discr_kind {
-            layout::DiscriminantKind::Tag => {
+            DiscriminantKind::Tag => {
                 let bits_discr = raw_discr
                     .not_undef()
                     .and_then(|raw_discr| self.force_bits(raw_discr, discr_val.layout.size))
@@ -627,7 +601,7 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
                         .expect("tagged layout corresponds to adt")
                         .repr
                         .discr_type();
-                    let size = layout::Integer::from_attr(self, discr_ty).size();
+                    let size = Integer::from_attr(self, discr_ty).size();
                     truncate(sexted, size)
                 } else {
                     bits_discr
@@ -648,11 +622,7 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
                 .ok_or_else(|| err_ub!(InvalidDiscriminant(raw_discr.erase_tag())))?;
                 (real_discr, index.0)
             }
-            layout::DiscriminantKind::Niche {
-                dataful_variant,
-                ref niche_variants,
-                niche_start,
-            } => {
+            DiscriminantKind::Niche { dataful_variant, ref niche_variants, niche_start } => {
                 let variants_start = niche_variants.start().as_u32();
                 let variants_end = niche_variants.end().as_u32();
                 let raw_discr = raw_discr

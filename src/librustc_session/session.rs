@@ -20,7 +20,8 @@ use rustc_errors::emitter::{Emitter, EmitterWriter, HumanReadableErrorType};
 use rustc_errors::json::JsonEmitter;
 use rustc_errors::{Applicability, DiagnosticBuilder, DiagnosticId, ErrorReported};
 use rustc_span::edition::Edition;
-use rustc_span::source_map::{self, MultiSpan, Span};
+use rustc_span::source_map::{self, FileLoader, MultiSpan, RealFileLoader, SourceMap, Span};
+use rustc_span::SourceFileHashAlgorithm;
 use rustc_target::spec::{PanicStrategy, RelroLevel, Target, TargetTriple};
 
 use std::cell::{self, RefCell};
@@ -140,6 +141,15 @@ pub struct Session {
     /// Options range from returning the error without a backtrace to returning an error
     /// and immediately printing the backtrace to stderr.
     pub ctfe_backtrace: Lock<CtfeBacktrace>,
+
+    /// Base directory containing the `src/` for the Rust standard library, and
+    /// potentially `rustc` as well, if we can can find it. Right now it's always
+    /// `$sysroot/lib/rustlib/src/rust` (i.e. the `rustup` `rust-src` component).
+    ///
+    /// This directory is what the virtual `/rustc/$hash` is translated back to,
+    /// if Rust was built with path remapping to `/rustc/$hash` enabled
+    /// (the `rust.remap-debuginfo` option in `config.toml`).
+    pub real_rust_source_base_dir: Option<PathBuf>,
 }
 
 pub struct PerfStats {
@@ -758,6 +768,13 @@ impl Session {
             return n as usize;
         }
 
+        // If incremental compilation is turned on, we default to a high number
+        // codegen units in order to reduce the "collateral damage" small
+        // changes cause.
+        if self.opts.incremental.is_some() {
+            return 256;
+        }
+
         // Why is 16 codegen units the default all the time?
         //
         // The main reason for enabling multiple codegen units by default is to
@@ -854,16 +871,15 @@ pub fn build_session(
     local_crate_source_file: Option<PathBuf>,
     registry: rustc_errors::registry::Registry,
 ) -> Session {
-    let file_path_mapping = sopts.file_path_mapping();
-
     build_session_with_source_map(
         sopts,
         local_crate_source_file,
         registry,
-        Lrc::new(source_map::SourceMap::new(file_path_mapping)),
         DiagnosticOutput::Default,
         Default::default(),
+        None,
     )
+    .0
 }
 
 fn default_emitter(
@@ -940,10 +956,10 @@ pub fn build_session_with_source_map(
     sopts: config::Options,
     local_crate_source_file: Option<PathBuf>,
     registry: rustc_errors::registry::Registry,
-    source_map: Lrc<source_map::SourceMap>,
     diagnostics_output: DiagnosticOutput,
-    lint_caps: FxHashMap<lint::LintId, lint::Level>,
-) -> Session {
+    driver_lint_caps: FxHashMap<lint::LintId, lint::Level>,
+    file_loader: Option<Box<dyn FileLoader + Send + Sync + 'static>>,
+) -> (Session, Lrc<SourceMap>) {
     // FIXME: This is not general enough to make the warning lint completely override
     // normal diagnostic warnings, since the warning lint can also be denied and changed
     // later via the source code.
@@ -961,23 +977,33 @@ pub fn build_session_with_source_map(
         DiagnosticOutput::Default => None,
         DiagnosticOutput::Raw(write) => Some(write),
     };
+
+    let target_cfg = config::build_target_config(&sopts, sopts.error_format);
+    let host_triple = TargetTriple::from_triple(config::host_triple());
+    let host = Target::search(&host_triple).unwrap_or_else(|e| {
+        early_error(sopts.error_format, &format!("Error loading host specification: {}", e))
+    });
+
+    let loader = file_loader.unwrap_or(Box::new(RealFileLoader));
+    let hash_kind = sopts.debugging_opts.src_hash_algorithm.unwrap_or_else(|| {
+        if target_cfg.target.options.is_like_msvc {
+            SourceFileHashAlgorithm::Sha1
+        } else {
+            SourceFileHashAlgorithm::Md5
+        }
+    });
+    let source_map = Lrc::new(SourceMap::with_file_loader_and_hash_kind(
+        loader,
+        sopts.file_path_mapping(),
+        hash_kind,
+    ));
     let emitter = default_emitter(&sopts, registry, &source_map, write_dest);
 
-    let diagnostic_handler = rustc_errors::Handler::with_emitter_and_flags(
+    let span_diagnostic = rustc_errors::Handler::with_emitter_and_flags(
         emitter,
         sopts.debugging_opts.diagnostic_handler_flags(can_emit_warnings),
     );
 
-    build_session_(sopts, local_crate_source_file, diagnostic_handler, source_map, lint_caps)
-}
-
-fn build_session_(
-    sopts: config::Options,
-    local_crate_source_file: Option<PathBuf>,
-    span_diagnostic: rustc_errors::Handler,
-    source_map: Lrc<source_map::SourceMap>,
-    driver_lint_caps: FxHashMap<lint::LintId, lint::Level>,
-) -> Session {
     let self_profiler = if let SwitchWithOptPath::Enabled(ref d) = sopts.debugging_opts.self_profile
     {
         let directory =
@@ -999,13 +1025,7 @@ fn build_session_(
         None
     };
 
-    let host_triple = TargetTriple::from_triple(config::host_triple());
-    let host = Target::search(&host_triple).unwrap_or_else(|e| {
-        span_diagnostic.fatal(&format!("Error loading host specification: {}", e)).raise()
-    });
-    let target_cfg = config::build_target_config(&sopts, &span_diagnostic);
-
-    let parse_sess = ParseSess::with_span_handler(span_diagnostic, source_map);
+    let parse_sess = ParseSess::with_span_handler(span_diagnostic, source_map.clone());
     let sysroot = match &sopts.maybe_sysroot {
         Some(sysroot) => sysroot.clone(),
         None => filesearch::get_or_default_sysroot(),
@@ -1056,6 +1076,26 @@ fn build_session_(
         _ => CtfeBacktrace::Disabled,
     });
 
+    // Try to find a directory containing the Rust `src`, for more details see
+    // the doc comment on the `real_rust_source_base_dir` field.
+    let real_rust_source_base_dir = {
+        // This is the location used by the `rust-src` `rustup` component.
+        let mut candidate = sysroot.join("lib/rustlib/src/rust");
+        if let Ok(metadata) = candidate.symlink_metadata() {
+            // Replace the symlink rustbuild creates, with its destination.
+            // We could try to use `fs::canonicalize` instead, but that might
+            // produce unnecessarily verbose path.
+            if metadata.file_type().is_symlink() {
+                if let Ok(symlink_dest) = std::fs::read_link(&candidate) {
+                    candidate = symlink_dest;
+                }
+            }
+        }
+
+        // Only use this directory if it has a file we can expect to always find.
+        if candidate.join("src/libstd/lib.rs").is_file() { Some(candidate) } else { None }
+    };
+
     let sess = Session {
         target: target_cfg,
         host,
@@ -1094,11 +1134,12 @@ fn build_session_(
         confused_type_with_std_module: Lock::new(Default::default()),
         system_library_path: OneThread::new(RefCell::new(Default::default())),
         ctfe_backtrace,
+        real_rust_source_base_dir,
     };
 
     validate_commandline_args_with_session_available(&sess);
 
-    sess
+    (sess, source_map)
 }
 
 // If it is useful to have a Session available already for validating a

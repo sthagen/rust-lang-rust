@@ -34,17 +34,17 @@ use rustc_middle::ich::NodeIdHashingMode;
 use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use rustc_middle::mir::interpret::truncate;
 use rustc_middle::mir::{self, Field, GeneratorLayout};
-use rustc_middle::ty::layout::{
-    self, Align, Integer, IntegerExt, LayoutOf, PrimitiveExt, Size, TyAndLayout, VariantIdx,
-};
+use rustc_middle::ty::layout::{self, IntegerExt, PrimitiveExt, TyAndLayout};
 use rustc_middle::ty::subst::{GenericArgKind, SubstsRef};
 use rustc_middle::ty::Instance;
 use rustc_middle::ty::{self, AdtKind, ParamEnv, Ty, TyCtxt};
 use rustc_middle::{bug, span_bug};
 use rustc_session::config::{self, DebugInfo};
 use rustc_span::symbol::{Interner, Symbol};
-use rustc_span::{self, FileName, Span};
-use rustc_target::abi::HasDataLayout;
+use rustc_span::{self, FileName, SourceFileHash, Span};
+use rustc_target::abi::{Abi, Align, DiscriminantKind, HasDataLayout, Integer, LayoutOf};
+use rustc_target::abi::{Int, Pointer, F32, F64};
+use rustc_target::abi::{Primitive, Size, VariantIdx, Variants};
 
 use libc::{c_longlong, c_uint};
 use std::collections::hash_map::Entry;
@@ -751,6 +751,14 @@ pub fn type_metadata(cx: &CodegenCx<'ll, 'tcx>, t: Ty<'tcx>, usage_site_span: Sp
     metadata
 }
 
+fn hex_encode(data: &[u8]) -> String {
+    let mut hex_string = String::with_capacity(data.len() * 2);
+    for byte in data.iter() {
+        write!(&mut hex_string, "{:02x}", byte).unwrap();
+    }
+    hex_string
+}
+
 pub fn file_metadata(
     cx: &CodegenCx<'ll, '_>,
     file_name: &FileName,
@@ -758,6 +766,8 @@ pub fn file_metadata(
 ) -> &'ll DIFile {
     debug!("file_metadata: file_name: {}, defining_crate: {}", file_name, defining_crate);
 
+    let source_file = cx.sess().source_map().get_source_file(file_name);
+    let hash = source_file.as_ref().map(|f| &f.src_hash);
     let file_name = Some(file_name.to_string());
     let directory = if defining_crate == LOCAL_CRATE {
         Some(cx.sess().working_dir.0.to_string_lossy().to_string())
@@ -766,17 +776,18 @@ pub fn file_metadata(
         // independent of the compiler's working directory one way or another.
         None
     };
-    file_metadata_raw(cx, file_name, directory)
+    file_metadata_raw(cx, file_name, directory, hash)
 }
 
 pub fn unknown_file_metadata(cx: &CodegenCx<'ll, '_>) -> &'ll DIFile {
-    file_metadata_raw(cx, None, None)
+    file_metadata_raw(cx, None, None, None)
 }
 
 fn file_metadata_raw(
     cx: &CodegenCx<'ll, '_>,
     file_name: Option<String>,
     directory: Option<String>,
+    hash: Option<&SourceFileHash>,
 ) -> &'ll DIFile {
     let key = (file_name, directory);
 
@@ -789,6 +800,17 @@ fn file_metadata_raw(
             let file_name = file_name.as_deref().unwrap_or("<unknown>");
             let directory = directory.as_deref().unwrap_or("");
 
+            let (hash_kind, hash_value) = match hash {
+                Some(hash) => {
+                    let kind = match hash.kind {
+                        rustc_span::SourceFileHashAlgorithm::Md5 => llvm::ChecksumKind::MD5,
+                        rustc_span::SourceFileHashAlgorithm::Sha1 => llvm::ChecksumKind::SHA1,
+                    };
+                    (kind, hex_encode(hash.hash_bytes()))
+                }
+                None => (llvm::ChecksumKind::None, String::new()),
+            };
+
             let file_metadata = unsafe {
                 llvm::LLVMRustDIBuilderCreateFile(
                     DIB(cx),
@@ -796,6 +818,9 @@ fn file_metadata_raw(
                     file_name.len(),
                     directory.as_ptr().cast(),
                     directory.len(),
+                    hash_kind,
+                    hash_value.as_ptr().cast(),
+                    hash_value.len(),
                 )
             };
 
@@ -920,6 +945,9 @@ pub fn compile_unit_metadata(
             name_in_debuginfo.len(),
             work_dir.as_ptr().cast(),
             work_dir.len(),
+            llvm::ChecksumKind::None,
+            ptr::null(),
+            0,
         );
 
         let unit_metadata = llvm::LLVMRustDIBuilderCreateCompileUnit(
@@ -1364,7 +1392,7 @@ impl EnumMemberDescriptionFactory<'ll, 'tcx> {
         };
 
         match self.layout.variants {
-            layout::Variants::Single { index } => {
+            Variants::Single { index } => {
                 if let ty::Adt(adt, _) = &self.enum_type.kind {
                     if adt.variants.is_empty() {
                         return vec![];
@@ -1399,8 +1427,8 @@ impl EnumMemberDescriptionFactory<'ll, 'tcx> {
                     discriminant: None,
                 }]
             }
-            layout::Variants::Multiple {
-                discr_kind: layout::DiscriminantKind::Tag,
+            Variants::Multiple {
+                discr_kind: DiscriminantKind::Tag,
                 discr_index,
                 ref variants,
                 ..
@@ -1457,9 +1485,9 @@ impl EnumMemberDescriptionFactory<'ll, 'tcx> {
                     })
                     .collect()
             }
-            layout::Variants::Multiple {
+            Variants::Multiple {
                 discr_kind:
-                    layout::DiscriminantKind::Niche { ref niche_variants, niche_start, dataful_variant },
+                    DiscriminantKind::Niche { ref niche_variants, niche_start, dataful_variant },
                 ref discr,
                 ref variants,
                 discr_index,
@@ -1592,7 +1620,7 @@ impl EnumMemberDescriptionFactory<'ll, 'tcx> {
 // Creates `MemberDescription`s for the fields of a single enum variant.
 struct VariantMemberDescriptionFactory<'ll, 'tcx> {
     /// Cloned from the `layout::Struct` describing the variant.
-    offsets: Vec<layout::Size>,
+    offsets: Vec<Size>,
     args: Vec<(String, Ty<'tcx>)>,
     discriminant_type_metadata: Option<&'ll DIType>,
     span: Span,
@@ -1777,7 +1805,7 @@ fn prepare_enum_metadata(
     // <unknown>
     let file_metadata = unknown_file_metadata(cx);
 
-    let discriminant_type_metadata = |discr: layout::Primitive| {
+    let discriminant_type_metadata = |discr: Primitive| {
         let enumerators_metadata: Vec<_> = match enum_type.kind {
             ty::Adt(def, _) => def
                 .discriminants(cx.tcx)
@@ -1870,10 +1898,8 @@ fn prepare_enum_metadata(
     let layout = cx.layout_of(enum_type);
 
     if let (
-        &layout::Abi::Scalar(_),
-        &layout::Variants::Multiple {
-            discr_kind: layout::DiscriminantKind::Tag, ref discr, ..
-        },
+        &Abi::Scalar(_),
+        &Variants::Multiple { discr_kind: DiscriminantKind::Tag, ref discr, .. },
     ) = (&layout.abi, &layout.variants)
     {
         return FinalMetadata(discriminant_type_metadata(discr.value));
@@ -1881,16 +1907,11 @@ fn prepare_enum_metadata(
 
     if use_enum_fallback(cx) {
         let discriminant_type_metadata = match layout.variants {
-            layout::Variants::Single { .. }
-            | layout::Variants::Multiple {
-                discr_kind: layout::DiscriminantKind::Niche { .. },
-                ..
-            } => None,
-            layout::Variants::Multiple {
-                discr_kind: layout::DiscriminantKind::Tag,
-                ref discr,
-                ..
-            } => Some(discriminant_type_metadata(discr.value)),
+            Variants::Single { .. }
+            | Variants::Multiple { discr_kind: DiscriminantKind::Niche { .. }, .. } => None,
+            Variants::Multiple { discr_kind: DiscriminantKind::Tag, ref discr, .. } => {
+                Some(discriminant_type_metadata(discr.value))
+            }
         };
 
         let enum_metadata = {
@@ -1938,10 +1959,10 @@ fn prepare_enum_metadata(
     };
     let discriminator_metadata = match layout.variants {
         // A single-variant enum has no discriminant.
-        layout::Variants::Single { .. } => None,
+        Variants::Single { .. } => None,
 
-        layout::Variants::Multiple {
-            discr_kind: layout::DiscriminantKind::Niche { .. },
+        Variants::Multiple {
+            discr_kind: DiscriminantKind::Niche { .. },
             ref discr,
             discr_index,
             ..
@@ -1951,10 +1972,10 @@ fn prepare_enum_metadata(
             let align = discr.value.align(cx);
 
             let discr_type = match discr.value {
-                layout::Int(t, _) => t,
-                layout::F32 => Integer::I32,
-                layout::F64 => Integer::I64,
-                layout::Pointer => cx.data_layout().ptr_sized_integer(),
+                Int(t, _) => t,
+                F32 => Integer::I32,
+                F64 => Integer::I64,
+                Pointer => cx.data_layout().ptr_sized_integer(),
             }
             .to_ty(cx.tcx, false);
 
@@ -1976,11 +1997,8 @@ fn prepare_enum_metadata(
             }
         }
 
-        layout::Variants::Multiple {
-            discr_kind: layout::DiscriminantKind::Tag,
-            ref discr,
-            discr_index,
-            ..
+        Variants::Multiple {
+            discr_kind: DiscriminantKind::Tag, ref discr, discr_index, ..
         } => {
             let discr_type = discr.value.to_ty(cx.tcx);
             let (size, align) = cx.size_and_align_of(discr_type);
@@ -2005,8 +2023,8 @@ fn prepare_enum_metadata(
     };
 
     let mut outer_fields = match layout.variants {
-        layout::Variants::Single { .. } => vec![],
-        layout::Variants::Multiple { .. } => {
+        Variants::Single { .. } => vec![],
+        Variants::Multiple { .. } => {
             let tuple_mdf = TupleMemberDescriptionFactory {
                 ty: enum_type,
                 component_types: outer_field_tys,
