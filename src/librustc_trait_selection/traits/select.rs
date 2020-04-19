@@ -44,7 +44,7 @@ use rustc_index::bit_set::GrowableBitSet;
 use rustc_middle::dep_graph::{DepKind, DepNodeIndex};
 use rustc_middle::ty::fast_reject;
 use rustc_middle::ty::relate::TypeRelation;
-use rustc_middle::ty::subst::{Subst, SubstsRef};
+use rustc_middle::ty::subst::{GenericArg, GenericArgKind, Subst, SubstsRef};
 use rustc_middle::ty::{
     self, ToPolyTraitRef, ToPredicate, Ty, TyCtxt, TypeFoldable, WithConstness,
 };
@@ -413,7 +413,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         match obligation.predicate {
             ty::Predicate::Trait(ref t, _) => {
                 debug_assert!(!t.has_escaping_bound_vars());
-                let obligation = obligation.with(t.clone());
+                let obligation = obligation.with(*t);
                 self.evaluate_trait_predicate_recursively(previous_stack, obligation)
             }
 
@@ -460,7 +460,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             }
 
             ty::Predicate::Projection(ref data) => {
-                let project_obligation = obligation.with(data.clone());
+                let project_obligation = obligation.with(*data);
                 match project::poly_project_and_unify_type(self, &project_obligation) {
                     Ok(Some(mut subobligations)) => {
                         self.add_depth(subobligations.iter_mut(), obligation.recursion_depth);
@@ -652,7 +652,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         &mut self,
         stack: &TraitObligationStack<'o, 'tcx>,
     ) -> Result<EvaluationResult, OverflowError> {
-        // In intercrate mode, whenever any of the types are unbound,
+        // In intercrate mode, whenever any of the generics are unbound,
         // there can always be an impl. Even if there are no impls in
         // this crate, perhaps the type would be unified with
         // something from another crate that does provide an impl.
@@ -677,7 +677,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         // terms of `Fn` etc, but we could probably make this more
         // precise still.
         let unbound_input_types =
-            stack.fresh_trait_ref.skip_binder().input_types().any(|ty| ty.is_fresh());
+            stack.fresh_trait_ref.skip_binder().substs.types().any(|ty| ty.is_fresh());
         // This check was an imperfect workaround for a bug in the old
         // intercrate mode; it should be removed when that goes away.
         if unbound_input_types && self.intercrate {
@@ -820,7 +820,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         }
 
         if self.can_use_global_caches(param_env) {
-            if !trait_ref.has_local_value() {
+            if !trait_ref.needs_infer() {
                 debug!(
                     "insert_evaluation_cache(trait_ref={:?}, candidate={:?}) global",
                     trait_ref, result,
@@ -910,7 +910,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         // separately rather than using `stack.fresh_trait_ref` --
         // this is because we want the unbound variables to be
         // replaced with fresh types starting from index 0.
-        let cache_fresh_trait_pred = self.infcx.freshen(stack.obligation.predicate.clone());
+        let cache_fresh_trait_pred = self.infcx.freshen(stack.obligation.predicate);
         debug!(
             "candidate_from_obligation(cache_fresh_trait_pred={:?}, obligation={:?})",
             cache_fresh_trait_pred, stack
@@ -1178,10 +1178,10 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
     /// Do note that if the type itself is not in the
     /// global tcx, the local caches will be used.
     fn can_use_global_caches(&self, param_env: ty::ParamEnv<'tcx>) -> bool {
-        // If there are any e.g. inference variables in the `ParamEnv`, then we
+        // If there are any inference variables in the `ParamEnv`, then we
         // always use a cache local to this particular scope. Otherwise, we
         // switch to a global cache.
-        if param_env.has_local_value() {
+        if param_env.needs_infer() {
             return false;
         }
 
@@ -1242,9 +1242,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         result: &SelectionResult<'tcx, SelectionCandidate<'tcx>>,
     ) -> bool {
         match result {
-            Ok(Some(SelectionCandidate::ParamCandidate(trait_ref))) => {
-                !trait_ref.skip_binder().input_types().any(|t| t.walk().any(|t_| t_.is_ty_infer()))
-            }
+            Ok(Some(SelectionCandidate::ParamCandidate(trait_ref))) => !trait_ref.needs_infer(),
             _ => true,
         }
     }
@@ -1271,8 +1269,8 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         if self.can_use_global_caches(param_env) {
             if let Err(Overflow) = candidate {
                 // Don't cache overflow globally; we only produce this in certain modes.
-            } else if !trait_ref.has_local_value() {
-                if !candidate.has_local_value() {
+            } else if !trait_ref.needs_infer() {
+                if !candidate.needs_infer() {
                     debug!(
                         "insert_candidate_cache(trait_ref={:?}, candidate={:?}) global",
                         trait_ref, candidate,
@@ -1450,8 +1448,8 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             self.infcx.probe(|_| {
                 self.match_projection(
                     obligation,
-                    bound.clone(),
-                    placeholder_trait_predicate.trait_ref.clone(),
+                    *bound,
+                    placeholder_trait_predicate.trait_ref,
                     &placeholder_map,
                     snapshot,
                 )
@@ -1470,7 +1468,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 let result = self.match_projection(
                     obligation,
                     bound,
-                    placeholder_trait_predicate.trait_ref.clone(),
+                    placeholder_trait_predicate.trait_ref,
                     &placeholder_map,
                     snapshot,
                 );
@@ -1522,7 +1520,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         // Keep only those bounds which may apply, and propagate overflow if it occurs.
         let mut param_candidates = vec![];
         for bound in matching_bounds {
-            let wc = self.evaluate_where_clause(stack, bound.clone())?;
+            let wc = self.evaluate_where_clause(stack, bound)?;
             if wc.may_apply() {
                 param_candidates.push(ParamCandidate(bound));
             }
@@ -2498,7 +2496,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         // where-clause trait-ref could be unified with the obligation
         // trait-ref. Repeat that unification now without any
         // transactional boundary; it should not fail.
-        match self.match_where_clause_trait_ref(obligation, param.clone()) {
+        match self.match_where_clause_trait_ref(obligation, param) {
             Ok(obligations) => obligations,
             Err(()) => {
                 bug!(
@@ -3048,20 +3046,31 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
 
             // `Struct<T>` -> `Struct<U>`
             (&ty::Adt(def, substs_a), &ty::Adt(_, substs_b)) => {
-                let fields =
-                    def.all_fields().map(|field| tcx.type_of(field.did)).collect::<Vec<_>>();
+                let maybe_unsizing_param_idx = |arg: GenericArg<'tcx>| match arg.unpack() {
+                    GenericArgKind::Type(ty) => match ty.kind {
+                        ty::Param(p) => Some(p.index),
+                        _ => None,
+                    },
 
-                // The last field of the structure has to exist and contain type parameters.
-                let field = if let Some(&field) = fields.last() {
-                    field
-                } else {
-                    return Err(Unimplemented);
+                    // Lifetimes aren't allowed to change during unsizing.
+                    GenericArgKind::Lifetime(_) => None,
+
+                    GenericArgKind::Const(ct) => match ct.val {
+                        ty::ConstKind::Param(p) => Some(p.index),
+                        _ => None,
+                    },
                 };
-                let mut ty_params = GrowableBitSet::new_empty();
+
+                // The last field of the structure has to exist and contain type/const parameters.
+                let (tail_field, prefix_fields) =
+                    def.non_enum_variant().fields.split_last().ok_or(Unimplemented)?;
+                let tail_field_ty = tcx.type_of(tail_field.did);
+
+                let mut unsizing_params = GrowableBitSet::new_empty();
                 let mut found = false;
-                for ty in field.walk() {
-                    if let ty::Param(p) = ty.kind {
-                        ty_params.insert(p.index as usize);
+                for arg in tail_field_ty.walk() {
+                    if let Some(i) = maybe_unsizing_param_idx(arg) {
+                        unsizing_params.insert(i);
                         found = true;
                     }
                 }
@@ -3069,31 +3078,31 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                     return Err(Unimplemented);
                 }
 
-                // Replace type parameters used in unsizing with
-                // Error and ensure they do not affect any other fields.
-                // This could be checked after type collection for any struct
-                // with a potentially unsized trailing field.
-                let params = substs_a
-                    .iter()
-                    .enumerate()
-                    .map(|(i, &k)| if ty_params.contains(i) { tcx.types.err.into() } else { k });
-                let substs = tcx.mk_substs(params);
-                for &ty in fields.split_last().unwrap().1 {
-                    if ty.subst(tcx, substs).references_error() {
-                        return Err(Unimplemented);
+                // Ensure none of the other fields mention the parameters used
+                // in unsizing.
+                // FIXME(eddyb) cache this (including computing `unsizing_params`)
+                // by putting it in a query; it would only need the `DefId` as it
+                // looks at declared field types, not anything substituted.
+                for field in prefix_fields {
+                    for arg in tcx.type_of(field.did).walk() {
+                        if let Some(i) = maybe_unsizing_param_idx(arg) {
+                            if unsizing_params.contains(i) {
+                                return Err(Unimplemented);
+                            }
+                        }
                     }
                 }
 
-                // Extract `Field<T>` and `Field<U>` from `Struct<T>` and `Struct<U>`.
-                let inner_source = field.subst(tcx, substs_a);
-                let inner_target = field.subst(tcx, substs_b);
+                // Extract `TailField<T>` and `TailField<U>` from `Struct<T>` and `Struct<U>`.
+                let source_tail = tail_field_ty.subst(tcx, substs_a);
+                let target_tail = tail_field_ty.subst(tcx, substs_b);
 
                 // Check that the source struct with the target's
-                // unsized parameters is equal to the target.
-                let params = substs_a.iter().enumerate().map(|(i, &k)| {
-                    if ty_params.contains(i) { substs_b.type_at(i).into() } else { k }
-                });
-                let new_struct = tcx.mk_adt(def, tcx.mk_substs(params));
+                // unsizing parameters is equal to the target.
+                let substs = tcx.mk_substs(substs_a.iter().enumerate().map(|(i, &k)| {
+                    if unsizing_params.contains(i as u32) { substs_b[i] } else { k }
+                }));
+                let new_struct = tcx.mk_adt(def, substs);
                 let InferOk { obligations, .. } = self
                     .infcx
                     .at(&obligation.cause, obligation.param_env)
@@ -3101,15 +3110,15 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                     .map_err(|_| Unimplemented)?;
                 nested.extend(obligations);
 
-                // Construct the nested `Field<T>: Unsize<Field<U>>` predicate.
+                // Construct the nested `TailField<T>: Unsize<TailField<U>>` predicate.
                 nested.push(predicate_for_trait_def(
                     tcx,
                     obligation.param_env,
                     obligation.cause.clone(),
                     obligation.predicate.def_id(),
                     obligation.recursion_depth + 1,
-                    inner_source,
-                    &[inner_target.into()],
+                    source_tail,
+                    &[target_tail.into()],
                 ));
             }
 
@@ -3253,15 +3262,31 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         // substitution if we find that any of the input types, when
         // simplified, do not match.
 
-        obligation.predicate.skip_binder().input_types().zip(impl_trait_ref.input_types()).any(
-            |(obligation_ty, impl_ty)| {
-                let simplified_obligation_ty =
-                    fast_reject::simplify_type(self.tcx(), obligation_ty, true);
-                let simplified_impl_ty = fast_reject::simplify_type(self.tcx(), impl_ty, false);
+        obligation.predicate.skip_binder().trait_ref.substs.iter().zip(impl_trait_ref.substs).any(
+            |(obligation_arg, impl_arg)| {
+                match (obligation_arg.unpack(), impl_arg.unpack()) {
+                    (GenericArgKind::Type(obligation_ty), GenericArgKind::Type(impl_ty)) => {
+                        let simplified_obligation_ty =
+                            fast_reject::simplify_type(self.tcx(), obligation_ty, true);
+                        let simplified_impl_ty =
+                            fast_reject::simplify_type(self.tcx(), impl_ty, false);
 
-                simplified_obligation_ty.is_some()
-                    && simplified_impl_ty.is_some()
-                    && simplified_obligation_ty != simplified_impl_ty
+                        simplified_obligation_ty.is_some()
+                            && simplified_impl_ty.is_some()
+                            && simplified_obligation_ty != simplified_impl_ty
+                    }
+                    (GenericArgKind::Lifetime(_), GenericArgKind::Lifetime(_)) => {
+                        // Lifetimes can never cause a rejection.
+                        false
+                    }
+                    (GenericArgKind::Const(_), GenericArgKind::Const(_)) => {
+                        // Conservatively ignore consts (i.e. assume they might
+                        // unify later) until we have `fast_reject` support for
+                        // them (if we'll ever need it, even).
+                        false
+                    }
+                    _ => unreachable!(),
+                }
             },
         )
     }
@@ -3625,11 +3650,7 @@ struct ProvisionalEvaluation {
 
 impl<'tcx> Default for ProvisionalEvaluationCache<'tcx> {
     fn default() -> Self {
-        Self {
-            dfn: Cell::new(0),
-            reached_depth: Cell::new(std::usize::MAX),
-            map: Default::default(),
-        }
+        Self { dfn: Cell::new(0), reached_depth: Cell::new(usize::MAX), map: Default::default() }
     }
 }
 
@@ -3728,7 +3749,7 @@ impl<'tcx> ProvisionalEvaluationCache<'tcx> {
             op(fresh_trait_ref, eval.result);
         }
 
-        self.reached_depth.set(std::usize::MAX);
+        self.reached_depth.set(usize::MAX);
     }
 }
 

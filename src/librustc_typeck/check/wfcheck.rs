@@ -294,7 +294,7 @@ fn check_associated_item(
                 let ty = fcx.normalize_associated_types_in(span, &ty);
                 fcx.register_wf_obligation(ty, span, code.clone());
             }
-            ty::AssocKind::Method => {
+            ty::AssocKind::Fn => {
                 let sig = fcx.tcx.fn_sig(item.def_id);
                 let sig = fcx.normalize_associated_types_in(span, &sig);
                 let hir_sig = sig_if_method.expect("bad signature for method");
@@ -335,7 +335,7 @@ fn for_id(tcx: TyCtxt<'_>, id: hir::HirId, span: Span) -> CheckWfFcxBuilder<'_> 
         inherited: Inherited::build(tcx, def_id),
         id,
         span,
-        param_env: tcx.param_env(def_id.to_def_id()),
+        param_env: tcx.param_env(def_id),
     }
 }
 
@@ -369,7 +369,7 @@ fn check_type_defn<'tcx, F>(
                 packed && {
                     let ty = variant.fields.last().unwrap().ty;
                     let ty = fcx.tcx.erase_regions(&ty);
-                    if ty.has_local_value() {
+                    if ty.needs_infer() {
                         fcx_tcx
                             .sess
                             .delay_span_bug(item.span, &format!("inference variables in {:?}", ty));
@@ -706,13 +706,13 @@ fn check_where_clauses<'tcx, 'fcx>(
                         return default_ty.into();
                     }
                 }
-                // Mark unwanted params as error.
-                fcx.tcx.types.err.into()
+
+                fcx.tcx.mk_param_from_def(param)
             }
 
             GenericParamDefKind::Const => {
                 // FIXME(const_generics:defaults)
-                fcx.tcx.consts.err.into()
+                fcx.tcx.mk_param_from_def(param)
             }
         }
     });
@@ -750,7 +750,10 @@ fn check_where_clauses<'tcx, 'fcx>(
             let substituted_pred = pred.subst(fcx.tcx, substs);
             // Don't check non-defaulted params, dependent defaults (including lifetimes)
             // or preds with multiple params.
-            if substituted_pred.references_error() || param_count.params.len() > 1 || has_region {
+            if substituted_pred.has_param_types_or_consts()
+                || param_count.params.len() > 1
+                || has_region
+            {
                 None
             } else if predicates.predicates.iter().any(|&(p, _)| p == substituted_pred) {
                 // Avoid duplication of predicates that contain no parameters, for example.
@@ -982,7 +985,7 @@ fn check_method_receiver<'fcx, 'tcx>(
     // Check that the method has a valid receiver type, given the type `Self`.
     debug!("check_method_receiver({:?}, self_ty={:?})", method, self_ty);
 
-    if !method.method_has_self_argument {
+    if !method.fn_has_self_parameter {
         return;
     }
 
@@ -1226,7 +1229,8 @@ fn check_false_global_bounds(fcx: &FnCtxt<'_, '_>, span: Span, id: hir::HirId) {
     // Check elaborated bounds.
     let implied_obligations = traits::elaborate_predicates(fcx.tcx, predicates);
 
-    for pred in implied_obligations {
+    for obligation in implied_obligations {
+        let pred = obligation.predicate;
         // Match the existing behavior.
         if pred.is_global() && !pred.has_late_bound_regions() {
             let pred = fcx.normalize_associated_types_in(span, &pred);

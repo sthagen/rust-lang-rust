@@ -209,7 +209,7 @@ impl<'a, 'tcx> ConfirmContext<'a, 'tcx> {
                     "impl {:?} is not an inherent impl",
                     impl_def_id
                 );
-                self.impl_self_ty(self.span, impl_def_id).substs
+                self.fresh_substs_for_item(self.span, impl_def_id)
             }
 
             probe::ObjectPick => {
@@ -573,13 +573,15 @@ impl<'a, 'tcx> ConfirmContext<'a, 'tcx> {
         };
 
         traits::elaborate_predicates(self.tcx, predicates.predicates.clone())
-            .filter_map(|predicate| match predicate {
+            .filter_map(|obligation| match obligation.predicate {
                 ty::Predicate::Trait(trait_pred, _) if trait_pred.def_id() == sized_def_id => {
                     let span = predicates
                         .predicates
                         .iter()
                         .zip(predicates.spans.iter())
-                        .filter_map(|(p, span)| if *p == predicate { Some(*span) } else { None })
+                        .filter_map(
+                            |(p, span)| if *p == obligation.predicate { Some(*span) } else { None },
+                        )
                         .next()
                         .unwrap_or(rustc_span::DUMMY_SP);
                     Some((trait_pred, span))

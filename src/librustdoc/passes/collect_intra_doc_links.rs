@@ -149,7 +149,7 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
                 // In case this is a trait item, skip the
                 // early return and try looking for the trait.
                 let value = match res {
-                    Res::Def(DefKind::AssocFn, _) | Res::Def(DefKind::AssocConst, _) => true,
+                    Res::Def(DefKind::AssocFn | DefKind::AssocConst, _) => true,
                     Res::Def(DefKind::AssocTy, _) => false,
                     Res::Def(DefKind::Variant, _) => {
                         return handle_variant(cx, res, extra_fragment);
@@ -209,7 +209,7 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
                     .filter_by_name_unhygienic(item_name)
                     .next()
                     .and_then(|item| match item.kind {
-                        ty::AssocKind::Method => Some("method"),
+                        ty::AssocKind::Fn => Some("method"),
                         _ => None,
                     })
                     .map(|out| (prim, Some(format!("{}#{}.{}", path, out, item_name))))
@@ -226,10 +226,10 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
             }
             let ty_res = ty_res.map_id(|_| panic!("unexpected node_id"));
             match ty_res {
-                Res::Def(DefKind::Struct, did)
-                | Res::Def(DefKind::Union, did)
-                | Res::Def(DefKind::Enum, did)
-                | Res::Def(DefKind::TyAlias, did) => {
+                Res::Def(
+                    DefKind::Struct | DefKind::Union | DefKind::Enum | DefKind::TyAlias,
+                    did,
+                ) => {
                     let item = cx
                         .tcx
                         .inherent_impls(did)
@@ -238,12 +238,12 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
                         .find(|item| item.ident.name == item_name);
                     if let Some(item) = item {
                         let out = match item.kind {
-                            ty::AssocKind::Method if ns == ValueNS => "method",
+                            ty::AssocKind::Fn if ns == ValueNS => "method",
                             ty::AssocKind::Const if ns == ValueNS => "associatedconstant",
                             _ => return self.variant_field(path_str, current_item, module_id),
                         };
                         if extra_fragment.is_some() {
-                            Err(ErrorKind::AnchorFailure(if item.kind == ty::AssocKind::Method {
+                            Err(ErrorKind::AnchorFailure(if item.kind == ty::AssocKind::Fn {
                                 "methods cannot be followed by anchors"
                             } else {
                                 "associated constants cannot be followed by anchors"
@@ -298,14 +298,15 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
                         .map(|item| cx.tcx.associated_item(*item))
                         .find(|item| item.ident.name == item_name);
                     if let Some(item) = item {
-                        let kind = match item.kind {
-                            ty::AssocKind::Const if ns == ValueNS => "associatedconstant",
-                            ty::AssocKind::Type if ns == TypeNS => "associatedtype",
-                            ty::AssocKind::Method if ns == ValueNS => {
-                                if item.defaultness.has_value() { "method" } else { "tymethod" }
-                            }
-                            _ => return self.variant_field(path_str, current_item, module_id),
-                        };
+                        let kind =
+                            match item.kind {
+                                ty::AssocKind::Const if ns == ValueNS => "associatedconstant",
+                                ty::AssocKind::Type if ns == TypeNS => "associatedtype",
+                                ty::AssocKind::Fn if ns == ValueNS => {
+                                    if item.defaultness.has_value() { "method" } else { "tymethod" }
+                                }
+                                _ => return self.variant_field(path_str, current_item, module_id),
+                            };
 
                         if extra_fragment.is_some() {
                             Err(ErrorKind::AnchorFailure(if item.kind == ty::AssocKind::Const {
@@ -813,7 +814,7 @@ fn ambiguity_error(
 
                     for (res, ns) in candidates {
                         let (action, mut suggestion) = match res {
-                            Res::Def(DefKind::AssocFn, _) | Res::Def(DefKind::Fn, _) => {
+                            Res::Def(DefKind::AssocFn | DefKind::Fn, _) => {
                                 ("add parentheses", format!("{}()", path_str))
                             }
                             Res::Def(DefKind::Macro(..), _) => {

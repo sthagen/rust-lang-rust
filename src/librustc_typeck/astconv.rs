@@ -737,8 +737,9 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         let default_needs_object_self = |param: &ty::GenericParamDef| {
             if let GenericParamDefKind::Type { has_default, .. } = param.kind {
                 if is_object && has_default {
+                    let default_ty = tcx.at(span).type_of(param.def_id);
                     let self_param = tcx.types.self_param;
-                    if tcx.at(span).type_of(param.def_id).walk().any(|ty| ty == self_param) {
+                    if default_ty.walk().any(|arg| arg == self_param.into()) {
                         // There is no suitable inference default for a type parameter
                         // that references self, in an object type.
                         return true;
@@ -825,14 +826,14 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                         }
                     }
                     GenericParamDefKind::Const => {
+                        let ty = tcx.at(span).type_of(param.def_id);
                         // FIXME(const_generics:defaults)
                         if infer_args {
                             // No const parameters were provided, we can infer all.
-                            let ty = tcx.at(span).type_of(param.def_id);
                             self.ct_infer(ty, Some(param), span).into()
                         } else {
                             // We've already errored above about the mismatch.
-                            tcx.consts.err.into()
+                            tcx.mk_const(ty::Const { val: ty::ConstKind::Error, ty }).into()
                         }
                     }
                 }
@@ -1044,7 +1045,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                 bounds,
                 speculative,
                 &mut dup_bindings,
-                span,
+                binding.span,
             );
             // Okay to ignore `Err` because of `ErrorReported` (see above).
         }
@@ -1249,7 +1250,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
     /// This helper takes a *converted* parameter type (`param_ty`)
     /// and an *unconverted* list of bounds:
     ///
-    /// ```
+    /// ```text
     /// fn foo<T: Debug>
     ///        ^  ^^^^^ `ast_bounds` parameter, in HIR form
     ///        |
@@ -1582,7 +1583,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                     tcx,
                     span,
                     item.trait_ref().def_id(),
-                    object_safety_violations,
+                    &object_safety_violations[..],
                 )
                 .emit();
                 return tcx.types.err;
@@ -1600,12 +1601,12 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         for (base_trait_ref, span, constness) in regular_traits_refs_spans {
             assert_eq!(constness, Constness::NotConst);
 
-            for trait_ref in traits::elaborate_trait_ref(tcx, base_trait_ref) {
+            for obligation in traits::elaborate_trait_ref(tcx, base_trait_ref) {
                 debug!(
                     "conv_object_ty_poly_trait_ref: observing object predicate `{:?}`",
-                    trait_ref
+                    obligation.predicate
                 );
-                match trait_ref {
+                match obligation.predicate {
                     ty::Predicate::Trait(pred, _) => {
                         associated_types.entry(span).or_default().extend(
                             tcx.associated_items(pred.def_id())
@@ -1617,7 +1618,8 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                     ty::Predicate::Projection(pred) => {
                         // A `Self` within the original bound will be substituted with a
                         // `trait_object_dummy_self`, so check for that.
-                        let references_self = pred.skip_binder().ty.walk().any(|t| t == dummy_self);
+                        let references_self =
+                            pred.skip_binder().ty.walk().any(|arg| arg == dummy_self.into());
 
                         // If the projection output contains `Self`, force the user to
                         // elaborate it explicitly to avoid a lot of complexity.
@@ -2369,7 +2371,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
 
             let parent_def_id = def_id
                 .and_then(|def_id| tcx.hir().as_local_hir_id(def_id))
-                .map(|hir_id| tcx.hir().get_parent_did(hir_id));
+                .map(|hir_id| tcx.hir().get_parent_did(hir_id).to_def_id());
 
             debug!("qpath_to_ty: parent_def_id={:?}", parent_def_id);
 
@@ -2990,7 +2992,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
 /// representations). These lists of bounds occur in many places in
 /// Rust's syntax:
 ///
-/// ```
+/// ```text
 /// trait Foo: Bar + Baz { }
 ///            ^^^^^^^^^ supertrait list bounding the `Self` type parameter
 ///

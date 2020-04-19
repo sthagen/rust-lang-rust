@@ -4,6 +4,7 @@
 use std::convert::TryFrom;
 use std::fmt::Write;
 
+use rustc_errors::ErrorReported;
 use rustc_hir::def::Namespace;
 use rustc_macros::HashStable;
 use rustc_middle::ty::layout::{IntegerExt, PrimitiveExt, TyAndLayout};
@@ -87,7 +88,7 @@ impl<'tcx, Tag> Immediate<Tag> {
 // as input for binary and cast operations.
 #[derive(Copy, Clone, Debug)]
 pub struct ImmTy<'tcx, Tag = ()> {
-    pub(crate) imm: Immediate<Tag>,
+    imm: Immediate<Tag>,
     pub layout: TyAndLayout<'tcx>,
 }
 
@@ -181,6 +182,11 @@ impl<'tcx, Tag: Copy> ImmTy<'tcx, Tag> {
     #[inline]
     pub fn from_scalar(val: Scalar<Tag>, layout: TyAndLayout<'tcx>) -> Self {
         ImmTy { imm: val.into(), layout }
+    }
+
+    #[inline]
+    pub fn from_immediate(imm: Immediate<Tag>, layout: TyAndLayout<'tcx>) -> Self {
+        ImmTy { imm, layout }
     }
 
     #[inline]
@@ -424,7 +430,9 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         Ok(OpTy { op, layout })
     }
 
-    /// Every place can be read from, so we can turn them into an operand
+    /// Every place can be read from, so we can turn them into an operand.
+    /// This will definitely return `Indirect` if the place is a `Ptr`, i.e., this
+    /// will never actually read from memory.
     #[inline(always)]
     pub fn place_to_op(
         &self,
@@ -511,6 +519,7 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         // Early-return cases.
         let val_val = match val.val {
             ty::ConstKind::Param(_) => throw_inval!(TooGeneric),
+            ty::ConstKind::Error => throw_inval!(TypeckError(ErrorReported)),
             ty::ConstKind::Unevaluated(def_id, substs, promoted) => {
                 let instance = self.resolve(def_id, substs)?;
                 // We use `const_eval` here and `const_eval_raw` elsewhere in mir interpretation.
@@ -529,7 +538,7 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
             ty::ConstKind::Value(val_val) => val_val,
         };
         // Other cases need layout.
-        let layout = from_known_layout(layout, || self.layout_of(val.ty))?;
+        let layout = from_known_layout(self.tcx, layout, || self.layout_of(val.ty))?;
         let op = match val_val {
             ConstValue::ByRef { alloc, offset } => {
                 let id = self.tcx.alloc_map.lock().create_memory_alloc(alloc);

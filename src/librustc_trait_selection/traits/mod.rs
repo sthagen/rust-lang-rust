@@ -31,7 +31,7 @@ use rustc_middle::middle::region;
 use rustc_middle::ty::fold::TypeFoldable;
 use rustc_middle::ty::subst::{InternalSubsts, SubstsRef};
 use rustc_middle::ty::{self, GenericParamDefKind, ToPredicate, Ty, TyCtxt, WithConstness};
-use rustc_span::{Span, DUMMY_SP};
+use rustc_span::Span;
 
 use std::fmt::Debug;
 
@@ -136,7 +136,7 @@ pub fn type_known_to_meet_bound_modulo_regions<'a, 'tcx>(
     let trait_ref = ty::TraitRef { def_id, substs: infcx.tcx.mk_substs_trait(ty, &[]) };
     let obligation = Obligation {
         param_env,
-        cause: ObligationCause::misc(span, hir::DUMMY_HIR_ID),
+        cause: ObligationCause::misc(span, hir::CRATE_HIR_ID),
         recursion_depth: 0,
         predicate: trait_ref.without_const().to_predicate(),
     };
@@ -163,7 +163,7 @@ pub fn type_known_to_meet_bound_modulo_regions<'a, 'tcx>(
         // We can use a dummy node-id here because we won't pay any mind
         // to region obligations that arise (there shouldn't really be any
         // anyhow).
-        let cause = ObligationCause::misc(span, hir::DUMMY_HIR_ID);
+        let cause = ObligationCause::misc(span, hir::CRATE_HIR_ID);
 
         fulfill_cx.register_bound(infcx, param_env, ty, def_id, cause);
 
@@ -259,8 +259,8 @@ fn do_normalize_predicates<'tcx>(
                 return Err(ErrorReported);
             }
         };
-        if predicates.has_local_value() {
-            // FIXME: shouldn't we, you know, actually report an error here? or an ICE?
+        if predicates.needs_infer() {
+            tcx.sess.delay_span_bug(span, "encountered inference variables after `fully_resolve`");
             Err(ErrorReported)
         } else {
             Ok(predicates)
@@ -297,7 +297,9 @@ pub fn normalize_param_env_or_error<'tcx>(
     );
 
     let mut predicates: Vec<_> =
-        util::elaborate_predicates(tcx, unnormalized_env.caller_bounds.to_vec()).collect();
+        util::elaborate_predicates(tcx, unnormalized_env.caller_bounds.to_vec())
+            .map(|obligation| obligation.predicate)
+            .collect();
 
     debug!("normalize_param_env_or_error: elaborated-predicates={:?}", predicates);
 
@@ -473,7 +475,7 @@ fn vtable_methods<'tcx>(
         let trait_methods = tcx
             .associated_items(trait_ref.def_id())
             .in_definition_order()
-            .filter(|item| item.kind == ty::AssocKind::Method);
+            .filter(|item| item.kind == ty::AssocKind::Fn);
 
         // Now list each method's DefId and InternalSubsts (for within its trait).
         // If the method can never be called from this object, produce None.

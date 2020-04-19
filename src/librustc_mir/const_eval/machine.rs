@@ -13,8 +13,8 @@ use rustc_middle::mir::AssertMessage;
 use rustc_span::symbol::Symbol;
 
 use crate::interpret::{
-    self, AllocId, Allocation, GlobalId, ImmTy, InterpCx, InterpResult, Memory, MemoryKind, OpTy,
-    PlaceTy, Pointer, Scalar,
+    self, AllocId, Allocation, Frame, GlobalId, ImmTy, InterpCx, InterpResult, Memory, MemoryKind,
+    OpTy, PlaceTy, Pointer, Scalar,
 };
 
 use super::error::*;
@@ -179,9 +179,12 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for CompileTimeInterpreter {
 
     const GLOBAL_KIND: Option<!> = None; // no copying of globals from `tcx` to machine memory
 
-    // We do not check for alignment to avoid having to carry an `Align`
-    // in `ConstValue::ByRef`.
-    const CHECK_ALIGN: bool = false;
+    #[inline(always)]
+    fn enforce_alignment(_memory_extra: &Self::MemoryExtra) -> bool {
+        // We do not check for alignment to avoid having to carry an `Align`
+        // in `ConstValue::ByRef`.
+        false
+    }
 
     #[inline(always)]
     fn enforce_validity(_ecx: &InterpCx<'mir, 'tcx, Self>) -> bool {
@@ -339,8 +342,11 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for CompileTimeInterpreter {
     }
 
     #[inline(always)]
-    fn stack_push(_ecx: &mut InterpCx<'mir, 'tcx, Self>) -> InterpResult<'tcx> {
-        Ok(())
+    fn init_frame_extra(
+        _ecx: &mut InterpCx<'mir, 'tcx, Self>,
+        frame: Frame<'mir, 'tcx>,
+    ) -> InterpResult<'tcx, Frame<'mir, 'tcx>> {
+        Ok(frame)
     }
 
     fn before_access_global(
@@ -350,15 +356,30 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for CompileTimeInterpreter {
         static_def_id: Option<DefId>,
         is_write: bool,
     ) -> InterpResult<'tcx> {
-        if is_write && allocation.mutability == Mutability::Not {
-            Err(err_ub!(WriteToReadOnly(alloc_id)).into())
-        } else if is_write {
-            Err(ConstEvalErrKind::ModifiedGlobal.into())
-        } else if memory_extra.can_access_statics || static_def_id.is_none() {
-            // `static_def_id.is_none()` indicates this is not a static, but a const or so.
-            Ok(())
+        if is_write {
+            // Write access. These are never allowed, but we give a targeted error message.
+            if allocation.mutability == Mutability::Not {
+                Err(err_ub!(WriteToReadOnly(alloc_id)).into())
+            } else {
+                Err(ConstEvalErrKind::ModifiedGlobal.into())
+            }
         } else {
-            Err(ConstEvalErrKind::ConstAccessesStatic.into())
+            // Read access. These are usually allowed, with some exceptions.
+            if memory_extra.can_access_statics {
+                // Machine configuration allows us read from anything (e.g., `static` initializer).
+                Ok(())
+            } else if static_def_id.is_some() {
+                // Machine configuration does not allow us to read statics
+                // (e.g., `const` initializer).
+                Err(ConstEvalErrKind::ConstAccessesStatic.into())
+            } else {
+                // Immutable global, this read is fine.
+                // But make sure we never accept a read from something mutable, that would be
+                // unsound. The reason is that as the content of this allocation may be different
+                // now and at run-time, so if we permit reading now we might return the wrong value.
+                assert_eq!(allocation.mutability, Mutability::Not);
+                Ok(())
+            }
         }
     }
 }

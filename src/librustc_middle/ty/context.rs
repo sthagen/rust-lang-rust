@@ -182,7 +182,7 @@ pub struct CommonLifetimes<'tcx> {
 }
 
 pub struct CommonConsts<'tcx> {
-    pub err: &'tcx Const<'tcx>,
+    pub unit: &'tcx Const<'tcx>,
 }
 
 pub struct LocalTableInContext<'a, V> {
@@ -410,8 +410,8 @@ pub struct TypeckTables<'tcx> {
     pub used_trait_imports: Lrc<DefIdSet>,
 
     /// If any errors occurred while type-checking this body,
-    /// this field will be set to `true`.
-    pub tainted_by_errors: bool,
+    /// this field will be set to `Some(ErrorReported)`.
+    pub tainted_by_errors: Option<ErrorReported>,
 
     /// All the opaque types that are restricted to concrete types
     /// by this function.
@@ -447,7 +447,7 @@ impl<'tcx> TypeckTables<'tcx> {
             fru_field_types: Default::default(),
             coercion_casts: Default::default(),
             used_trait_imports: Lrc::new(Default::default()),
-            tainted_by_errors: false,
+            tainted_by_errors: None,
             concrete_opaque_types: Default::default(),
             upvar_list: Default::default(),
             generator_interior_types: Default::default(),
@@ -858,9 +858,9 @@ impl<'tcx> CommonConsts<'tcx> {
         let mk_const = |c| interners.const_.intern(c, |c| Interned(interners.arena.alloc(c))).0;
 
         CommonConsts {
-            err: mk_const(ty::Const {
+            unit: mk_const(ty::Const {
                 val: ty::ConstKind::Value(ConstValue::Scalar(Scalar::zst())),
-                ty: types.err,
+                ty: types.unit,
             }),
         }
     }
@@ -1126,13 +1126,16 @@ impl<'tcx> TyCtxt<'tcx> {
 
         let mut trait_map: FxHashMap<_, FxHashMap<_, _>> = FxHashMap::default();
         for (k, v) in resolutions.trait_map {
-            let hir_id = definitions.node_id_to_hir_id(k);
-            let map = trait_map.entry(hir_id.owner).or_default();
-            let v = v
-                .into_iter()
-                .map(|tc| tc.map_import_ids(|id| definitions.node_id_to_hir_id(id)))
-                .collect();
-            map.insert(hir_id.local_id, StableVec::new(v));
+            // FIXME(#71104) Should really be using just `node_id_to_hir_id` but
+            // some `NodeId` do not seem to have a corresponding HirId.
+            if let Some(hir_id) = definitions.opt_node_id_to_hir_id(k) {
+                let map = trait_map.entry(hir_id.owner).or_default();
+                let v = v
+                    .into_iter()
+                    .map(|tc| tc.map_import_ids(|id| definitions.node_id_to_hir_id(id)))
+                    .collect();
+                map.insert(hir_id.local_id, StableVec::new(v));
+            }
         }
 
         GlobalCtxt {
@@ -1162,17 +1165,17 @@ impl<'tcx> TyCtxt<'tcx> {
             maybe_unused_trait_imports: resolutions
                 .maybe_unused_trait_imports
                 .into_iter()
-                .map(|id| definitions.local_def_id(id))
+                .map(|id| definitions.local_def_id(id).to_def_id())
                 .collect(),
             maybe_unused_extern_crates: resolutions
                 .maybe_unused_extern_crates
                 .into_iter()
-                .map(|(id, sp)| (definitions.local_def_id(id), sp))
+                .map(|(id, sp)| (definitions.local_def_id(id).to_def_id(), sp))
                 .collect(),
             glob_map: resolutions
                 .glob_map
                 .into_iter()
-                .map(|(id, names)| (definitions.local_def_id(id), names))
+                .map(|(id, names)| (definitions.local_def_id(id).to_def_id(), names))
                 .collect(),
             extern_prelude: resolutions.extern_prelude,
             untracked_crate: krate,
@@ -2065,10 +2068,6 @@ macro_rules! direct_interners {
     }
 }
 
-pub fn keep_local<'tcx, T: ty::TypeFoldable<'tcx>>(x: &T) -> bool {
-    x.has_type_flags(ty::TypeFlags::KEEP_IN_LOCAL_TCX)
-}
-
 direct_interners!(
     region: mk_region(RegionKind),
     goal: mk_goal(GoalKind<'tcx>),
@@ -2210,6 +2209,12 @@ impl<'tcx> TyCtxt<'tcx> {
     #[inline]
     pub fn mk_lang_item(self, ty: Ty<'tcx>, item: lang_items::LangItem) -> Option<Ty<'tcx>> {
         let def_id = self.lang_items().require(item).ok()?;
+        Some(self.mk_generic_adt(def_id, ty))
+    }
+
+    #[inline]
+    pub fn mk_diagnostic_item(self, ty: Ty<'tcx>, name: Symbol) -> Option<Ty<'tcx>> {
+        let def_id = self.get_diagnostic_item(name)?;
         Some(self.mk_generic_adt(def_id, ty))
     }
 
@@ -2721,7 +2726,7 @@ pub fn provide(providers: &mut ty::query::Providers<'_>) {
     };
     providers.names_imported_by_glob_use = |tcx, id| {
         assert_eq!(id.krate, LOCAL_CRATE);
-        Lrc::new(tcx.glob_map.get(&id).cloned().unwrap_or_default())
+        tcx.arena.alloc(tcx.glob_map.get(&id).cloned().unwrap_or_default())
     };
 
     providers.lookup_stability = |tcx, id| {

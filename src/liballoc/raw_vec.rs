@@ -3,7 +3,7 @@
 
 use core::alloc::MemoryBlock;
 use core::cmp;
-use core::mem::{self, MaybeUninit};
+use core::mem::{self, ManuallyDrop, MaybeUninit};
 use core::ops::Drop;
 use core::ptr::{NonNull, Unique};
 use core::slice;
@@ -112,11 +112,10 @@ impl<T> RawVec<T, Global> {
     }
 
     /// Converts a `Box<[T]>` into a `RawVec<T>`.
-    pub fn from_box(mut slice: Box<[T]>) -> Self {
+    pub fn from_box(slice: Box<[T]>) -> Self {
         unsafe {
-            let result = RawVec::from_raw_parts(slice.as_mut_ptr(), slice.len());
-            mem::forget(slice);
-            result
+            let mut slice = ManuallyDrop::new(slice);
+            RawVec::from_raw_parts(slice.as_mut_ptr(), slice.len())
         }
     }
 }
@@ -571,19 +570,21 @@ impl<T> RawVec<T, Global> {
     ///
     /// # Safety
     ///
-    /// `shrink_to_fit(len)` must be called immediately prior to calling this function. This
-    /// implies, that `len` must be smaller than or equal to `self.capacity()`.
+    /// * `len` must be greater than or equal to the most recently requested capacity, and
+    /// * `len` must be less than or equal to `self.capacity()`.
+    ///
+    /// Note, that the requested capacity and `self.capacity()` could differ, as
+    /// an allocator could overallocate and return a greater memory block than requested.
     pub unsafe fn into_box(self, len: usize) -> Box<[MaybeUninit<T>]> {
+        // Sanity-check one half of the safety requirement (we cannot check the other half).
         debug_assert!(
             len <= self.capacity(),
             "`len` must be smaller than or equal to `self.capacity()`"
         );
 
-        // NOTE: not calling `capacity()` here; actually using the real `cap` field!
-        let slice = slice::from_raw_parts_mut(self.ptr() as *mut MaybeUninit<T>, len);
-        let output = Box::from_raw(slice);
-        mem::forget(self);
-        output
+        let me = ManuallyDrop::new(self);
+        let slice = slice::from_raw_parts_mut(me.ptr() as *mut MaybeUninit<T>, len);
+        Box::from_raw(slice)
     }
 }
 
@@ -607,7 +608,7 @@ unsafe impl<#[may_dangle] T, A: AllocRef> Drop for RawVec<T, A> {
 
 #[inline]
 fn alloc_guard(alloc_size: usize) -> Result<(), TryReserveError> {
-    if mem::size_of::<usize>() < 8 && alloc_size > core::isize::MAX as usize {
+    if mem::size_of::<usize>() < 8 && alloc_size > isize::MAX as usize {
         Err(CapacityOverflow)
     } else {
         Ok(())

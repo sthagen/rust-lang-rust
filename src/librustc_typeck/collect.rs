@@ -45,6 +45,7 @@ use rustc_session::parse::feature_err;
 use rustc_span::symbol::{kw, sym, Symbol};
 use rustc_span::{Span, DUMMY_SP};
 use rustc_target::spec::abi;
+use rustc_trait_selection::traits::error_reporting::suggestions::NextTypeParamName;
 
 mod type_of;
 
@@ -135,20 +136,7 @@ crate fn placeholder_type_error(
     if placeholder_types.is_empty() {
         return;
     }
-    // This is the whitelist of possible parameter names that we might suggest.
-    let possible_names = ["T", "K", "L", "A", "B", "C"];
-    let used_names = generics
-        .iter()
-        .filter_map(|p| match p.name {
-            hir::ParamName::Plain(ident) => Some(ident.name),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-
-    let type_name = possible_names
-        .iter()
-        .find(|n| !used_names.contains(&Symbol::intern(n)))
-        .unwrap_or(&"ParamName");
+    let type_name = generics.next_type_param_name(None);
 
     let mut sugg: Vec<_> =
         placeholder_types.iter().map(|sp| (*sp, (*type_name).to_string())).collect();
@@ -328,13 +316,13 @@ impl AstConv<'tcx> for ItemCtxt<'tcx> {
 
     fn ct_infer(
         &self,
-        _: Ty<'tcx>,
+        ty: Ty<'tcx>,
         _: Option<&ty::GenericParamDef>,
         span: Span,
     ) -> &'tcx Const<'tcx> {
         bad_placeholder_type(self.tcx(), vec![span]).emit();
 
-        self.tcx().consts.err
+        self.tcx().mk_const(ty::Const { val: ty::ConstKind::Error, ty })
     }
 
     fn projected_ty_from_poly_trait_ref(
@@ -1182,14 +1170,28 @@ fn generics_of(tcx: TyCtxt<'_>, def_id: DefId) -> &ty::Generics {
         }
         // FIXME(#43408) enable this always when we get lazy normalization.
         Node::AnonConst(_) => {
+            let parent_id = tcx.hir().get_parent_item(hir_id);
+            let parent_def_id = tcx.hir().local_def_id(parent_id);
+
             // HACK(eddyb) this provides the correct generics when
             // `feature(const_generics)` is enabled, so that const expressions
             // used with const generics, e.g. `Foo<{N+1}>`, can work at all.
             if tcx.features().const_generics {
-                let parent_id = tcx.hir().get_parent_item(hir_id);
-                Some(tcx.hir().local_def_id(parent_id))
+                Some(parent_def_id)
             } else {
-                None
+                let parent_node = tcx.hir().get(tcx.hir().get_parent_node(hir_id));
+                match parent_node {
+                    // HACK(eddyb) this provides the correct generics for repeat
+                    // expressions' count (i.e. `N` in `[x; N]`), as they shouldn't
+                    // be able to cause query cycle errors.
+                    Node::Expr(&Expr { kind: ExprKind::Repeat(_, ref constant), .. })
+                        if constant.hir_id == hir_id =>
+                    {
+                        Some(parent_def_id)
+                    }
+
+                    _ => None,
+                }
             }
         }
         Node::Expr(&hir::Expr { kind: hir::ExprKind::Closure(..), .. }) => {
@@ -1513,7 +1515,7 @@ fn fn_sig(tcx: TyCtxt<'_>, def_id: DefId) -> ty::PolyFnSig<'_> {
         }
 
         Ctor(data) | Variant(hir::Variant { data, .. }) if data.ctor_hir_id().is_some() => {
-            let ty = tcx.type_of(tcx.hir().get_parent_did(hir_id));
+            let ty = tcx.type_of(tcx.hir().get_parent_did(hir_id).to_def_id());
             let inputs =
                 data.fields().iter().map(|f| tcx.type_of(tcx.hir().local_def_id(f.hir_id)));
             ty::Binder::bind(tcx.mk_fn_sig(
@@ -1650,7 +1652,7 @@ fn predicates_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::GenericPredicates<'_> {
         // prove that the trait applies to the types that were
         // used, and adding the predicate into this list ensures
         // that this is done.
-        let span = tcx.def_span(def_id);
+        let span = tcx.sess.source_map().guess_head_span(tcx.def_span(def_id));
         result.predicates =
             tcx.arena.alloc_from_iter(result.predicates.iter().copied().chain(std::iter::once((
                 ty::TraitRef::identity(tcx, def_id).without_const().to_predicate(),
@@ -2035,7 +2037,8 @@ fn associated_item_predicates(
             }
             ty::GenericParamDefKind::Const => {
                 unimplemented_error("const");
-                tcx.consts.err.into()
+                tcx.mk_const(ty::Const { val: ty::ConstKind::Error, ty: tcx.type_of(param.def_id) })
+                    .into()
             }
         }
     };
@@ -2595,7 +2598,7 @@ fn should_inherit_track_caller(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
                     .associated_items(trait_def_id)
                     .filter_by_name_unhygienic(impl_item.ident.name)
                     .find(move |trait_item| {
-                        trait_item.kind == ty::AssocKind::Method
+                        trait_item.kind == ty::AssocKind::Fn
                             && tcx.hygienic_eq(impl_item.ident, trait_item.ident, trait_def_id)
                     })
                 {
@@ -2620,13 +2623,13 @@ fn check_link_ordinal(tcx: TyCtxt<'_>, attr: &ast::Attribute) -> Option<usize> {
         _ => None,
     };
     if let Some(Lit { kind: LitKind::Int(ordinal, LitIntType::Unsuffixed), .. }) = sole_meta_list {
-        if *ordinal <= std::usize::MAX as u128 {
+        if *ordinal <= usize::MAX as u128 {
             Some(*ordinal as usize)
         } else {
             let msg = format!("ordinal value in `link_ordinal` is too large: `{}`", &ordinal);
             tcx.sess
                 .struct_span_err(attr.span, &msg)
-                .note("the value may not exceed `std::usize::MAX`")
+                .note("the value may not exceed `usize::MAX`")
                 .emit();
             None
         }

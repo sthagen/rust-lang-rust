@@ -12,7 +12,7 @@ use crate::infer::error_reporting::{TyCategory, TypeAnnotationNeeded as ErrorCod
 use crate::infer::type_variable::{TypeVariableOrigin, TypeVariableOriginKind};
 use crate::infer::{self, InferCtxt, TyCtxtInferExt};
 use rustc_data_structures::fx::FxHashMap;
-use rustc_errors::{pluralize, struct_span_err, Applicability, DiagnosticBuilder};
+use rustc_errors::{pluralize, struct_span_err, Applicability, DiagnosticBuilder, ErrorReported};
 use rustc_hir as hir;
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
 use rustc_hir::{Node, QPath, TyKind, WhereBoundPredicate, WherePredicate};
@@ -126,7 +126,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                 .borrow_mut()
                 .entry(span)
                 .or_default()
-                .push(error.obligation.predicate.clone());
+                .push(error.obligation.predicate);
         }
 
         // We do this in 2 passes because we want to display errors in order, though
@@ -292,7 +292,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                                 )),
                                 Some(
                                     "the question mark operation (`?`) implicitly performs a \
-                                     conversion on the error value using the `From` trait"
+                                        conversion on the error value using the `From` trait"
                                         .to_owned(),
                                 ),
                             )
@@ -311,6 +311,27 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                                 post_message,
                             ))
                         );
+
+                        let should_convert_option_to_result =
+                            format!("{}", trait_ref.print_only_trait_path())
+                                .starts_with("std::convert::From<std::option::NoneError");
+                        let should_convert_result_to_option = format!("{}", trait_ref)
+                            .starts_with("<std::option::NoneError as std::convert::From<");
+                        if is_try && is_from && should_convert_option_to_result {
+                            err.span_suggestion_verbose(
+                                span.shrink_to_lo(),
+                                "consider converting the `Option<T>` into a `Result<T, _>` using `Option::ok_or` or `Option::ok_or_else`",
+                                ".ok_or_else(|| /* error value */)".to_string(),
+                                Applicability::HasPlaceholders,
+                            );
+                        } else if is_try && is_from && should_convert_result_to_option {
+                            err.span_suggestion_verbose(
+                                span.shrink_to_lo(),
+                                "consider converting the `Result<T, _>` into an `Option<T>` using `Result::ok`",
+                                ".ok()".to_string(),
+                                Applicability::MachineApplicable,
+                            );
+                        }
 
                         let explanation =
                             if obligation.cause.code == ObligationCauseCode::MainFunctionType {
@@ -358,7 +379,8 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                                         tcx.hir().body_owner_def_id(hir::BodyId {
                                             hir_id: obligation.cause.body_id,
                                         })
-                                    }),
+                                    })
+                                    .to_def_id(),
                             );
 
                             err.span_label(enclosing_scope_span, s.as_str());
@@ -387,7 +409,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                             // which is somewhat confusing.
                             self.suggest_restricting_param_bound(
                                 &mut err,
-                                &trait_ref,
+                                trait_ref,
                                 obligation.cause.body_id,
                             );
                         } else {
@@ -652,8 +674,17 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
             }
 
             // Already reported in the query.
-            ConstEvalFailure(ErrorHandled::Reported) => {
-                self.tcx.sess.delay_span_bug(span, "constant in type had an ignored error");
+            ConstEvalFailure(ErrorHandled::Reported(ErrorReported)) => {
+                // FIXME(eddyb) remove this once `ErrorReported` becomes a proof token.
+                self.tcx.sess.delay_span_bug(span, "`ErrorReported` without an error");
+                return;
+            }
+
+            // Already reported in the query, but only as a lint.
+            // This shouldn't actually happen for constants used in types, modulo
+            // bugs. The `delay_span_bug` here ensures it won't be ignored.
+            ConstEvalFailure(ErrorHandled::Linted) => {
+                self.tcx.sess.delay_span_bug(span, "constant in type had error reported as lint");
                 return;
             }
 
@@ -976,8 +1007,8 @@ impl<'a, 'tcx> InferCtxtPrivExt<'tcx> for InferCtxt<'a, 'tcx> {
             }
         };
 
-        for implication in super::elaborate_predicates(self.tcx, vec![*cond]) {
-            if let ty::Predicate::Trait(implication, _) = implication {
+        for obligation in super::elaborate_predicates(self.tcx, vec![*cond]) {
+            if let ty::Predicate::Trait(implication, _) = obligation.predicate {
                 let error = error.to_poly_trait_ref();
                 let implication = implication.to_poly_trait_ref();
                 // FIXME: I'm just not taking associated types at all here.
@@ -1377,7 +1408,7 @@ impl<'a, 'tcx> InferCtxtPrivExt<'tcx> for InferCtxt<'a, 'tcx> {
                     return;
                 }
                 let mut err = self.need_type_info_err(body_id, span, self_ty, ErrorCode::E0283);
-                err.note(&format!("cannot resolve `{}`", predicate));
+                err.note(&format!("cannot satisfy `{}`", predicate));
                 if let ObligationCauseCode::ItemObligation(def_id) = obligation.cause.code {
                     self.suggest_fully_qualified_path(&mut err, def_id, span, trait_ref.def_id());
                 } else if let (
@@ -1387,7 +1418,9 @@ impl<'a, 'tcx> InferCtxtPrivExt<'tcx> for InferCtxt<'a, 'tcx> {
                     (self.tcx.sess.source_map().span_to_snippet(span), &obligation.cause.code)
                 {
                     let generics = self.tcx.generics_of(*def_id);
-                    if !generics.params.is_empty() && !snippet.ends_with('>') {
+                    if generics.params.iter().any(|p| p.name.as_str() != "Self")
+                        && !snippet.ends_with('>')
+                    {
                         // FIXME: To avoid spurious suggestions in functions where type arguments
                         // where already supplied, we check the snippet to make sure it doesn't
                         // end with a turbofish. Ideally we would have access to a `PathSegment`
@@ -1405,9 +1438,9 @@ impl<'a, 'tcx> InferCtxtPrivExt<'tcx> for InferCtxt<'a, 'tcx> {
                         //    |                        `Tt::const_val::<[i8; 123]>::<T>`
                         // ...
                         // LL |     const fn const_val<T: Sized>() -> usize {
-                        //    |              --------- - required by this bound in `Tt::const_val`
+                        //    |                        - required by this bound in `Tt::const_val`
                         //    |
-                        //    = note: cannot resolve `_: Tt`
+                        //    = note: cannot satisfy `_: Tt`
 
                         err.span_suggestion_verbose(
                             span.shrink_to_hi(),
@@ -1457,7 +1490,7 @@ impl<'a, 'tcx> InferCtxtPrivExt<'tcx> for InferCtxt<'a, 'tcx> {
                     return;
                 }
                 let mut err = self.need_type_info_err(body_id, span, self_ty, ErrorCode::E0284);
-                err.note(&format!("cannot resolve `{}`", predicate));
+                err.note(&format!("cannot satisfy `{}`", predicate));
                 err
             }
 
@@ -1469,10 +1502,10 @@ impl<'a, 'tcx> InferCtxtPrivExt<'tcx> for InferCtxt<'a, 'tcx> {
                     self.tcx.sess,
                     span,
                     E0284,
-                    "type annotations needed: cannot resolve `{}`",
+                    "type annotations needed: cannot satisfy `{}`",
                     predicate,
                 );
-                err.span_label(span, &format!("cannot resolve `{}`", predicate));
+                err.span_label(span, &format!("cannot satisfy `{}`", predicate));
                 err
             }
         };
@@ -1814,7 +1847,7 @@ pub fn suggest_constraining_type_param(
         // Account for `fn foo<T>(t: T) where T: Foo,` so we don't suggest two trailing commas.
         let mut trailing_comma = false;
         if let Ok(snippet) = tcx.sess.source_map().span_to_snippet(where_clause_span) {
-            trailing_comma = snippet.ends_with(",");
+            trailing_comma = snippet.ends_with(',');
         }
         let where_clause_span = if trailing_comma {
             let hi = where_clause_span.hi();

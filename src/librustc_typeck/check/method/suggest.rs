@@ -117,7 +117,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                             .span_if_local(item.def_id)
                             .or_else(|| self.tcx.hir().span_if_local(impl_did));
 
-                        let impl_ty = self.impl_self_ty(span, impl_did).ty;
+                        let impl_ty = self.tcx.at(span).type_of(impl_did);
 
                         let insertion = match self.tcx.impl_trait_ref(impl_did) {
                             None => String::new(),
@@ -162,7 +162,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                                 ty::AssocKind::Const
                                 | ty::AssocKind::Type
                                 | ty::AssocKind::OpaqueTy => rcvr_ty,
-                                ty::AssocKind::Method => self
+                                ty::AssocKind::Fn => self
                                     .tcx
                                     .fn_sig(item.def_id)
                                     .inputs()
@@ -179,6 +179,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                                 path,
                                 ty,
                                 item.kind,
+                                item.def_id,
                                 sugg_span,
                                 idx,
                                 self.tcx.sess.source_map(),
@@ -220,6 +221,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                             path,
                             rcvr_ty,
                             item.kind,
+                            item.def_id,
                             sugg_span,
                             idx,
                             self.tcx.sess.source_map(),
@@ -271,11 +273,35 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     let mut candidates = all_traits(self.tcx).into_iter().filter_map(|info| {
                         self.associated_item(info.def_id, item_name, Namespace::ValueNS)
                     });
-                    if let (true, false, SelfSource::MethodCall(expr), Some(_)) = (
+                    // There are methods that are defined on the primitive types and won't be
+                    // found when exploring `all_traits`, but we also need them to be acurate on
+                    // our suggestions (#47759).
+                    let fund_assoc = |opt_def_id: Option<DefId>| {
+                        opt_def_id
+                            .and_then(|id| self.associated_item(id, item_name, Namespace::ValueNS))
+                            .is_some()
+                    };
+                    let lang_items = tcx.lang_items();
+                    let found_candidate = candidates.next().is_some()
+                        || fund_assoc(lang_items.i8_impl())
+                        || fund_assoc(lang_items.i16_impl())
+                        || fund_assoc(lang_items.i32_impl())
+                        || fund_assoc(lang_items.i64_impl())
+                        || fund_assoc(lang_items.i128_impl())
+                        || fund_assoc(lang_items.u8_impl())
+                        || fund_assoc(lang_items.u16_impl())
+                        || fund_assoc(lang_items.u32_impl())
+                        || fund_assoc(lang_items.u64_impl())
+                        || fund_assoc(lang_items.u128_impl())
+                        || fund_assoc(lang_items.f32_impl())
+                        || fund_assoc(lang_items.f32_runtime_impl())
+                        || fund_assoc(lang_items.f64_impl())
+                        || fund_assoc(lang_items.f64_runtime_impl());
+                    if let (true, false, SelfSource::MethodCall(expr), true) = (
                         actual.is_numeric(),
                         actual.has_concrete_skeleton(),
                         source,
-                        candidates.next(),
+                        found_candidate,
                     ) {
                         let mut err = struct_span_err!(
                             tcx.sess,
@@ -513,7 +539,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         // When the "method" is resolved through dereferencing, we really want the
                         // original type that has the associated function for accurate suggestions.
                         // (#61411)
-                        let ty = self.impl_self_ty(span, *impl_did).ty;
+                        let ty = tcx.at(span).type_of(*impl_did);
                         match (&ty.peel_refs().kind, &actual.peel_refs().kind) {
                             (ty::Adt(def, _), ty::Adt(def_actual, _)) if def == def_actual => {
                                 // Use `actual` as it will have more `substs` filled in.
@@ -740,7 +766,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         err.span_label(span, msg);
                     }
                 } else if let Some(lev_candidate) = lev_candidate {
-                    let def_kind = lev_candidate.def_kind();
+                    let def_kind = lev_candidate.kind.as_def_kind();
                     err.span_suggestion(
                         span,
                         &format!(
@@ -933,7 +959,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     && self
                         .associated_item(info.def_id, item_name, Namespace::ValueNS)
                         .filter(|item| {
-                            if let ty::AssocKind::Method = item.kind {
+                            if let ty::AssocKind::Fn = item.kind {
                                 let id = self.tcx.hir().as_local_hir_id(item.def_id);
                                 if let Some(hir::Node::TraitItem(hir::TraitItem {
                                     kind: hir::TraitItemKind::Fn(fn_sig, method),
@@ -1363,12 +1389,13 @@ fn print_disambiguation_help(
     trait_name: String,
     rcvr_ty: Ty<'_>,
     kind: ty::AssocKind,
+    def_id: DefId,
     span: Span,
     candidate: Option<usize>,
     source_map: &source_map::SourceMap,
 ) {
     let mut applicability = Applicability::MachineApplicable;
-    let sugg_args = if let (ty::AssocKind::Method, Some(args)) = (kind, args) {
+    let sugg_args = if let (ty::AssocKind::Fn, Some(args)) = (kind, args) {
         format!(
             "({}{})",
             if rcvr_ty.is_region_ptr() {
@@ -1392,7 +1419,7 @@ fn print_disambiguation_help(
         span,
         &format!(
             "disambiguate the {} for {}",
-            kind.suggestion_descr(),
+            kind.as_def_kind().descr(def_id),
             if let Some(candidate) = candidate {
                 format!("candidate #{}", candidate)
             } else {

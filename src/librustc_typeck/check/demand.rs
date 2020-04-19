@@ -217,14 +217,10 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         span: Span,
         expected: Ty<'tcx>,
         checked_ty: Ty<'tcx>,
+        hir_id: hir::HirId,
     ) -> Vec<AssocItem> {
-        let mut methods = self.probe_for_return_type(
-            span,
-            probe::Mode::MethodCall,
-            expected,
-            checked_ty,
-            hir::DUMMY_HIR_ID,
-        );
+        let mut methods =
+            self.probe_for_return_type(span, probe::Mode::MethodCall, expected, checked_ty, hir_id);
         methods.retain(|m| {
             self.has_no_input_arg(m)
                 && self
@@ -250,9 +246,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     // This function checks if the method isn't static and takes other arguments than `self`.
     fn has_no_input_arg(&self, method: &AssocItem) -> bool {
         match method.kind {
-            ty::AssocKind::Method => {
-                self.tcx.fn_sig(method.def_id).inputs().skip_binder().len() == 1
-            }
+            ty::AssocKind::Fn => self.tcx.fn_sig(method.def_id).inputs().skip_binder().len() == 1,
             _ => false,
         }
     }
@@ -753,8 +747,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
             match (&expected_ty.kind, &checked_ty.kind) {
                 (&ty::Int(ref exp), &ty::Int(ref found)) => {
-                    let is_fallible = match (found.bit_width(), exp.bit_width()) {
-                        (Some(found), Some(exp)) if found > exp => true,
+                    let is_fallible = match (exp.bit_width(), found.bit_width()) {
+                        (Some(exp), Some(found)) if exp < found => true,
+                        (None, Some(8 | 16)) => false,
                         (None, _) | (_, None) => true,
                         _ => false,
                     };
@@ -762,8 +757,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     true
                 }
                 (&ty::Uint(ref exp), &ty::Uint(ref found)) => {
-                    let is_fallible = match (found.bit_width(), exp.bit_width()) {
-                        (Some(found), Some(exp)) if found > exp => true,
+                    let is_fallible = match (exp.bit_width(), found.bit_width()) {
+                        (Some(exp), Some(found)) if exp < found => true,
+                        (None, Some(8 | 16)) => false,
                         (None, _) | (_, None) => true,
                         _ => false,
                     };

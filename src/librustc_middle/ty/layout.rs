@@ -22,6 +22,7 @@ use std::cmp;
 use std::fmt;
 use std::iter;
 use std::mem;
+use std::num::NonZeroUsize;
 use std::ops::Bound;
 
 pub trait IntegerExt {
@@ -285,11 +286,7 @@ impl<'tcx> LayoutCx<'tcx, TyCtxt<'tcx>> {
 
         let mut inverse_memory_index: Vec<u32> = (0..fields.len() as u32).collect();
 
-        let mut optimize = !repr.inhibit_struct_field_reordering_opt();
-        if let StructKind::Prefixed(_, align) = kind {
-            optimize &= align.bytes() == 1;
-        }
-
+        let optimize = !repr.inhibit_struct_field_reordering_opt();
         if optimize {
             let end =
                 if let StructKind::MaybeUnsized = kind { fields.len() - 1 } else { fields.len() };
@@ -307,6 +304,8 @@ impl<'tcx> LayoutCx<'tcx, TyCtxt<'tcx>> {
                     });
                 }
                 StructKind::Prefixed(..) => {
+                    // Sort in ascending alignment so that the layout stay optimal
+                    // regardless of the prefix
                     optimizing.sort_by_key(|&x| field_align(&fields[x as usize]));
                 }
             }
@@ -520,7 +519,7 @@ impl<'tcx> LayoutCx<'tcx, TyCtxt<'tcx>> {
             // The never type.
             ty::Never => tcx.intern_layout(Layout {
                 variants: Variants::Single { index: VariantIdx::new(0) },
-                fields: FieldsShape::Union(0),
+                fields: FieldsShape::Primitive,
                 abi: Abi::Uninhabited,
                 largest_niche: None,
                 align: dl.i8_align,
@@ -746,7 +745,10 @@ impl<'tcx> LayoutCx<'tcx, TyCtxt<'tcx>> {
 
                     return Ok(tcx.intern_layout(Layout {
                         variants: Variants::Single { index },
-                        fields: FieldsShape::Union(variants[index].len()),
+                        fields: FieldsShape::Union(
+                            NonZeroUsize::new(variants[index].len())
+                                .ok_or(LayoutError::Unknown(ty))?,
+                        ),
                         abi,
                         largest_niche: None,
                         align,
@@ -1587,7 +1589,7 @@ impl<'tcx> LayoutCx<'tcx, TyCtxt<'tcx>> {
         // Ignore layouts that are done with non-empty environments or
         // non-monomorphic layouts, as the user only wants to see the stuff
         // resulting from the final codegen session.
-        if layout.ty.has_param_types() || !self.param_env.caller_bounds.is_empty() {
+        if layout.ty.has_param_types_or_consts() || !self.param_env.caller_bounds.is_empty() {
             return;
         }
 
@@ -1756,7 +1758,7 @@ impl<'tcx> SizeSkeleton<'tcx> {
                 let tail = tcx.struct_tail_erasing_lifetimes(pointee, param_env);
                 match tail.kind {
                     ty::Param(_) | ty::Projection(_) => {
-                        debug_assert!(tail.has_param_types());
+                        debug_assert!(tail.has_param_types_or_consts());
                         Ok(SizeSkeleton::Pointer { non_zero, tail: tcx.erase_regions(&tail) })
                     }
                     _ => bug!(
@@ -1990,7 +1992,7 @@ where
                 if index == variant_index &&
                 // Don't confuse variants of uninhabited enums with the enum itself.
                 // For more details see https://github.com/rust-lang/rust/issues/69763.
-                this.fields != FieldsShape::Union(0) =>
+                this.fields != FieldsShape::Primitive =>
             {
                 this.layout
             }
@@ -2008,7 +2010,10 @@ where
                 let tcx = cx.tcx();
                 tcx.intern_layout(Layout {
                     variants: Variants::Single { index: variant_index },
-                    fields: FieldsShape::Union(fields),
+                    fields: match NonZeroUsize::new(fields) {
+                        Some(fields) => FieldsShape::Union(fields),
+                        None => FieldsShape::Arbitrary { offsets: vec![], memory_index: vec![] },
+                    },
                     abi: Abi::Uninhabited,
                     largest_niche: None,
                     align: tcx.data_layout.i8_align,

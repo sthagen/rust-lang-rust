@@ -33,7 +33,7 @@ use std::borrow::Cow;
 use std::fmt::{self, Debug, Display, Formatter, Write};
 use std::ops::Index;
 use std::slice;
-use std::{iter, mem, option, u32};
+use std::{iter, mem, option};
 
 pub use self::cache::{BodyAndCache, ReadOnlyBodyAndCache};
 pub use self::query::*;
@@ -1403,6 +1403,21 @@ impl<O> AssertKind<O> {
             BoundsCheck { .. } => bug!("Unexpected AssertKind"),
         }
     }
+
+    /// Format the message arguments for the `assert(cond, msg..)` terminator in MIR printing.
+    fn fmt_assert_args<W: Write>(&self, f: &mut W) -> fmt::Result
+    where
+        O: Debug,
+    {
+        match self {
+            AssertKind::BoundsCheck { ref len, ref index } => write!(
+                f,
+                "\"index out of bounds: the len is {{}} but the index is {{}}\", {:?}, {:?}",
+                len, index
+            ),
+            _ => write!(f, "\"{}\"", self.description()),
+        }
+    }
 }
 
 impl<O: fmt::Debug> fmt::Debug for AssertKind<O> {
@@ -1480,7 +1495,9 @@ impl<'tcx> TerminatorKind<'tcx> {
                 if !expected {
                     write!(fmt, "!")?;
                 }
-                write!(fmt, "{:?}, \"{:?}\")", cond, msg)
+                write!(fmt, "{:?}, ", cond)?;
+                msg.fmt_assert_args(fmt)?;
+                write!(fmt, ")")
             }
             FalseEdges { .. } => write!(fmt, "falseEdges"),
             FalseUnwind { .. } => write!(fmt, "falseUnwind"),
@@ -2594,14 +2611,14 @@ impl<'a, 'b> graph::GraphSuccessors<'b> for Body<'a> {
     type Iter = iter::Cloned<Successors<'b>>;
 }
 
+/// `Location` represents the position of the start of the statement; or, if
+/// `statement_index` equals the number of statements, then the start of the
+/// terminator.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, HashStable)]
 pub struct Location {
     /// The block that the location is within.
     pub block: BasicBlock,
 
-    /// The location is the position of the start of the statement; or, if
-    /// `statement_index` equals the number of statements, then the start of the
-    /// terminator.
     pub statement_index: usize,
 }
 

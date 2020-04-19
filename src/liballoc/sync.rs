@@ -23,7 +23,6 @@ use core::ptr::{self, NonNull};
 use core::slice::{self, from_raw_parts_mut};
 use core::sync::atomic;
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release, SeqCst};
-use core::{isize, usize};
 
 use crate::alloc::{box_free, handle_alloc_error, AllocInit, AllocRef, Global, Layout};
 use crate::boxed::Box;
@@ -208,7 +207,8 @@ macro_rules! acquire {
 /// counting in general.
 ///
 /// [rc_examples]: ../../std/rc/index.html#examples
-#[cfg_attr(not(test), lang = "arc")]
+#[cfg_attr(all(bootstrap, not(test)), lang = "arc")]
+#[cfg_attr(not(test), rustc_diagnostic_item = "Arc")]
 #[stable(feature = "rust1", since = "1.0.0")]
 pub struct Arc<T: ?Sized> {
     ptr: NonNull<ArcInner<T>>,

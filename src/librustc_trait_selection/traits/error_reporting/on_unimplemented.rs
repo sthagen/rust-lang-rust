@@ -134,7 +134,8 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
 
         match obligation.cause.code {
             ObligationCauseCode::BuiltinDerivedObligation(..)
-            | ObligationCauseCode::ImplDerivedObligation(..) => {}
+            | ObligationCauseCode::ImplDerivedObligation(..)
+            | ObligationCauseCode::DerivedObligation(..) => {}
             _ => {
                 // this is a "direct", user-specified, rather than derived,
                 // obligation.
@@ -142,7 +143,9 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
             }
         }
 
-        if let ObligationCauseCode::ItemObligation(item) = obligation.cause.code {
+        if let ObligationCauseCode::ItemObligation(item)
+        | ObligationCauseCode::BindingObligation(item, _) = obligation.cause.code
+        {
             // FIXME: maybe also have some way of handling methods
             // from other traits? That would require name resolution,
             // which we might want to be some sort of hygienic.

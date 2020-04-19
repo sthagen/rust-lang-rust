@@ -366,6 +366,7 @@ E0644: include_str!("./error_codes/E0644.md"),
 E0646: include_str!("./error_codes/E0646.md"),
 E0647: include_str!("./error_codes/E0647.md"),
 E0648: include_str!("./error_codes/E0648.md"),
+E0657: include_str!("./error_codes/E0657.md"),
 E0658: include_str!("./error_codes/E0658.md"),
 E0659: include_str!("./error_codes/E0659.md"),
 E0660: include_str!("./error_codes/E0660.md"),
@@ -394,6 +395,7 @@ E0703: include_str!("./error_codes/E0703.md"),
 E0704: include_str!("./error_codes/E0704.md"),
 E0705: include_str!("./error_codes/E0705.md"),
 E0706: include_str!("./error_codes/E0706.md"),
+E0708: include_str!("./error_codes/E0708.md"),
 E0710: include_str!("./error_codes/E0710.md"),
 E0712: include_str!("./error_codes/E0712.md"),
 E0713: include_str!("./error_codes/E0713.md"),
@@ -416,7 +418,6 @@ E0734: include_str!("./error_codes/E0734.md"),
 E0735: include_str!("./error_codes/E0735.md"),
 E0736: include_str!("./error_codes/E0736.md"),
 E0737: include_str!("./error_codes/E0737.md"),
-E0738: include_str!("./error_codes/E0738.md"),
 E0739: include_str!("./error_codes/E0739.md"),
 E0740: include_str!("./error_codes/E0740.md"),
 E0741: include_str!("./error_codes/E0741.md"),
@@ -597,7 +598,6 @@ E0751: include_str!("./error_codes/E0751.md"),
            // used in argument position
     E0640, // infer outlives requirements
 //  E0645, // trait aliases not finished
-    E0657, // `impl Trait` can only capture lifetimes bound at the fn level
     E0667, // `impl Trait` in projections
     E0687, // in-band lifetimes cannot be used in `fn`/`Fn` syntax
     E0688, // in-band lifetimes cannot be mixed with explicit lifetime binders
@@ -605,8 +605,6 @@ E0751: include_str!("./error_codes/E0751.md"),
     E0696, // `continue` pointing to a labeled block
 //  E0702, // replaced with a generic attribute input check
 //  E0707, // multiple elided lifetimes used in arguments of `async fn`
-    E0708, // `async` non-`move` closures with parameters are not currently
-           // supported
 //  E0709, // multiple different lifetimes used in arguments of `async fn`
     E0711, // a feature has been declared with conflicting stability attributes
     E0717, // rustc_promotable without stability attribute
@@ -614,4 +612,5 @@ E0751: include_str!("./error_codes/E0751.md"),
     E0722, // Malformed `#[optimize]` attribute
     E0724, // `#[ffi_returns_twice]` is only allowed in foreign functions
     E0726, // non-explicit (not `'_`) elided lifetime in unsupported position
+//  E0738, // Removed; errored on `#[track_caller] fn`s in `extern "Rust" { ... }`.
 }

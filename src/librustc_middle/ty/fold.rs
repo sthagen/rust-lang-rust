@@ -82,9 +82,9 @@ pub trait TypeFoldable<'tcx>: fmt::Debug + Clone {
         self.has_type_flags(TypeFlags::HAS_TY_OPAQUE)
     }
     fn references_error(&self) -> bool {
-        self.has_type_flags(TypeFlags::HAS_TY_ERR)
+        self.has_type_flags(TypeFlags::HAS_ERROR)
     }
-    fn has_param_types(&self) -> bool {
+    fn has_param_types_or_consts(&self) -> bool {
         self.has_type_flags(TypeFlags::HAS_TY_PARAM | TypeFlags::HAS_CT_PARAM)
     }
     fn has_infer_types(&self) -> bool {
@@ -95,9 +95,6 @@ pub trait TypeFoldable<'tcx>: fmt::Debug + Clone {
     }
     fn has_infer_consts(&self) -> bool {
         self.has_type_flags(TypeFlags::HAS_CT_INFER)
-    }
-    fn has_local_value(&self) -> bool {
-        self.has_type_flags(TypeFlags::KEEP_IN_LOCAL_TCX)
     }
     fn needs_infer(&self) -> bool {
         self.has_type_flags(TypeFlags::NEEDS_INFER)
@@ -263,20 +260,6 @@ where
 // Region folder
 
 impl<'tcx> TyCtxt<'tcx> {
-    /// Collects the free and escaping regions in `value` into `region_set`. Returns
-    /// whether any late-bound regions were skipped
-    pub fn collect_regions<T>(self, value: &T, region_set: &mut FxHashSet<ty::Region<'tcx>>) -> bool
-    where
-        T: TypeFoldable<'tcx>,
-    {
-        let mut have_bound_regions = false;
-        self.fold_regions(value, &mut have_bound_regions, |r, d| {
-            region_set.insert(self.mk_region(r.shifted_out_to_binder(d)));
-            r
-        });
-        have_bound_regions
-    }
-
     /// Folds the escaping and free regions in `value` using `f`, and
     /// sets `skipped_regions` to true if any late-bound region was found
     /// and skipped.

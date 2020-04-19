@@ -294,10 +294,13 @@ impl DocFolder for Cache {
                             // for where the type was defined. On the other
                             // hand, `paths` always has the right
                             // information if present.
-                            Some(&(ref fqp, ItemType::Trait))
-                            | Some(&(ref fqp, ItemType::Struct))
-                            | Some(&(ref fqp, ItemType::Union))
-                            | Some(&(ref fqp, ItemType::Enum)) => Some(&fqp[..fqp.len() - 1]),
+                            Some(&(
+                                ref fqp,
+                                ItemType::Trait
+                                | ItemType::Struct
+                                | ItemType::Union
+                                | ItemType::Enum,
+                            )) => Some(&fqp[..fqp.len() - 1]),
                             Some(..) => Some(&*self.stack),
                             None => None,
                         };
@@ -697,11 +700,11 @@ fn get_generics(clean_type: &clean::Type) -> Option<Vec<Generic>> {
         let r = types
             .iter()
             .filter_map(|t| {
-                if let Some(name) = get_index_type_name(t, false) {
-                    Some(Generic { name: name.to_ascii_lowercase(), defid: t.def_id(), idx: None })
-                } else {
-                    None
-                }
+                get_index_type_name(t, false).map(|name| Generic {
+                    name: name.to_ascii_lowercase(),
+                    defid: t.def_id(),
+                    idx: None,
+                })
             })
             .collect::<Vec<_>>();
         if r.is_empty() { None } else { Some(r) }

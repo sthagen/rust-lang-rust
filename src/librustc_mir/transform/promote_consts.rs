@@ -27,7 +27,7 @@ use rustc_index::vec::{Idx, IndexVec};
 use rustc_target::spec::abi::Abi;
 
 use std::cell::Cell;
-use std::{cmp, iter, mem, usize};
+use std::{cmp, iter, mem};
 
 use crate::const_eval::{is_const_fn, is_unstable_const_fn};
 use crate::transform::check_consts::{is_lang_panic_fn, qualifs, ConstKind, Item};
@@ -835,7 +835,11 @@ impl<'a, 'tcx> Promoter<'a, 'tcx> {
                     if self.keep_original {
                         rhs.clone()
                     } else {
-                        let unit = Rvalue::Aggregate(box AggregateKind::Tuple, vec![]);
+                        let unit = Rvalue::Use(Operand::Constant(box Constant {
+                            span: statement.source_info.span,
+                            user_ty: None,
+                            literal: ty::Const::zero_sized(self.tcx, self.tcx.types.unit),
+                        }));
                         mem::replace(rhs, unit)
                     },
                     statement.source_info,
@@ -1034,15 +1038,6 @@ impl<'a, 'tcx> MutVisitor<'tcx> for Promoter<'a, 'tcx> {
     fn visit_local(&mut self, local: &mut Local, _: PlaceContext, _: Location) {
         if self.is_temp_kind(*local) {
             *local = self.promote_temp(*local);
-        }
-    }
-
-    fn process_projection_elem(&mut self, elem: &PlaceElem<'tcx>) -> Option<PlaceElem<'tcx>> {
-        match elem {
-            PlaceElem::Index(local) if self.is_temp_kind(*local) => {
-                Some(PlaceElem::Index(self.promote_temp(*local)))
-            }
-            _ => None,
         }
     }
 }

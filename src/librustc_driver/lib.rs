@@ -8,9 +8,6 @@
 #![feature(nll)]
 #![recursion_limit = "256"]
 
-pub extern crate getopts;
-#[cfg(unix)]
-extern crate libc;
 #[macro_use]
 extern crate log;
 #[macro_use]
@@ -37,6 +34,7 @@ use rustc_save_analysis::DumpHandler;
 use rustc_serialize::json::{self, ToJson};
 use rustc_session::config::nightly_options;
 use rustc_session::config::{ErrorOutputType, Input, OutputType, PrintRequest};
+use rustc_session::getopts;
 use rustc_session::lint::{Lint, LintId};
 use rustc_session::{config, DiagnosticOutput, Session};
 use rustc_session::{early_error, early_warn};
@@ -136,7 +134,6 @@ pub fn diagnostics_registry() -> Registry {
 }
 
 // Parse args and run the compiler. This is the primary entry point for rustc.
-// See comments on CompilerCalls below for details about the callbacks argument.
 // The FileLoader provides a way to load files from sources other than the file system.
 pub fn run_compiler(
     at_args: &[String],

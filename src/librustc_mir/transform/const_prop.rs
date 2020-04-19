@@ -126,7 +126,7 @@ impl<'tcx> MirPass<'tcx> for ConstProp {
             .collect();
         if !traits::normalize_and_test_predicates(
             tcx,
-            traits::elaborate_predicates(tcx, predicates).collect(),
+            traits::elaborate_predicates(tcx, predicates).map(|o| o.predicate).collect(),
         ) {
             trace!("ConstProp skipped for {:?}: found unsatisfiable predicates", source.def_id());
             return;
@@ -173,7 +173,10 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for ConstPropMachine {
 
     const GLOBAL_KIND: Option<!> = None; // no copying of globals from `tcx` to machine memory
 
-    const CHECK_ALIGN: bool = false;
+    #[inline(always)]
+    fn enforce_alignment(_memory_extra: &Self::MemoryExtra) -> bool {
+        false
+    }
 
     #[inline(always)]
     fn enforce_validity(_ecx: &InterpCx<'mir, 'tcx, Self>) -> bool {
@@ -287,8 +290,11 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for ConstPropMachine {
     }
 
     #[inline(always)]
-    fn stack_push(_ecx: &mut InterpCx<'mir, 'tcx, Self>) -> InterpResult<'tcx> {
-        Ok(())
+    fn init_frame_extra(
+        _ecx: &mut InterpCx<'mir, 'tcx, Self>,
+        frame: Frame<'mir, 'tcx>,
+    ) -> InterpResult<'tcx, Frame<'mir, 'tcx>> {
+        Ok(frame)
     }
 }
 
@@ -425,8 +431,6 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
     }
 
     fn eval_constant(&mut self, c: &Constant<'tcx>, source_info: SourceInfo) -> Option<OpTy<'tcx>> {
-        self.ecx.tcx.span = c.span;
-
         // FIXME we need to revisit this for #67176
         if c.needs_subst() {
             return None;
@@ -435,6 +439,8 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
         match self.ecx.eval_const_to_op(c.literal, None) {
             Ok(op) => Some(op),
             Err(error) => {
+                // Make sure errors point at the constant.
+                self.ecx.set_span(c.span);
                 let err = error_to_const_error(&self.ecx, error);
                 if let Some(lint_root) = self.lint_root(source_info) {
                     let lint_only = match c.literal.val {
@@ -575,11 +581,6 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
             return None;
         }
 
-        // FIXME we need to revisit this for #67176
-        if rvalue.needs_subst() {
-            return None;
-        }
-
         // Perform any special handling for specific Rvalue types.
         // Generally, checks here fall into one of two categories:
         //   1. Additional checking to provide useful lints to the user
@@ -618,6 +619,11 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
             }
 
             _ => {}
+        }
+
+        // FIXME we need to revisit this for #67176
+        if rvalue.needs_subst() {
+            return None;
         }
 
         self.use_ecx(|this| {
@@ -820,6 +826,7 @@ impl<'mir, 'tcx> MutVisitor<'tcx> for ConstPropagator<'mir, 'tcx> {
     fn visit_statement(&mut self, statement: &mut Statement<'tcx>, location: Location) {
         trace!("visit_statement: {:?}", statement);
         let source_info = statement.source_info;
+        self.ecx.set_span(source_info.span);
         self.source_info = Some(source_info);
         if let StatementKind::Assign(box (place, ref mut rval)) = statement.kind {
             let place_ty: Ty<'tcx> = place.ty(&self.local_decls, self.tcx).ty;
@@ -870,6 +877,7 @@ impl<'mir, 'tcx> MutVisitor<'tcx> for ConstPropagator<'mir, 'tcx> {
 
     fn visit_terminator(&mut self, terminator: &mut Terminator<'tcx>, location: Location) {
         let source_info = terminator.source_info;
+        self.ecx.set_span(source_info.span);
         self.source_info = Some(source_info);
         self.super_terminator(terminator, location);
         match &mut terminator.kind {

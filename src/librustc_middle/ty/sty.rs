@@ -18,6 +18,7 @@ use crate::ty::{List, ParamEnv, ParamEnvAnd, TyS};
 use polonius_engine::Atom;
 use rustc_ast::ast::{self, Ident};
 use rustc_data_structures::captures::Captures;
+use rustc_errors::ErrorReported;
 use rustc_hir as hir;
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_index::vec::Idx;
@@ -25,7 +26,6 @@ use rustc_macros::HashStable;
 use rustc_span::symbol::{kw, Symbol};
 use rustc_target::abi::{Size, VariantIdx};
 use rustc_target::spec::abi;
-use smallvec::SmallVec;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::marker::PhantomData;
@@ -755,14 +755,6 @@ impl<'tcx> TraitRef<'tcx> {
         self.substs.type_at(0)
     }
 
-    pub fn input_types<'a>(&'a self) -> impl DoubleEndedIterator<Item = Ty<'tcx>> + 'a {
-        // Select only the "input types" from a trait-reference. For
-        // now this is all the types that appear in the
-        // trait-reference, but it should eventually exclude
-        // associated types.
-        self.substs.types()
-    }
-
     pub fn from_method(
         tcx: TyCtxt<'tcx>,
         trait_id: DefId,
@@ -806,14 +798,6 @@ pub struct ExistentialTraitRef<'tcx> {
 }
 
 impl<'tcx> ExistentialTraitRef<'tcx> {
-    pub fn input_types<'b>(&'b self) -> impl DoubleEndedIterator<Item = Ty<'tcx>> + 'b {
-        // Select only the "input types" from a trait-reference. For
-        // now this is all the types that appear in the
-        // trait-reference, but it should eventually exclude
-        // associated types.
-        self.substs.types()
-    }
-
     pub fn erase_self_ty(
         tcx: TyCtxt<'tcx>,
         trait_ref: ty::TraitRef<'tcx>,
@@ -1622,7 +1606,6 @@ impl RegionKind {
                 flags = flags | TypeFlags::HAS_FREE_REGIONS;
                 flags = flags | TypeFlags::HAS_FREE_LOCAL_REGIONS;
                 flags = flags | TypeFlags::HAS_RE_INFER;
-                flags = flags | TypeFlags::KEEP_IN_LOCAL_TCX;
                 flags = flags | TypeFlags::STILL_FURTHER_SPECIALIZABLE;
             }
             ty::RePlaceholder(..) => {
@@ -1882,24 +1865,6 @@ impl<'tcx> TyS<'tcx> {
         self.is_region_ptr() || self.is_unsafe_ptr() || self.is_fn_ptr()
     }
 
-    /// Returns `true` if this type is an `Arc<T>`.
-    #[inline]
-    pub fn is_arc(&self) -> bool {
-        match self.kind {
-            Adt(def, _) => def.is_arc(),
-            _ => false,
-        }
-    }
-
-    /// Returns `true` if this type is an `Rc<T>`.
-    #[inline]
-    pub fn is_rc(&self) -> bool {
-        match self.kind {
-            Adt(def, _) => def.is_rc(),
-            _ => false,
-        }
-    }
-
     #[inline]
     pub fn is_box(&self) -> bool {
         match self.kind {
@@ -2152,31 +2117,6 @@ impl<'tcx> TyS<'tcx> {
         }
     }
 
-    /// Pushes onto `out` the regions directly referenced from this type (but not
-    /// types reachable from this type via `walk_tys`). This ignores late-bound
-    /// regions binders.
-    pub fn push_regions(&self, out: &mut SmallVec<[ty::Region<'tcx>; 4]>) {
-        match self.kind {
-            Ref(region, _, _) => {
-                out.push(region);
-            }
-            Dynamic(ref obj, region) => {
-                out.push(region);
-                if let Some(principal) = obj.principal() {
-                    out.extend(principal.skip_binder().substs.regions());
-                }
-            }
-            Adt(_, substs) | Opaque(_, substs) => out.extend(substs.regions()),
-            Closure(_, ref substs) | Generator(_, ref substs, _) => out.extend(substs.regions()),
-            Projection(ref data) | UnnormalizedProjection(ref data) => {
-                out.extend(data.substs.regions())
-            }
-            FnDef(..) | FnPtr(_) | GeneratorWitness(..) | Bool | Char | Int(_) | Uint(_)
-            | Float(_) | Str | Array(..) | Slice(_) | RawPtr(_) | Never | Tuple(..)
-            | Foreign(..) | Param(_) | Bound(..) | Placeholder(..) | Infer(_) | Error => {}
-        }
-    }
-
     /// When we create a closure, we record its kind (i.e., what trait
     /// it implements) into its `ClosureSubsts` using a type
     /// parameter. This is kind of a phantom type, except that the
@@ -2400,43 +2340,45 @@ impl<'tcx> Const<'tcx> {
     /// Tries to evaluate the constant if it is `Unevaluated`. If that doesn't succeed, return the
     /// unevaluated constant.
     pub fn eval(&self, tcx: TyCtxt<'tcx>, param_env: ParamEnv<'tcx>) -> &Const<'tcx> {
-        let try_const_eval = |did, param_env: ParamEnv<'tcx>, substs, promoted| {
+        if let ConstKind::Unevaluated(did, substs, promoted) = self.val {
+            use crate::mir::interpret::ErrorHandled;
+
             let param_env_and_substs = param_env.with_reveal_all().and(substs);
 
-            // Avoid querying `tcx.const_eval(...)` with any e.g. inference vars.
-            if param_env_and_substs.has_local_value() {
-                return None;
-            }
+            // HACK(eddyb) this erases lifetimes even though `const_eval_resolve`
+            // also does later, but we want to do it before checking for
+            // inference variables.
+            let param_env_and_substs = tcx.erase_regions(&param_env_and_substs);
 
+            // HACK(eddyb) when the query key would contain inference variables,
+            // attempt using identity substs and `ParamEnv` instead, that will succeed
+            // when the expression doesn't depend on any parameters.
+            // FIXME(eddyb, skinny121) pass `InferCtxt` into here when it's available, so that
+            // we can call `infcx.const_eval_resolve` which handles inference variables.
+            let param_env_and_substs = if param_env_and_substs.needs_infer() {
+                tcx.param_env(did).and(InternalSubsts::identity_for_item(tcx, did))
+            } else {
+                param_env_and_substs
+            };
+
+            // FIXME(eddyb) maybe the `const_eval_*` methods should take
+            // `ty::ParamEnvAnd<SubstsRef>` instead of having them separate.
             let (param_env, substs) = param_env_and_substs.into_parts();
-
             // try to resolve e.g. associated constants to their definition on an impl, and then
             // evaluate the const.
-            tcx.const_eval_resolve(param_env, did, substs, promoted, None)
-                .ok()
-                .map(|val| Const::from_value(tcx, val, self.ty))
-        };
-
-        match self.val {
-            ConstKind::Unevaluated(did, substs, promoted) => {
-                // HACK(eddyb) when substs contain e.g. inference variables,
-                // attempt using identity substs instead, that will succeed
-                // when the expression doesn't depend on any parameters.
-                // FIXME(eddyb, skinny121) pass `InferCtxt` into here when it's available, so that
-                // we can call `infcx.const_eval_resolve` which handles inference variables.
-                if substs.has_local_value() {
-                    let identity_substs = InternalSubsts::identity_for_item(tcx, did);
-                    // The `ParamEnv` needs to match the `identity_substs`.
-                    let identity_param_env = tcx.param_env(did);
-                    match try_const_eval(did, identity_param_env, identity_substs, promoted) {
-                        Some(ct) => ct.subst(tcx, substs),
-                        None => self,
-                    }
-                } else {
-                    try_const_eval(did, param_env, substs, promoted).unwrap_or(self)
+            match tcx.const_eval_resolve(param_env, did, substs, promoted, None) {
+                // NOTE(eddyb) `val` contains no lifetimes/types/consts,
+                // and we use the original type, so nothing from `substs`
+                // (which may be identity substs, see above),
+                // can leak through `val` into the const we return.
+                Ok(val) => Const::from_value(tcx, val, self.ty),
+                Err(ErrorHandled::TooGeneric | ErrorHandled::Linted) => self,
+                Err(ErrorHandled::Reported(ErrorReported)) => {
+                    tcx.mk_const(ty::Const { val: ty::ConstKind::Error, ty: self.ty })
                 }
             }
-            _ => self,
+        } else {
+            self
         }
     }
 
@@ -2492,6 +2434,10 @@ pub enum ConstKind<'tcx> {
 
     /// Used to hold computed value.
     Value(ConstValue<'tcx>),
+
+    /// A placeholder for a const which could not be computed; this is
+    /// propagated to avoid useless error messages.
+    Error,
 }
 
 #[cfg(target_arch = "x86_64")]

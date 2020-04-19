@@ -1736,15 +1736,24 @@ pub struct Destination {
 #[derive(Copy, Clone, PartialEq, Eq, Debug, RustcEncodable, RustcDecodable, HashStable_Generic)]
 pub enum YieldSource {
     /// An `<expr>.await`.
-    Await,
+    Await { expr: Option<HirId> },
     /// A plain `yield`.
     Yield,
+}
+
+impl YieldSource {
+    pub fn is_await(&self) -> bool {
+        match self {
+            YieldSource::Await { .. } => true,
+            YieldSource::Yield => false,
+        }
+    }
 }
 
 impl fmt::Display for YieldSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            YieldSource::Await => "`await`",
+            YieldSource::Await { .. } => "`await`",
             YieldSource::Yield => "`yield`",
         })
     }
@@ -1755,7 +1764,7 @@ impl From<GeneratorKind> for YieldSource {
         match kind {
             // Guess based on the kind of the current generator.
             GeneratorKind::Gen => Self::Yield,
-            GeneratorKind::Async(_) => Self::Await,
+            GeneratorKind::Async(_) => Self::Await { expr: None },
         }
     }
 }
@@ -2515,7 +2524,7 @@ pub struct ImplItemRef<'hir> {
 #[derive(Copy, Clone, PartialEq, RustcEncodable, RustcDecodable, Debug, HashStable_Generic)]
 pub enum AssocItemKind {
     Const,
-    Method { has_self: bool },
+    Fn { has_self: bool },
     Type,
     OpaqueTy,
 }

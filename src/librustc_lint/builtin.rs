@@ -36,6 +36,7 @@ use rustc_hir::def_id::DefId;
 use rustc_hir::{GenericParamKind, PatKind};
 use rustc_hir::{HirIdSet, Node};
 use rustc_middle::lint::LintDiagnosticBuilder;
+use rustc_middle::ty::subst::GenericArgKind;
 use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_session::lint::FutureIncompatibleInfo;
 use rustc_span::edition::Edition;
@@ -104,11 +105,13 @@ declare_lint_pass!(BoxPointers => [BOX_POINTERS]);
 
 impl BoxPointers {
     fn check_heap_type(&self, cx: &LateContext<'_, '_>, span: Span, ty: Ty<'_>) {
-        for leaf_ty in ty.walk() {
-            if leaf_ty.is_box() {
-                cx.struct_span_lint(BOX_POINTERS, span, |lint| {
-                    lint.build(&format!("type uses owned (Box type) pointers: {}", ty)).emit()
-                });
+        for leaf in ty.walk() {
+            if let GenericArgKind::Type(leaf_ty) = leaf.unpack() {
+                if leaf_ty.is_box() {
+                    cx.struct_span_lint(BOX_POINTERS, span, |lint| {
+                        lint.build(&format!("type uses owned (Box type) pointers: {}", ty)).emit()
+                    });
+                }
             }
         }
     }
@@ -1163,7 +1166,7 @@ declare_lint_pass!(
 );
 
 fn check_const(cx: &LateContext<'_, '_>, body_id: hir::BodyId) {
-    let def_id = cx.tcx.hir().body_owner_def_id(body_id);
+    let def_id = cx.tcx.hir().body_owner_def_id(body_id).to_def_id();
     // trigger the query once for all constants since that will already report the errors
     // FIXME: Use ensure here
     let _ = cx.tcx.const_eval_poly(def_id);
@@ -1351,7 +1354,7 @@ declare_lint! {
 }
 
 pub struct UnnameableTestItems {
-    boundary: hir::HirId, // HirId of the item under which things are not nameable
+    boundary: Option<hir::HirId>, // HirId of the item under which things are not nameable
     items_nameable: bool,
 }
 
@@ -1359,7 +1362,7 @@ impl_lint_pass!(UnnameableTestItems => [UNNAMEABLE_TEST_ITEMS]);
 
 impl UnnameableTestItems {
     pub fn new() -> Self {
-        Self { boundary: hir::DUMMY_HIR_ID, items_nameable: true }
+        Self { boundary: None, items_nameable: true }
     }
 }
 
@@ -1369,7 +1372,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for UnnameableTestItems {
             if let hir::ItemKind::Mod(..) = it.kind {
             } else {
                 self.items_nameable = false;
-                self.boundary = it.hir_id;
+                self.boundary = Some(it.hir_id);
             }
             return;
         }
@@ -1382,7 +1385,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for UnnameableTestItems {
     }
 
     fn check_item_post(&mut self, _cx: &LateContext<'_, '_>, it: &hir::Item<'_>) {
-        if !self.items_nameable && self.boundary == it.hir_id {
+        if !self.items_nameable && self.boundary == Some(it.hir_id) {
             self.items_nameable = true;
         }
     }

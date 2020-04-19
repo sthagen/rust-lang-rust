@@ -582,7 +582,7 @@ impl Inliner<'tcx> {
             let tuple_tmp_args = tuple_tys.iter().enumerate().map(|(i, ty)| {
                 // This is e.g., `tuple_tmp.0` in our example above.
                 let tuple_field =
-                    Operand::Move(tcx.mk_place_field(tuple.clone(), Field::new(i), ty.expect_ty()));
+                    Operand::Move(tcx.mk_place_field(tuple, Field::new(i), ty.expect_ty()));
 
                 // Spill to a local to make e.g., `tmp0`.
                 self.create_temp_if_necessary(tuple_field, callsite, caller_body)
@@ -704,18 +704,6 @@ impl<'a, 'tcx> MutVisitor<'tcx> for Integrator<'a, 'tcx> {
         // Handles integrating any locals that occur in the base
         // or projections
         self.super_place(place, context, location)
-    }
-
-    fn process_projection_elem(&mut self, elem: &PlaceElem<'tcx>) -> Option<PlaceElem<'tcx>> {
-        if let PlaceElem::Index(local) = elem {
-            let new_local = self.make_integrate_local(*local);
-
-            if new_local != *local {
-                return Some(PlaceElem::Index(new_local));
-            }
-        }
-
-        None
     }
 
     fn visit_basic_block_data(&mut self, block: BasicBlock, data: &mut BasicBlockData<'tcx>) {

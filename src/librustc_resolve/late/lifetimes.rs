@@ -643,13 +643,13 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
                                 if param_name.name == kw::UnderscoreLifetime {
                                     // Pick the elided lifetime "definition" if one exists
                                     // and use it to make an elision scope.
-                                    self.lifetime_uses.insert(def_id.clone(), LifetimeUseSet::Many);
+                                    self.lifetime_uses.insert(def_id, LifetimeUseSet::Many);
                                     elision = Some(reg);
                                 } else {
                                     lifetimes.insert(name, reg);
                                 }
                             } else {
-                                self.lifetime_uses.insert(def_id.clone(), LifetimeUseSet::Many);
+                                self.lifetime_uses.insert(def_id, LifetimeUseSet::Many);
                                 lifetimes.insert(name, reg);
                             }
                         }
@@ -2117,7 +2117,7 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
         };
 
         let has_self = match assoc_item_kind {
-            Some(hir::AssocItemKind::Method { has_self }) => has_self,
+            Some(hir::AssocItemKind::Fn { has_self }) => has_self,
             _ => false,
         };
 
@@ -2704,14 +2704,6 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
     }
 
     fn insert_lifetime(&mut self, lifetime_ref: &'tcx hir::Lifetime, def: Region) {
-        if lifetime_ref.hir_id == hir::DUMMY_HIR_ID {
-            span_bug!(
-                lifetime_ref.span,
-                "lifetime reference not renumbered, \
-                 probably a bug in rustc_ast::fold"
-            );
-        }
-
         debug!(
             "insert_lifetime: {} resolved to {:?} span={:?}",
             self.tcx.hir().node_to_string(lifetime_ref.hir_id),

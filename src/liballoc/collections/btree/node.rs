@@ -161,7 +161,7 @@ impl<K, V> Root<K, V> {
         NodeRef {
             height: self.height,
             node: self.node.as_ptr(),
-            root: self as *const _ as *mut _,
+            root: ptr::null(),
             _marker: PhantomData,
         }
     }
@@ -179,7 +179,7 @@ impl<K, V> Root<K, V> {
         NodeRef {
             height: self.height,
             node: self.node.as_ptr(),
-            root: ptr::null_mut(), // FIXME: Is there anything better to do here?
+            root: ptr::null(),
             _marker: PhantomData,
         }
     }
@@ -722,6 +722,11 @@ impl<Node, Type> Handle<Node, Type> {
     /// Retrieves the node that contains the edge of key/value pair this handle points to.
     pub fn into_node(self) -> Node {
         self.node
+    }
+
+    /// Returns the position of this handle in the node.
+    pub fn idx(&self) -> usize {
+        self.idx
     }
 }
 

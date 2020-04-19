@@ -3,8 +3,6 @@
 use core::cell::Cell;
 use core::convert::TryFrom;
 use core::iter::*;
-use core::usize;
-use core::{i16, i8, isize};
 
 #[test]
 fn test_lt() {
@@ -78,7 +76,6 @@ fn test_cmp_by() {
 #[test]
 fn test_partial_cmp_by() {
     use core::cmp::Ordering;
-    use core::f64;
 
     let f = |x: i32, y: i32| (x * x).partial_cmp(&y);
     let xs = || [1, 2, 3, 4].iter().copied();
@@ -2251,62 +2248,58 @@ fn test_range_inclusive_folds() {
 
 #[test]
 fn test_range_size_hint() {
-    use core::usize::MAX as UMAX;
     assert_eq!((0..0usize).size_hint(), (0, Some(0)));
     assert_eq!((0..100usize).size_hint(), (100, Some(100)));
-    assert_eq!((0..UMAX).size_hint(), (UMAX, Some(UMAX)));
+    assert_eq!((0..usize::MAX).size_hint(), (usize::MAX, Some(usize::MAX)));
 
-    let umax = u128::try_from(UMAX).unwrap();
+    let umax = u128::try_from(usize::MAX).unwrap();
     assert_eq!((0..0u128).size_hint(), (0, Some(0)));
     assert_eq!((0..100u128).size_hint(), (100, Some(100)));
-    assert_eq!((0..umax).size_hint(), (UMAX, Some(UMAX)));
-    assert_eq!((0..umax + 1).size_hint(), (UMAX, None));
+    assert_eq!((0..umax).size_hint(), (usize::MAX, Some(usize::MAX)));
+    assert_eq!((0..umax + 1).size_hint(), (usize::MAX, None));
 
-    use core::isize::{MAX as IMAX, MIN as IMIN};
     assert_eq!((0..0isize).size_hint(), (0, Some(0)));
     assert_eq!((-100..100isize).size_hint(), (200, Some(200)));
-    assert_eq!((IMIN..IMAX).size_hint(), (UMAX, Some(UMAX)));
+    assert_eq!((isize::MIN..isize::MAX).size_hint(), (usize::MAX, Some(usize::MAX)));
 
-    let imin = i128::try_from(IMIN).unwrap();
-    let imax = i128::try_from(IMAX).unwrap();
+    let imin = i128::try_from(isize::MIN).unwrap();
+    let imax = i128::try_from(isize::MAX).unwrap();
     assert_eq!((0..0i128).size_hint(), (0, Some(0)));
     assert_eq!((-100..100i128).size_hint(), (200, Some(200)));
-    assert_eq!((imin..imax).size_hint(), (UMAX, Some(UMAX)));
-    assert_eq!((imin..imax + 1).size_hint(), (UMAX, None));
+    assert_eq!((imin..imax).size_hint(), (usize::MAX, Some(usize::MAX)));
+    assert_eq!((imin..imax + 1).size_hint(), (usize::MAX, None));
 }
 
 #[test]
 fn test_range_inclusive_size_hint() {
-    use core::usize::MAX as UMAX;
     assert_eq!((1..=0usize).size_hint(), (0, Some(0)));
     assert_eq!((0..=0usize).size_hint(), (1, Some(1)));
     assert_eq!((0..=100usize).size_hint(), (101, Some(101)));
-    assert_eq!((0..=UMAX - 1).size_hint(), (UMAX, Some(UMAX)));
-    assert_eq!((0..=UMAX).size_hint(), (UMAX, None));
+    assert_eq!((0..=usize::MAX - 1).size_hint(), (usize::MAX, Some(usize::MAX)));
+    assert_eq!((0..=usize::MAX).size_hint(), (usize::MAX, None));
 
-    let umax = u128::try_from(UMAX).unwrap();
+    let umax = u128::try_from(usize::MAX).unwrap();
     assert_eq!((1..=0u128).size_hint(), (0, Some(0)));
     assert_eq!((0..=0u128).size_hint(), (1, Some(1)));
     assert_eq!((0..=100u128).size_hint(), (101, Some(101)));
-    assert_eq!((0..=umax - 1).size_hint(), (UMAX, Some(UMAX)));
-    assert_eq!((0..=umax).size_hint(), (UMAX, None));
-    assert_eq!((0..=umax + 1).size_hint(), (UMAX, None));
+    assert_eq!((0..=umax - 1).size_hint(), (usize::MAX, Some(usize::MAX)));
+    assert_eq!((0..=umax).size_hint(), (usize::MAX, None));
+    assert_eq!((0..=umax + 1).size_hint(), (usize::MAX, None));
 
-    use core::isize::{MAX as IMAX, MIN as IMIN};
     assert_eq!((0..=-1isize).size_hint(), (0, Some(0)));
     assert_eq!((0..=0isize).size_hint(), (1, Some(1)));
     assert_eq!((-100..=100isize).size_hint(), (201, Some(201)));
-    assert_eq!((IMIN..=IMAX - 1).size_hint(), (UMAX, Some(UMAX)));
-    assert_eq!((IMIN..=IMAX).size_hint(), (UMAX, None));
+    assert_eq!((isize::MIN..=isize::MAX - 1).size_hint(), (usize::MAX, Some(usize::MAX)));
+    assert_eq!((isize::MIN..=isize::MAX).size_hint(), (usize::MAX, None));
 
-    let imin = i128::try_from(IMIN).unwrap();
-    let imax = i128::try_from(IMAX).unwrap();
+    let imin = i128::try_from(isize::MIN).unwrap();
+    let imax = i128::try_from(isize::MAX).unwrap();
     assert_eq!((0..=-1i128).size_hint(), (0, Some(0)));
     assert_eq!((0..=0i128).size_hint(), (1, Some(1)));
     assert_eq!((-100..=100i128).size_hint(), (201, Some(201)));
-    assert_eq!((imin..=imax - 1).size_hint(), (UMAX, Some(UMAX)));
-    assert_eq!((imin..=imax).size_hint(), (UMAX, None));
-    assert_eq!((imin..=imax + 1).size_hint(), (UMAX, None));
+    assert_eq!((imin..=imax - 1).size_hint(), (usize::MAX, Some(usize::MAX)));
+    assert_eq!((imin..=imax).size_hint(), (usize::MAX, None));
+    assert_eq!((imin..=imax + 1).size_hint(), (usize::MAX, None));
 }
 
 #[test]
@@ -2900,7 +2893,7 @@ fn test_is_sorted() {
     assert!(![1, 3, 2].iter().is_sorted());
     assert!([0].iter().is_sorted());
     assert!(std::iter::empty::<i32>().is_sorted());
-    assert!(![0.0, 1.0, std::f32::NAN].iter().is_sorted());
+    assert!(![0.0, 1.0, f32::NAN].iter().is_sorted());
     assert!([-2, -1, 0, 3].iter().is_sorted());
     assert!(![-2i32, -1, 0, 3].iter().is_sorted_by_key(|n| n.abs()));
     assert!(!["c", "bb", "aaa"].iter().is_sorted());

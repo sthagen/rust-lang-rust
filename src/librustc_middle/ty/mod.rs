@@ -1,5 +1,3 @@
-// ignore-tidy-filelength
-
 pub use self::fold::{TypeFoldable, TypeVisitor};
 pub use self::AssocItemContainer::*;
 pub use self::BorrowKind::*;
@@ -19,7 +17,6 @@ use crate::traits::{self, Reveal};
 use crate::ty;
 use crate::ty::subst::{InternalSubsts, Subst, SubstsRef};
 use crate::ty::util::{Discr, IntTypeExt};
-use crate::ty::walk::TypeWalker;
 use rustc_ast::ast::{self, Ident, Name};
 use rustc_ast::node_id::{NodeId, NodeMap, NodeSet};
 use rustc_attr as attr;
@@ -29,7 +26,8 @@ use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::fx::FxIndexMap;
 use rustc_data_structures::sorted_map::SortedIndexMultiMap;
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
-use rustc_data_structures::sync::{self, par_iter, Lrc, ParallelIterator};
+use rustc_data_structures::sync::{self, par_iter, ParallelIterator};
+use rustc_errors::ErrorReported;
 use rustc_hir as hir;
 use rustc_hir::def::{CtorKind, CtorOf, DefKind, Namespace, Res};
 use rustc_hir::def_id::{CrateNum, DefId, DefIdMap, LocalDefId, CRATE_DEF_INDEX};
@@ -72,7 +70,7 @@ pub use crate::ty::diagnostics::*;
 pub use self::binding::BindingMode;
 pub use self::binding::BindingMode::*;
 
-pub use self::context::{keep_local, tls, FreeRegionInfo, TyCtxt};
+pub use self::context::{tls, FreeRegionInfo, TyCtxt};
 pub use self::context::{
     CanonicalUserType, CanonicalUserTypeAnnotation, CanonicalUserTypeAnnotations, ResolvedOpaqueTy,
     UserType, UserTypeAnnotationIndex,
@@ -81,7 +79,6 @@ pub use self::context::{
     CtxtInterners, GeneratorInteriorTypeCause, GlobalCtxt, Lift, TypeckTables,
 };
 
-pub use self::instance::RESOLVE_INSTANCE;
 pub use self::instance::{Instance, InstanceDef};
 
 pub use self::trait_def::TraitDef;
@@ -194,58 +191,50 @@ pub struct AssocItem {
     pub container: AssocItemContainer,
 
     /// Whether this is a method with an explicit self
-    /// as its first argument, allowing method calls.
-    pub method_has_self_argument: bool,
+    /// as its first parameter, allowing method calls.
+    pub fn_has_self_parameter: bool,
 }
 
 #[derive(Copy, Clone, PartialEq, Debug, HashStable)]
 pub enum AssocKind {
     Const,
-    Method,
+    Fn,
     OpaqueTy,
     Type,
 }
 
 impl AssocKind {
-    pub fn suggestion_descr(&self) -> &'static str {
-        match self {
-            ty::AssocKind::Method => "method call",
-            ty::AssocKind::Type | ty::AssocKind::OpaqueTy => "associated type",
-            ty::AssocKind::Const => "associated constant",
-        }
-    }
-
     pub fn namespace(&self) -> Namespace {
         match *self {
             ty::AssocKind::OpaqueTy | ty::AssocKind::Type => Namespace::TypeNS,
-            ty::AssocKind::Const | ty::AssocKind::Method => Namespace::ValueNS,
+            ty::AssocKind::Const | ty::AssocKind::Fn => Namespace::ValueNS,
+        }
+    }
+
+    pub fn as_def_kind(&self) -> DefKind {
+        match self {
+            AssocKind::Const => DefKind::AssocConst,
+            AssocKind::Fn => DefKind::AssocFn,
+            AssocKind::Type => DefKind::AssocTy,
+            AssocKind::OpaqueTy => DefKind::AssocOpaqueTy,
         }
     }
 }
 
 impl AssocItem {
-    pub fn def_kind(&self) -> DefKind {
-        match self.kind {
-            AssocKind::Const => DefKind::AssocConst,
-            AssocKind::Method => DefKind::AssocFn,
-            AssocKind::Type => DefKind::AssocTy,
-            AssocKind::OpaqueTy => DefKind::AssocOpaqueTy,
-        }
-    }
-
     /// Tests whether the associated item admits a non-trivial implementation
     /// for !
     pub fn relevant_for_never(&self) -> bool {
         match self.kind {
             AssocKind::OpaqueTy | AssocKind::Const | AssocKind::Type => true,
             // FIXME(canndrew): Be more thorough here, check if any argument is uninhabited.
-            AssocKind::Method => !self.method_has_self_argument,
+            AssocKind::Fn => !self.fn_has_self_parameter,
         }
     }
 
     pub fn signature(&self, tcx: TyCtxt<'_>) -> String {
         match self.kind {
-            ty::AssocKind::Method => {
+            ty::AssocKind::Fn => {
                 // We skip the binder here because the binder would deanonymize all
                 // late-bound regions, and we don't want method signatures to show up
                 // `as for<'r> fn(&'r MyType)`.  Pretty-printing handles late-bound
@@ -579,50 +568,23 @@ bitflags! {
                                           | TypeFlags::HAS_TY_OPAQUE.bits
                                           | TypeFlags::HAS_CT_PROJECTION.bits;
 
-        /// Present if the type belongs in a local type context.
-        /// Set for placeholders and inference variables that are not "Fresh".
-        const KEEP_IN_LOCAL_TCX           = 1 << 13;
-
-        /// Is an error type reachable?
-        const HAS_TY_ERR                  = 1 << 14;
+        /// Is an error type/const reachable?
+        const HAS_ERROR                   = 1 << 13;
 
         /// Does this have any region that "appears free" in the type?
         /// Basically anything but [ReLateBound] and [ReErased].
-        const HAS_FREE_REGIONS            = 1 << 15;
+        const HAS_FREE_REGIONS            = 1 << 14;
 
         /// Does this have any [ReLateBound] regions? Used to check
         /// if a global bound is safe to evaluate.
-        const HAS_RE_LATE_BOUND           = 1 << 16;
+        const HAS_RE_LATE_BOUND           = 1 << 15;
 
         /// Does this have any [ReErased] regions?
-        const HAS_RE_ERASED               = 1 << 17;
+        const HAS_RE_ERASED               = 1 << 16;
 
         /// Does this value have parameters/placeholders/inference variables which could be
         /// replaced later, in a way that would change the results of `impl` specialization?
-        const STILL_FURTHER_SPECIALIZABLE = 1 << 18;
-
-        /// Flags representing the nominal content of a type,
-        /// computed by FlagsComputation. If you add a new nominal
-        /// flag, it should be added here too.
-        const NOMINAL_FLAGS               = TypeFlags::HAS_TY_PARAM.bits
-                                          | TypeFlags::HAS_RE_PARAM.bits
-                                          | TypeFlags::HAS_CT_PARAM.bits
-                                          | TypeFlags::HAS_TY_INFER.bits
-                                          | TypeFlags::HAS_RE_INFER.bits
-                                          | TypeFlags::HAS_CT_INFER.bits
-                                          | TypeFlags::HAS_TY_PLACEHOLDER.bits
-                                          | TypeFlags::HAS_RE_PLACEHOLDER.bits
-                                          | TypeFlags::HAS_CT_PLACEHOLDER.bits
-                                          | TypeFlags::HAS_FREE_LOCAL_REGIONS.bits
-                                          | TypeFlags::HAS_TY_PROJECTION.bits
-                                          | TypeFlags::HAS_TY_OPAQUE.bits
-                                          | TypeFlags::HAS_CT_PROJECTION.bits
-                                          | TypeFlags::KEEP_IN_LOCAL_TCX.bits
-                                          | TypeFlags::HAS_TY_ERR.bits
-                                          | TypeFlags::HAS_FREE_REGIONS.bits
-                                          | TypeFlags::HAS_RE_LATE_BOUND.bits
-                                          | TypeFlags::HAS_RE_ERASED.bits
-                                          | TypeFlags::STILL_FURTHER_SPECIALIZABLE.bits;
+        const STILL_FURTHER_SPECIALIZABLE = 1 << 17;
     }
 }
 
@@ -1367,10 +1329,6 @@ impl<'tcx> TraitPredicate<'tcx> {
         self.trait_ref.def_id
     }
 
-    pub fn input_types<'a>(&'a self) -> impl DoubleEndedIterator<Item = Ty<'tcx>> + 'a {
-        self.trait_ref.input_types()
-    }
-
     pub fn self_ty(&self) -> Ty<'tcx> {
         self.trait_ref.self_ty()
     }
@@ -1520,77 +1478,7 @@ impl<'tcx> ToPredicate<'tcx> for PolyProjectionPredicate<'tcx> {
     }
 }
 
-// A custom iterator used by `Predicate::walk_tys`.
-enum WalkTysIter<'tcx, I, J, K>
-where
-    I: Iterator<Item = Ty<'tcx>>,
-    J: Iterator<Item = Ty<'tcx>>,
-    K: Iterator<Item = Ty<'tcx>>,
-{
-    None,
-    One(Ty<'tcx>),
-    Two(Ty<'tcx>, Ty<'tcx>),
-    Types(I),
-    InputTypes(J),
-    ProjectionTypes(K),
-}
-
-impl<'tcx, I, J, K> Iterator for WalkTysIter<'tcx, I, J, K>
-where
-    I: Iterator<Item = Ty<'tcx>>,
-    J: Iterator<Item = Ty<'tcx>>,
-    K: Iterator<Item = Ty<'tcx>>,
-{
-    type Item = Ty<'tcx>;
-
-    fn next(&mut self) -> Option<Ty<'tcx>> {
-        match *self {
-            WalkTysIter::None => None,
-            WalkTysIter::One(item) => {
-                *self = WalkTysIter::None;
-                Some(item)
-            }
-            WalkTysIter::Two(item1, item2) => {
-                *self = WalkTysIter::One(item2);
-                Some(item1)
-            }
-            WalkTysIter::Types(ref mut iter) => iter.next(),
-            WalkTysIter::InputTypes(ref mut iter) => iter.next(),
-            WalkTysIter::ProjectionTypes(ref mut iter) => iter.next(),
-        }
-    }
-}
-
 impl<'tcx> Predicate<'tcx> {
-    /// Iterates over the types in this predicate. Note that in all
-    /// cases this is skipping over a binder, so late-bound regions
-    /// with depth 0 are bound by the predicate.
-    pub fn walk_tys(&'a self) -> impl Iterator<Item = Ty<'tcx>> + 'a {
-        match *self {
-            ty::Predicate::Trait(ref data, _) => {
-                WalkTysIter::InputTypes(data.skip_binder().input_types())
-            }
-            ty::Predicate::Subtype(binder) => {
-                let SubtypePredicate { a, b, a_is_expected: _ } = binder.skip_binder();
-                WalkTysIter::Two(a, b)
-            }
-            ty::Predicate::TypeOutlives(binder) => WalkTysIter::One(binder.skip_binder().0),
-            ty::Predicate::RegionOutlives(..) => WalkTysIter::None,
-            ty::Predicate::Projection(ref data) => {
-                let inner = data.skip_binder();
-                WalkTysIter::ProjectionTypes(
-                    inner.projection_ty.substs.types().chain(Some(inner.ty)),
-                )
-            }
-            ty::Predicate::WellFormed(data) => WalkTysIter::One(data),
-            ty::Predicate::ObjectSafe(_trait_def_id) => WalkTysIter::None,
-            ty::Predicate::ClosureKind(_closure_def_id, closure_substs, _kind) => {
-                WalkTysIter::Types(closure_substs.types())
-            }
-            ty::Predicate::ConstEvaluatable(_, substs) => WalkTysIter::Types(substs.types()),
-        }
-    }
-
     pub fn to_opt_poly_trait_ref(&self) -> Option<PolyTraitRef<'tcx>> {
         match *self {
             Predicate::Trait(ref t, _) => Some(t.to_poly_trait_ref()),
@@ -1932,14 +1820,9 @@ bitflags! {
         const IS_BOX              = 1 << 6;
         /// Indicates whether the type is `ManuallyDrop`.
         const IS_MANUALLY_DROP    = 1 << 7;
-        // FIXME(matthewjasper) replace these with diagnostic items
-        /// Indicates whether the type is an `Arc`.
-        const IS_ARC              = 1 << 8;
-        /// Indicates whether the type is an `Rc`.
-        const IS_RC               = 1 << 9;
         /// Indicates whether the variant list of this ADT is `#[non_exhaustive]`.
         /// (i.e., this flag is never set unless this ADT is an enum).
-        const IS_VARIANT_LIST_NON_EXHAUSTIVE = 1 << 10;
+        const IS_VARIANT_LIST_NON_EXHAUSTIVE = 1 << 8;
     }
 }
 
@@ -2324,12 +2207,6 @@ impl<'tcx> AdtDef {
         if Some(did) == tcx.lang_items().manually_drop() {
             flags |= AdtFlags::IS_MANUALLY_DROP;
         }
-        if Some(did) == tcx.lang_items().arc() {
-            flags |= AdtFlags::IS_ARC;
-        }
-        if Some(did) == tcx.lang_items().rc() {
-            flags |= AdtFlags::IS_RC;
-        }
 
         AdtDef { did, variants, flags, repr }
     }
@@ -2406,16 +2283,6 @@ impl<'tcx> AdtDef {
     #[inline]
     pub fn is_phantom_data(&self) -> bool {
         self.flags.contains(AdtFlags::IS_PHANTOM_DATA)
-    }
-
-    /// Returns `true` if this is `Arc<T>`.
-    pub fn is_arc(&self) -> bool {
-        self.flags.contains(AdtFlags::IS_ARC)
-    }
-
-    /// Returns `true` if this is `Rc<T>`.
-    pub fn is_rc(&self) -> bool {
-        self.flags.contains(AdtFlags::IS_RC)
     }
 
     /// Returns `true` if this is Box<T>.
@@ -2522,7 +2389,7 @@ impl<'tcx> AdtDef {
                     None
                 }
             }
-            Err(ErrorHandled::Reported) => {
+            Err(ErrorHandled::Reported(ErrorReported) | ErrorHandled::Linted) => {
                 if !expr_did.is_local() {
                     span_bug!(
                         tcx.def_span(expr_did),
@@ -2533,7 +2400,11 @@ impl<'tcx> AdtDef {
                 None
             }
             Err(ErrorHandled::TooGeneric) => {
-                span_bug!(tcx.def_span(expr_did), "enum discriminant depends on generic arguments",)
+                tcx.sess.delay_span_bug(
+                    tcx.def_span(expr_did),
+                    "enum discriminant depends on generic arguments",
+                );
+                None
             }
         }
     }
@@ -2687,46 +2558,6 @@ impl<'tcx> ClosureKind {
     }
 }
 
-impl<'tcx> TyS<'tcx> {
-    /// Iterator that walks `self` and any types reachable from
-    /// `self`, in depth-first order. Note that just walks the types
-    /// that appear in `self`, it does not descend into the fields of
-    /// structs or variants. For example:
-    ///
-    /// ```notrust
-    /// isize => { isize }
-    /// Foo<Bar<isize>> => { Foo<Bar<isize>>, Bar<isize>, isize }
-    /// [isize] => { [isize], isize }
-    /// ```
-    pub fn walk(&'tcx self) -> TypeWalker<'tcx> {
-        TypeWalker::new(self)
-    }
-
-    /// Iterator that walks the immediate children of `self`. Hence
-    /// `Foo<Bar<i32>, u32>` yields the sequence `[Bar<i32>, u32]`
-    /// (but not `i32`, like `walk`).
-    pub fn walk_shallow(&'tcx self) -> smallvec::IntoIter<walk::TypeWalkerArray<'tcx>> {
-        walk::walk_shallow(self)
-    }
-
-    /// Walks `ty` and any types appearing within `ty`, invoking the
-    /// callback `f` on each type. If the callback returns `false`, then the
-    /// children of the current type are ignored.
-    ///
-    /// Note: prefer `ty.walk()` where possible.
-    pub fn maybe_walk<F>(&'tcx self, mut f: F)
-    where
-        F: FnMut(Ty<'tcx>) -> bool,
-    {
-        let mut walker = self.walk();
-        while let Some(ty) = walker.next() {
-            if !f(ty) {
-                walker.skip_current_subtree();
-            }
-        }
-    }
-}
-
 impl BorrowKind {
     pub fn from_mutbl(m: hir::Mutability) -> BorrowKind {
         match m {
@@ -2760,22 +2591,7 @@ impl BorrowKind {
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum Attributes<'tcx> {
-    Owned(Lrc<[ast::Attribute]>),
-    Borrowed(&'tcx [ast::Attribute]),
-}
-
-impl<'tcx> ::std::ops::Deref for Attributes<'tcx> {
-    type Target = [ast::Attribute];
-
-    fn deref(&self) -> &[ast::Attribute] {
-        match self {
-            &Attributes::Owned(ref data) => &data,
-            &Attributes::Borrowed(data) => data,
-        }
-    }
-}
+pub type Attributes<'tcx> = &'tcx [ast::Attribute];
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ImplOverlapKind {
@@ -2821,13 +2637,13 @@ pub enum ImplOverlapKind {
 
 impl<'tcx> TyCtxt<'tcx> {
     pub fn body_tables(self, body: hir::BodyId) -> &'tcx TypeckTables<'tcx> {
-        self.typeck_tables_of(self.hir().body_owner_def_id(body))
+        self.typeck_tables_of(self.hir().body_owner_def_id(body).to_def_id())
     }
 
     /// Returns an iterator of the `DefId`s for all body-owners in this
     /// crate. If you would prefer to iterate over the bodies
     /// themselves, you can do `self.hir().krate().body_ids.iter()`.
-    pub fn body_owners(self) -> impl Iterator<Item = DefId> + Captures<'tcx> + 'tcx {
+    pub fn body_owners(self) -> impl Iterator<Item = LocalDefId> + Captures<'tcx> + 'tcx {
         self.hir()
             .krate()
             .body_ids
@@ -2835,7 +2651,7 @@ impl<'tcx> TyCtxt<'tcx> {
             .map(move |&body_id| self.hir().body_owner_def_id(body_id))
     }
 
-    pub fn par_body_owners<F: Fn(DefId) + sync::Sync + sync::Send>(self, f: F) {
+    pub fn par_body_owners<F: Fn(LocalDefId) + sync::Sync + sync::Send>(self, f: F) {
         par_iter(&self.hir().krate().body_ids)
             .for_each(|&body_id| f(self.hir().body_owner_def_id(body_id)));
     }
@@ -2843,7 +2659,7 @@ impl<'tcx> TyCtxt<'tcx> {
     pub fn provided_trait_methods(self, id: DefId) -> impl 'tcx + Iterator<Item = &'tcx AssocItem> {
         self.associated_items(id)
             .in_definition_order()
-            .filter(|item| item.kind == AssocKind::Method && item.defaultness.has_value())
+            .filter(|item| item.kind == AssocKind::Fn && item.defaultness.has_value())
     }
 
     pub fn trait_relevant_for_never(self, did: DefId) -> bool {
@@ -3011,9 +2827,9 @@ impl<'tcx> TyCtxt<'tcx> {
     /// Gets the attributes of a definition.
     pub fn get_attrs(self, did: DefId) -> Attributes<'tcx> {
         if let Some(id) = self.hir().as_local_hir_id(did) {
-            Attributes::Borrowed(self.hir().attrs(id))
+            self.hir().attrs(id)
         } else {
-            Attributes::Owned(self.item_attrs(did))
+            self.item_attrs(did)
         }
     }
 

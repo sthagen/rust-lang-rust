@@ -250,7 +250,6 @@ use core::ops::{CoerceUnsized, Deref, DispatchFromDyn, Receiver};
 use core::pin::Pin;
 use core::ptr::{self, NonNull};
 use core::slice::{self, from_raw_parts_mut};
-use core::usize;
 
 use crate::alloc::{box_free, handle_alloc_error, AllocInit, AllocRef, Global, Layout};
 use crate::string::String;
@@ -280,7 +279,8 @@ struct RcBox<T: ?Sized> {
 /// type `T`.
 ///
 /// [get_mut]: #method.get_mut
-#[cfg_attr(not(test), lang = "rc")]
+#[cfg_attr(all(bootstrap, not(test)), lang = "rc")]
+#[cfg_attr(not(test), rustc_diagnostic_item = "Rc")]
 #[stable(feature = "rust1", since = "1.0.0")]
 pub struct Rc<T: ?Sized> {
     ptr: NonNull<RcBox<T>>,

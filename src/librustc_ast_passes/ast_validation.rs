@@ -6,6 +6,7 @@
 // This pass is supposed to perform only simple checks not requiring name resolution
 // or type checking or some other kind of complex analysis.
 
+use itertools::{Either, Itertools};
 use rustc_ast::ast::*;
 use rustc_ast::attr;
 use rustc_ast::expand::is_proc_macro_attr;
@@ -14,7 +15,7 @@ use rustc_ast::visit::{self, AssocCtxt, FnCtxt, FnKind, Visitor};
 use rustc_ast::walk_list;
 use rustc_ast_pretty::pprust;
 use rustc_data_structures::fx::FxHashMap;
-use rustc_errors::{error_code, struct_span_err, Applicability};
+use rustc_errors::{error_code, pluralize, struct_span_err, Applicability};
 use rustc_parse::validate_attr;
 use rustc_session::lint::builtin::PATTERNS_IN_FNS_WITHOUT_BODY;
 use rustc_session::lint::LintBuffer;
@@ -560,28 +561,6 @@ impl<'a> AstValidator<'a> {
         }
     }
 
-    /// We currently do not permit const generics in `const fn`,
-    /// as this is tantamount to allowing compile-time dependent typing.
-    ///
-    /// FIXME(const_generics): Is this really true / necessary? Discuss with @varkor.
-    /// At any rate, the restriction feels too syntactic. Consider moving it to e.g. typeck.
-    fn check_const_fn_const_generic(&self, span: Span, sig: &FnSig, generics: &Generics) {
-        if let Const::Yes(const_span) = sig.header.constness {
-            // Look for const generics and error if we find any.
-            for param in &generics.params {
-                if let GenericParamKind::Const { .. } = param.kind {
-                    self.err_handler()
-                        .struct_span_err(
-                            span,
-                            "const parameters are not permitted in const functions",
-                        )
-                        .span_label(const_span, "`const` because of this")
-                        .emit();
-                }
-            }
-        }
-    }
-
     fn check_item_named(&self, ident: Ident, kind: &str) {
         if ident.name != kw::Underscore {
             return;
@@ -640,6 +619,33 @@ impl<'a> AstValidator<'a> {
         }
     }
 
+    fn correct_generic_order_suggestion(&self, data: &AngleBracketedArgs) -> String {
+        // Lifetimes always come first.
+        let lt_sugg = data.args.iter().filter_map(|arg| match arg {
+            AngleBracketedArg::Arg(lt @ GenericArg::Lifetime(_)) => {
+                Some(pprust::to_string(|s| s.print_generic_arg(lt)))
+            }
+            _ => None,
+        });
+        let args_sugg = data.args.iter().filter_map(|a| match a {
+            AngleBracketedArg::Arg(GenericArg::Lifetime(_)) | AngleBracketedArg::Constraint(_) => {
+                None
+            }
+            AngleBracketedArg::Arg(arg) => Some(pprust::to_string(|s| s.print_generic_arg(arg))),
+        });
+        // Constraints always come last.
+        let constraint_sugg = data.args.iter().filter_map(|a| match a {
+            AngleBracketedArg::Arg(_) => None,
+            AngleBracketedArg::Constraint(c) => {
+                Some(pprust::to_string(|s| s.print_assoc_constraint(c)))
+            }
+        });
+        format!(
+            "<{}>",
+            lt_sugg.chain(args_sugg).chain(constraint_sugg).collect::<Vec<String>>().join(", ")
+        )
+    }
+
     /// Enforce generic args coming before constraints in `<...>` of a path segment.
     fn check_generic_args_before_constraints(&self, data: &AngleBracketedArgs) {
         // Early exit in case it's partitioned as it should be.
@@ -647,24 +653,36 @@ impl<'a> AstValidator<'a> {
             return;
         }
         // Find all generic argument coming after the first constraint...
-        let mut misplaced_args = Vec::new();
-        let mut first = None;
-        for arg in &data.args {
-            match (arg, first) {
-                (AngleBracketedArg::Arg(a), Some(_)) => misplaced_args.push(a.span()),
-                (AngleBracketedArg::Constraint(c), None) => first = Some(c.span),
-                (AngleBracketedArg::Arg(_), None) | (AngleBracketedArg::Constraint(_), Some(_)) => {
-                }
-            }
-        }
+        let (constraint_spans, arg_spans): (Vec<Span>, Vec<Span>) =
+            data.args.iter().partition_map(|arg| match arg {
+                AngleBracketedArg::Constraint(c) => Either::Left(c.span),
+                AngleBracketedArg::Arg(a) => Either::Right(a.span()),
+            });
+        let args_len = arg_spans.len();
+        let constraint_len = constraint_spans.len();
         // ...and then error:
         self.err_handler()
             .struct_span_err(
-                misplaced_args.clone(),
+                arg_spans.clone(),
                 "generic arguments must come before the first constraint",
             )
-            .span_label(first.unwrap(), "the first constraint is provided here")
-            .span_labels(misplaced_args, "generic argument")
+            .span_label(constraint_spans[0], &format!("constraint{}", pluralize!(constraint_len)))
+            .span_label(
+                *arg_spans.iter().last().unwrap(),
+                &format!("generic argument{}", pluralize!(args_len)),
+            )
+            .span_labels(constraint_spans, "")
+            .span_labels(arg_spans, "")
+            .span_suggestion_verbose(
+                data.span,
+                &format!(
+                    "move the constraint{} after the generic argument{}",
+                    pluralize!(constraint_len),
+                    pluralize!(args_len)
+                ),
+                self.correct_generic_order_suggestion(&data),
+                Applicability::MachineApplicable,
+            )
             .emit();
     }
 }
@@ -926,9 +944,8 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
                         .emit();
                 }
             }
-            ItemKind::Fn(def, ref sig, ref generics, ref body) => {
+            ItemKind::Fn(def, _, _, ref body) => {
                 self.check_defaultness(item.span, def);
-                self.check_const_fn_const_generic(item.span, sig, generics);
 
                 if body.is_none() {
                     let msg = "free function without a body";

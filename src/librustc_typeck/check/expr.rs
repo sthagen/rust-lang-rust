@@ -902,8 +902,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         error: MethodError<'tcx>,
     ) {
         let rcvr = &args[0];
-        let try_alt_rcvr = |err: &mut DiagnosticBuilder<'_>, rcvr_t, lang_item| {
-            if let Some(new_rcvr_t) = self.tcx.mk_lang_item(rcvr_t, lang_item) {
+        let try_alt_rcvr = |err: &mut DiagnosticBuilder<'_>, new_rcvr_t| {
+            if let Some(new_rcvr_t) = new_rcvr_t {
                 if let Ok(pick) = self.lookup_probe(
                     span,
                     segment.ident,
@@ -931,10 +931,10 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 // Try alternative arbitrary self types that could fulfill this call.
                 // FIXME: probe for all types that *could* be arbitrary self-types, not
                 // just this whitelist.
-                try_alt_rcvr(&mut err, rcvr_t, lang_items::OwnedBoxLangItem);
-                try_alt_rcvr(&mut err, rcvr_t, lang_items::PinTypeLangItem);
-                try_alt_rcvr(&mut err, rcvr_t, lang_items::Arc);
-                try_alt_rcvr(&mut err, rcvr_t, lang_items::Rc);
+                try_alt_rcvr(&mut err, self.tcx.mk_lang_item(rcvr_t, lang_items::OwnedBoxLangItem));
+                try_alt_rcvr(&mut err, self.tcx.mk_lang_item(rcvr_t, lang_items::PinTypeLangItem));
+                try_alt_rcvr(&mut err, self.tcx.mk_diagnostic_item(rcvr_t, sym::Arc));
+                try_alt_rcvr(&mut err, self.tcx.mk_diagnostic_item(rcvr_t, sym::Rc));
             }
             err.emit();
         }
@@ -975,18 +975,19 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         expected: Expectation<'tcx>,
         expr: &'tcx hir::Expr<'tcx>,
     ) -> Ty<'tcx> {
-        let uty = expected.to_option(self).and_then(|uty| match uty.kind {
-            ty::Array(ty, _) | ty::Slice(ty) => Some(ty),
-            _ => None,
-        });
-
         let element_ty = if !args.is_empty() {
-            let coerce_to = uty.unwrap_or_else(|| {
-                self.next_ty_var(TypeVariableOrigin {
-                    kind: TypeVariableOriginKind::TypeInference,
-                    span: expr.span,
+            let coerce_to = expected
+                .to_option(self)
+                .and_then(|uty| match uty.kind {
+                    ty::Array(ty, _) | ty::Slice(ty) => Some(ty),
+                    _ => None,
                 })
-            });
+                .unwrap_or_else(|| {
+                    self.next_ty_var(TypeVariableOrigin {
+                        kind: TypeVariableOriginKind::TypeInference,
+                        span: expr.span,
+                    })
+                });
             let mut coerce = CoerceMany::with_coercion_sites(coerce_to, args);
             assert_eq!(self.diverges.get(), Diverges::Maybe);
             for e in args {
@@ -1797,7 +1798,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             // we know that the yield type must be `()`; however, the context won't contain this
             // information. Hence, we check the source of the yield expression here and check its
             // value's type against `()` (this check should always hold).
-            None if src == &hir::YieldSource::Await => {
+            None if src.is_await() => {
                 self.check_expr_coercable_to_type(&value, self.tcx.mk_unit());
                 self.tcx.mk_unit()
             }

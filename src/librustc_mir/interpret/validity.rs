@@ -6,6 +6,7 @@
 
 use std::convert::TryFrom;
 use std::fmt::Write;
+use std::num::NonZeroUsize;
 use std::ops::RangeInclusive;
 
 use rustc_data_structures::fx::FxHashSet;
@@ -322,7 +323,11 @@ impl<'rt, 'mir, 'tcx, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, 'tcx, M
         let value = self.ecx.read_immediate(value)?;
         // Handle wide pointers.
         // Check metadata early, for better diagnostics
-        let place = try_validation!(self.ecx.ref_to_mplace(value), "undefined pointer", self.path);
+        let place = try_validation!(
+            self.ecx.ref_to_mplace(value),
+            format_args!("uninitialized {}", kind),
+            self.path
+        );
         if place.layout.is_unsized() {
             self.check_wide_ptr_meta(place.meta, place.layout)?;
         }
@@ -334,7 +339,7 @@ impl<'rt, 'mir, 'tcx, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, 'tcx, M
                     format_args!("invalid {} metadata: {}", kind, msg),
                     self.path
                 ),
-                _ => bug!("Unexpected error during ptr size_and_align_of: {}", err),
+                _ => bug!("unexpected error during ptr size_and_align_of: {}", err),
             },
         };
         let (size, align) = size_and_align
@@ -477,10 +482,11 @@ impl<'rt, 'mir, 'tcx, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, 'tcx, M
             }
             ty::RawPtr(..) => {
                 // We are conservative with undef for integers, but try to
-                // actually enforce our current rules for raw pointers.
+                // actually enforce the strict rules for raw pointers (mostly because
+                // that lets us re-use `ref_to_mplace`).
                 let place = try_validation!(
                     self.ecx.ref_to_mplace(self.ecx.read_immediate(value)?),
-                    "undefined pointer",
+                    "uninitialized raw pointer",
                     self.path
                 );
                 if place.layout.is_unsized() {
@@ -642,10 +648,11 @@ impl<'rt, 'mir, 'tcx, M: Machine<'mir, 'tcx>> ValueVisitor<'mir, 'tcx, M>
     }
 
     #[inline(always)]
-    fn visit_union(&mut self, op: OpTy<'tcx, M::PointerTag>, fields: usize) -> InterpResult<'tcx> {
-        // Empty unions are not accepted by rustc. But uninhabited enums
-        // claim to be unions, so allow them, too.
-        assert!(op.layout.abi.is_uninhabited() || fields > 0);
+    fn visit_union(
+        &mut self,
+        _op: OpTy<'tcx, M::PointerTag>,
+        _fields: NonZeroUsize,
+    ) -> InterpResult<'tcx> {
         Ok(())
     }
 
@@ -776,14 +783,14 @@ impl<'rt, 'mir, 'tcx, M: Machine<'mir, 'tcx>> ValueVisitor<'mir, 'tcx, M>
                         // For some errors we might be able to provide extra information
                         match err.kind {
                             err_ub!(InvalidUndefBytes(Some(ptr))) => {
-                                // Some byte was undefined, determine which
+                                // Some byte was uninitialized, determine which
                                 // element that byte belongs to so we can
                                 // provide an index.
                                 let i = usize::try_from(ptr.offset.bytes() / layout.size.bytes())
                                     .unwrap();
                                 self.path.push(PathElem::ArrayElem(i));
 
-                                throw_validation_failure!("undefined bytes", self.path)
+                                throw_validation_failure!("uninitialized bytes", self.path)
                             }
                             // Other errors shouldn't be possible
                             _ => return Err(err),

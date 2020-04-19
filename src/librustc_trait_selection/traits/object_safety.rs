@@ -16,7 +16,7 @@ use crate::traits::{self, Obligation, ObligationCause};
 use rustc_errors::{Applicability, FatalError};
 use rustc_hir as hir;
 use rustc_hir::def_id::DefId;
-use rustc_middle::ty::subst::{InternalSubsts, Subst};
+use rustc_middle::ty::subst::{GenericArg, GenericArgKind, InternalSubsts, Subst};
 use rustc_middle::ty::{self, Predicate, ToPredicate, Ty, TyCtxt, TypeFoldable, WithConstness};
 use rustc_session::lint::builtin::WHERE_CLAUSES_OBJECT_SAFETY;
 use rustc_span::symbol::Symbol;
@@ -47,13 +47,17 @@ pub fn astconv_object_safety_violations(
     violations
 }
 
-fn object_safety_violations(tcx: TyCtxt<'_>, trait_def_id: DefId) -> Vec<ObjectSafetyViolation> {
+fn object_safety_violations(
+    tcx: TyCtxt<'tcx>,
+    trait_def_id: DefId,
+) -> &'tcx [ObjectSafetyViolation] {
     debug_assert!(tcx.generics_of(trait_def_id).has_self);
     debug!("object_safety_violations: {:?}", trait_def_id);
 
-    traits::supertrait_def_ids(tcx, trait_def_id)
-        .flat_map(|def_id| object_safety_violations_for_trait(tcx, def_id))
-        .collect()
+    tcx.arena.alloc_from_iter(
+        traits::supertrait_def_ids(tcx, trait_def_id)
+            .flat_map(|def_id| object_safety_violations_for_trait(tcx, def_id)),
+    )
 }
 
 /// We say a method is *vtable safe* if it can be invoked on a trait
@@ -82,7 +86,7 @@ fn object_safety_violations_for_trait(
     let mut violations: Vec<_> = tcx
         .associated_items(trait_def_id)
         .in_definition_order()
-        .filter(|item| item.kind == ty::AssocKind::Method)
+        .filter(|item| item.kind == ty::AssocKind::Fn)
         .filter_map(|item| {
             object_safety_violation_for_method(tcx, trait_def_id, &item)
                 .map(|(code, span)| ObjectSafetyViolation::Method(item.ident.name, code, span))
@@ -234,7 +238,7 @@ fn predicates_reference_self(
         tcx.predicates_of(trait_def_id)
     };
     let self_ty = tcx.types.self_param;
-    let has_self_ty = |t: Ty<'_>| t.walk().any(|t| t == self_ty);
+    let has_self_ty = |arg: &GenericArg<'_>| arg.walk().any(|arg| arg == self_ty.into());
     predicates
         .predicates
         .iter()
@@ -243,7 +247,7 @@ fn predicates_reference_self(
             match predicate {
                 ty::Predicate::Trait(ref data, _) => {
                     // In the case of a trait predicate, we can skip the "self" type.
-                    if data.skip_binder().input_types().skip(1).any(has_self_ty) {
+                    if data.skip_binder().trait_ref.substs[1..].iter().any(has_self_ty) {
                         Some(sp)
                     } else {
                         None
@@ -262,12 +266,8 @@ fn predicates_reference_self(
                     //
                     // This is ALT2 in issue #56288, see that for discussion of the
                     // possible alternatives.
-                    if data
-                        .skip_binder()
-                        .projection_ty
-                        .trait_ref(tcx)
-                        .input_types()
-                        .skip(1)
+                    if data.skip_binder().projection_ty.trait_ref(tcx).substs[1..]
+                        .iter()
                         .any(has_self_ty)
                     {
                         Some(sp)
@@ -302,7 +302,7 @@ fn generics_require_sized_self(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
     // Search for a predicate like `Self : Sized` amongst the trait bounds.
     let predicates = tcx.predicates_of(def_id);
     let predicates = predicates.instantiate_identity(tcx).predicates;
-    elaborate_predicates(tcx, predicates).any(|predicate| match predicate {
+    elaborate_predicates(tcx, predicates).any(|obligation| match obligation.predicate {
         ty::Predicate::Trait(ref trait_pred, _) => {
             trait_pred.def_id() == sized_def_id && trait_pred.skip_binder().self_ty().is_param(0)
         }
@@ -362,7 +362,7 @@ fn virtual_call_violation_for_method<'tcx>(
     method: &ty::AssocItem,
 ) -> Option<MethodViolationCode> {
     // The method's first parameter must be named `self`
-    if !method.method_has_self_argument {
+    if !method.fn_has_self_parameter {
         // We'll attempt to provide a structured suggestion for `Self: Sized`.
         let sugg =
             tcx.hir().get_if_local(method.def_id).as_ref().and_then(|node| node.generics()).map(
@@ -616,7 +616,7 @@ fn receiver_is_dispatchable<'tcx>(
     // FIXME(mikeyhew) this is a total hack. Once object_safe_for_dispatch is stabilized, we can
     // replace this with `dyn Trait`
     let unsized_self_ty: Ty<'tcx> =
-        tcx.mk_ty_param(::std::u32::MAX, Symbol::intern("RustaceansAreAwesome"));
+        tcx.mk_ty_param(u32::MAX, Symbol::intern("RustaceansAreAwesome"));
 
     // `Receiver[Self => U]`
     let unsized_receiver_ty =
@@ -725,19 +725,17 @@ fn contains_illegal_self_type_reference<'tcx>(
     // without knowing what `Self` is.
 
     let mut supertraits: Option<Vec<ty::PolyTraitRef<'tcx>>> = None;
-    let mut error = false;
     let self_ty = tcx.types.self_param;
-    ty.maybe_walk(|ty| {
-        match ty.kind {
-            ty::Param(_) => {
-                if ty == self_ty {
-                    error = true;
-                }
 
-                false // no contained types to walk
-            }
+    let mut walker = ty.walk();
+    while let Some(arg) = walker.next() {
+        if arg == self_ty.into() {
+            return true;
+        }
 
-            ty::Projection(ref data) => {
+        // Special-case projections (everything else is walked normally).
+        if let GenericArgKind::Type(ty) = arg.unpack() {
+            if let ty::Projection(ref data) = ty.kind {
                 // This is a projected type `<Foo as SomeTrait>::X`.
 
                 // Compute supertraits of current trait lazily.
@@ -759,17 +757,18 @@ fn contains_illegal_self_type_reference<'tcx>(
                     supertraits.as_ref().unwrap().contains(&projection_trait_ref);
 
                 if is_supertrait_of_current_trait {
-                    false // do not walk contained types, do not report error, do collect $200
-                } else {
-                    true // DO walk contained types, POSSIBLY reporting an error
+                    // Do not walk contained types, do not report error, do collect $200.
+                    walker.skip_current_subtree();
                 }
+
+                // DO walk contained types, POSSIBLY reporting an error.
             }
-
-            _ => true, // walk contained types, if any
         }
-    });
 
-    error
+        // Walk contained types, if any.
+    }
+
+    false
 }
 
 pub fn provide(providers: &mut ty::query::Providers<'_>) {

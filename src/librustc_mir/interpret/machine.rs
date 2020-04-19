@@ -51,7 +51,7 @@ pub trait AllocMap<K: Hash + Eq, V> {
     where
         K: Borrow<Q>;
 
-    /// Returns data based the keys and values in the map.
+    /// Returns data based on the keys and values in the map.
     fn filter_map_collect<T>(&self, f: impl FnMut(&K, &V) -> Option<T>) -> Vec<T>;
 
     /// Returns a reference to entry `k`. If no such entry exists, call
@@ -79,7 +79,7 @@ pub trait AllocMap<K: Hash + Eq, V> {
 /// and some use case dependent behaviour can instead be applied.
 pub trait Machine<'mir, 'tcx>: Sized {
     /// Additional memory kinds a machine wishes to distinguish from the builtin ones
-    type MemoryKind: ::std::fmt::Debug + MayLeak + Eq + 'static;
+    type MemoryKind: ::std::fmt::Debug + ::std::fmt::Display + MayLeak + Eq + 'static;
 
     /// Tag tracked alongside every pointer. This is used to implement "Stacked Borrows"
     /// <https://www.ralfj.de/blog/2018/08/07/stacked-borrows.html>.
@@ -118,7 +118,7 @@ pub trait Machine<'mir, 'tcx>: Sized {
     const GLOBAL_KIND: Option<Self::MemoryKind>;
 
     /// Whether memory accesses should be alignment-checked.
-    const CHECK_ALIGN: bool;
+    fn enforce_alignment(memory_extra: &Self::MemoryExtra) -> bool;
 
     /// Whether to enforce the validity invariant
     fn enforce_validity(ecx: &InterpCx<'mir, 'tcx, Self>) -> bool;
@@ -254,6 +254,14 @@ pub trait Machine<'mir, 'tcx>: Sized {
         kind: Option<MemoryKind<Self::MemoryKind>>,
     ) -> (Cow<'b, Allocation<Self::PointerTag, Self::AllocExtra>>, Self::PointerTag);
 
+    /// Called to notify the machine before a deallocation occurs.
+    fn before_deallocation(
+        _memory_extra: &mut Self::MemoryExtra,
+        _id: AllocId,
+    ) -> InterpResult<'tcx> {
+        Ok(())
+    }
+
     /// Return the "base" tag for the given *global* allocation: the one that is used for direct
     /// accesses to this static/const/fn allocation. If `id` is not a global allocation,
     /// this will return an unusable tag (i.e., accesses will be UB)!
@@ -271,13 +279,21 @@ pub trait Machine<'mir, 'tcx>: Sized {
         Ok(())
     }
 
-    /// Called immediately before a new stack frame got pushed.
-    fn stack_push(ecx: &mut InterpCx<'mir, 'tcx, Self>) -> InterpResult<'tcx, Self::FrameExtra>;
+    /// Called immediately before a new stack frame gets pushed.
+    fn init_frame_extra(
+        ecx: &mut InterpCx<'mir, 'tcx, Self>,
+        frame: Frame<'mir, 'tcx, Self::PointerTag>,
+    ) -> InterpResult<'tcx, Frame<'mir, 'tcx, Self::PointerTag, Self::FrameExtra>>;
 
-    /// Called immediately after a stack frame gets popped
-    fn stack_pop(
+    /// Called immediately after a stack frame got pushed and its locals got initialized.
+    fn after_stack_push(_ecx: &mut InterpCx<'mir, 'tcx, Self>) -> InterpResult<'tcx> {
+        Ok(())
+    }
+
+    /// Called immediately after a stack frame got popped, but before jumping back to the caller.
+    fn after_stack_pop(
         _ecx: &mut InterpCx<'mir, 'tcx, Self>,
-        _extra: Self::FrameExtra,
+        _frame: Frame<'mir, 'tcx, Self::PointerTag, Self::FrameExtra>,
         _unwinding: bool,
     ) -> InterpResult<'tcx, StackPopJump> {
         // By default, we do not support unwinding from panics

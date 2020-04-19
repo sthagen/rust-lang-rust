@@ -144,6 +144,7 @@ symbols! {
         any,
         arbitrary_enum_discriminant,
         arbitrary_self_types,
+        Arc,
         Arguments,
         ArgumentV1,
         arm_target_feature,
@@ -347,6 +348,7 @@ symbols! {
         generators,
         generic_associated_types,
         generic_param_attrs,
+        get_context,
         global_allocator,
         global_asm,
         globs,
@@ -546,8 +548,8 @@ symbols! {
         plugin,
         plugin_registrar,
         plugins,
+        poll,
         Poll,
-        poll_with_context,
         powerpc_target_feature,
         precise_pointer_size_matching,
         pref_align_of,
@@ -582,6 +584,7 @@ symbols! {
         raw_dylib,
         raw_identifiers,
         raw_ref_op,
+        Rc,
         Ready,
         reason,
         recursion_limit,
@@ -1151,12 +1154,20 @@ impl Interner {
 }
 
 // This module has a very short name because it's used a lot.
+/// This module contains all the defined keyword `Symbol`s.
+///
+/// Given that `kw` is imported, use them like `kw::keyword_name`.
+/// For example `kw::Loop` or `kw::Break`.
 pub mod kw {
     use super::Symbol;
     keywords!();
 }
 
 // This module has a very short name because it's used a lot.
+/// This module contains all the defined non-keyword `Symbol`s.
+///
+/// Given that `sym` is imported, use them like `sym::symbol_name`.
+/// For example `sym::rustfmt` or `sym::u8`.
 #[allow(rustc::default_hash_types)]
 pub mod sym {
     use super::Symbol;

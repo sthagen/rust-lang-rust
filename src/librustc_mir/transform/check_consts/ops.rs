@@ -90,16 +90,6 @@ impl NonConstOp for FnCallNonConst {
     }
 }
 
-/// A function call where the callee is not a function definition or function pointer, e.g. a
-/// closure.
-///
-/// This can be subdivided in the future to produce a better error message.
-#[derive(Debug)]
-pub struct FnCallOther;
-impl NonConstOp for FnCallOther {
-    const IS_SUPPORTED_IN_MIRI: bool = false;
-}
-
 /// A call to a `#[unstable]` const fn or `#[rustc_const_unstable]` function.
 ///
 /// Contains the name of the feature that would allow the use of this function.
@@ -123,8 +113,6 @@ impl NonConstOp for FnCallUnstable {
 #[derive(Debug)]
 pub struct HeapAllocation;
 impl NonConstOp for HeapAllocation {
-    const IS_SUPPORTED_IN_MIRI: bool = false;
-
     fn emit_error(&self, item: &Item<'_, '_>, span: Span) {
         let mut err = struct_span_err!(
             item.tcx.sess,

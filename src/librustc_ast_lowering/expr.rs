@@ -556,9 +556,9 @@ impl<'hir> LoweringContext<'_, 'hir> {
     /// ```rust
     /// match <expr> {
     ///     mut pinned => loop {
-    ///         match unsafe { ::std::future::poll_with_context(
+    ///         match unsafe { ::std::future::Future::poll(
     ///             <::std::pin::Pin>::new_unchecked(&mut pinned),
-    ///             task_context,
+    ///             ::std::future::get_context(task_context),
     ///         ) } {
     ///             ::std::task::Poll::Ready(result) => break result,
     ///             ::std::task::Poll::Pending => {}
@@ -590,6 +590,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
             await_span,
             self.allow_gen_future.clone(),
         );
+        let expr = self.lower_expr(expr);
 
         let pinned_ident = Ident::with_dummy_span(sym::pinned);
         let (pinned_pat, pinned_pat_hid) =
@@ -598,9 +599,9 @@ impl<'hir> LoweringContext<'_, 'hir> {
         let task_context_ident = Ident::with_dummy_span(sym::_task_context);
 
         // unsafe {
-        //     ::std::future::poll_with_context(
+        //     ::std::future::Future::poll(
         //         ::std::pin::Pin::new_unchecked(&mut pinned),
-        //         task_context,
+        //         ::std::future::get_context(task_context),
         //     )
         // }
         let poll_expr = {
@@ -621,10 +622,15 @@ impl<'hir> LoweringContext<'_, 'hir> {
                 arena_vec![self; ref_mut_pinned],
             );
             let new_unchecked = self.expr(span, new_unchecked_expr_kind, ThinVec::new());
-            let call = self.expr_call_std_path(
+            let get_context = self.expr_call_std_path_mut(
                 gen_future_span,
-                &[sym::future, sym::poll_with_context],
-                arena_vec![self; new_unchecked, task_context],
+                &[sym::future, sym::get_context],
+                arena_vec![self; task_context],
+            );
+            let call = self.expr_call_std_path(
+                span,
+                &[sym::future, sym::Future, sym::poll],
+                arena_vec![self; new_unchecked, get_context],
             );
             self.arena.alloc(self.expr_unsafe(call))
         };
@@ -671,7 +677,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
             let unit = self.expr_unit(span);
             let yield_expr = self.expr(
                 span,
-                hir::ExprKind::Yield(unit, hir::YieldSource::Await),
+                hir::ExprKind::Yield(unit, hir::YieldSource::Await { expr: Some(expr.hir_id) }),
                 ThinVec::new(),
             );
             let yield_expr = self.arena.alloc(yield_expr);
@@ -704,7 +710,6 @@ impl<'hir> LoweringContext<'_, 'hir> {
         // match <expr> {
         //     mut pinned => loop { .. }
         // }
-        let expr = self.lower_expr(expr);
         hir::ExprKind::Match(expr, arena_vec![self; pinned_arm], hir::MatchSource::AwaitDesugar)
     }
 
@@ -1326,25 +1331,43 @@ impl<'hir> LoweringContext<'_, 'hir> {
         self.arena.alloc(self.expr(sp, hir::ExprKind::Tup(&[]), ThinVec::new()))
     }
 
+    fn expr_call_mut(
+        &mut self,
+        span: Span,
+        e: &'hir hir::Expr<'hir>,
+        args: &'hir [hir::Expr<'hir>],
+    ) -> hir::Expr<'hir> {
+        self.expr(span, hir::ExprKind::Call(e, args), ThinVec::new())
+    }
+
     fn expr_call(
         &mut self,
         span: Span,
         e: &'hir hir::Expr<'hir>,
         args: &'hir [hir::Expr<'hir>],
     ) -> &'hir hir::Expr<'hir> {
-        self.arena.alloc(self.expr(span, hir::ExprKind::Call(e, args), ThinVec::new()))
+        self.arena.alloc(self.expr_call_mut(span, e, args))
     }
 
     // Note: associated functions must use `expr_call_std_path`.
+    fn expr_call_std_path_mut(
+        &mut self,
+        span: Span,
+        path_components: &[Symbol],
+        args: &'hir [hir::Expr<'hir>],
+    ) -> hir::Expr<'hir> {
+        let path =
+            self.arena.alloc(self.expr_std_path(span, path_components, None, ThinVec::new()));
+        self.expr_call_mut(span, path, args)
+    }
+
     fn expr_call_std_path(
         &mut self,
         span: Span,
         path_components: &[Symbol],
         args: &'hir [hir::Expr<'hir>],
     ) -> &'hir hir::Expr<'hir> {
-        let path =
-            self.arena.alloc(self.expr_std_path(span, path_components, None, ThinVec::new()));
-        self.expr_call(span, path, args)
+        self.arena.alloc(self.expr_call_std_path_mut(span, path_components, args))
     }
 
     // Create an expression calling an associated function of an std type.

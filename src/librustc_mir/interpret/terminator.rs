@@ -52,6 +52,8 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
             }
 
             Call { ref func, ref args, destination, ref cleanup, .. } => {
+                let old_stack = self.cur_frame();
+                let old_bb = self.frame().block;
                 let func = self.eval_operand(func, None)?;
                 let (fn_val, abi) = match func.layout.ty.kind {
                     ty::FnPtr(sig) => {
@@ -64,7 +66,11 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
                         let sig = func.layout.ty.fn_sig(*self.tcx);
                         (FnVal::Instance(self.resolve(def_id, substs)?), sig.abi())
                     }
-                    _ => bug!("invalid callee of type {:?}", func.layout.ty),
+                    _ => span_bug!(
+                        terminator.source_info.span,
+                        "invalid callee of type {:?}",
+                        func.layout.ty
+                    ),
                 };
                 let args = self.eval_operands(args)?;
                 let ret = match destination {
@@ -72,10 +78,14 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
                     None => None,
                 };
                 self.eval_fn_call(fn_val, abi, &args[..], ret, *cleanup)?;
+                // Sanity-check that `eval_fn_call` either pushed a new frame or
+                // did a jump to another block.
+                if self.cur_frame() == old_stack && self.frame().block == old_bb {
+                    span_bug!(terminator.source_info.span, "evaluating this call made no progress");
+                }
             }
 
             Drop { location, target, unwind } => {
-                // FIXME(CTFE): forbid drop in const eval
                 let place = self.eval_place(location)?;
                 let ty = place.layout.ty;
                 trace!("TerminatorKind::drop: {:?}, type {}", location, ty);
@@ -117,9 +127,11 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
             | FalseEdges { .. }
             | FalseUnwind { .. }
             | Yield { .. }
-            | GeneratorDrop => {
-                bug!("{:#?} should have been eliminated by MIR pass", terminator.kind)
-            }
+            | GeneratorDrop => span_bug!(
+                terminator.source_info.span,
+                "{:#?} should have been eliminated by MIR pass",
+                terminator.kind
+            ),
         }
 
         Ok(())
@@ -395,7 +407,7 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
                 let this_receiver_ptr = self.layout_of(receiver_ptr_ty)?.field(self, 0)?;
                 // Adjust receiver argument.
                 args[0] =
-                    OpTy::from(ImmTy { layout: this_receiver_ptr, imm: receiver_place.ptr.into() });
+                    OpTy::from(ImmTy::from_immediate(receiver_place.ptr.into(), this_receiver_ptr));
                 trace!("Patched self operand to {:#?}", args[0]);
                 // recurse with concrete function
                 self.eval_fn_call(drop_fn, caller_abi, &args, ret, unwind)
@@ -424,10 +436,10 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
             _ => (instance, place),
         };
 
-        let arg = ImmTy {
-            imm: place.to_ref(),
-            layout: self.layout_of(self.tcx.mk_mut_ptr(place.layout.ty))?,
-        };
+        let arg = ImmTy::from_immediate(
+            place.to_ref(),
+            self.layout_of(self.tcx.mk_mut_ptr(place.layout.ty))?,
+        );
 
         let ty = self.tcx.mk_unit(); // return type is ()
         let dest = MPlaceTy::dangling(self.layout_of(ty)?, self);

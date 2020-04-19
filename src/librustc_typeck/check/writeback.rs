@@ -5,6 +5,7 @@
 use crate::check::FnCtxt;
 
 use rustc_data_structures::sync::Lrc;
+use rustc_errors::ErrorReported;
 use rustc_hir as hir;
 use rustc_hir::def_id::DefIdSet;
 use rustc_hir::intravisit::{self, NestedVisitorMap, Visitor};
@@ -40,7 +41,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let item_def_id = self.tcx.hir().local_def_id(item_id);
 
         // This attribute causes us to dump some writeback information
-        // in the form of errors, which is uSymbolfor unit tests.
+        // in the form of errors, which is uSymbol for unit tests.
         let rustc_dump_user_substs = self.tcx.has_attr(item_def_id, sym::rustc_dump_user_substs);
 
         let mut wbcx = WritebackCx::new(self, body, rustc_dump_user_substs);
@@ -75,7 +76,10 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         wbcx.tables.upvar_list =
             mem::replace(&mut self.tables.borrow_mut().upvar_list, Default::default());
 
-        wbcx.tables.tainted_by_errors = self.is_tainted_by_errors();
+        if self.is_tainted_by_errors() {
+            // FIXME(eddyb) keep track of `ErrorReported` from where the error was emitted.
+            wbcx.tables.tainted_by_errors = Some(ErrorReported);
+        }
 
         debug!("writeback: tables for {:?} are {:#?}", item_def_id, wbcx.tables);
 
@@ -365,11 +369,15 @@ impl<'cx, 'tcx> WritebackCx<'cx, 'tcx> {
         for (&local_id, c_ty) in fcx_tables.user_provided_types().iter() {
             let hir_id = hir::HirId { owner: common_hir_owner, local_id };
 
-            if cfg!(debug_assertions) && c_ty.has_local_value() {
-                span_bug!(hir_id.to_span(self.fcx.tcx), "writeback: `{:?}` is a local value", c_ty);
+            if cfg!(debug_assertions) && c_ty.needs_infer() {
+                span_bug!(
+                    hir_id.to_span(self.fcx.tcx),
+                    "writeback: `{:?}` has inference variables",
+                    c_ty
+                );
             };
 
-            self.tables.user_provided_types_mut().insert(hir_id, c_ty.clone());
+            self.tables.user_provided_types_mut().insert(hir_id, *c_ty);
 
             if let ty::UserType::TypeOf(_, user_substs) = c_ty.value {
                 if self.rustc_dump_user_substs {
@@ -399,15 +407,15 @@ impl<'cx, 'tcx> WritebackCx<'cx, 'tcx> {
         assert_eq!(fcx_tables.hir_owner, self.tables.hir_owner);
 
         for (&def_id, c_sig) in fcx_tables.user_provided_sigs.iter() {
-            if cfg!(debug_assertions) && c_sig.has_local_value() {
+            if cfg!(debug_assertions) && c_sig.needs_infer() {
                 span_bug!(
                     self.fcx.tcx.hir().span_if_local(def_id).unwrap(),
-                    "writeback: `{:?}` is a local value",
+                    "writeback: `{:?}` has inference variables",
                     c_sig
                 );
             };
 
-            self.tables.user_provided_sigs.insert(def_id, c_sig.clone());
+            self.tables.user_provided_sigs.insert(def_id, *c_sig);
         }
     }
 
@@ -457,7 +465,7 @@ impl<'cx, 'tcx> WritebackCx<'cx, 'tcx> {
                 }
             }
 
-            if !opaque_defn.substs.has_local_value() {
+            if !opaque_defn.substs.needs_infer() {
                 // We only want to add an entry into `concrete_opaque_types`
                 // if we actually found a defining usage of this opaque type.
                 // Otherwise, we do nothing - we'll either find a defining usage
@@ -485,7 +493,7 @@ impl<'cx, 'tcx> WritebackCx<'cx, 'tcx> {
                     }
                 }
             } else {
-                self.tcx().sess.delay_span_bug(span, "`opaque_defn` is a local value");
+                self.tcx().sess.delay_span_bug(span, "`opaque_defn` has inference variables");
             }
         }
     }
@@ -558,7 +566,7 @@ impl<'cx, 'tcx> WritebackCx<'cx, 'tcx> {
         for (&local_id, fn_sig) in fcx_tables.liberated_fn_sigs().iter() {
             let hir_id = hir::HirId { owner: common_hir_owner, local_id };
             let fn_sig = self.resolve(fn_sig, &hir_id);
-            self.tables.liberated_fn_sigs_mut().insert(hir_id, fn_sig.clone());
+            self.tables.liberated_fn_sigs_mut().insert(hir_id, fn_sig);
         }
     }
 
@@ -574,14 +582,24 @@ impl<'cx, 'tcx> WritebackCx<'cx, 'tcx> {
         }
     }
 
-    fn resolve<T>(&self, x: &T, span: &dyn Locatable) -> T
+    fn resolve<T>(&mut self, x: &T, span: &dyn Locatable) -> T
     where
         T: TypeFoldable<'tcx>,
     {
-        let x = x.fold_with(&mut Resolver::new(self.fcx, span, self.body));
-        if cfg!(debug_assertions) && x.has_local_value() {
-            span_bug!(span.to_span(self.fcx.tcx), "writeback: `{:?}` is a local value", x);
+        let mut resolver = Resolver::new(self.fcx, span, self.body);
+        let x = x.fold_with(&mut resolver);
+        if cfg!(debug_assertions) && x.needs_infer() {
+            span_bug!(span.to_span(self.fcx.tcx), "writeback: `{:?}` has inference variables", x);
         }
+
+        // We may have introduced e.g. `ty::Error`, if inference failed, make sure
+        // to mark the `TypeckTables` as tainted in that case, so that downstream
+        // users of the tables don't produce extra errors, or worse, ICEs.
+        if resolver.replaced_with_error {
+            // FIXME(eddyb) keep track of `ErrorReported` from where the error was emitted.
+            self.tables.tainted_by_errors = Some(ErrorReported);
+        }
+
         x
     }
 }
@@ -609,6 +627,9 @@ struct Resolver<'cx, 'tcx> {
     infcx: &'cx InferCtxt<'cx, 'tcx>,
     span: &'cx dyn Locatable,
     body: &'tcx hir::Body<'tcx>,
+
+    /// Set to `true` if any `Ty` or `ty::Const` had to be replaced with an `Error`.
+    replaced_with_error: bool,
 }
 
 impl<'cx, 'tcx> Resolver<'cx, 'tcx> {
@@ -617,7 +638,7 @@ impl<'cx, 'tcx> Resolver<'cx, 'tcx> {
         span: &'cx dyn Locatable,
         body: &'tcx hir::Body<'tcx>,
     ) -> Resolver<'cx, 'tcx> {
-        Resolver { tcx: fcx.tcx, infcx: fcx, span, body }
+        Resolver { tcx: fcx.tcx, infcx: fcx, span, body, replaced_with_error: false }
     }
 
     fn report_error(&self, t: Ty<'tcx>) {
@@ -640,6 +661,7 @@ impl<'cx, 'tcx> TypeFolder<'tcx> for Resolver<'cx, 'tcx> {
             Err(_) => {
                 debug!("Resolver::fold_ty: input type `{:?}` not fully resolvable", t);
                 self.report_error(t);
+                self.replaced_with_error = true;
                 self.tcx().types.err
             }
         }
@@ -657,7 +679,8 @@ impl<'cx, 'tcx> TypeFolder<'tcx> for Resolver<'cx, 'tcx> {
                 debug!("Resolver::fold_const: input const `{:?}` not fully resolvable", ct);
                 // FIXME: we'd like to use `self.report_error`, but it doesn't yet
                 // accept a &'tcx ty::Const.
-                self.tcx().consts.err
+                self.replaced_with_error = true;
+                self.tcx().mk_const(ty::Const { val: ty::ConstKind::Error, ty: ct.ty })
             }
         }
     }

@@ -3,10 +3,8 @@ use crate::infer::{GenericKind, VerifyBound};
 use crate::traits;
 use rustc_data_structures::captures::Captures;
 use rustc_hir::def_id::DefId;
-use rustc_middle::ty::subst::{InternalSubsts, Subst};
+use rustc_middle::ty::subst::{GenericArg, GenericArgKind, InternalSubsts, Subst};
 use rustc_middle::ty::{self, Ty, TyCtxt};
-
-use smallvec::smallvec;
 
 /// The `TypeOutlives` struct has the job of "lowering" a `T: 'a`
 /// obligation into a series of `'a: 'b` constraints and "verifys", as
@@ -44,7 +42,32 @@ impl<'cx, 'tcx> VerifyBoundCx<'cx, 'tcx> {
         match ty.kind {
             ty::Param(p) => self.param_bound(p),
             ty::Projection(data) => self.projection_bound(data),
-            _ => self.recursive_type_bound(ty),
+            ty::FnDef(_, substs) => {
+                // HACK(eddyb) ignore lifetimes found shallowly in `substs`.
+                // This is inconsistent with `ty::Adt` (including all substs),
+                // but consistent with previous (accidental) behavior.
+                // See https://github.com/rust-lang/rust/issues/70917
+                // for further background and discussion.
+                let mut bounds = substs
+                    .iter()
+                    .filter_map(|&child| match child.unpack() {
+                        GenericArgKind::Type(ty) => Some(self.type_bound(ty)),
+                        GenericArgKind::Lifetime(_) => None,
+                        GenericArgKind::Const(_) => Some(self.recursive_bound(child)),
+                    })
+                    .filter(|bound| {
+                        // Remove bounds that must hold, since they are not interesting.
+                        !bound.must_hold()
+                    });
+
+                match (bounds.next(), bounds.next()) {
+                    (Some(first), None) => first,
+                    (first, second) => VerifyBound::AllBounds(
+                        first.into_iter().chain(second).chain(bounds).collect(),
+                    ),
+                }
+            }
+            _ => self.recursive_bound(ty.into()),
         }
     }
 
@@ -144,25 +167,33 @@ impl<'cx, 'tcx> VerifyBoundCx<'cx, 'tcx> {
 
         // see the extensive comment in projection_must_outlive
         let ty = self.tcx.mk_projection(projection_ty.item_def_id, projection_ty.substs);
-        let recursive_bound = self.recursive_type_bound(ty);
+        let recursive_bound = self.recursive_bound(ty.into());
 
         VerifyBound::AnyBound(env_bounds.chain(trait_bounds).collect()).or(recursive_bound)
     }
 
-    fn recursive_type_bound(&self, ty: Ty<'tcx>) -> VerifyBound<'tcx> {
-        let mut bounds = ty.walk_shallow().map(|subty| self.type_bound(subty)).collect::<Vec<_>>();
+    fn recursive_bound(&self, parent: GenericArg<'tcx>) -> VerifyBound<'tcx> {
+        let mut bounds = parent
+            .walk_shallow()
+            .filter_map(|child| match child.unpack() {
+                GenericArgKind::Type(ty) => Some(self.type_bound(ty)),
+                GenericArgKind::Lifetime(lt) => {
+                    // Ignore late-bound regions.
+                    if !lt.is_late_bound() { Some(VerifyBound::OutlivedBy(lt)) } else { None }
+                }
+                GenericArgKind::Const(_) => Some(self.recursive_bound(child)),
+            })
+            .filter(|bound| {
+                // Remove bounds that must hold, since they are not interesting.
+                !bound.must_hold()
+            });
 
-        let mut regions = smallvec![];
-        ty.push_regions(&mut regions);
-        regions.retain(|r| !r.is_late_bound()); // ignore late-bound regions
-        bounds.push(VerifyBound::AllBounds(
-            regions.into_iter().map(|r| VerifyBound::OutlivedBy(r)).collect(),
-        ));
-
-        // remove bounds that must hold, since they are not interesting
-        bounds.retain(|b| !b.must_hold());
-
-        if bounds.len() == 1 { bounds.pop().unwrap() } else { VerifyBound::AllBounds(bounds) }
+        match (bounds.next(), bounds.next()) {
+            (Some(first), None) => first,
+            (first, second) => {
+                VerifyBound::AllBounds(first.into_iter().chain(second).chain(bounds).collect())
+            }
+        }
     }
 
     /// Searches the environment for where-clauses like `G: 'a` where
@@ -290,7 +321,9 @@ impl<'cx, 'tcx> VerifyBoundCx<'cx, 'tcx> {
         let identity_proj = tcx.mk_projection(assoc_item_def_id, identity_substs);
         self.collect_outlives_from_predicate_list(
             move |ty| ty == identity_proj,
-            traits::elaborate_predicates(tcx, trait_predicates),
+            traits::elaborate_predicates(tcx, trait_predicates)
+                .map(|o| o.predicate)
+                .collect::<Vec<_>>(),
         )
         .map(|b| b.1)
     }

@@ -26,7 +26,7 @@ pub enum MemPlaceMeta<Tag = (), Id = AllocId> {
     /// `Sized` types or unsized `extern type`
     None,
     /// The address of this place may not be taken. This protects the `MemPlace` from coming from
-    /// a ZST Operand with a backing allocation and being converted to an integer address. This
+    /// a ZST Operand without a backing allocation and being converted to an integer address. This
     /// should be impossible, because you can't take the address of an operand, but this is a second
     /// protection layer ensuring that we don't mess up.
     Poison,
@@ -247,7 +247,7 @@ impl<'tcx, Tag: ::std::fmt::Debug + Copy> OpTy<'tcx, Tag> {
             Operand::Immediate(_) if self.layout.is_zst() => {
                 Ok(MPlaceTy::dangling(self.layout, cx))
             }
-            Operand::Immediate(imm) => Err(ImmTy { imm, layout: self.layout }),
+            Operand::Immediate(imm) => Err(ImmTy::from_immediate(imm, self.layout)),
         }
     }
 
@@ -549,7 +549,7 @@ where
                 let n = base.len(self)?;
                 if n < u64::from(min_length) {
                     // This can only be reached in ConstProp and non-rustc-MIR.
-                    throw_ub!(BoundsCheckFailed { len: min_length.into(), index: n.into() });
+                    throw_ub!(BoundsCheckFailed { len: min_length.into(), index: n });
                 }
 
                 let index = if from_end {
@@ -867,12 +867,14 @@ where
     ) -> InterpResult<'tcx> {
         // We do NOT compare the types for equality, because well-typed code can
         // actually "transmute" `&mut T` to `&T` in an assignment without a cast.
-        assert!(
-            mir_assign_valid_types(src.layout, dest.layout),
-            "type mismatch when copying!\nsrc: {:?},\ndest: {:?}",
-            src.layout.ty,
-            dest.layout.ty,
-        );
+        if !mir_assign_valid_types(self.tcx.tcx, src.layout, dest.layout) {
+            span_bug!(
+                self.tcx.span,
+                "type mismatch when copying!\nsrc: {:?},\ndest: {:?}",
+                src.layout.ty,
+                dest.layout.ty,
+            );
+        }
 
         // Let us see if the layout is simple so we take a shortcut, avoid force_allocation.
         let src = match self.try_read_immediate(src)? {
@@ -922,7 +924,7 @@ where
         src: OpTy<'tcx, M::PointerTag>,
         dest: PlaceTy<'tcx, M::PointerTag>,
     ) -> InterpResult<'tcx> {
-        if mir_assign_valid_types(src.layout, dest.layout) {
+        if mir_assign_valid_types(self.tcx.tcx, src.layout, dest.layout) {
             // Fast path: Just use normal `copy_op`
             return self.copy_op(src, dest);
         }

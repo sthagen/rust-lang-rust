@@ -93,7 +93,8 @@ pub(super) fn note_and_explain_region(
             let unknown_scope =
                 || format!("{}unknown scope: {:?}{}.  Please report a bug.", prefix, scope, suffix);
             let span = scope.span(tcx, region_scope_tree);
-            let tag = match tcx.hir().find(scope.hir_id(region_scope_tree)) {
+            let hir_id = scope.hir_id(region_scope_tree);
+            let tag = match hir_id.and_then(|hir_id| tcx.hir().find(hir_id)) {
                 Some(Node::Block(_)) => "block",
                 Some(Node::Expr(expr)) => match expr.kind {
                     hir::ExprKind::Call(..) => "call",
@@ -190,7 +191,7 @@ fn msg_span_from_early_bound_and_free_regions(
     let sm = tcx.sess.source_map();
 
     let scope = region.free_region_binding_scope(tcx);
-    let node = tcx.hir().as_local_hir_id(scope).unwrap_or(hir::DUMMY_HIR_ID);
+    let node = tcx.hir().as_local_hir_id(scope).unwrap();
     let tag = match tcx.hir().find(node) {
         Some(Node::Block(_)) | Some(Node::Expr(_)) => "body",
         Some(Node::Item(it)) => item_scope_tag(&it),
@@ -303,8 +304,8 @@ pub fn unexpected_hidden_region_diagnostic(
         // down this path which gives a decent human readable
         // explanation.
         //
-        // (*) if not, the `tainted_by_errors` flag would be set to
-        // true in any case, so we wouldn't be here at all.
+        // (*) if not, the `tainted_by_errors` field would be set to
+        // `Some(ErrorReported)` in any case, so we wouldn't be here at all.
         note_and_explain_free_region(
             tcx,
             &mut err,
@@ -870,7 +871,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                 return Some(());
             }
             if let &ty::Adt(def, _) = &ta.kind {
-                let path_ = self.tcx.def_path_str(def.did.clone());
+                let path_ = self.tcx.def_path_str(def.did);
                 if path_ == other_path {
                     self.highlight_outer(&mut t1_out, &mut t2_out, path, sub, i, &other_ty);
                     return Some(());
@@ -1090,8 +1091,8 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                 let sub_no_defaults_1 = self.strip_generic_default_params(def1.did, sub1);
                 let sub_no_defaults_2 = self.strip_generic_default_params(def2.did, sub2);
                 let mut values = (DiagnosticStyledString::new(), DiagnosticStyledString::new());
-                let path1 = self.tcx.def_path_str(def1.did.clone());
-                let path2 = self.tcx.def_path_str(def2.did.clone());
+                let path1 = self.tcx.def_path_str(def1.did);
+                let path2 = self.tcx.def_path_str(def2.did);
                 if def1.did == def2.did {
                     // Easy case. Replace same types with `_` to shorten the output and highlight
                     // the differing ones.
@@ -1594,7 +1595,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                 self.tcx.hir().body_owner_def_id(hir::BodyId { hir_id: cause.body_id })
             });
         self.check_and_note_conflicting_crates(diag, terr);
-        self.tcx.note_and_explain_type_err(diag, terr, span, body_owner_def_id);
+        self.tcx.note_and_explain_type_err(diag, terr, span, body_owner_def_id.to_def_id());
 
         // It reads better to have the error origin as the final
         // thing.

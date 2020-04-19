@@ -47,7 +47,7 @@ pub fn try_inline(
     }
     let mut ret = Vec::new();
 
-    let attrs_clone = attrs.clone();
+    let attrs_clone = attrs;
 
     let inner = match res {
         Res::Def(DefKind::Trait, did) => {
@@ -292,7 +292,7 @@ pub fn build_impls(cx: &DocContext<'_>, did: DefId, attrs: Option<Attrs<'_>>) ->
     let mut impls = Vec::new();
 
     for &did in tcx.inherent_impls(did).iter() {
-        build_impl(cx, did, attrs.clone(), &mut impls);
+        build_impl(cx, did, attrs, &mut impls);
     }
 
     impls
@@ -451,7 +451,11 @@ fn build_module(cx: &DocContext<'_>, did: DefId, visited: &mut FxHashSet<DefId>)
                         name: None,
                         attrs: clean::Attributes::default(),
                         source: clean::Span::empty(),
-                        def_id: cx.tcx.hir().local_def_id_from_node_id(ast::CRATE_NODE_ID),
+                        def_id: cx
+                            .tcx
+                            .hir()
+                            .local_def_id_from_node_id(ast::CRATE_NODE_ID)
+                            .to_def_id(),
                         visibility: clean::Public,
                         stability: None,
                         deprecation: None,

@@ -37,7 +37,6 @@
 use crate::spec::abi::{lookup as lookup_abi, Abi};
 use rustc_serialize::json::{Json, ToJson};
 use std::collections::BTreeMap;
-use std::default::Default;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::{fmt, io};
@@ -56,22 +55,24 @@ mod fuchsia_base;
 mod haiku_base;
 mod hermit_base;
 mod hermit_kernel_base;
+mod illumos_base;
 mod l4re_base;
 mod linux_base;
 mod linux_kernel_base;
 mod linux_musl_base;
+mod msvc_base;
 mod netbsd_base;
 mod openbsd_base;
 mod redox_base;
 mod riscv_base;
 mod solaris_base;
 mod thumb_base;
-mod uefi_base;
+mod uefi_msvc_base;
 mod vxworks_base;
 mod wasm32_base;
-mod windows_base;
+mod windows_gnu_base;
 mod windows_msvc_base;
-mod windows_uwp_base;
+mod windows_uwp_gnu_base;
 mod windows_uwp_msvc_base;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -309,23 +310,14 @@ macro_rules! supported_targets {
         }
 
         #[cfg(test)]
-        mod test_json_encode_decode {
-            use rustc_serialize::json::ToJson;
-            use super::Target;
-            $(use super::$module;)+
+        mod tests {
+            mod tests_impl;
 
+            // Cannot put this into a separate file without duplication, make an exception.
             $(
-                #[test] // `#[test]` - this is hard to put into a separate file, make an exception
+                #[test] // `#[test]`
                 fn $module() {
-                    // Grab the TargetResult struct. If we successfully retrieved
-                    // a Target, then the test JSON encoding/decoding can run for this
-                    // Target on this testing platform (i.e., checking the iOS targets
-                    // only on a Mac test platform).
-                    let _ = $module::target().map(|original| {
-                        let as_json = original.to_json();
-                        let parsed = Target::from_json(as_json).unwrap();
-                        assert_eq!(original, parsed);
-                    });
+                    tests_impl::test_target(super::$module::target());
                 }
             )+
         }
@@ -447,6 +439,8 @@ supported_targets! {
     ("x86_64-sun-solaris", "x86_64-pc-solaris", x86_64_sun_solaris),
     ("sparcv9-sun-solaris", sparcv9_sun_solaris),
 
+    ("x86_64-unknown-illumos", x86_64_unknown_illumos),
+
     ("x86_64-pc-windows-gnu", x86_64_pc_windows_gnu),
     ("i686-pc-windows-gnu", i686_pc_windows_gnu),
     ("i686-uwp-windows-gnu", i686_uwp_windows_gnu),
@@ -538,7 +532,8 @@ pub struct Target {
     pub arch: String,
     /// [Data layout](http://llvm.org/docs/LangRef.html#data-layout) to pass to LLVM.
     pub data_layout: String,
-    /// Linker flavor
+    /// Default linker flavor used if `-C linker-flavor` or `-C linker` are not passed
+    /// on the command line.
     pub linker_flavor: LinkerFlavor,
     /// Optional settings with defaults.
     pub options: TargetOptions,
@@ -566,7 +561,8 @@ pub struct TargetOptions {
     /// Linker to invoke
     pub linker: Option<String>,
 
-    /// LLD flavor
+    /// LLD flavor used if `lld` (or `rust-lld`) is specified as a linker
+    /// without clarifying its flavor in any way.
     pub lld_flavor: LldFlavor,
 
     /// Linker arguments that are passed *before* any user-defined libraries.
