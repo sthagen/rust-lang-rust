@@ -242,7 +242,7 @@
 #![feature(atomic_mut_ptr)]
 #![feature(box_syntax)]
 #![feature(c_variadic)]
-#![cfg_attr(not(bootstrap), feature(cfg_accessible))]
+#![feature(cfg_accessible)]
 #![feature(cfg_target_has_atomic)]
 #![feature(cfg_target_thread_local)]
 #![feature(char_error_internals)]
@@ -281,7 +281,7 @@
 #![feature(maybe_uninit_ref)]
 #![feature(maybe_uninit_slice)]
 #![feature(needs_panic_runtime)]
-#![cfg_attr(not(bootstrap), feature(negative_impls))]
+#![feature(negative_impls)]
 #![feature(never_type)]
 #![feature(nll)]
 #![feature(optin_builtin_traits)]
@@ -298,8 +298,7 @@
 #![feature(shrink_to)]
 #![feature(slice_concat_ext)]
 #![feature(slice_internals)]
-#![cfg_attr(bootstrap, feature(specialization))]
-#![cfg_attr(not(bootstrap), feature(min_specialization))]
+#![feature(min_specialization)]
 #![feature(staged_api)]
 #![feature(std_internals)]
 #![feature(stdsimd)]
@@ -524,6 +523,7 @@ pub use core::{
 
 // Re-export built-in macros defined through libcore.
 #[stable(feature = "builtin_macro_prelude", since = "1.38.0")]
+#[allow(deprecated)]
 pub use core::{
     asm, assert, cfg, column, compile_error, concat, concat_idents, env, file, format_args,
     format_args_nl, global_asm, include, include_bytes, include_str, line, llvm_asm, log_syntax,

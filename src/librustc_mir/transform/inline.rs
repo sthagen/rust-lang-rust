@@ -8,7 +8,7 @@ use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use rustc_middle::mir::visit::*;
 use rustc_middle::mir::*;
 use rustc_middle::ty::subst::{Subst, SubstsRef};
-use rustc_middle::ty::{self, Instance, InstanceDef, ParamEnv, Ty, TyCtxt};
+use rustc_middle::ty::{self, ConstKind, Instance, InstanceDef, ParamEnv, Ty, TyCtxt};
 use rustc_session::config::Sanitizer;
 use rustc_target::spec::abi::Abi;
 
@@ -38,7 +38,7 @@ struct CallSite<'tcx> {
 }
 
 impl<'tcx> MirPass<'tcx> for Inline {
-    fn run_pass(&self, tcx: TyCtxt<'tcx>, source: MirSource<'tcx>, body: &mut BodyAndCache<'tcx>) {
+    fn run_pass(&self, tcx: TyCtxt<'tcx>, source: MirSource<'tcx>, body: &mut Body<'tcx>) {
         if tcx.sess.opts.debugging_opts.mir_opt_level >= 2 {
             Inliner { tcx, source }.run_pass(body);
         }
@@ -51,7 +51,7 @@ struct Inliner<'tcx> {
 }
 
 impl Inliner<'tcx> {
-    fn run_pass(&self, caller_body: &mut BodyAndCache<'tcx>) {
+    fn run_pass(&self, caller_body: &mut Body<'tcx>) {
         // Keep a queue of callsites to try inlining on. We take
         // advantage of the fact that queries detect cycles here to
         // allow us to try and fetch the fully optimized MIR of a
@@ -69,7 +69,7 @@ impl Inliner<'tcx> {
         let param_env = self.tcx.param_env(self.source.def_id()).with_reveal_all();
 
         // Only do inlining into fn bodies.
-        let id = self.tcx.hir().as_local_hir_id(self.source.def_id()).unwrap();
+        let id = self.tcx.hir().as_local_hir_id(self.source.def_id().expect_local());
         if self.tcx.hir().body_owner_kind(id).is_fn_or_closure() && self.source.promoted.is_none() {
             for (bb, bb_data) in caller_body.basic_blocks().iter_enumerated() {
                 if let Some(callsite) =
@@ -94,17 +94,15 @@ impl Inliner<'tcx> {
                     continue;
                 }
 
-                let self_node_id = self.tcx.hir().as_local_node_id(self.source.def_id()).unwrap();
-                let callee_node_id = self.tcx.hir().as_local_node_id(callsite.callee);
-
-                let callee_body = if let Some(callee_node_id) = callee_node_id {
+                let callee_body = if let Some(callee_def_id) = callsite.callee.as_local() {
+                    let callee_hir_id = self.tcx.hir().as_local_hir_id(callee_def_id);
+                    let self_hir_id =
+                        self.tcx.hir().as_local_hir_id(self.source.def_id().expect_local());
                     // Avoid a cycle here by only using `optimized_mir` only if we have
-                    // a lower node id than the callee. This ensures that the callee will
+                    // a lower `HirId` than the callee. This ensures that the callee will
                     // not inline us. This trick only works without incremental compilation.
                     // So don't do it if that is enabled.
-                    if !self.tcx.dep_graph.is_fully_enabled()
-                        && self_node_id.as_u32() < callee_node_id.as_u32()
-                    {
+                    if !self.tcx.dep_graph.is_fully_enabled() && self_hir_id < callee_hir_id {
                         self.tcx.optimized_mir(callsite.callee)
                     } else {
                         continue;
@@ -124,6 +122,16 @@ impl Inliner<'tcx> {
                 } else {
                     continue;
                 };
+
+                // Copy only unevaluated constants from the callee_body into the caller_body.
+                // Although we are only pushing `ConstKind::Unevaluated` consts to
+                // `required_consts`, here we may not only have `ConstKind::Unevaluated`
+                // because we are calling `subst_and_normalize_erasing_regions`.
+                caller_body.required_consts.extend(
+                    callee_body.required_consts.iter().copied().filter(|&constant| {
+                        matches!(constant.literal.val, ConstKind::Unevaluated(_, _, _))
+                    }),
+                );
 
                 let start = caller_body.basic_blocks().len();
                 debug!("attempting to inline callsite {:?} - body={:?}", callsite, callee_body);
@@ -178,7 +186,8 @@ impl Inliner<'tcx> {
         let terminator = bb_data.terminator();
         if let TerminatorKind::Call { func: ref op, .. } = terminator.kind {
             if let ty::FnDef(callee_def_id, substs) = op.ty(caller_body, self.tcx).kind {
-                let instance = Instance::resolve(self.tcx, param_env, callee_def_id, substs)?;
+                let instance =
+                    Instance::resolve(self.tcx, param_env, callee_def_id, substs).ok().flatten()?;
 
                 if let InstanceDef::Virtual(..) = instance.def {
                     return None;
@@ -406,8 +415,8 @@ impl Inliner<'tcx> {
     fn inline_call(
         &self,
         callsite: CallSite<'tcx>,
-        caller_body: &mut BodyAndCache<'tcx>,
-        mut callee_body: BodyAndCache<'tcx>,
+        caller_body: &mut Body<'tcx>,
+        mut callee_body: Body<'tcx>,
     ) -> bool {
         let terminator = caller_body[callsite.bb].terminator.take().unwrap();
         match terminator.kind {
@@ -469,7 +478,7 @@ impl Inliner<'tcx> {
                         destination.0,
                     );
 
-                    let ty = dest.ty(&**caller_body, self.tcx);
+                    let ty = dest.ty(caller_body, self.tcx);
 
                     let temp = LocalDecl::new_temp(ty, callsite.location.span);
 
@@ -535,7 +544,7 @@ impl Inliner<'tcx> {
         &self,
         args: Vec<Operand<'tcx>>,
         callsite: &CallSite<'tcx>,
-        caller_body: &mut BodyAndCache<'tcx>,
+        caller_body: &mut Body<'tcx>,
     ) -> Vec<Local> {
         let tcx = self.tcx;
 
@@ -569,7 +578,7 @@ impl Inliner<'tcx> {
             assert!(args.next().is_none());
 
             let tuple = Place::from(tuple);
-            let tuple_tys = if let ty::Tuple(s) = tuple.ty(&**caller_body, tcx).ty.kind {
+            let tuple_tys = if let ty::Tuple(s) = tuple.ty(caller_body, tcx).ty.kind {
                 s
             } else {
                 bug!("Closure arguments are not passed as a tuple");
@@ -602,7 +611,7 @@ impl Inliner<'tcx> {
         &self,
         arg: Operand<'tcx>,
         callsite: &CallSite<'tcx>,
-        caller_body: &mut BodyAndCache<'tcx>,
+        caller_body: &mut Body<'tcx>,
     ) -> Local {
         // FIXME: Analysis of the usage of the arguments to avoid
         // unnecessary temporaries.
@@ -620,7 +629,7 @@ impl Inliner<'tcx> {
         // Otherwise, create a temporary for the arg
         let arg = Rvalue::Use(arg);
 
-        let ty = arg.ty(&**caller_body, self.tcx);
+        let ty = arg.ty(caller_body, self.tcx);
 
         let arg_tmp = LocalDecl::new_temp(ty, callsite.location.span);
         let arg_tmp = caller_body.local_decls.push(arg_tmp);

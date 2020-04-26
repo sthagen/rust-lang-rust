@@ -5,13 +5,16 @@ use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_data_structures::graph::dominators::Dominators;
 use rustc_errors::{Applicability, Diagnostic, DiagnosticBuilder, ErrorReported};
 use rustc_hir as hir;
-use rustc_hir::{def_id::DefId, HirId, Node};
+use rustc_hir::{
+    def_id::{DefId, LocalDefId},
+    HirId, Node,
+};
 use rustc_index::bit_set::BitSet;
 use rustc_index::vec::IndexVec;
 use rustc_infer::infer::{InferCtxt, TyCtxtInferExt};
 use rustc_middle::mir::{
-    read_only, traversal, Body, BodyAndCache, ClearCrossCrate, Local, Location, Mutability,
-    Operand, Place, PlaceElem, PlaceRef, ReadOnlyBodyAndCache,
+    traversal, Body, ClearCrossCrate, Local, Location, Mutability, Operand, Place, PlaceElem,
+    PlaceRef,
 };
 use rustc_middle::mir::{AggregateKind, BasicBlock, BorrowCheckResult, BorrowKind};
 use rustc_middle::mir::{Field, ProjectionElem, Promoted, Rvalue, Statement, StatementKind};
@@ -96,7 +99,7 @@ fn mir_borrowck(tcx: TyCtxt<'_>, def_id: DefId) -> &BorrowCheckResult<'_> {
     let opt_closure_req = tcx.infer_ctxt().enter(|infcx| {
         let input_body: &Body<'_> = &input_body.borrow();
         let promoted: &IndexVec<_, _> = &promoted.borrow();
-        do_mir_borrowck(&infcx, input_body, promoted, def_id)
+        do_mir_borrowck(&infcx, input_body, promoted, def_id.expect_local())
     });
     debug!("mir_borrowck done");
 
@@ -106,14 +109,14 @@ fn mir_borrowck(tcx: TyCtxt<'_>, def_id: DefId) -> &BorrowCheckResult<'_> {
 fn do_mir_borrowck<'a, 'tcx>(
     infcx: &InferCtxt<'a, 'tcx>,
     input_body: &Body<'tcx>,
-    input_promoted: &IndexVec<Promoted, BodyAndCache<'tcx>>,
-    def_id: DefId,
+    input_promoted: &IndexVec<Promoted, Body<'tcx>>,
+    def_id: LocalDefId,
 ) -> BorrowCheckResult<'tcx> {
     debug!("do_mir_borrowck(def_id = {:?})", def_id);
 
     let tcx = infcx.tcx;
     let param_env = tcx.param_env(def_id);
-    let id = tcx.hir().as_local_hir_id(def_id).expect("do_mir_borrowck: non-local DefId");
+    let id = tcx.hir().as_local_hir_id(def_id);
 
     let mut local_names = IndexVec::from_elem(None, &input_body.local_decls);
     for var_debug_info in &input_body.var_debug_info {
@@ -140,7 +143,7 @@ fn do_mir_borrowck<'a, 'tcx>(
     }
     let upvars: Vec<_> = tables
         .upvar_list
-        .get(&def_id)
+        .get(&def_id.to_def_id())
         .into_iter()
         .flat_map(|v| v.values())
         .map(|upvar_id| {
@@ -168,13 +171,11 @@ fn do_mir_borrowck<'a, 'tcx>(
     // requires first making our own copy of the MIR. This copy will
     // be modified (in place) to contain non-lexical lifetimes. It
     // will have a lifetime tied to the inference context.
-    let body_clone: Body<'tcx> = input_body.clone();
+    let mut body = input_body.clone();
     let mut promoted = input_promoted.clone();
-    let mut body = BodyAndCache::new(body_clone);
     let free_regions =
-        nll::replace_regions_in_mir(infcx, def_id, param_env, &mut body, &mut promoted);
-    let body = read_only!(body); // no further changes
-    let promoted: IndexVec<_, _> = promoted.iter_mut().map(|body| read_only!(body)).collect();
+        nll::replace_regions_in_mir(infcx, def_id.to_def_id(), param_env, &mut body, &mut promoted);
+    let body = &body; // no further changes
 
     let location_table = &LocationTable::new(&body);
 
@@ -188,7 +189,7 @@ fn do_mir_borrowck<'a, 'tcx>(
     let mdpe = MoveDataParamEnv { move_data, param_env };
 
     let mut flow_inits = MaybeInitializedPlaces::new(tcx, &body, &mdpe)
-        .into_engine(tcx, &body, def_id)
+        .into_engine(tcx, &body, def_id.to_def_id())
         .iterate_to_fixpoint()
         .into_results_cursor(&body);
 
@@ -205,7 +206,7 @@ fn do_mir_borrowck<'a, 'tcx>(
         nll_errors,
     } = nll::compute_regions(
         infcx,
-        def_id,
+        def_id.to_def_id(),
         free_regions,
         body,
         &promoted,
@@ -218,14 +219,20 @@ fn do_mir_borrowck<'a, 'tcx>(
 
     // Dump MIR results into a file, if that is enabled. This let us
     // write unit-tests, as well as helping with debugging.
-    nll::dump_mir_results(infcx, MirSource::item(def_id), &body, &regioncx, &opt_closure_req);
+    nll::dump_mir_results(
+        infcx,
+        MirSource::item(def_id.to_def_id()),
+        &body,
+        &regioncx,
+        &opt_closure_req,
+    );
 
     // We also have a `#[rustc_regions]` annotation that causes us to dump
     // information.
     nll::dump_annotation(
         infcx,
         &body,
-        def_id,
+        def_id.to_def_id(),
         &regioncx,
         &opt_closure_req,
         &opaque_type_values,
@@ -240,13 +247,13 @@ fn do_mir_borrowck<'a, 'tcx>(
     let regioncx = Rc::new(regioncx);
 
     let flow_borrows = Borrows::new(tcx, &body, regioncx.clone(), &borrow_set)
-        .into_engine(tcx, &body, def_id)
+        .into_engine(tcx, &body, def_id.to_def_id())
         .iterate_to_fixpoint();
     let flow_uninits = MaybeUninitializedPlaces::new(tcx, &body, &mdpe)
-        .into_engine(tcx, &body, def_id)
+        .into_engine(tcx, &body, def_id.to_def_id())
         .iterate_to_fixpoint();
     let flow_ever_inits = EverInitializedPlaces::new(tcx, &body, &mdpe)
-        .into_engine(tcx, &body, def_id)
+        .into_engine(tcx, &body, def_id.to_def_id())
         .iterate_to_fixpoint();
 
     let movable_generator = match tcx.hir().get(id) {
@@ -262,7 +269,7 @@ fn do_mir_borrowck<'a, 'tcx>(
     let mut mbcx = MirBorrowckCtxt {
         infcx,
         body,
-        mir_def_id: def_id,
+        mir_def_id: def_id.to_def_id(),
         move_data: &mdpe.move_data,
         location_table,
         movable_generator,
@@ -415,7 +422,7 @@ fn do_mir_borrowck<'a, 'tcx>(
 
 crate struct MirBorrowckCtxt<'cx, 'tcx> {
     crate infcx: &'cx InferCtxt<'cx, 'tcx>,
-    body: ReadOnlyBodyAndCache<'cx, 'tcx>,
+    body: &'cx Body<'tcx>,
     mir_def_id: DefId,
     move_data: &'cx MoveData<'tcx>,
 
@@ -619,7 +626,7 @@ impl<'cx, 'tcx> dataflow::ResultsVisitor<'cx, 'tcx> for MirBorrowckCtxt<'cx, 'tc
                 let tcx = self.infcx.tcx;
 
                 // Compute the type with accurate region information.
-                let drop_place_ty = drop_place.ty(*self.body, self.infcx.tcx);
+                let drop_place_ty = drop_place.ty(self.body, self.infcx.tcx);
 
                 // Erase the regions.
                 let drop_place_ty = self.infcx.tcx.erase_regions(&drop_place_ty).ty;
@@ -871,7 +878,7 @@ impl InitializationRequiringAction {
 
 impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
     fn body(&self) -> &'cx Body<'tcx> {
-        *self.body
+        self.body
     }
 
     /// Checks an access to the given place to see if it is allowed. Examines the set of borrows
@@ -952,7 +959,6 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         let mut error_reported = false;
         let tcx = self.infcx.tcx;
         let body = self.body;
-        let body: &Body<'_> = &body;
         let borrow_set = self.borrow_set.clone();
 
         // Use polonius output if it has been enabled.
@@ -991,19 +997,18 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                     Control::Continue
                 }
 
-                (Read(_), BorrowKind::Shared)
-                | (Read(_), BorrowKind::Shallow)
-                | (Read(ReadKind::Borrow(BorrowKind::Shallow)), BorrowKind::Unique)
-                | (Read(ReadKind::Borrow(BorrowKind::Shallow)), BorrowKind::Mut { .. }) => {
-                    Control::Continue
-                }
+                (Read(_), BorrowKind::Shared | BorrowKind::Shallow)
+                | (
+                    Read(ReadKind::Borrow(BorrowKind::Shallow)),
+                    BorrowKind::Unique | BorrowKind::Mut { .. },
+                ) => Control::Continue,
 
                 (Write(WriteKind::Move), BorrowKind::Shallow) => {
                     // Handled by initialization checks.
                     Control::Continue
                 }
 
-                (Read(kind), BorrowKind::Unique) | (Read(kind), BorrowKind::Mut { .. }) => {
+                (Read(kind), BorrowKind::Unique | BorrowKind::Mut { .. }) => {
                     // Reading from mere reservations of mutable-borrows is OK.
                     if !is_active(&this.dominators, borrow, location) {
                         assert!(allow_two_phase_borrow(borrow.kind));
@@ -1024,12 +1029,12 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                     Control::Break
                 }
 
-                (Reservation(WriteKind::MutableBorrow(bk)), BorrowKind::Shallow)
-                | (Reservation(WriteKind::MutableBorrow(bk)), BorrowKind::Shared)
-                    if {
-                        tcx.migrate_borrowck()
-                            && this.borrow_set.location_map.contains_key(&location)
-                    } =>
+                (
+                    Reservation(WriteKind::MutableBorrow(bk)),
+                    BorrowKind::Shallow | BorrowKind::Shared,
+                ) if {
+                    tcx.migrate_borrowck() && this.borrow_set.location_map.contains_key(&location)
+                } =>
                 {
                     let bi = this.borrow_set.location_map[&location];
                     debug!(
@@ -1048,7 +1053,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                     Control::Continue
                 }
 
-                (Reservation(kind), _) | (Activation(kind, _), _) | (Write(kind), _) => {
+                (Reservation(kind) | Activation(kind, _) | Write(kind), _) => {
                     match rw {
                         Reservation(..) => {
                             debug!(
@@ -1916,10 +1921,12 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         let the_place_err;
 
         match kind {
-            Reservation(WriteKind::MutableBorrow(borrow_kind @ BorrowKind::Unique))
-            | Reservation(WriteKind::MutableBorrow(borrow_kind @ BorrowKind::Mut { .. }))
-            | Write(WriteKind::MutableBorrow(borrow_kind @ BorrowKind::Unique))
-            | Write(WriteKind::MutableBorrow(borrow_kind @ BorrowKind::Mut { .. })) => {
+            Reservation(WriteKind::MutableBorrow(
+                borrow_kind @ (BorrowKind::Unique | BorrowKind::Mut { .. }),
+            ))
+            | Write(WriteKind::MutableBorrow(
+                borrow_kind @ (BorrowKind::Unique | BorrowKind::Mut { .. }),
+            )) => {
                 let is_local_mutation_allowed = match borrow_kind {
                     BorrowKind::Unique => LocalMutationIsAllowed::Yes,
                     BorrowKind::Mut { .. } => is_local_mutation_allowed,
@@ -1949,14 +1956,18 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                 }
             }
 
-            Reservation(WriteKind::Move)
-            | Write(WriteKind::Move)
-            | Reservation(WriteKind::StorageDeadOrDrop)
-            | Reservation(WriteKind::MutableBorrow(BorrowKind::Shared))
-            | Reservation(WriteKind::MutableBorrow(BorrowKind::Shallow))
-            | Write(WriteKind::StorageDeadOrDrop)
-            | Write(WriteKind::MutableBorrow(BorrowKind::Shared))
-            | Write(WriteKind::MutableBorrow(BorrowKind::Shallow)) => {
+            Reservation(
+                WriteKind::Move
+                | WriteKind::StorageDeadOrDrop
+                | WriteKind::MutableBorrow(BorrowKind::Shared)
+                | WriteKind::MutableBorrow(BorrowKind::Shallow),
+            )
+            | Write(
+                WriteKind::Move
+                | WriteKind::StorageDeadOrDrop
+                | WriteKind::MutableBorrow(BorrowKind::Shared)
+                | WriteKind::MutableBorrow(BorrowKind::Shallow),
+            ) => {
                 if let (Err(_), true) = (
                     self.is_mutable(place.as_ref(), is_local_mutation_allowed),
                     self.errors_buffer.is_empty(),
@@ -1980,11 +1991,15 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                 // permission checks are done at Reservation point.
                 return false;
             }
-            Read(ReadKind::Borrow(BorrowKind::Unique))
-            | Read(ReadKind::Borrow(BorrowKind::Mut { .. }))
-            | Read(ReadKind::Borrow(BorrowKind::Shared))
-            | Read(ReadKind::Borrow(BorrowKind::Shallow))
-            | Read(ReadKind::Copy) => {
+            Read(
+                ReadKind::Borrow(
+                    BorrowKind::Unique
+                    | BorrowKind::Mut { .. }
+                    | BorrowKind::Shared
+                    | BorrowKind::Shallow,
+                )
+                | ReadKind::Copy,
+            ) => {
                 // Access authorized
                 return false;
             }
@@ -2152,10 +2167,11 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                                 upvar, is_local_mutation_allowed, place
                             );
                             match (upvar.mutability, is_local_mutation_allowed) {
-                                (Mutability::Not, LocalMutationIsAllowed::No)
-                                | (Mutability::Not, LocalMutationIsAllowed::ExceptUpvars) => {
-                                    Err(place)
-                                }
+                                (
+                                    Mutability::Not,
+                                    LocalMutationIsAllowed::No
+                                    | LocalMutationIsAllowed::ExceptUpvars,
+                                ) => Err(place),
                                 (Mutability::Not, LocalMutationIsAllowed::Yes)
                                 | (Mutability::Mut, _) => {
                                     // Subtle: this is an upvar

@@ -923,7 +923,6 @@ impl<K: Ord, V> BTreeMap<K, V> {
     /// Basic usage:
     ///
     /// ```
-    /// #![feature(btreemap_remove_entry)]
     /// use std::collections::BTreeMap;
     ///
     /// let mut map = BTreeMap::new();
@@ -931,7 +930,7 @@ impl<K: Ord, V> BTreeMap<K, V> {
     /// assert_eq!(map.remove_entry(&1), Some((1, "a")));
     /// assert_eq!(map.remove_entry(&1), None);
     /// ```
-    #[unstable(feature = "btreemap_remove_entry", issue = "66714")]
+    #[stable(feature = "btreemap_remove_entry", since = "1.44.0")]
     pub fn remove_entry<Q: ?Sized>(&mut self, key: &Q) -> Option<(K, V)>
     where
         K: Borrow<Q>,
@@ -1034,9 +1033,7 @@ impl<K: Ord, V> BTreeMap<K, V> {
         R: RangeBounds<T>,
     {
         if let Some(root) = &self.root {
-            let root1 = root.as_ref();
-            let root2 = root.as_ref();
-            let (f, b) = range_search(root1, root2, range);
+            let (f, b) = range_search(root.as_ref(), range);
 
             Range { front: Some(f), back: Some(b) }
         } else {
@@ -1082,9 +1079,7 @@ impl<K: Ord, V> BTreeMap<K, V> {
         R: RangeBounds<T>,
     {
         if let Some(root) = &mut self.root {
-            let root1 = root.as_mut();
-            let root2 = unsafe { ptr::read(&root1) };
-            let (f, b) = range_search(root1, root2, range);
+            let (f, b) = range_search(root.as_mut(), range);
 
             RangeMut { front: Some(f), back: Some(b), _marker: PhantomData }
         } else {
@@ -2043,8 +2038,7 @@ where
 }
 
 fn range_search<BorrowType, K, V, Q: ?Sized, R: RangeBounds<Q>>(
-    root1: NodeRef<BorrowType, K, V, marker::LeafOrInternal>,
-    root2: NodeRef<BorrowType, K, V, marker::LeafOrInternal>,
+    root: NodeRef<BorrowType, K, V, marker::LeafOrInternal>,
     range: R,
 ) -> (
     Handle<NodeRef<BorrowType, K, V, marker::Leaf>, marker::Edge>,
@@ -2064,8 +2058,10 @@ where
         _ => {}
     };
 
-    let mut min_node = root1;
-    let mut max_node = root2;
+    // We duplicate the root NodeRef here -- we will never access it in a way
+    // that overlaps references obtained from the root.
+    let mut min_node = unsafe { ptr::read(&root) };
+    let mut max_node = root;
     let mut min_found = false;
     let mut max_found = false;
 

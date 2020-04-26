@@ -56,7 +56,7 @@ pub struct LivenessResult {
 
 /// Computes which local variables are live within the given function
 /// `mir`, including drops.
-pub fn liveness_of_locals(body: ReadOnlyBodyAndCache<'_, '_>) -> LivenessResult {
+pub fn liveness_of_locals(body: &Body<'_>) -> LivenessResult {
     let num_live_vars = body.local_decls.len();
 
     let def_use: IndexVec<_, DefsUses> =
@@ -232,7 +232,7 @@ impl<'tcx> Visitor<'tcx> for DefsUsesVisitor {
     fn visit_local(&mut self, &local: &Local, context: PlaceContext, _: Location) {
         match categorize(context) {
             Some(DefUse::Def) => self.defs_uses.add_def(local),
-            Some(DefUse::Use) | Some(DefUse::Drop) => self.defs_uses.add_use(local),
+            Some(DefUse::Use | DefUse::Drop) => self.defs_uses.add_use(local),
             _ => (),
         }
     }
@@ -285,7 +285,7 @@ fn dump_matched_mir_node<'tcx>(
 ) {
     let mut file_path = PathBuf::new();
     file_path.push(Path::new(&tcx.sess.opts.debugging_opts.dump_mir_dir));
-    let item_id = tcx.hir().as_local_hir_id(source.def_id()).unwrap();
+    let item_id = tcx.hir().as_local_hir_id(source.def_id().expect_local());
     let file_name = format!("rustc.node{}{}-liveness.mir", item_id, pass_name);
     file_path.push(&file_name);
     let _ = fs::File::create(&file_path).and_then(|file| {

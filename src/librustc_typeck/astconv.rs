@@ -15,7 +15,7 @@ use rustc_errors::ErrorReported;
 use rustc_errors::{pluralize, struct_span_err, Applicability, DiagnosticId, FatalError};
 use rustc_hir as hir;
 use rustc_hir::def::{CtorOf, DefKind, Namespace, Res};
-use rustc_hir::def_id::DefId;
+use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_hir::intravisit::{walk_generics, Visitor as _};
 use rustc_hir::lang_items::SizedTraitLangItem;
 use rustc_hir::{Constness, GenericArg, GenericArgs};
@@ -147,13 +147,13 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         def: Option<&ty::GenericParamDef>,
     ) -> ty::Region<'tcx> {
         let tcx = self.tcx();
-        let lifetime_name = |def_id| tcx.hir().name(tcx.hir().as_local_hir_id(def_id).unwrap());
+        let lifetime_name = |def_id| tcx.hir().name(tcx.hir().as_local_hir_id(def_id));
 
         let r = match tcx.named_region(lifetime.hir_id) {
             Some(rl::Region::Static) => tcx.lifetimes.re_static,
 
             Some(rl::Region::LateBound(debruijn, id, _)) => {
-                let name = lifetime_name(id);
+                let name = lifetime_name(id.expect_local());
                 tcx.mk_region(ty::ReLateBound(debruijn, ty::BrNamed(id, name)))
             }
 
@@ -162,12 +162,12 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
             }
 
             Some(rl::Region::EarlyBound(index, id, _)) => {
-                let name = lifetime_name(id);
+                let name = lifetime_name(id.expect_local());
                 tcx.mk_region(ty::ReEarlyBound(ty::EarlyBoundRegion { def_id: id, index, name }))
             }
 
             Some(rl::Region::Free(scope, id)) => {
-                let name = lifetime_name(id);
+                let name = lifetime_name(id.expect_local());
                 tcx.mk_region(ty::ReFree(ty::FreeRegion {
                     scope,
                     bound_region: ty::BrNamed(id, name),
@@ -213,7 +213,9 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
             None,
         );
 
-        assoc_bindings.first().map(|b| Self::prohibit_assoc_ty_binding(self.tcx(), b.span));
+        if let Some(b) = assoc_bindings.first() {
+            Self::prohibit_assoc_ty_binding(self.tcx(), b.span);
+        }
 
         substs
     }
@@ -592,8 +594,10 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                                 args.next();
                                 params.next();
                             }
-                            (GenericArg::Type(_), GenericParamDefKind::Lifetime)
-                            | (GenericArg::Const(_), GenericParamDefKind::Lifetime) => {
+                            (
+                                GenericArg::Type(_) | GenericArg::Const(_),
+                                GenericParamDefKind::Lifetime,
+                            ) => {
                                 // We expected a lifetime argument, but got a type or const
                                 // argument. That means we're inferring the lifetimes.
                                 substs.push(inferred_kind(None, param, infer_args));
@@ -782,7 +786,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                     }
                 }
                 (GenericParamDefKind::Const, GenericArg::Const(ct)) => {
-                    let ct_def_id = tcx.hir().local_def_id(ct.value.hir_id).expect_local();
+                    let ct_def_id = tcx.hir().local_def_id(ct.value.hir_id);
                     ty::Const::from_anon_const(tcx, ct_def_id).into()
                 }
                 _ => unreachable!(),
@@ -1015,18 +1019,8 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
 
         self.prohibit_generics(trait_ref.path.segments.split_last().unwrap().1);
 
-        let path_span = if let [segment] = &trait_ref.path.segments[..] {
-            // FIXME: `trait_ref.path.span` can point to a full path with multiple
-            // segments, even though `trait_ref.path.segments` is of length `1`. Work
-            // around that bug here, even though it should be fixed elsewhere.
-            // This would otherwise cause an invalid suggestion. For an example, look at
-            // `src/test/ui/issues/issue-28344.rs`.
-            segment.ident.span
-        } else {
-            trait_ref.path.span
-        };
         let (substs, assoc_bindings, arg_count_correct) = self.create_substs_for_ast_trait_ref(
-            path_span,
+            trait_ref.path.span,
             trait_def_id,
             self_ty,
             trait_ref.path.segments.last().unwrap(),
@@ -1103,7 +1097,9 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
     ) -> ty::TraitRef<'tcx> {
         let (substs, assoc_bindings, _) =
             self.create_substs_for_ast_trait_ref(span, trait_def_id, self_ty, trait_segment);
-        assoc_bindings.first().map(|b| AstConv::prohibit_assoc_ty_binding(self.tcx(), b.span));
+        if let Some(b) = assoc_bindings.first() {
+            AstConv::prohibit_assoc_ty_binding(self.tcx(), b.span);
+        }
         ty::TraitRef::new(trait_def_id, substs)
     }
 
@@ -1144,13 +1140,12 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                             .generic_args()
                             .bindings
                             .iter()
-                            .filter_map(|b| match (b.ident.as_str() == "Output", &b.kind) {
+                            .find_map(|b| match (b.ident.as_str() == "Output", &b.kind) {
                                 (true, hir::TypeBindingKind::Equality { ty }) => {
                                     sess.source_map().span_to_snippet(ty.span).ok()
                                 }
                                 _ => None,
                             })
-                            .next()
                             .unwrap_or_else(|| "()".to_string()),
                     )),
                 )
@@ -1727,6 +1722,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                     self.ast_region_to_region(lifetime, None)
                 } else {
                     self.re_infer(None, span).unwrap_or_else(|| {
+                        // FIXME: these can be redundant with E0106, but not always.
                         struct_span_err!(
                             tcx.sess,
                             span,
@@ -1972,7 +1968,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
     // any ambiguity.
     fn find_bound_for_assoc_item(
         &self,
-        ty_param_def_id: DefId,
+        ty_param_def_id: LocalDefId,
         assoc_name: ast::Ident,
         span: Span,
     ) -> Result<ty::PolyTraitRef<'tcx>, ErrorReported> {
@@ -1983,11 +1979,12 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
             ty_param_def_id, assoc_name, span,
         );
 
-        let predicates = &self.get_type_parameter_bounds(span, ty_param_def_id).predicates;
+        let predicates =
+            &self.get_type_parameter_bounds(span, ty_param_def_id.to_def_id()).predicates;
 
         debug!("find_bound_for_assoc_item: predicates={:#?}", predicates);
 
-        let param_hir_id = tcx.hir().as_local_hir_id(ty_param_def_id).unwrap();
+        let param_hir_id = tcx.hir().as_local_hir_id(ty_param_def_id);
         let param_name = tcx.hir().ty_param_name(param_hir_id);
         self.one_bound_for_assoc_type(
             || {
@@ -2231,10 +2228,10 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                     || None,
                 )?
             }
-            (&ty::Param(_), Res::SelfTy(Some(param_did), None))
-            | (&ty::Param(_), Res::Def(DefKind::TyParam, param_did)) => {
-                self.find_bound_for_assoc_item(param_did, assoc_ident, span)?
-            }
+            (
+                &ty::Param(_),
+                Res::SelfTy(Some(param_did), None) | Res::Def(DefKind::TyParam, param_did),
+            ) => self.find_bound_for_assoc_item(param_did.expect_local(), assoc_ident, span)?,
             _ => {
                 if variant_resolution.is_some() {
                     // Variant in type position
@@ -2370,7 +2367,9 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
             debug!("qpath_to_ty: self.item_def_id()={:?}", def_id);
 
             let parent_def_id = def_id
-                .and_then(|def_id| tcx.hir().as_local_hir_id(def_id))
+                .and_then(|def_id| {
+                    def_id.as_local().map(|def_id| tcx.hir().as_local_hir_id(def_id))
+                })
                 .map(|hir_id| tcx.hir().get_parent_did(hir_id).to_def_id());
 
             debug!("qpath_to_ty: parent_def_id={:?}", parent_def_id);
@@ -2630,11 +2629,14 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                 let substs = self.ast_path_substs_for_ty(span, did, item_segment.0);
                 self.normalize_ty(span, tcx.mk_opaque(did, substs))
             }
-            Res::Def(DefKind::Enum, did)
-            | Res::Def(DefKind::TyAlias, did)
-            | Res::Def(DefKind::Struct, did)
-            | Res::Def(DefKind::Union, did)
-            | Res::Def(DefKind::ForeignTy, did) => {
+            Res::Def(
+                DefKind::Enum
+                | DefKind::TyAlias
+                | DefKind::Struct
+                | DefKind::Union
+                | DefKind::ForeignTy,
+                did,
+            ) => {
                 assert_eq!(opt_self_ty, None);
                 self.prohibit_generics(path.segments.split_last().unwrap().1);
                 self.ast_path_to_ty(span, did, path.segments.last().unwrap())
@@ -2661,7 +2663,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                 assert_eq!(opt_self_ty, None);
                 self.prohibit_generics(path.segments);
 
-                let hir_id = tcx.hir().as_local_hir_id(def_id).unwrap();
+                let hir_id = tcx.hir().as_local_hir_id(def_id.expect_local());
                 let item_id = tcx.hir().get_parent_node(hir_id);
                 let item_def_id = tcx.hir().local_def_id(item_id);
                 let generics = tcx.generics_of(item_def_id);
@@ -2754,7 +2756,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
             }
             hir::TyKind::Def(item_id, ref lifetimes) => {
                 let did = tcx.hir().local_def_id(item_id.id);
-                self.impl_trait_ty_to_ty(did, lifetimes)
+                self.impl_trait_ty_to_ty(did.to_def_id(), lifetimes)
             }
             hir::TyKind::Path(hir::QPath::TypeRelative(ref qself, ref segment)) => {
                 debug!("ast_ty_to_ty: qself={:?} segment={:?}", qself, segment);
@@ -2770,7 +2772,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                     .unwrap_or(tcx.types.err)
             }
             hir::TyKind::Array(ref ty, ref length) => {
-                let length_def_id = tcx.hir().local_def_id(length.hir_id).expect_local();
+                let length_def_id = tcx.hir().local_def_id(length.hir_id);
                 let length = ty::Const::from_anon_const(tcx, length_def_id);
                 let array_ty = tcx.mk_ty(ty::Array(self.ast_ty_to_ty(&ty), length));
                 self.normalize_ty(ast_ty.span, array_ty)

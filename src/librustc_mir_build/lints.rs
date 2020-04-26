@@ -11,7 +11,7 @@ use rustc_session::lint::builtin::UNCONDITIONAL_RECURSION;
 use rustc_span::Span;
 
 crate fn check<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>, def_id: DefId) {
-    let hir_id = tcx.hir().as_local_hir_id(def_id).unwrap();
+    let hir_id = tcx.hir().as_local_hir_id(def_id.expect_local());
 
     if let Some(fn_like_node) = FnLikeNode::from_node(tcx.hir().get(hir_id)) {
         if let FnKind::Closure(_) = fn_like_node.kind() {
@@ -37,7 +37,7 @@ crate fn check<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>, def_id: DefId) {
 
         vis.reachable_recursive_calls.sort();
 
-        let hir_id = tcx.hir().as_local_hir_id(def_id).unwrap();
+        let hir_id = tcx.hir().as_local_hir_id(def_id.expect_local());
         let sp = tcx.sess.source_map().guess_head_span(tcx.hir().span(hir_id));
         tcx.struct_span_lint_hir(UNCONDITIONAL_RECURSION, hir_id, sp, |lint| {
             let mut db = lint.build("function cannot return without recursing");
@@ -72,7 +72,7 @@ impl<'mir, 'tcx> Search<'mir, 'tcx> {
         let func_ty = func.ty(body, tcx);
         if let ty::FnDef(fn_def_id, substs) = func_ty.kind {
             let (call_fn_id, call_substs) =
-                if let Some(instance) = Instance::resolve(tcx, param_env, fn_def_id, substs) {
+                if let Ok(Some(instance)) = Instance::resolve(tcx, param_env, fn_def_id, substs) {
                     (instance.def_id(), instance.substs)
                 } else {
                     (fn_def_id, substs)

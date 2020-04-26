@@ -384,7 +384,7 @@ impl<'a> Linker for GccLinker<'a> {
             // If we are building without debuginfo enabled and we were called with
             // `-Zstrip-debuginfo-if-disabled=yes`, tell the linker to strip any debuginfo
             // found when linking to get rid of symbols from libstd.
-            if let Some(true) = self.sess.opts.debugging_opts.strip_debuginfo_if_disabled {
+            if self.sess.opts.debugging_opts.strip_debuginfo_if_disabled {
                 self.linker_arg("-S");
             }
         };
@@ -1127,11 +1127,7 @@ fn exported_symbols(tcx: TyCtxt<'_>, crate_type: CrateType) -> Vec<String> {
     }
 
     let formats = tcx.dependency_formats(LOCAL_CRATE);
-    let deps = formats
-        .iter()
-        .filter_map(|(t, list)| if *t == crate_type { Some(list) } else { None })
-        .next()
-        .unwrap();
+    let deps = formats.iter().find_map(|(t, list)| (*t == crate_type).then_some(list)).unwrap();
 
     for (index, dep_format) in deps.iter().enumerate() {
         let cnum = CrateNum::new(index + 1);

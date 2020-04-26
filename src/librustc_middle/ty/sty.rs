@@ -1887,8 +1887,15 @@ impl<'tcx> TyS<'tcx> {
     #[inline]
     pub fn is_scalar(&self) -> bool {
         match self.kind {
-            Bool | Char | Int(_) | Float(_) | Uint(_) | Infer(IntVar(_)) | Infer(FloatVar(_))
-            | FnDef(..) | FnPtr(_) | RawPtr(_) => true,
+            Bool
+            | Char
+            | Int(_)
+            | Float(_)
+            | Uint(_)
+            | Infer(IntVar(_) | FloatVar(_))
+            | FnDef(..)
+            | FnPtr(_)
+            | RawPtr(_) => true,
             _ => false,
         }
     }
@@ -2154,8 +2161,7 @@ impl<'tcx> TyS<'tcx> {
     /// `false` means nothing -- could be sized, might not be.
     pub fn is_trivially_sized(&self, tcx: TyCtxt<'tcx>) -> bool {
         match self.kind {
-            ty::Infer(ty::IntVar(_))
-            | ty::Infer(ty::FloatVar(_))
+            ty::Infer(ty::IntVar(_) | ty::FloatVar(_))
             | ty::Uint(_)
             | ty::Int(_)
             | ty::Bool
@@ -2186,9 +2192,7 @@ impl<'tcx> TyS<'tcx> {
 
             ty::Bound(..)
             | ty::Placeholder(..)
-            | ty::Infer(ty::FreshTy(_))
-            | ty::Infer(ty::FreshIntTy(_))
-            | ty::Infer(ty::FreshFloatTy(_)) => {
+            | ty::Infer(ty::FreshTy(_) | ty::FreshIntTy(_) | ty::FreshFloatTy(_)) => {
                 bug!("`is_trivially_sized` applied to unexpected type: {:?}", self)
             }
         }
@@ -2262,11 +2266,12 @@ impl<'tcx> Const<'tcx> {
             ExprKind::Path(QPath::Resolved(_, &Path { res: Res::Def(ConstParam, def_id), .. })) => {
                 // Find the name and index of the const parameter by indexing the generics of
                 // the parent item and construct a `ParamConst`.
-                let hir_id = tcx.hir().as_local_hir_id(def_id).unwrap();
+                let hir_id = tcx.hir().as_local_hir_id(def_id.expect_local());
                 let item_id = tcx.hir().get_parent_node(hir_id);
                 let item_def_id = tcx.hir().local_def_id(item_id);
-                let generics = tcx.generics_of(item_def_id);
-                let index = generics.param_def_id_to_index[&tcx.hir().local_def_id(hir_id)];
+                let generics = tcx.generics_of(item_def_id.to_def_id());
+                let index =
+                    generics.param_def_id_to_index[&tcx.hir().local_def_id(hir_id).to_def_id()];
                 let name = tcx.hir().name(hir_id);
                 ty::ConstKind::Param(ty::ParamConst::new(index, name))
             }

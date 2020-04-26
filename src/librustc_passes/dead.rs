@@ -24,13 +24,15 @@ use rustc_span::symbol::sym;
 // may need to be marked as live.
 fn should_explore(tcx: TyCtxt<'_>, hir_id: hir::HirId) -> bool {
     match tcx.hir().find(hir_id) {
-        Some(Node::Item(..))
-        | Some(Node::ImplItem(..))
-        | Some(Node::ForeignItem(..))
-        | Some(Node::TraitItem(..))
-        | Some(Node::Variant(..))
-        | Some(Node::AnonConst(..))
-        | Some(Node::Pat(..)) => true,
+        Some(
+            Node::Item(..)
+            | Node::ImplItem(..)
+            | Node::ForeignItem(..)
+            | Node::TraitItem(..)
+            | Node::Variant(..)
+            | Node::AnonConst(..)
+            | Node::Pat(..),
+        ) => true,
         _ => false,
     }
 }
@@ -50,7 +52,8 @@ struct MarkSymbolVisitor<'a, 'tcx> {
 
 impl<'a, 'tcx> MarkSymbolVisitor<'a, 'tcx> {
     fn check_def_id(&mut self, def_id: DefId) {
-        if let Some(hir_id) = self.tcx.hir().as_local_hir_id(def_id) {
+        if let Some(def_id) = def_id.as_local() {
+            let hir_id = self.tcx.hir().as_local_hir_id(def_id);
             if should_explore(self.tcx, hir_id) || self.struct_constructors.contains_key(&hir_id) {
                 self.worklist.push(hir_id);
             }
@@ -59,7 +62,8 @@ impl<'a, 'tcx> MarkSymbolVisitor<'a, 'tcx> {
     }
 
     fn insert_def_id(&mut self, def_id: DefId) {
-        if let Some(hir_id) = self.tcx.hir().as_local_hir_id(def_id) {
+        if let Some(def_id) = def_id.as_local() {
+            let hir_id = self.tcx.hir().as_local_hir_id(def_id);
             debug_assert!(!should_explore(self.tcx, hir_id));
             self.live_symbols.insert(hir_id);
         }
@@ -67,9 +71,7 @@ impl<'a, 'tcx> MarkSymbolVisitor<'a, 'tcx> {
 
     fn handle_res(&mut self, res: Res) {
         match res {
-            Res::Def(DefKind::Const, _)
-            | Res::Def(DefKind::AssocConst, _)
-            | Res::Def(DefKind::TyAlias, _) => {
+            Res::Def(DefKind::Const | DefKind::AssocConst | DefKind::TyAlias, _) => {
                 self.check_def_id(res.def_id());
             }
             _ if self.in_pat => {}
@@ -255,7 +257,9 @@ impl<'a, 'tcx> Visitor<'tcx> for MarkSymbolVisitor<'a, 'tcx> {
             hir::ExprKind::Field(ref lhs, ..) => {
                 self.handle_field_access(&lhs, expr.hir_id);
             }
-            hir::ExprKind::Struct(_, ref fields, _) => {
+            hir::ExprKind::Struct(ref qpath, ref fields, _) => {
+                let res = self.tables.qpath_res(qpath, expr.hir_id);
+                self.handle_res(res);
                 if let ty::Adt(ref adt, _) = self.tables.expr_ty(expr).kind {
                     self.mark_as_used_if_union(adt, fields);
                 }
@@ -448,7 +452,8 @@ fn create_and_seed_worklist<'tcx>(
         )
         .chain(
             // Seed entry point
-            tcx.entry_fn(LOCAL_CRATE).map(|(def_id, _)| tcx.hir().as_local_hir_id(def_id).unwrap()),
+            tcx.entry_fn(LOCAL_CRATE)
+                .map(|(def_id, _)| tcx.hir().as_local_hir_id(def_id.expect_local())),
         )
         .collect::<Vec<_>>();
 
@@ -532,7 +537,8 @@ impl DeadVisitor<'tcx> {
         let inherent_impls = self.tcx.inherent_impls(def_id);
         for &impl_did in inherent_impls.iter() {
             for &item_did in &self.tcx.associated_item_def_ids(impl_did)[..] {
-                if let Some(item_hir_id) = self.tcx.hir().as_local_hir_id(item_did) {
+                if let Some(did) = item_did.as_local() {
+                    let item_hir_id = self.tcx.hir().as_local_hir_id(did);
                     if self.live_symbols.contains(&item_hir_id) {
                         return true;
                     }
@@ -547,12 +553,13 @@ impl DeadVisitor<'tcx> {
         id: hir::HirId,
         span: rustc_span::Span,
         name: ast::Name,
-        node_type: &str,
         participle: &str,
     ) {
         if !name.as_str().starts_with('_') {
             self.tcx.struct_span_lint_hir(lint::builtin::DEAD_CODE, id, span, |lint| {
-                lint.build(&format!("{} is never {}: `{}`", node_type, participle, name)).emit()
+                let def_id = self.tcx.hir().local_def_id(id);
+                let descr = self.tcx.def_kind(def_id).descr(def_id.to_def_id());
+                lint.build(&format!("{} is never {}: `{}`", descr, participle, name)).emit()
             });
         }
     }
@@ -598,7 +605,7 @@ impl Visitor<'tcx> for DeadVisitor<'tcx> {
                 hir::ItemKind::Struct(..) => "constructed", // Issue #52325
                 _ => "used",
             };
-            self.warn_dead_code(item.hir_id, span, item.ident.name, item.kind.descr(), participle);
+            self.warn_dead_code(item.hir_id, span, item.ident.name, participle);
         } else {
             // Only continue if we didn't warn
             intravisit::walk_item(self, item);
@@ -612,13 +619,7 @@ impl Visitor<'tcx> for DeadVisitor<'tcx> {
         id: hir::HirId,
     ) {
         if self.should_warn_about_variant(&variant) {
-            self.warn_dead_code(
-                variant.id,
-                variant.span,
-                variant.ident.name,
-                "variant",
-                "constructed",
-            );
+            self.warn_dead_code(variant.id, variant.span, variant.ident.name, "constructed");
         } else {
             intravisit::walk_variant(self, variant, g, id);
         }
@@ -626,20 +627,14 @@ impl Visitor<'tcx> for DeadVisitor<'tcx> {
 
     fn visit_foreign_item(&mut self, fi: &'tcx hir::ForeignItem<'tcx>) {
         if self.should_warn_about_foreign_item(fi) {
-            self.warn_dead_code(
-                fi.hir_id,
-                fi.span,
-                fi.ident.name,
-                fi.kind.descriptive_variant(),
-                "used",
-            );
+            self.warn_dead_code(fi.hir_id, fi.span, fi.ident.name, "used");
         }
         intravisit::walk_foreign_item(self, fi);
     }
 
     fn visit_struct_field(&mut self, field: &'tcx hir::StructField<'tcx>) {
         if self.should_warn_about_field(&field) {
-            self.warn_dead_code(field.hir_id, field.span, field.ident.name, "field", "read");
+            self.warn_dead_code(field.hir_id, field.span, field.ident.name, "read");
         }
         intravisit::walk_struct_field(self, field);
     }
@@ -652,7 +647,6 @@ impl Visitor<'tcx> for DeadVisitor<'tcx> {
                         impl_item.hir_id,
                         impl_item.span,
                         impl_item.ident.name,
-                        "associated const",
                         "used",
                     );
                 }
@@ -661,13 +655,7 @@ impl Visitor<'tcx> for DeadVisitor<'tcx> {
             hir::ImplItemKind::Fn(_, body_id) => {
                 if !self.symbol_is_live(impl_item.hir_id) {
                     let span = self.tcx.sess.source_map().guess_head_span(impl_item.span);
-                    self.warn_dead_code(
-                        impl_item.hir_id,
-                        span,
-                        impl_item.ident.name,
-                        "method",
-                        "used",
-                    );
+                    self.warn_dead_code(impl_item.hir_id, span, impl_item.ident.name, "used");
                 }
                 self.visit_nested_body(body_id)
             }

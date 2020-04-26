@@ -191,9 +191,9 @@ fn msg_span_from_early_bound_and_free_regions(
     let sm = tcx.sess.source_map();
 
     let scope = region.free_region_binding_scope(tcx);
-    let node = tcx.hir().as_local_hir_id(scope).unwrap();
+    let node = tcx.hir().as_local_hir_id(scope.expect_local());
     let tag = match tcx.hir().find(node) {
-        Some(Node::Block(_)) | Some(Node::Expr(_)) => "body",
+        Some(Node::Block(_) | Node::Expr(_)) => "body",
         Some(Node::Item(it)) => item_scope_tag(&it),
         Some(Node::TraitItem(it)) => trait_item_scope_tag(&it),
         Some(Node::ImplItem(it)) => impl_item_scope_tag(&it),
@@ -755,7 +755,9 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             },
             ObligationCauseCode::IfExpression(box IfExpressionCause { then, outer, semicolon }) => {
                 err.span_label(then, "expected because of this");
-                outer.map(|sp| err.span_label(sp, "`if` and `else` have incompatible types"));
+                if let Some(sp) = outer {
+                    err.span_label(sp, "`if` and `else` have incompatible types");
+                }
                 if let Some(sp) = semicolon {
                     err.span_suggestion_short(
                         sp,
@@ -1058,13 +1060,15 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             match (&a.kind, &b.kind) {
                 (a, b) if *a == *b => true,
                 (&ty::Int(_), &ty::Infer(ty::InferTy::IntVar(_)))
-                | (&ty::Infer(ty::InferTy::IntVar(_)), &ty::Int(_))
-                | (&ty::Infer(ty::InferTy::IntVar(_)), &ty::Infer(ty::InferTy::IntVar(_)))
+                | (
+                    &ty::Infer(ty::InferTy::IntVar(_)),
+                    &ty::Int(_) | &ty::Infer(ty::InferTy::IntVar(_)),
+                )
                 | (&ty::Float(_), &ty::Infer(ty::InferTy::FloatVar(_)))
-                | (&ty::Infer(ty::InferTy::FloatVar(_)), &ty::Float(_))
-                | (&ty::Infer(ty::InferTy::FloatVar(_)), &ty::Infer(ty::InferTy::FloatVar(_))) => {
-                    true
-                }
+                | (
+                    &ty::Infer(ty::InferTy::FloatVar(_)),
+                    &ty::Float(_) | &ty::Infer(ty::InferTy::FloatVar(_)),
+                ) => true,
                 _ => false,
             }
         }
@@ -1628,8 +1632,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                     ];
                     if let Some(msg) = have_as_ref
                         .iter()
-                        .filter_map(|(path, msg)| if &path_str == path { Some(msg) } else { None })
-                        .next()
+                        .find_map(|(path, msg)| (&path_str == path).then_some(msg))
                     {
                         let mut show_suggestion = true;
                         for (exp_ty, found_ty) in exp_substs.types().zip(found_substs.types()) {
@@ -1780,10 +1783,11 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                     if !(generics.has_self && param.index == 0) {
                         let type_param = generics.type_param(param, self.tcx);
                         let hir = &self.tcx.hir();
-                        hir.as_local_hir_id(type_param.def_id).map(|id| {
+                        type_param.def_id.as_local().map(|def_id| {
                             // Get the `hir::Param` to verify whether it already has any bounds.
                             // We do this to avoid suggesting code that ends up as `T: 'a'b`,
                             // instead we suggest `T: 'a + 'b` in that case.
+                            let id = hir.as_local_hir_id(def_id);
                             let mut has_bounds = false;
                             if let Node::GenericParam(param) = hir.get(id) {
                                 has_bounds = !param.bounds.is_empty();

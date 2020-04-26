@@ -689,7 +689,7 @@ checksum = "b3a71ab494c0b5b860bdc8407ae08978052417070c2ced38573a9157ad75b8ac"
 
 [[package]]
 name = "crates-io"
-version = "0.31.0"
+version = "0.31.1"
 dependencies = [
  "anyhow",
  "curl",
@@ -1736,7 +1736,7 @@ checksum = "5b31c9b90731276fdd24d896f31bb10aecf2e5151733364ae81123186643d939"
 dependencies = [
  "jsonrpc-core",
  "log",
- "parking_lot 0.10.0",
+ "parking_lot 0.10.2",
  "serde",
 ]
 
@@ -1855,9 +1855,9 @@ checksum = "ae91b68aebc4ddb91978b11a1b02ddd8602a05ec19002801c5666000e05e0f83"
 
 [[package]]
 name = "lock_api"
-version = "0.3.1"
+version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8912e782533a93a167888781b836336a6ca5da6175c05944c86cf28c31104dc"
+checksum = "c4da24a77a3d8a6d4862d95f72e6fdb9c09a643ecdb402d754004a557f2bec75"
 dependencies = [
  "scopeguard",
 ]
@@ -2298,9 +2298,9 @@ checksum = "77af24da69f9d9341038eba93a073b1fdaaa1b788221b00a69bce9e762cb32de"
 
 [[package]]
 name = "openssl-src"
-version = "111.8.1+1.1.1f"
+version = "111.9.0+1.1.1g"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f04f0299a91de598dde58d2e99101895498dcf3d58896a3297798f28b27c8b72"
+checksum = "a2dbe10ddd1eb335aba3780eb2eaa13e1b7b441d2562fd962398740927f39ec4"
 dependencies = [
  "cc",
 ]
@@ -2395,12 +2395,12 @@ dependencies = [
 
 [[package]]
 name = "parking_lot"
-version = "0.10.0"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92e98c49ab0b7ce5b222f2cc9193fc4efe11c6d0bd4f648e374684a6857b1cfc"
+checksum = "d3a704eb390aafdc107b0e392f56a82b668e3a71366993b5340f5833fd62505e"
 dependencies = [
  "lock_api",
- "parking_lot_core 0.7.0",
+ "parking_lot_core 0.7.1",
 ]
 
 [[package]]
@@ -2420,9 +2420,9 @@ dependencies = [
 
 [[package]]
 name = "parking_lot_core"
-version = "0.7.0"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7582838484df45743c8434fbff785e8edf260c28748353d44bc0da32e0ceabf1"
+checksum = "0e136c1904604defe99ce5fd71a28d473fa60a12255d511aa78a9ddf11237aeb"
 dependencies = [
  "cfg-if",
  "cloudabi",
@@ -3242,7 +3242,7 @@ dependencies = [
  "libc",
  "log",
  "measureme",
- "parking_lot 0.10.0",
+ "parking_lot 0.10.2",
  "rustc-ap-graphviz",
  "rustc-ap-rustc_index",
  "rustc-ap-serialize",
@@ -3577,7 +3577,6 @@ version = "0.0.0"
 dependencies = [
  "log",
  "rustc_ast",
- "rustc_data_structures",
  "rustc_span",
 ]
 
@@ -3594,7 +3593,6 @@ dependencies = [
  "rustc_session",
  "rustc_span",
  "serialize",
- "smallvec 1.0.0",
 ]
 
 [[package]]
@@ -3666,7 +3664,6 @@ dependencies = [
  "rustc_hir",
  "rustc_incremental",
  "rustc_index",
- "rustc_metadata",
  "rustc_middle",
  "rustc_session",
  "rustc_span",
@@ -3691,7 +3688,7 @@ dependencies = [
  "libc",
  "log",
  "measureme",
- "parking_lot 0.10.0",
+ "parking_lot 0.10.2",
  "rustc-hash",
  "rustc-rayon",
  "rustc-rayon-core",
@@ -3809,7 +3806,6 @@ version = "0.0.0"
 dependencies = [
  "rustc_ast",
  "rustc_ast_pretty",
- "rustc_data_structures",
  "rustc_hir",
  "rustc_span",
  "rustc_target",
@@ -3879,7 +3875,6 @@ dependencies = [
  "rustc_expand",
  "rustc_hir",
  "rustc_incremental",
- "rustc_infer",
  "rustc_lint",
  "rustc_metadata",
  "rustc_middle",
@@ -3924,7 +3919,6 @@ dependencies = [
  "rustc_feature",
  "rustc_hir",
  "rustc_index",
- "rustc_infer",
  "rustc_middle",
  "rustc_session",
  "rustc_span",
@@ -3986,10 +3980,8 @@ dependencies = [
  "backtrace",
  "bitflags",
  "byteorder",
- "jobserver",
  "log",
  "measureme",
- "parking_lot 0.10.0",
  "polonius-engine",
  "rustc-rayon",
  "rustc-rayon-core",
@@ -4023,7 +4015,6 @@ dependencies = [
  "polonius-engine",
  "rustc_apfloat",
  "rustc_ast",
- "rustc_ast_pretty",
  "rustc_attr",
  "rustc_data_structures",
  "rustc_errors",
@@ -4079,7 +4070,6 @@ dependencies = [
  "rustc_lexer",
  "rustc_session",
  "rustc_span",
- "smallvec 1.0.0",
  "unicode-normalization",
 ]
 
@@ -4092,10 +4082,8 @@ dependencies = [
  "rustc_attr",
  "rustc_data_structures",
  "rustc_errors",
- "rustc_feature",
  "rustc_hir",
  "rustc_index",
- "rustc_infer",
  "rustc_middle",
  "rustc_session",
  "rustc_span",
@@ -4138,12 +4126,11 @@ name = "rustc_query_system"
 version = "0.0.0"
 dependencies = [
  "log",
- "parking_lot 0.9.0",
+ "parking_lot 0.10.2",
  "rustc-rayon-core",
  "rustc_data_structures",
  "rustc_errors",
  "rustc_index",
- "rustc_macros",
  "rustc_span",
  "serialize",
  "smallvec 1.0.0",
@@ -4296,10 +4283,8 @@ dependencies = [
  "rustc_data_structures",
  "rustc_hir",
  "rustc_infer",
- "rustc_macros",
  "rustc_middle",
  "rustc_span",
- "rustc_target",
  "rustc_trait_selection",
  "smallvec 1.0.0",
 ]
@@ -4310,6 +4295,7 @@ version = "0.0.0"
 dependencies = [
  "log",
  "rustc_data_structures",
+ "rustc_errors",
  "rustc_hir",
  "rustc_infer",
  "rustc_middle",

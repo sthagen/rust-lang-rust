@@ -50,6 +50,7 @@ const MAXIMUM_ZST_CAPACITY: usize = 1 << (64 - 1); // Largest possible power of 
 /// [`pop_front`]: #method.pop_front
 /// [`extend`]: #method.extend
 /// [`append`]: #method.append
+#[cfg_attr(not(test), rustc_diagnostic_item = "vecdeque_type")]
 #[stable(feature = "rust1", since = "1.0.0")]
 pub struct VecDeque<T> {
     // tail and head are pointers into the buffer. Tail always points
@@ -72,7 +73,7 @@ pub struct VecDeque<T> {
 /// It produces the following sequence of matching slices:
 ///
 /// ([0 1], [a b])
-/// ([2], [c])
+/// (\[2\], \[c\])
 /// ([3 4], [d e])
 ///
 /// and the uneven remainder of either A or B is skipped.

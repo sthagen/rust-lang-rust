@@ -170,7 +170,7 @@ rustc_queries! {
 
         /// Fetch the MIR for a given `DefId` right after it's built - this includes
         /// unreachable code.
-        query mir_built(_: DefId) -> &'tcx Steal<mir::BodyAndCache<'tcx>> {
+        query mir_built(_: DefId) -> &'tcx Steal<mir::Body<'tcx>> {
             desc { "building MIR for" }
         }
 
@@ -178,48 +178,38 @@ rustc_queries! {
         /// ready for const evaluation.
         ///
         /// See the README for the `mir` module for details.
-        query mir_const(_: DefId) -> &'tcx Steal<mir::BodyAndCache<'tcx>> {
+        query mir_const(_: DefId) -> &'tcx Steal<mir::Body<'tcx>> {
             no_hash
         }
 
         query mir_validated(_: DefId) ->
             (
-                &'tcx Steal<mir::BodyAndCache<'tcx>>,
-                &'tcx Steal<IndexVec<mir::Promoted, mir::BodyAndCache<'tcx>>>
+                &'tcx Steal<mir::Body<'tcx>>,
+                &'tcx Steal<IndexVec<mir::Promoted, mir::Body<'tcx>>>
             ) {
             no_hash
         }
 
         /// MIR after our optimization passes have run. This is MIR that is ready
         /// for codegen. This is also the only query that can fetch non-local MIR, at present.
-        query optimized_mir(key: DefId) -> &'tcx mir::BodyAndCache<'tcx> {
+        query optimized_mir(key: DefId) -> &'tcx mir::Body<'tcx> {
             cache_on_disk_if { key.is_local() }
             load_cached(tcx, id) {
-                let mir: Option<crate::mir::BodyAndCache<'tcx>>
+                let mir: Option<crate::mir::Body<'tcx>>
                     = tcx.queries.on_disk_cache.try_load_query_result(tcx, id);
-                mir.map(|x| {
-                    let cache = tcx.arena.alloc(x);
-                    cache.ensure_predecessors();
-                    &*cache
-                })
+                mir.map(|x| &*tcx.arena.alloc(x))
             }
         }
 
-        query promoted_mir(key: DefId) -> &'tcx IndexVec<mir::Promoted, mir::BodyAndCache<'tcx>> {
+        query promoted_mir(key: DefId) -> &'tcx IndexVec<mir::Promoted, mir::Body<'tcx>> {
             cache_on_disk_if { key.is_local() }
             load_cached(tcx, id) {
                 let promoted: Option<
                     rustc_index::vec::IndexVec<
                         crate::mir::Promoted,
-                        crate::mir::BodyAndCache<'tcx>
+                        crate::mir::Body<'tcx>
                     >> = tcx.queries.on_disk_cache.try_load_query_result(tcx, id);
-                promoted.map(|p| {
-                    let cache = tcx.arena.alloc(p);
-                    for body in cache.iter_mut() {
-                        body.ensure_predecessors();
-                    }
-                    &*cache
-                })
+                promoted.map(|p| &*tcx.arena.alloc(p))
             }
         }
     }
@@ -287,7 +277,7 @@ rustc_queries! {
         /// per-type-parameter predicates for resolving `T::AssocTy`.
         query type_param_predicates(key: (DefId, DefId)) -> ty::GenericPredicates<'tcx> {
             desc { |tcx| "computing the bounds for type parameter `{}`", {
-                let id = tcx.hir().as_local_hir_id(key.1).unwrap();
+                let id = tcx.hir().as_local_hir_id(key.1.expect_local());
                 tcx.hir().ty_param_name(id)
             }}
         }
@@ -574,7 +564,7 @@ rustc_queries! {
             desc { "extract field of const" }
         }
 
-        /// Destructure a constant ADT or array into its variant indent and its
+        /// Destructure a constant ADT or array into its variant index and its
         /// field values.
         query destructure_const(
             key: ty::ParamEnvAnd<'tcx, &'tcx ty::Const<'tcx>>
@@ -618,7 +608,7 @@ rustc_queries! {
         /// in the case of closures, this will be redirected to the enclosing function.
         query region_scope_tree(_: DefId) -> &'tcx region::ScopeTree {}
 
-        query mir_shims(key: ty::InstanceDef<'tcx>) -> &'tcx mir::BodyAndCache<'tcx> {
+        query mir_shims(key: ty::InstanceDef<'tcx>) -> &'tcx mir::Body<'tcx> {
             desc { |tcx| "generating MIR shim for `{}`", tcx.def_path_str(key.def_id()) }
         }
 
@@ -630,7 +620,7 @@ rustc_queries! {
             cache_on_disk_if { true }
         }
 
-        query def_kind(_: DefId) -> Option<DefKind> {}
+        query def_kind(_: DefId) -> DefKind {}
         query def_span(_: DefId) -> Span {
             // FIXME(mw): DefSpans are not really inputs since they are derived from
             // HIR. But at the moment HIR hashing still contains some hacks that allow
@@ -679,7 +669,7 @@ rustc_queries! {
     Codegen {
         query codegen_fulfill_obligation(
             key: (ty::ParamEnv<'tcx>, ty::PolyTraitRef<'tcx>)
-        ) -> Option<Vtable<'tcx, ()>> {
+        ) -> Result<Vtable<'tcx, ()>, ErrorReported> {
             cache_on_disk_if { true }
             desc { |tcx|
                 "checking if `{}` fulfills its obligations",
@@ -1258,8 +1248,19 @@ rustc_queries! {
             desc { "looking up enabled feature gates" }
         }
 
-        query resolve_instance(key: (ty::ParamEnv<'tcx>, DefId, SubstsRef<'tcx>)) -> Option<ty::Instance<'tcx>> {
-            desc { "resolving instance `{:?}` `{:?}` with {:?}", key.1, key.2, key.0 }
+        /// Attempt to resolve the given `DefId` to an `Instance`, for the
+        /// given generics args (`SubstsRef`), returning one of:
+        ///  * `Ok(Some(instance))` on success
+        ///  * `Ok(None)` when the `SubstsRef` are still too generic,
+        ///    and therefore don't allow finding the final `Instance`
+        ///  * `Err(ErrorReported)` when the `Instance` resolution process
+        ///    couldn't complete due to errors elsewhere - this is distinct
+        ///    from `Ok(None)` to avoid misleading diagnostics when an error
+        ///    has already been/will be emitted, for the original cause
+        query resolve_instance(
+            key: ty::ParamEnvAnd<'tcx, (DefId, SubstsRef<'tcx>)>
+        ) -> Result<Option<ty::Instance<'tcx>>, ErrorReported> {
+            desc { "resolving instance `{}`", ty::Instance::new(key.value.0, key.value.1) }
         }
     }
 }

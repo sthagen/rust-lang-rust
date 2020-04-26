@@ -179,8 +179,7 @@ impl<'tcx> ConstEvalErr<'tcx> {
                     .stacktrace
                     .iter()
                     .rev()
-                    .filter_map(|frame| frame.lint_root)
-                    .next()
+                    .find_map(|frame| frame.lint_root)
                     .unwrap_or(lint_root);
                 tcx.struct_span_lint_hir(
                     rustc_session::lint::builtin::CONST_ERR,
@@ -361,8 +360,6 @@ pub enum UndefinedBehaviorInfo {
     InvalidUndefBytes(Option<Pointer>),
     /// Working with a local that is not currently live.
     DeadLocal,
-    /// Trying to read from the return place of a function.
-    ReadFromReturnPlace,
 }
 
 impl fmt::Debug for UndefinedBehaviorInfo {
@@ -424,7 +421,6 @@ impl fmt::Debug for UndefinedBehaviorInfo {
                 "using uninitialized data, but this operation requires initialized memory"
             ),
             DeadLocal => write!(f, "accessing a dead local variable"),
-            ReadFromReturnPlace => write!(f, "reading from return place"),
         }
     }
 }

@@ -21,7 +21,7 @@ use polonius_engine::Atom;
 pub use rustc_ast::ast::Mutability;
 use rustc_ast::ast::Name;
 use rustc_data_structures::fx::FxHashSet;
-use rustc_data_structures::graph::dominators::Dominators;
+use rustc_data_structures::graph::dominators::{dominators, Dominators};
 use rustc_data_structures::graph::{self, GraphSuccessors};
 use rustc_index::bit_set::BitMatrix;
 use rustc_index::vec::{Idx, IndexVec};
@@ -31,17 +31,16 @@ use rustc_span::symbol::Symbol;
 use rustc_span::{Span, DUMMY_SP};
 use std::borrow::Cow;
 use std::fmt::{self, Debug, Display, Formatter, Write};
-use std::ops::Index;
+use std::ops::{Index, IndexMut};
 use std::slice;
 use std::{iter, mem, option};
 
-pub use self::cache::{BodyAndCache, ReadOnlyBodyAndCache};
+use self::predecessors::{PredecessorCache, Predecessors};
 pub use self::query::*;
-pub use crate::read_only;
 
-mod cache;
 pub mod interpret;
 pub mod mono;
+mod predecessors;
 mod query;
 pub mod tcx;
 pub mod traversal;
@@ -108,7 +107,7 @@ pub struct Body<'tcx> {
     pub yield_ty: Option<Ty<'tcx>>,
 
     /// Generator drop glue.
-    pub generator_drop: Option<Box<BodyAndCache<'tcx>>>,
+    pub generator_drop: Option<Box<Body<'tcx>>>,
 
     /// The layout of a generator. Produced by the state transformation.
     pub generator_layout: Option<GeneratorLayout<'tcx>>,
@@ -155,6 +154,10 @@ pub struct Body<'tcx> {
     /// A span representing this MIR, for error reporting.
     pub span: Span,
 
+    /// Constants that are required to evaluate successfully for this MIR to be well-formed.
+    /// We hold in this field all the constants we are not able to evaluate yet.
+    pub required_consts: Vec<Constant<'tcx>>,
+
     /// The user may be writing e.g. &[(SOME_CELL, 42)][i].1 and this would get promoted, because
     /// we'd statically know that no thing with interior mutability will ever be available to the
     /// user without some serious unsafe code.  Now this means that our promoted is actually
@@ -164,6 +167,8 @@ pub struct Body<'tcx> {
     /// implementation without the flag hid this situation silently.
     /// FIXME(oli-obk): rewrite the promoted during promotion to eliminate the cell components.
     pub ignore_interior_mut_in_const_validation: bool,
+
+    predecessor_cache: PredecessorCache,
 }
 
 impl<'tcx> Body<'tcx> {
@@ -200,8 +205,10 @@ impl<'tcx> Body<'tcx> {
             spread_arg: None,
             var_debug_info,
             span,
+            required_consts: Vec::new(),
             ignore_interior_mut_in_const_validation: false,
             control_flow_destroyed,
+            predecessor_cache: PredecessorCache::new(),
         }
     }
 
@@ -223,16 +230,37 @@ impl<'tcx> Body<'tcx> {
             arg_count: 0,
             spread_arg: None,
             span: DUMMY_SP,
+            required_consts: Vec::new(),
             control_flow_destroyed: Vec::new(),
             generator_kind: None,
             var_debug_info: Vec::new(),
             ignore_interior_mut_in_const_validation: false,
+            predecessor_cache: PredecessorCache::new(),
         }
     }
 
     #[inline]
     pub fn basic_blocks(&self) -> &IndexVec<BasicBlock, BasicBlockData<'tcx>> {
         &self.basic_blocks
+    }
+
+    #[inline]
+    pub fn basic_blocks_mut(&mut self) -> &mut IndexVec<BasicBlock, BasicBlockData<'tcx>> {
+        // Because the user could mutate basic block terminators via this reference, we need to
+        // invalidate the predecessor cache.
+        //
+        // FIXME: Use a finer-grained API for this, so only transformations that alter terminators
+        // invalidate the predecessor cache.
+        self.predecessor_cache.invalidate();
+        &mut self.basic_blocks
+    }
+
+    #[inline]
+    pub fn basic_blocks_and_local_decls_mut(
+        &mut self,
+    ) -> (&mut IndexVec<BasicBlock, BasicBlockData<'tcx>>, &mut LocalDecls<'tcx>) {
+        self.predecessor_cache.invalidate();
+        (&mut self.basic_blocks, &mut self.local_decls)
     }
 
     /// Returns `true` if a cycle exists in the control-flow graph that is reachable from the
@@ -357,13 +385,25 @@ impl<'tcx> Body<'tcx> {
     }
 
     /// Returns the return type; it always return first element from `local_decls` array.
+    #[inline]
     pub fn return_ty(&self) -> Ty<'tcx> {
         self.local_decls[RETURN_PLACE].ty
     }
 
     /// Gets the location of the terminator for the given block.
+    #[inline]
     pub fn terminator_loc(&self, bb: BasicBlock) -> Location {
         Location { block: bb, statement_index: self[bb].statements.len() }
+    }
+
+    #[inline]
+    pub fn predecessors(&self) -> impl std::ops::Deref<Target = Predecessors> + '_ {
+        self.predecessor_cache.compute(&self.basic_blocks)
+    }
+
+    #[inline]
+    pub fn dominators(&self) -> Dominators<BasicBlock> {
+        dominators(self)
     }
 }
 
@@ -384,6 +424,13 @@ impl<'tcx> Index<BasicBlock> for Body<'tcx> {
     #[inline]
     fn index(&self, index: BasicBlock) -> &BasicBlockData<'tcx> {
         &self.basic_blocks()[index]
+    }
+}
+
+impl<'tcx> IndexMut<BasicBlock> for Body<'tcx> {
+    #[inline]
+    fn index_mut(&mut self, index: BasicBlock) -> &mut BasicBlockData<'tcx> {
+        &mut self.basic_blocks_mut()[index]
     }
 }
 
@@ -2242,39 +2289,41 @@ impl<'tcx> Debug for Rvalue<'tcx> {
             }
 
             Aggregate(ref kind, ref places) => {
-                fn fmt_tuple(fmt: &mut Formatter<'_>, places: &[Operand<'_>]) -> fmt::Result {
-                    let mut tuple_fmt = fmt.debug_tuple("");
+                let fmt_tuple = |fmt: &mut Formatter<'_>, name: &str| {
+                    let mut tuple_fmt = fmt.debug_tuple(name);
                     for place in places {
                         tuple_fmt.field(place);
                     }
                     tuple_fmt.finish()
-                }
+                };
 
                 match **kind {
                     AggregateKind::Array(_) => write!(fmt, "{:?}", places),
 
-                    AggregateKind::Tuple => match places.len() {
-                        0 => write!(fmt, "()"),
-                        1 => write!(fmt, "({:?},)", places[0]),
-                        _ => fmt_tuple(fmt, places),
-                    },
+                    AggregateKind::Tuple => {
+                        if places.is_empty() {
+                            write!(fmt, "()")
+                        } else {
+                            fmt_tuple(fmt, "")
+                        }
+                    }
 
                     AggregateKind::Adt(adt_def, variant, substs, _user_ty, _) => {
                         let variant_def = &adt_def.variants[variant];
 
-                        let f = &mut *fmt;
-                        ty::tls::with(|tcx| {
+                        let name = ty::tls::with(|tcx| {
+                            let mut name = String::new();
                             let substs = tcx.lift(&substs).expect("could not lift for printing");
-                            FmtPrinter::new(tcx, f, Namespace::ValueNS)
+                            FmtPrinter::new(tcx, &mut name, Namespace::ValueNS)
                                 .print_def_path(variant_def.def_id, substs)?;
-                            Ok(())
+                            Ok(name)
                         })?;
 
                         match variant_def.ctor_kind {
-                            CtorKind::Const => Ok(()),
-                            CtorKind::Fn => fmt_tuple(fmt, places),
+                            CtorKind::Const => fmt.write_str(&name),
+                            CtorKind::Fn => fmt_tuple(fmt, &name),
                             CtorKind::Fictive => {
-                                let mut struct_fmt = fmt.debug_struct("");
+                                let mut struct_fmt = fmt.debug_struct(&name);
                                 for (field, place) in variant_def.fields.iter().zip(places) {
                                     struct_fmt.field(&field.ident.as_str(), place);
                                 }
@@ -2284,12 +2333,13 @@ impl<'tcx> Debug for Rvalue<'tcx> {
                     }
 
                     AggregateKind::Closure(def_id, substs) => ty::tls::with(|tcx| {
-                        if let Some(hir_id) = tcx.hir().as_local_hir_id(def_id) {
+                        if let Some(def_id) = def_id.as_local() {
+                            let hir_id = tcx.hir().as_local_hir_id(def_id);
                             let name = if tcx.sess.opts.debugging_opts.span_free_formats {
                                 let substs = tcx.lift(&substs).unwrap();
                                 format!(
                                     "[closure@{}]",
-                                    tcx.def_path_str_with_substs(def_id, substs),
+                                    tcx.def_path_str_with_substs(def_id.to_def_id(), substs),
                                 )
                             } else {
                                 format!("[closure@{:?}]", tcx.hir().span(hir_id))
@@ -2310,7 +2360,8 @@ impl<'tcx> Debug for Rvalue<'tcx> {
                     }),
 
                     AggregateKind::Generator(def_id, _, _) => ty::tls::with(|tcx| {
-                        if let Some(hir_id) = tcx.hir().as_local_hir_id(def_id) {
+                        if let Some(def_id) = def_id.as_local() {
+                            let hir_id = tcx.hir().as_local_hir_id(def_id);
                             let name = format!("[generator@{:?}]", tcx.hir().span(hir_id));
                             let mut struct_fmt = fmt.debug_struct(&name);
 
@@ -2339,7 +2390,7 @@ impl<'tcx> Debug for Rvalue<'tcx> {
 /// this does not necessarily mean that they are "==" in Rust -- in
 /// particular one must be wary of `NaN`!
 
-#[derive(Clone, PartialEq, RustcEncodable, RustcDecodable, HashStable)]
+#[derive(Clone, Copy, PartialEq, RustcEncodable, RustcDecodable, HashStable)]
 pub struct Constant<'tcx> {
     pub span: Span,
 
@@ -2589,18 +2640,21 @@ impl<'tcx> graph::DirectedGraph for Body<'tcx> {
 }
 
 impl<'tcx> graph::WithNumNodes for Body<'tcx> {
+    #[inline]
     fn num_nodes(&self) -> usize {
         self.basic_blocks.len()
     }
 }
 
 impl<'tcx> graph::WithStartNode for Body<'tcx> {
+    #[inline]
     fn start_node(&self) -> Self::Node {
         START_BLOCK
     }
 }
 
 impl<'tcx> graph::WithSuccessors for Body<'tcx> {
+    #[inline]
     fn successors(&self, node: Self::Node) -> <Self as GraphSuccessors<'_>>::Iter {
         self.basic_blocks[node].terminator().successors().cloned()
     }
@@ -2609,6 +2663,18 @@ impl<'tcx> graph::WithSuccessors for Body<'tcx> {
 impl<'a, 'b> graph::GraphSuccessors<'b> for Body<'a> {
     type Item = BasicBlock;
     type Iter = iter::Cloned<Successors<'b>>;
+}
+
+impl graph::GraphPredecessors<'graph> for Body<'tcx> {
+    type Item = BasicBlock;
+    type Iter = smallvec::IntoIter<[BasicBlock; 4]>;
+}
+
+impl graph::WithPredecessors for Body<'tcx> {
+    #[inline]
+    fn predecessors(&self, node: Self::Node) -> <Self as graph::GraphPredecessors<'_>>::Iter {
+        self.predecessors()[node].clone().into_iter()
+    }
 }
 
 /// `Location` represents the position of the start of the statement; or, if
@@ -2640,25 +2706,23 @@ impl Location {
     }
 
     /// Returns `true` if `other` is earlier in the control flow graph than `self`.
-    pub fn is_predecessor_of<'tcx>(
-        &self,
-        other: Location,
-        body: ReadOnlyBodyAndCache<'_, 'tcx>,
-    ) -> bool {
+    pub fn is_predecessor_of<'tcx>(&self, other: Location, body: &Body<'tcx>) -> bool {
         // If we are in the same block as the other location and are an earlier statement
         // then we are a predecessor of `other`.
         if self.block == other.block && self.statement_index < other.statement_index {
             return true;
         }
 
+        let predecessors = body.predecessors();
+
         // If we're in another block, then we want to check that block is a predecessor of `other`.
-        let mut queue: Vec<BasicBlock> = body.predecessors_for(other.block).to_vec();
+        let mut queue: Vec<BasicBlock> = predecessors[other.block].to_vec();
         let mut visited = FxHashSet::default();
 
         while let Some(block) = queue.pop() {
             // If we haven't visited this block before, then make sure we visit it's predecessors.
             if visited.insert(block) {
-                queue.extend(body.predecessors_for(block).iter().cloned());
+                queue.extend(predecessors[block].iter().cloned());
             } else {
                 continue;
             }

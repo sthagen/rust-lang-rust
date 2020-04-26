@@ -45,7 +45,7 @@ fn disable_error_reporting<F: FnOnce() -> R, R>(f: F) -> R {
     use winapi::um::winbase::SEM_NOGPFAULTERRORBOX;
 
     lazy_static! {
-        static ref LOCK: Mutex<()> = { Mutex::new(()) };
+        static ref LOCK: Mutex<()> = Mutex::new(());
     }
     // Error mode is a global variable, so lock it so only one thread will change it
     let _lock = LOCK.lock().unwrap();
@@ -3338,6 +3338,10 @@ impl<'test> TestCx<'test> {
     }
 
     fn delete_file(&self, file: &PathBuf) {
+        if !file.exists() {
+            // Deleting a nonexistant file would error.
+            return;
+        }
         if let Err(e) = fs::remove_file(file) {
             self.fatal(&format!("failed to delete `{}`: {}", file.display(), e,));
         }
@@ -3400,7 +3404,7 @@ impl<'test> TestCx<'test> {
         let examined_content =
             self.load_expected_output_from_path(&examined_path).unwrap_or_else(|_| String::new());
 
-        if examined_path.exists() && canon_content == &examined_content {
+        if canon_content == &examined_content {
             self.delete_file(&examined_path);
         }
     }

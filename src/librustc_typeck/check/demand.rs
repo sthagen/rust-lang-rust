@@ -36,7 +36,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     // Requires that the two types unify, and prints an error message if
     // they don't.
     pub fn demand_suptype(&self, sp: Span, expected: Ty<'tcx>, actual: Ty<'tcx>) {
-        self.demand_suptype_diag(sp, expected, actual).map(|mut e| e.emit());
+        if let Some(mut e) = self.demand_suptype_diag(sp, expected, actual) {
+            e.emit();
+        }
     }
 
     pub fn demand_suptype_diag(
@@ -222,7 +224,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let mut methods =
             self.probe_for_return_type(span, probe::Mode::MethodCall, expected, checked_ty, hir_id);
         methods.retain(|m| {
-            self.has_no_input_arg(m)
+            self.has_only_self_parameter(m)
                 && self
                     .tcx
                     .get_attrs(m.def_id)
@@ -243,10 +245,13 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         methods
     }
 
-    // This function checks if the method isn't static and takes other arguments than `self`.
-    fn has_no_input_arg(&self, method: &AssocItem) -> bool {
+    /// This function checks whether the method is not static and does not accept other parameters than `self`.
+    fn has_only_self_parameter(&self, method: &AssocItem) -> bool {
         match method.kind {
-            ty::AssocKind::Fn => self.tcx.fn_sig(method.def_id).inputs().skip_binder().len() == 1,
+            ty::AssocKind::Fn => {
+                method.fn_has_self_parameter
+                    && self.tcx.fn_sig(method.def_id).inputs().skip_binder().len() == 1
+            }
             _ => false,
         }
     }
@@ -390,9 +395,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
         match (&expr.kind, &expected.kind, &checked_ty.kind) {
             (_, &ty::Ref(_, exp, _), &ty::Ref(_, check, _)) => match (&exp.kind, &check.kind) {
-                (&ty::Str, &ty::Array(arr, _)) | (&ty::Str, &ty::Slice(arr))
-                    if arr == self.tcx.types.u8 =>
-                {
+                (&ty::Str, &ty::Array(arr, _) | &ty::Slice(arr)) if arr == self.tcx.types.u8 => {
                     if let hir::ExprKind::Lit(_) = expr.kind {
                         if let Ok(src) = sm.span_to_snippet(sp) {
                             if src.starts_with("b\"") {
@@ -405,9 +408,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         }
                     }
                 }
-                (&ty::Array(arr, _), &ty::Str) | (&ty::Slice(arr), &ty::Str)
-                    if arr == self.tcx.types.u8 =>
-                {
+                (&ty::Array(arr, _) | &ty::Slice(arr), &ty::Str) if arr == self.tcx.types.u8 => {
                     if let hir::ExprKind::Lit(_) = expr.kind {
                         if let Ok(src) = sm.span_to_snippet(sp) {
                             if src.starts_with('"') {
@@ -702,7 +703,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             let suffix_suggestion = format!(
                 "{}{}{}{}",
                 if needs_paren { "(" } else { "" },
-                if let (ty::Int(_), ty::Float(_)) | (ty::Uint(_), ty::Float(_)) =
+                if let (ty::Int(_) | ty::Uint(_), ty::Float(_)) =
                     (&expected_ty.kind, &checked_ty.kind,)
                 {
                     // Remove fractional part from literal, for example `42.0f32` into `42`
@@ -791,7 +792,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     }
                     true
                 }
-                (&ty::Uint(_), &ty::Float(_)) | (&ty::Int(_), &ty::Float(_)) => {
+                (&ty::Uint(_) | &ty::Int(_), &ty::Float(_)) => {
                     if literal_is_ty_suffixed(expr) {
                         err.span_suggestion(
                             expr.span,

@@ -306,7 +306,7 @@ fn mono_item_visibility(
             let def_id = tcx.hir().local_def_id(*hir_id);
             return if tcx.is_reachable_non_generic(def_id) {
                 *can_be_internalized = false;
-                default_visibility(tcx, def_id, false)
+                default_visibility(tcx, def_id.to_def_id(), false)
             } else {
                 Visibility::Hidden
             };
@@ -755,7 +755,7 @@ fn characteristic_def_id_of_mono_item<'tcx>(
             Some(def_id)
         }
         MonoItem::Static(def_id) => Some(def_id),
-        MonoItem::GlobalAsm(hir_id) => Some(tcx.hir().local_def_id(hir_id)),
+        MonoItem::GlobalAsm(hir_id) => Some(tcx.hir().local_def_id(hir_id).to_def_id()),
     }
 }
 
@@ -779,7 +779,7 @@ fn compute_codegen_unit_name(
                 cgu_def_id = Some(DefId { krate: def_id.krate, index: CRATE_DEF_INDEX });
             }
             break;
-        } else if tcx.def_kind(current_def_id) == Some(DefKind::Mod) {
+        } else if tcx.def_kind(current_def_id) == DefKind::Mod {
             if cgu_def_id.is_none() {
                 cgu_def_id = Some(current_def_id);
             }

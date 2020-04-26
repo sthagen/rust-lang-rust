@@ -104,7 +104,9 @@ impl<'tcx> FnCtxt<'_, 'tcx> {
         actual: Ty<'tcx>,
         ti: TopInfo<'tcx>,
     ) {
-        self.demand_eqtype_pat_diag(cause_span, expected, actual, ti).map(|mut err| err.emit());
+        if let Some(mut err) = self.demand_eqtype_pat_diag(cause_span, expected, actual, ti) {
+            err.emit();
+        }
     }
 }
 
@@ -286,7 +288,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 // These constants can be of a reference type, e.g. `const X: &u8 = &0;`.
                 // Peeling the reference types too early will cause type checking failures.
                 // Although it would be possible to *also* peel the types of the constants too.
-                Res::Def(DefKind::Const, _) | Res::Def(DefKind::AssocConst, _) => AdjustMode::Pass,
+                Res::Def(DefKind::Const | DefKind::AssocConst, _) => AdjustMode::Pass,
                 // In the `ValueNS`, we have `SelfCtor(..) | Ctor(_, Const), _)` remaining which
                 // could successfully compile. The former being `Self` requires a unit struct.
                 // In either case, and unlike constants, the pattern itself cannot be
@@ -449,12 +451,12 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         // Subtyping doesn't matter here, as the value is some kind of scalar.
         let demand_eqtype = |x, y| {
             if let Some((_, x_ty, x_span)) = x {
-                self.demand_eqtype_pat_diag(x_span, expected, x_ty, ti).map(|mut err| {
+                if let Some(mut err) = self.demand_eqtype_pat_diag(x_span, expected, x_ty, ti) {
                     if let Some((_, y_ty, y_span)) = y {
                         self.endpoint_has_type(&mut err, y_span, y_ty);
                     }
                     err.emit();
-                });
+                };
             }
         };
         demand_eqtype(lhs, rhs);
@@ -852,8 +854,12 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
         // Type-check the tuple struct pattern against the expected type.
         let diag = self.demand_eqtype_pat_diag(pat.span, expected, pat_ty, ti);
-        let had_err = diag.is_some();
-        diag.map(|mut err| err.emit());
+        let had_err = if let Some(mut err) = diag {
+            err.emit();
+            true
+        } else {
+            false
+        };
 
         // Type-check subpatterns.
         if subpats.len() == variant.fields.len()

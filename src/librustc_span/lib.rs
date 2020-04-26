@@ -9,7 +9,7 @@
 #![feature(const_if_match)]
 #![feature(const_fn)]
 #![feature(const_panic)]
-#![cfg_attr(not(bootstrap), feature(negative_impls))]
+#![feature(negative_impls)]
 #![feature(nll)]
 #![feature(optin_builtin_traits)]
 #![feature(specialization)]
@@ -657,7 +657,8 @@ impl MultiSpan {
         MultiSpan { primary_spans: vec![primary_span], span_labels: vec![] }
     }
 
-    pub fn from_spans(vec: Vec<Span>) -> MultiSpan {
+    pub fn from_spans(mut vec: Vec<Span>) -> MultiSpan {
+        vec.sort();
         MultiSpan { primary_spans: vec, span_labels: vec![] }
     }
 

@@ -209,7 +209,7 @@ impl<'tcx, Tag: Copy> ImmTy<'tcx, Tag> {
     }
 }
 
-impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
+impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
     /// Normalice `place.ptr` to a `Pointer` if this is a place and not a ZST.
     /// Can be helpful to avoid lots of `force_ptr` calls later, if this place is used a lot.
     #[inline]
@@ -248,13 +248,11 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
             }
         };
 
+        let alloc = self.memory.get_raw(ptr.alloc_id)?;
+
         match mplace.layout.abi {
             Abi::Scalar(..) => {
-                let scalar = self.memory.get_raw(ptr.alloc_id)?.read_scalar(
-                    self,
-                    ptr,
-                    mplace.layout.size,
-                )?;
+                let scalar = alloc.read_scalar(self, ptr, mplace.layout.size)?;
                 Ok(Some(ImmTy { imm: scalar.into(), layout: mplace.layout }))
             }
             Abi::ScalarPair(ref a, ref b) => {
@@ -267,8 +265,8 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
                 let b_offset = a_size.align_to(b.align(self).abi);
                 assert!(b_offset.bytes() > 0); // we later use the offset to tell apart the fields
                 let b_ptr = ptr.offset(b_offset, self)?;
-                let a_val = self.memory.get_raw(ptr.alloc_id)?.read_scalar(self, a_ptr, a_size)?;
-                let b_val = self.memory.get_raw(ptr.alloc_id)?.read_scalar(self, b_ptr, b_size)?;
+                let a_val = alloc.read_scalar(self, a_ptr, a_size)?;
+                let b_val = alloc.read_scalar(self, b_ptr, b_size)?;
                 Ok(Some(ImmTy { imm: Immediate::ScalarPair(a_val, b_val), layout: mplace.layout }))
             }
             _ => Ok(None),
@@ -419,7 +417,6 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         local: mir::Local,
         layout: Option<TyAndLayout<'tcx>>,
     ) -> InterpResult<'tcx, OpTy<'tcx, M::PointerTag>> {
-        assert_ne!(local, mir::RETURN_PLACE);
         let layout = self.layout_of_local(frame, local, layout)?;
         let op = if layout.is_zst() {
             // Do not read from ZST, they might not be initialized
@@ -440,7 +437,9 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
     ) -> InterpResult<'tcx, OpTy<'tcx, M::PointerTag>> {
         let op = match *place {
             Place::Ptr(mplace) => Operand::Indirect(mplace),
-            Place::Local { frame, local } => *self.access_local(&self.stack[frame], local, None)?,
+            Place::Local { frame, local } => {
+                *self.access_local(&self.stack()[frame], local, None)?
+            }
         };
         Ok(OpTy { op, layout: place.layout })
     }
@@ -452,16 +451,11 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         place: mir::Place<'tcx>,
         layout: Option<TyAndLayout<'tcx>>,
     ) -> InterpResult<'tcx, OpTy<'tcx, M::PointerTag>> {
-        let base_op = match place.local {
-            mir::RETURN_PLACE => throw_ub!(ReadFromReturnPlace),
-            local => {
-                // Do not use the layout passed in as argument if the base we are looking at
-                // here is not the entire place.
-                let layout = if place.projection.is_empty() { layout } else { None };
+        // Do not use the layout passed in as argument if the base we are looking at
+        // here is not the entire place.
+        let layout = if place.projection.is_empty() { layout } else { None };
 
-                self.access_local(self.frame(), local, layout)?
-            }
-        };
+        let base_op = self.access_local(self.frame(), place.local, layout)?;
 
         let op = place
             .projection
@@ -528,6 +522,10 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
                 // potentially requiring the current static to be evaluated again. This is not a
                 // problem here, because we are building an operand which means an actual read is
                 // happening.
+                //
+                // The machine callback `adjust_global_const` below is guaranteed to
+                // be called for all constants because `const_eval` calls
+                // `eval_const_to_op` recursively.
                 return Ok(self.const_eval(GlobalId { instance, promoted }, val.ty)?);
             }
             ty::ConstKind::Infer(..)
@@ -537,6 +535,10 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
             }
             ty::ConstKind::Value(val_val) => val_val,
         };
+        // This call allows the machine to create fresh allocation ids for
+        // thread-local statics (see the `adjust_global_const` function
+        // documentation).
+        let val_val = M::adjust_global_const(self, val_val)?;
         // Other cases need layout.
         let layout = from_known_layout(self.tcx, layout, || self.layout_of(val.ty))?;
         let op = match val_val {

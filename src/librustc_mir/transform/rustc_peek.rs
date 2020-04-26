@@ -6,7 +6,7 @@ use rustc_target::spec::abi::Abi;
 use crate::transform::{MirPass, MirSource};
 use rustc_hir::def_id::DefId;
 use rustc_index::bit_set::BitSet;
-use rustc_middle::mir::{self, Body, BodyAndCache, Local, Location};
+use rustc_middle::mir::{self, Body, Local, Location};
 use rustc_middle::ty::{self, Ty, TyCtxt};
 
 use crate::dataflow::move_paths::{HasMoveData, MoveData};
@@ -21,7 +21,7 @@ use crate::dataflow::{
 pub struct SanityCheck;
 
 impl<'tcx> MirPass<'tcx> for SanityCheck {
-    fn run_pass(&self, tcx: TyCtxt<'tcx>, src: MirSource<'tcx>, body: &mut BodyAndCache<'tcx>) {
+    fn run_pass(&self, tcx: TyCtxt<'tcx>, src: MirSource<'tcx>, body: &mut Body<'tcx>) {
         use crate::dataflow::has_rustc_mir_with;
         let def_id = src.def_id();
         if !tcx.has_attr(def_id, sym::rustc_mir) {
@@ -113,8 +113,7 @@ pub fn sanity_check_via_rustc_peek<'tcx, A>(
             .statements
             .iter()
             .enumerate()
-            .filter_map(|(i, stmt)| value_assigned_to_local(stmt, call.arg).map(|rval| (i, rval)))
-            .next()
+            .find_map(|(i, stmt)| value_assigned_to_local(stmt, call.arg).map(|rval| (i, rval)))
             .expect(
                 "call to rustc_peek should be preceded by \
                     assignment to temporary holding its argument",
@@ -122,8 +121,10 @@ pub fn sanity_check_via_rustc_peek<'tcx, A>(
 
         match (call.kind, peek_rval) {
             (PeekCallKind::ByRef, mir::Rvalue::Ref(_, _, place))
-            | (PeekCallKind::ByVal, mir::Rvalue::Use(mir::Operand::Move(place)))
-            | (PeekCallKind::ByVal, mir::Rvalue::Use(mir::Operand::Copy(place))) => {
+            | (
+                PeekCallKind::ByVal,
+                mir::Rvalue::Use(mir::Operand::Move(place) | mir::Operand::Copy(place)),
+            ) => {
                 let loc = Location { block: bb, statement_index };
                 cursor.seek_before(loc);
                 let state = cursor.get();

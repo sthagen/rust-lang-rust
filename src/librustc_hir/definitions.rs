@@ -246,7 +246,7 @@ impl DefPath {
 
         let mut opt_delimiter = None;
         for component in &self.data {
-            opt_delimiter.map(|d| s.push(d));
+            s.extend(opt_delimiter);
             opt_delimiter = Some('-');
             if component.disambiguator == 0 {
                 write!(s, "{}", component.data.as_symbol()).unwrap();
@@ -342,12 +342,8 @@ impl Definitions {
     }
 
     #[inline]
-    pub fn as_local_hir_id(&self, def_id: DefId) -> Option<hir::HirId> {
-        if let Some(def_id) = def_id.as_local() {
-            Some(self.local_def_id_to_hir_id(def_id))
-        } else {
-            None
-        }
+    pub fn as_local_hir_id(&self, def_id: LocalDefId) -> hir::HirId {
+        self.local_def_id_to_hir_id(def_id)
     }
 
     #[inline]

@@ -11,8 +11,8 @@ use crate::infer::canonical::Canonical;
 use crate::middle::cstore::CrateStoreDyn;
 use crate::middle::resolve_lifetime::ObjectLifetimeDefault;
 use crate::mir::interpret::ErrorHandled;
+use crate::mir::Body;
 use crate::mir::GeneratorLayout;
-use crate::mir::ReadOnlyBodyAndCache;
 use crate::traits::{self, Reveal};
 use crate::ty;
 use crate::ty::subst::{InternalSubsts, Subst, SubstsRef};
@@ -2667,18 +2667,20 @@ impl<'tcx> TyCtxt<'tcx> {
     }
 
     pub fn opt_item_name(self, def_id: DefId) -> Option<Ident> {
-        self.hir().as_local_hir_id(def_id).and_then(|hir_id| self.hir().get(hir_id).ident())
+        def_id
+            .as_local()
+            .and_then(|def_id| self.hir().get(self.hir().as_local_hir_id(def_id)).ident())
     }
 
     pub fn opt_associated_item(self, def_id: DefId) -> Option<AssocItem> {
-        let is_associated_item = if let Some(hir_id) = self.hir().as_local_hir_id(def_id) {
-            match self.hir().get(hir_id) {
+        let is_associated_item = if let Some(def_id) = def_id.as_local() {
+            match self.hir().get(self.hir().as_local_hir_id(def_id)) {
                 Node::TraitItem(_) | Node::ImplItem(_) => true,
                 _ => false,
             }
         } else {
             match self.def_kind(def_id) {
-                Some(DefKind::AssocConst | DefKind::AssocFn | DefKind::AssocTy) => true,
+                DefKind::AssocConst | DefKind::AssocFn | DefKind::AssocTy => true,
                 _ => false,
             }
         };
@@ -2776,9 +2778,7 @@ impl<'tcx> TyCtxt<'tcx> {
                 let enum_did = self.parent(did).unwrap();
                 self.adt_def(enum_did).variant_with_id(did)
             }
-            Res::Def(DefKind::Struct, did) | Res::Def(DefKind::Union, did) => {
-                self.adt_def(did).non_enum_variant()
-            }
+            Res::Def(DefKind::Struct | DefKind::Union, did) => self.adt_def(did).non_enum_variant(),
             Res::Def(DefKind::Ctor(CtorOf::Variant, ..), variant_ctor_did) => {
                 let variant_did = self.parent(variant_ctor_did).unwrap();
                 let enum_did = self.parent(variant_did).unwrap();
@@ -2810,9 +2810,9 @@ impl<'tcx> TyCtxt<'tcx> {
     }
 
     /// Returns the possibly-auto-generated MIR of a `(DefId, Subst)` pair.
-    pub fn instance_mir(self, instance: ty::InstanceDef<'tcx>) -> ReadOnlyBodyAndCache<'tcx, 'tcx> {
+    pub fn instance_mir(self, instance: ty::InstanceDef<'tcx>) -> &'tcx Body<'tcx> {
         match instance {
-            ty::InstanceDef::Item(did) => self.optimized_mir(did).unwrap_read_only(),
+            ty::InstanceDef::Item(did) => self.optimized_mir(did),
             ty::InstanceDef::VtableShim(..)
             | ty::InstanceDef::ReifyShim(..)
             | ty::InstanceDef::Intrinsic(..)
@@ -2820,14 +2820,14 @@ impl<'tcx> TyCtxt<'tcx> {
             | ty::InstanceDef::Virtual(..)
             | ty::InstanceDef::ClosureOnceShim { .. }
             | ty::InstanceDef::DropGlue(..)
-            | ty::InstanceDef::CloneShim(..) => self.mir_shims(instance).unwrap_read_only(),
+            | ty::InstanceDef::CloneShim(..) => self.mir_shims(instance),
         }
     }
 
     /// Gets the attributes of a definition.
     pub fn get_attrs(self, did: DefId) -> Attributes<'tcx> {
-        if let Some(id) = self.hir().as_local_hir_id(did) {
-            self.hir().attrs(id)
+        if let Some(did) = did.as_local() {
+            self.hir().attrs(self.hir().as_local_hir_id(did))
         } else {
             self.item_attrs(did)
         }
@@ -2865,8 +2865,8 @@ impl<'tcx> TyCtxt<'tcx> {
     /// Looks up the span of `impl_did` if the impl is local; otherwise returns `Err`
     /// with the name of the crate containing the impl.
     pub fn span_of_impl(self, impl_did: DefId) -> Result<Span, Symbol> {
-        if impl_did.is_local() {
-            let hir_id = self.hir().as_local_hir_id(impl_did).unwrap();
+        if let Some(impl_did) = impl_did.as_local() {
+            let hir_id = self.hir().as_local_hir_id(impl_did);
             Ok(self.hir().span(hir_id))
         } else {
             Err(self.crate_name(impl_did.krate))
@@ -2926,8 +2926,8 @@ pub struct AdtSizedConstraint<'tcx>(pub &'tcx [Ty<'tcx>]);
 
 /// Yields the parent function's `DefId` if `def_id` is an `impl Trait` definition.
 pub fn is_impl_trait_defn(tcx: TyCtxt<'_>, def_id: DefId) -> Option<DefId> {
-    if let Some(hir_id) = tcx.hir().as_local_hir_id(def_id) {
-        if let Node::Item(item) = tcx.hir().get(hir_id) {
+    if let Some(def_id) = def_id.as_local() {
+        if let Node::Item(item) = tcx.hir().get(tcx.hir().as_local_hir_id(def_id)) {
             if let hir::ItemKind::OpaqueTy(ref opaque_ty) = item.kind {
                 return opaque_ty.impl_trait_fn;
             }

@@ -164,28 +164,23 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
         body: hir::BodyId,
     ) {
         debug!("visiting fn");
-        let macro_kind = item
-            .attrs
-            .iter()
-            .filter_map(|a| {
-                if a.check_name(sym::proc_macro) {
-                    Some(MacroKind::Bang)
-                } else if a.check_name(sym::proc_macro_derive) {
-                    Some(MacroKind::Derive)
-                } else if a.check_name(sym::proc_macro_attribute) {
-                    Some(MacroKind::Attr)
-                } else {
-                    None
-                }
-            })
-            .next();
+        let macro_kind = item.attrs.iter().find_map(|a| {
+            if a.check_name(sym::proc_macro) {
+                Some(MacroKind::Bang)
+            } else if a.check_name(sym::proc_macro_derive) {
+                Some(MacroKind::Derive)
+            } else if a.check_name(sym::proc_macro_attribute) {
+                Some(MacroKind::Attr)
+            } else {
+                None
+            }
+        });
         match macro_kind {
             Some(kind) => {
                 let name = if kind == MacroKind::Derive {
                     item.attrs
                         .lists(sym::proc_macro_derive)
-                        .filter_map(|mi| mi.ident())
-                        .next()
+                        .find_map(|mi| mi.ident())
                         .expect("proc-macro derives require a name")
                         .name
                 } else {
@@ -331,8 +326,8 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
             return false;
         }
 
-        let res_hir_id = match tcx.hir().as_local_hir_id(res_did) {
-            Some(n) => n,
+        let res_hir_id = match res_did.as_local() {
+            Some(n) => tcx.hir().as_local_hir_id(n),
             None => return false,
         };
 
@@ -391,7 +386,7 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
 
         if item.vis.node.is_pub() {
             let def_id = self.cx.tcx.hir().local_def_id(item.hir_id);
-            self.store_path(def_id);
+            self.store_path(def_id.to_def_id());
         }
 
         match item.kind {
@@ -629,7 +624,7 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
 
         Macro {
             hid: def.hir_id,
-            def_id: self.cx.tcx.hir().local_def_id(def.hir_id),
+            def_id: self.cx.tcx.hir().local_def_id(def.hir_id).to_def_id(),
             attrs: &def.attrs,
             name: renamed.unwrap_or(def.ident.name),
             whence: def.span,

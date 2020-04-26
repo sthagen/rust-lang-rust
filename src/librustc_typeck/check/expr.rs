@@ -1564,10 +1564,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         base_did: DefId,
     ) {
         let struct_path = self.tcx().def_path_str(base_did);
-        let kind_name = match self.tcx().def_kind(base_did) {
-            Some(def_kind) => def_kind.descr(base_did),
-            _ => " ",
-        };
+        let kind_name = self.tcx().def_kind(base_did).descr(base_did);
         let mut err = struct_span_err!(
             self.tcx().sess,
             field.span,
@@ -1625,8 +1622,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             return;
         }
         let param_def_id = generic_param.def_id;
-        let param_hir_id = match self.tcx.hir().as_local_hir_id(param_def_id) {
-            Some(x) => x,
+        let param_hir_id = match param_def_id.as_local() {
+            Some(x) => self.tcx.hir().as_local_hir_id(x),
             None => return,
         };
         let param_span = self.tcx.hir().span(param_hir_id);

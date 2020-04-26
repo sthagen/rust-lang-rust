@@ -13,7 +13,7 @@ use rustc_hir::intravisit::Visitor;
 use rustc_hir::{AsyncGeneratorKind, GeneratorKind, Node};
 use rustc_middle::ty::TypeckTables;
 use rustc_middle::ty::{
-    self, AdtKind, DefIdTree, ToPredicate, Ty, TyCtxt, TypeFoldable, WithConstness,
+    self, AdtKind, DefIdTree, Infer, InferTy, ToPredicate, Ty, TyCtxt, TypeFoldable, WithConstness,
 };
 use rustc_span::symbol::{kw, sym, Symbol};
 use rustc_span::{MultiSpan, Span, DUMMY_SP};
@@ -125,6 +125,7 @@ pub trait InferCtxtExt<'tcx> {
         err: &mut DiagnosticBuilder<'_>,
         target_span: Span,
         scope_span: &Option<Span>,
+        await_span: Span,
         expr: Option<hir::HirId>,
         snippet: String,
         inner_generator_body: Option<&hir::Body<'_>>,
@@ -319,10 +320,12 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                     );
                     return;
                 }
-                hir::Node::Item(
-                    hir::Item { kind: hir::ItemKind::Trait(_, _, generics, _, _), .. }
-                    | hir::Item { kind: hir::ItemKind::Impl { generics, .. }, .. },
-                ) if projection.is_some() => {
+                hir::Node::Item(hir::Item {
+                    kind:
+                        hir::ItemKind::Trait(_, _, generics, _, _)
+                        | hir::ItemKind::Impl { generics, .. },
+                    ..
+                }) if projection.is_some() => {
                     // Missing restriction on associated type of type parameter (unmet projection).
                     suggest_restriction(
                         &generics,
@@ -335,19 +338,19 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                     return;
                 }
 
-                hir::Node::Item(
-                    hir::Item { kind: hir::ItemKind::Struct(_, generics), .. }
-                    | hir::Item { kind: hir::ItemKind::Enum(_, generics), .. }
-                    | hir::Item { kind: hir::ItemKind::Union(_, generics), .. }
-                    | hir::Item { kind: hir::ItemKind::Trait(_, _, generics, ..), .. }
-                    | hir::Item { kind: hir::ItemKind::Impl { generics, .. }, .. }
-                    | hir::Item { kind: hir::ItemKind::Fn(_, generics, _), .. }
-                    | hir::Item { kind: hir::ItemKind::TyAlias(_, generics), .. }
-                    | hir::Item { kind: hir::ItemKind::TraitAlias(generics, _), .. }
-                    | hir::Item {
-                        kind: hir::ItemKind::OpaqueTy(hir::OpaqueTy { generics, .. }), ..
-                    },
-                )
+                hir::Node::Item(hir::Item {
+                    kind:
+                        hir::ItemKind::Struct(_, generics)
+                        | hir::ItemKind::Enum(_, generics)
+                        | hir::ItemKind::Union(_, generics)
+                        | hir::ItemKind::Trait(_, _, generics, ..)
+                        | hir::ItemKind::Impl { generics, .. }
+                        | hir::ItemKind::Fn(_, generics, _)
+                        | hir::ItemKind::TyAlias(_, generics)
+                        | hir::ItemKind::TraitAlias(generics, _)
+                        | hir::ItemKind::OpaqueTy(hir::OpaqueTy { generics, .. }),
+                    ..
+                })
                 | hir::Node::TraitItem(hir::TraitItem { generics, .. })
                 | hir::Node::ImplItem(hir::ImplItem { generics, .. })
                     if param_ty =>
@@ -427,7 +430,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
             };
 
         let hir = self.tcx.hir();
-        let hir_id = hir.as_local_hir_id(def_id)?;
+        let hir_id = hir.as_local_hir_id(def_id.as_local()?);
         let parent_node = hir.get_parent_node(hir_id);
         match hir.find(parent_node) {
             Some(hir::Node::Stmt(hir::Stmt { kind: hir::StmtKind::Local(local), .. })) => {
@@ -466,9 +469,11 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
         );
 
         match self.evaluate_obligation(&obligation) {
-            Ok(EvaluationResult::EvaluatedToOk)
-            | Ok(EvaluationResult::EvaluatedToOkModuloRegions)
-            | Ok(EvaluationResult::EvaluatedToAmbig) => {}
+            Ok(
+                EvaluationResult::EvaluatedToOk
+                | EvaluationResult::EvaluatedToOkModuloRegions
+                | EvaluationResult::EvaluatedToAmbig,
+            ) => {}
             _ => return,
         }
         let hir = self.tcx.hir();
@@ -822,12 +827,28 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
             .iter()
             .filter_map(|expr| tables.node_type_opt(expr.hir_id))
             .map(|ty| self.resolve_vars_if_possible(&ty));
-        let (last_ty, all_returns_have_same_type) = ret_types.clone().fold(
-            (None, true),
-            |(last_ty, mut same): (std::option::Option<Ty<'_>>, bool), ty| {
+        let (last_ty, all_returns_have_same_type, only_never_return) = ret_types.clone().fold(
+            (None, true, true),
+            |(last_ty, mut same, only_never_return): (std::option::Option<Ty<'_>>, bool, bool),
+             ty| {
                 let ty = self.resolve_vars_if_possible(&ty);
-                same &= last_ty.map_or(true, |last_ty| last_ty == ty) && ty.kind != ty::Error;
-                (Some(ty), same)
+                same &=
+                    ty.kind != ty::Error
+                        && last_ty.map_or(true, |last_ty| {
+                            // FIXME: ideally we would use `can_coerce` here instead, but `typeck` comes
+                            // *after* in the dependency graph.
+                            match (&ty.kind, &last_ty.kind) {
+                                (Infer(InferTy::IntVar(_)), Infer(InferTy::IntVar(_)))
+                                | (Infer(InferTy::FloatVar(_)), Infer(InferTy::FloatVar(_)))
+                                | (Infer(InferTy::FreshIntTy(_)), Infer(InferTy::FreshIntTy(_)))
+                                | (
+                                    Infer(InferTy::FreshFloatTy(_)),
+                                    Infer(InferTy::FreshFloatTy(_)),
+                                ) => true,
+                                _ => ty == last_ty,
+                            }
+                        });
+                (Some(ty), same, only_never_return && matches!(ty.kind, ty::Never))
             },
         );
         let all_returns_conform_to_trait =
@@ -836,13 +857,14 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                     ty::Dynamic(predicates, _) => {
                         let cause = ObligationCause::misc(ret_ty.span, ret_ty.hir_id);
                         let param_env = ty::ParamEnv::empty();
-                        ret_types.all(|returned_ty| {
-                            predicates.iter().all(|predicate| {
-                                let pred = predicate.with_self_ty(self.tcx, returned_ty);
-                                let obl = Obligation::new(cause.clone(), param_env, pred);
-                                self.predicate_may_hold(&obl)
+                        only_never_return
+                            || ret_types.all(|returned_ty| {
+                                predicates.iter().all(|predicate| {
+                                    let pred = predicate.with_self_ty(self.tcx, returned_ty);
+                                    let obl = Obligation::new(cause.clone(), param_env, pred);
+                                    self.predicate_may_hold(&obl)
+                                })
                             })
-                        })
                     }
                     _ => false,
                 }
@@ -851,21 +873,19 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
             };
 
         let sm = self.tcx.sess.source_map();
-        let (snippet, last_ty) =
-            if let (true, hir::TyKind::TraitObject(..), Ok(snippet), true, Some(last_ty)) = (
-                // Verify that we're dealing with a return `dyn Trait`
-                ret_ty.span.overlaps(span),
-                &ret_ty.kind,
-                sm.span_to_snippet(ret_ty.span),
-                // If any of the return types does not conform to the trait, then we can't
-                // suggest `impl Trait` nor trait objects, it is a type mismatch error.
-                all_returns_conform_to_trait,
-                last_ty,
-            ) {
-                (snippet, last_ty)
-            } else {
-                return false;
-            };
+        let snippet = if let (true, hir::TyKind::TraitObject(..), Ok(snippet), true) = (
+            // Verify that we're dealing with a return `dyn Trait`
+            ret_ty.span.overlaps(span),
+            &ret_ty.kind,
+            sm.span_to_snippet(ret_ty.span),
+            // If any of the return types does not conform to the trait, then we can't
+            // suggest `impl Trait` nor trait objects: it is a type mismatch error.
+            all_returns_conform_to_trait,
+        ) {
+            snippet
+        } else {
+            return false;
+        };
         err.code(error_code!(E0746));
         err.set_primary_message("return type cannot have an unboxed trait object");
         err.children.clear();
@@ -877,13 +897,22 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
             #using-trait-objects-that-allow-for-values-of-different-types>";
         let has_dyn = snippet.split_whitespace().next().map_or(false, |s| s == "dyn");
         let trait_obj = if has_dyn { &snippet[4..] } else { &snippet[..] };
-        if all_returns_have_same_type {
+        if only_never_return {
+            // No return paths, probably using `panic!()` or similar.
+            // Suggest `-> T`, `-> impl Trait`, and if `Trait` is object safe, `-> Box<dyn Trait>`.
+            suggest_trait_object_return_type_alternatives(
+                err,
+                ret_ty.span,
+                trait_obj,
+                is_object_safe,
+            );
+        } else if let (Some(last_ty), true) = (last_ty, all_returns_have_same_type) {
             // Suggest `-> impl Trait`.
             err.span_suggestion(
                 ret_ty.span,
                 &format!(
-                    "return `impl {1}` instead, as all return paths are of type `{}`, \
-                        which implements `{1}`",
+                    "use `impl {1}` as the return type, as all return paths are of type `{}`, \
+                     which implements `{1}`",
                     last_ty, trait_obj,
                 ),
                 format!("impl {}", trait_obj),
@@ -921,8 +950,8 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
             }
             err.note(trait_obj_msg);
             err.note(&format!(
-                "if all the returned values were of the same type you could use \
-                    `impl {}` as the return type",
+                "if all the returned values were of the same type you could use `impl {}` as the \
+                 return type",
                 trait_obj,
             ));
             err.note(impl_trait_msg);
@@ -1180,7 +1209,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
         let span = self.tcx.def_span(generator_did);
 
         // Do not ICE on closure typeck (#66868).
-        if hir.as_local_hir_id(generator_did).is_none() {
+        if !generator_did.is_local() {
             return false;
         }
 
@@ -1206,8 +1235,9 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
             }
         };
 
-        let generator_body = hir
-            .as_local_hir_id(generator_did)
+        let generator_body = generator_did
+            .as_local()
+            .map(|def_id| hir.as_local_hir_id(def_id))
             .and_then(|hir_id| hir.maybe_body_owned_by(hir_id))
             .map(|body_id| hir.body(body_id));
         let mut visitor = AwaitsVisitor::default();
@@ -1261,8 +1291,16 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                         ty_matches(ty)
                     })
                     .map(|expr| expr.span);
-                let ty::GeneratorInteriorTypeCause { span, scope_span, expr, .. } = cause;
-                (span, source_map.span_to_snippet(*span), scope_span, expr, from_awaited_ty)
+                let ty::GeneratorInteriorTypeCause { span, scope_span, yield_span, expr, .. } =
+                    cause;
+                (
+                    span,
+                    source_map.span_to_snippet(*span),
+                    scope_span,
+                    yield_span,
+                    expr,
+                    from_awaited_ty,
+                )
             });
 
         debug!(
@@ -1270,11 +1308,14 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                 generator_interior_types={:?} target_span={:?}",
             target_ty, tables.generator_interior_types, target_span
         );
-        if let Some((target_span, Ok(snippet), scope_span, expr, from_awaited_ty)) = target_span {
+        if let Some((target_span, Ok(snippet), scope_span, yield_span, expr, from_awaited_ty)) =
+            target_span
+        {
             self.note_obligation_cause_for_async_await(
                 err,
                 *target_span,
                 scope_span,
+                *yield_span,
                 *expr,
                 snippet,
                 generator_body,
@@ -1299,6 +1340,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
         err: &mut DiagnosticBuilder<'_>,
         target_span: Span,
         scope_span: &Option<Span>,
+        yield_span: Span,
         expr: Option<hir::HirId>,
         snippet: String,
         inner_generator_body: Option<&hir::Body<'_>>,
@@ -1314,10 +1356,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
 
         let is_async = inner_generator_body
             .and_then(|body| body.generator_kind())
-            .map(|generator_kind| match generator_kind {
-                hir::GeneratorKind::Async(..) => true,
-                _ => false,
-            })
+            .map(|generator_kind| matches!(generator_kind, hir::GeneratorKind::Async(..)))
             .unwrap_or(false);
         let (await_or_yield, an_await_or_yield) =
             if is_async { ("await", "an await") } else { ("yield", "a yield") };
@@ -1348,7 +1387,8 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                         GeneratorKind::Async(AsyncGeneratorKind::Fn) => self
                             .tcx
                             .parent(generator_did)
-                            .and_then(|parent_did| hir.as_local_hir_id(parent_did))
+                            .and_then(|parent_did| parent_did.as_local())
+                            .map(|parent_did| hir.as_local_hir_id(parent_did))
                             .and_then(|parent_hir_id| hir.opt_name(parent_hir_id))
                             .map(|name| {
                                 format!("future returned by `{}` is not {}", name, trait_name)
@@ -1393,10 +1433,9 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                 "note_obligation_cause_for_async_await generator_interior_types: {:#?}",
                 tables.generator_interior_types
             );
-            let await_span = tables.generator_interior_types.iter().map(|t| t.span).last().unwrap();
-            let mut span = MultiSpan::from_span(await_span);
+            let mut span = MultiSpan::from_span(yield_span);
             span.push_span_label(
-                await_span,
+                yield_span,
                 format!("{} occurs here, with `{}` maybe used later", await_or_yield, snippet),
             );
 
@@ -1448,7 +1487,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                 // ```
                 debug!("parent_def_kind: {:?}", self.tcx.def_kind(parent_did));
                 let is_raw_borrow_inside_fn_like_call = match self.tcx.def_kind(parent_did) {
-                    Some(DefKind::Fn) | Some(DefKind::Ctor(..)) => target_ty.is_unsafe_ptr(),
+                    DefKind::Fn | DefKind::Ctor(..) => target_ty.is_unsafe_ptr(),
                     _ => false,
                 };
 
@@ -1810,5 +1849,41 @@ impl NextTypeParamName for &[hir::GenericParam<'_>] {
             .find(|n| !used_names.contains(&Symbol::intern(n)))
             .unwrap_or(&"ParamName")
             .to_string()
+    }
+}
+
+fn suggest_trait_object_return_type_alternatives(
+    err: &mut DiagnosticBuilder<'tcx>,
+    ret_ty: Span,
+    trait_obj: &str,
+    is_object_safe: bool,
+) {
+    err.span_suggestion(
+        ret_ty,
+        "use some type `T` that is `T: Sized` as the return type if all return paths have the \
+            same type",
+        "T".to_string(),
+        Applicability::MaybeIncorrect,
+    );
+    err.span_suggestion(
+        ret_ty,
+        &format!(
+            "use `impl {}` as the return type if all return paths have the same type but you \
+                want to expose only the trait in the signature",
+            trait_obj,
+        ),
+        format!("impl {}", trait_obj),
+        Applicability::MaybeIncorrect,
+    );
+    if is_object_safe {
+        err.span_suggestion(
+            ret_ty,
+            &format!(
+                "use a boxed trait object if all return paths implement trait `{}`",
+                trait_obj,
+            ),
+            format!("Box<dyn {}>", trait_obj),
+            Applicability::MaybeIncorrect,
+        );
     }
 }

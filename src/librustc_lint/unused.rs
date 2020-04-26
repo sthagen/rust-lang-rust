@@ -16,7 +16,7 @@ use rustc_middle::ty::{self, Ty};
 use rustc_session::lint::builtin::UNUSED_ATTRIBUTES;
 use rustc_span::symbol::Symbol;
 use rustc_span::symbol::{kw, sym};
-use rustc_span::{BytePos, Span};
+use rustc_span::{BytePos, Span, DUMMY_SP};
 
 use log::debug;
 
@@ -56,9 +56,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for UnusedResults {
                 match callee.kind {
                     hir::ExprKind::Path(ref qpath) => {
                         match cx.tables.qpath_res(qpath, callee.hir_id) {
-                            Res::Def(DefKind::Fn, def_id) | Res::Def(DefKind::AssocFn, def_id) => {
-                                Some(def_id)
-                            }
+                            Res::Def(DefKind::Fn | DefKind::AssocFn, def_id) => Some(def_id),
                             // `Res::Local` if it was a closure, for which we
                             // do not currently support must-use linting
                             _ => None,
@@ -417,6 +415,12 @@ trait UnusedDelimLint {
         msg: &str,
         keep_space: (bool, bool),
     ) {
+        // FIXME(flip1995): Quick and dirty fix for #70814. This should be fixed in rustdoc
+        // properly.
+        if span == DUMMY_SP {
+            return;
+        }
+
         cx.struct_span_lint(self.lint(), span, |lint| {
             let span_msg = format!("unnecessary {} around {}", Self::DELIM_STR, msg);
             let mut err = lint.build(&span_msg);

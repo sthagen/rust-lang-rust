@@ -1,3 +1,4 @@
+use either::Either;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_errors::{Applicability, DiagnosticBuilder};
 use rustc_hir as hir;
@@ -186,12 +187,12 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
             }
 
             let ty =
-                Place::ty_from(used_place.local, used_place.projection, *self.body, self.infcx.tcx)
+                Place::ty_from(used_place.local, used_place.projection, self.body, self.infcx.tcx)
                     .ty;
             let needs_note = match ty.kind {
                 ty::Closure(id, _) => {
                     let tables = self.infcx.tcx.typeck_tables_of(id);
-                    let hir_id = self.infcx.tcx.hir().as_local_hir_id(id).unwrap();
+                    let hir_id = self.infcx.tcx.hir().as_local_hir_id(id.expect_local());
 
                     tables.closure_kind_origins().get(hir_id).is_none()
                 }
@@ -202,7 +203,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                 let mpi = self.move_data.moves[move_out_indices[0]].path;
                 let place = &self.move_data.move_paths[mpi].place;
 
-                let ty = place.ty(*self.body, self.infcx.tcx).ty;
+                let ty = place.ty(self.body, self.infcx.tcx).ty;
                 let opt_name =
                     self.describe_place_with_options(place.as_ref(), IncludingDowncast(true));
                 let note_msg = match opt_name {
@@ -407,8 +408,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                 self.cannot_uniquely_borrow_by_two_closures(span, &desc_place, issued_span, None)
             }
 
-            (BorrowKind::Mut { .. }, BorrowKind::Shallow)
-            | (BorrowKind::Unique, BorrowKind::Shallow) => {
+            (BorrowKind::Mut { .. } | BorrowKind::Unique, BorrowKind::Shallow) => {
                 if let Some(immutable_section_description) =
                     self.classify_immutable_section(issued_borrow.assigned_place)
                 {
@@ -489,12 +489,14 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                 )
             }
 
-            (BorrowKind::Shared, BorrowKind::Shared)
-            | (BorrowKind::Shared, BorrowKind::Shallow)
-            | (BorrowKind::Shallow, BorrowKind::Mut { .. })
-            | (BorrowKind::Shallow, BorrowKind::Unique)
-            | (BorrowKind::Shallow, BorrowKind::Shared)
-            | (BorrowKind::Shallow, BorrowKind::Shallow) => unreachable!(),
+            (BorrowKind::Shared, BorrowKind::Shared | BorrowKind::Shallow)
+            | (
+                BorrowKind::Shallow,
+                BorrowKind::Mut { .. }
+                | BorrowKind::Unique
+                | BorrowKind::Shared
+                | BorrowKind::Shallow,
+            ) => unreachable!(),
         };
 
         if issued_spans == borrow_spans {
@@ -590,7 +592,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         // Define a small closure that we can use to check if the type of a place
         // is a union.
         let union_ty = |place_base, place_projection| {
-            let ty = Place::ty_from(place_base, place_projection, *self.body, self.infcx.tcx).ty;
+            let ty = Place::ty_from(place_base, place_projection, self.body, self.infcx.tcx).ty;
             ty.ty_adt_def().filter(|adt| adt.is_union()).map(|_| ty)
         };
 
@@ -862,7 +864,8 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                 format!("`{}` would have to be valid for `{}`...", name, region_name),
             );
 
-            if let Some(fn_hir_id) = self.infcx.tcx.hir().as_local_hir_id(self.mir_def_id) {
+            if let Some(def_id) = self.mir_def_id.as_local() {
+                let fn_hir_id = self.infcx.tcx.hir().as_local_hir_id(def_id);
                 err.span_label(
                     drop_span,
                     format!(
@@ -1261,8 +1264,23 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
     }
 
     fn get_moved_indexes(&mut self, location: Location, mpi: MovePathIndex) -> Vec<MoveSite> {
+        fn predecessor_locations(
+            body: &'a mir::Body<'tcx>,
+            location: Location,
+        ) -> impl Iterator<Item = Location> + 'a {
+            if location.statement_index == 0 {
+                let predecessors = body.predecessors()[location.block].to_vec();
+                Either::Left(predecessors.into_iter().map(move |bb| body.terminator_loc(bb)))
+            } else {
+                Either::Right(std::iter::once(Location {
+                    statement_index: location.statement_index - 1,
+                    ..location
+                }))
+            }
+        }
+
         let mut stack = Vec::new();
-        stack.extend(self.body.predecessor_locations(location).map(|predecessor| {
+        stack.extend(predecessor_locations(self.body, location).map(|predecessor| {
             let is_back_edge = location.dominates(predecessor, &self.dominators);
             (predecessor, is_back_edge)
         }));
@@ -1344,7 +1362,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                 continue 'dfs;
             }
 
-            stack.extend(self.body.predecessor_locations(location).map(|predecessor| {
+            stack.extend(predecessor_locations(self.body, location).map(|predecessor| {
                 let back_edge = location.dominates(predecessor, &self.dominators);
                 (predecessor, is_back_edge || back_edge)
             }));
@@ -1426,17 +1444,19 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         // PATTERN;) then make the error refer to that local, rather than the
         // place being assigned later.
         let (place_description, assigned_span) = match local_decl {
-            Some(LocalDecl { local_info: LocalInfo::User(ClearCrossCrate::Clear), .. })
-            | Some(LocalDecl {
+            Some(LocalDecl {
                 local_info:
-                    LocalInfo::User(ClearCrossCrate::Set(BindingForm::Var(VarBindingForm {
-                        opt_match_place: None,
-                        ..
-                    }))),
+                    LocalInfo::User(
+                        ClearCrossCrate::Clear
+                        | ClearCrossCrate::Set(BindingForm::Var(VarBindingForm {
+                            opt_match_place: None,
+                            ..
+                        })),
+                    )
+                    | LocalInfo::StaticRef { .. }
+                    | LocalInfo::Other,
                 ..
             })
-            | Some(LocalDecl { local_info: LocalInfo::StaticRef { .. }, .. })
-            | Some(LocalDecl { local_info: LocalInfo::Other, .. })
             | None => (self.describe_any_place(place.as_ref()), assigned_span),
             Some(decl) => (self.describe_any_place(err_place.as_ref()), decl.source_info.span),
         };
@@ -1483,7 +1503,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                         StorageDeadOrDrop::LocalStorageDead
                         | StorageDeadOrDrop::BoxedStorageDead => {
                             assert!(
-                                Place::ty_from(place.local, proj_base, *self.body, tcx).ty.is_box(),
+                                Place::ty_from(place.local, proj_base, self.body, tcx).ty.is_box(),
                                 "Drop of value behind a reference or raw pointer"
                             );
                             StorageDeadOrDrop::BoxedStorageDead
@@ -1491,7 +1511,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                         StorageDeadOrDrop::Destructor(_) => base_access,
                     },
                     ProjectionElem::Field(..) | ProjectionElem::Downcast(..) => {
-                        let base_ty = Place::ty_from(place.local, proj_base, *self.body, tcx).ty;
+                        let base_ty = Place::ty_from(place.local, proj_base, self.body, tcx).ty;
                         match base_ty.kind {
                             ty::Adt(def, _) if def.has_dtor(tcx) => {
                                 // Report the outermost adt with a destructor
@@ -1763,7 +1783,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
     ) -> Option<AnnotatedBorrowFnSignature<'tcx>> {
         debug!("annotate_fn_sig: did={:?} sig={:?}", did, sig);
         let is_closure = self.infcx.tcx.is_closure(did);
-        let fn_hir_id = self.infcx.tcx.hir().as_local_hir_id(did)?;
+        let fn_hir_id = self.infcx.tcx.hir().as_local_hir_id(did.as_local()?);
         let fn_decl = self.infcx.tcx.hir().fn_decl_by_hir_id(fn_hir_id)?;
 
         // We need to work out which arguments to highlight. We do this by looking

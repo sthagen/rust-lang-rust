@@ -341,8 +341,8 @@ pub fn const_eval_raw_provider<'tcx>(
                     // because any code that existed before validation could not have failed
                     // validation thus preventing such a hard error from being a backwards
                     // compatibility hazard
-                    Some(DefKind::Const) | Some(DefKind::AssocConst) => {
-                        let hir_id = tcx.hir().as_local_hir_id(def_id).unwrap();
+                    DefKind::Const | DefKind::AssocConst => {
+                        let hir_id = tcx.hir().as_local_hir_id(def_id.expect_local());
                         err.report_as_lint(
                             tcx.at(tcx.def_span(def_id)),
                             "any use of this value will cause an error",
@@ -365,7 +365,7 @@ pub fn const_eval_raw_provider<'tcx>(
                                 err.report_as_lint(
                                     tcx.at(span),
                                     "reaching this expression at runtime will panic or abort",
-                                    tcx.hir().as_local_hir_id(def_id).unwrap(),
+                                    tcx.hir().as_local_hir_id(def_id.expect_local()),
                                     Some(err.span),
                                 )
                             }

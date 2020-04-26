@@ -42,7 +42,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
         // This attribute causes us to dump some writeback information
         // in the form of errors, which is uSymbol for unit tests.
-        let rustc_dump_user_substs = self.tcx.has_attr(item_def_id, sym::rustc_dump_user_substs);
+        let rustc_dump_user_substs =
+            self.tcx.has_attr(item_def_id.to_def_id(), sym::rustc_dump_user_substs);
 
         let mut wbcx = WritebackCx::new(self, body, rustc_dump_user_substs);
         for param in body.params {
@@ -137,8 +138,7 @@ impl<'cx, 'tcx> WritebackCx<'cx, 'tcx> {
     // operating on scalars, we clear the overload.
     fn fix_scalar_builtin_expr(&mut self, e: &hir::Expr<'_>) {
         match e.kind {
-            hir::ExprKind::Unary(hir::UnOp::UnNeg, ref inner)
-            | hir::ExprKind::Unary(hir::UnOp::UnNot, ref inner) => {
+            hir::ExprKind::Unary(hir::UnOp::UnNeg | hir::UnOp::UnNot, ref inner) => {
                 let inner_ty = self.fcx.node_ty(inner.hir_id);
                 let inner_ty = self.fcx.resolve_vars_if_possible(&inner_ty);
 
@@ -165,12 +165,18 @@ impl<'cx, 'tcx> WritebackCx<'cx, 'tcx> {
                         hir::ExprKind::Binary(..) => {
                             if !op.node.is_by_value() {
                                 let mut adjustments = tables.adjustments_mut();
-                                adjustments.get_mut(lhs.hir_id).map(|a| a.pop());
-                                adjustments.get_mut(rhs.hir_id).map(|a| a.pop());
+                                if let Some(a) = adjustments.get_mut(lhs.hir_id) {
+                                    a.pop();
+                                }
+                                if let Some(a) = adjustments.get_mut(rhs.hir_id) {
+                                    a.pop();
+                                }
                             }
                         }
                         hir::ExprKind::AssignOp(..) => {
-                            tables.adjustments_mut().get_mut(lhs.hir_id).map(|a| a.pop());
+                            if let Some(a) = tables.adjustments_mut().get_mut(lhs.hir_id) {
+                                a.pop();
+                            }
                         }
                         _ => {}
                     }
@@ -215,7 +221,7 @@ impl<'cx, 'tcx> WritebackCx<'cx, 'tcx> {
                     tables.type_dependent_defs_mut().remove(e.hir_id);
                     tables.node_substs_mut().remove(e.hir_id);
 
-                    tables.adjustments_mut().get_mut(base.hir_id).map(|a| {
+                    if let Some(a) = tables.adjustments_mut().get_mut(base.hir_id) {
                         // Discard the need for a mutable borrow
 
                         // Extra adjustment made when indexing causes a drop
@@ -229,7 +235,7 @@ impl<'cx, 'tcx> WritebackCx<'cx, 'tcx> {
                             // So the borrow discard actually happens here
                             a.pop();
                         }
-                    });
+                    }
                 }
             }
         }
@@ -427,7 +433,7 @@ impl<'cx, 'tcx> WritebackCx<'cx, 'tcx> {
 
     fn visit_opaque_types(&mut self, span: Span) {
         for (&def_id, opaque_defn) in self.fcx.opaque_types.borrow().iter() {
-            let hir_id = self.tcx().hir().as_local_hir_id(def_id).unwrap();
+            let hir_id = self.tcx().hir().as_local_hir_id(def_id.expect_local());
             let instantiated_ty = self.resolve(&opaque_defn.concrete_ty, &hir_id);
 
             debug_assert!(!instantiated_ty.has_escaping_bound_vars());

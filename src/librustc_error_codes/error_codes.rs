@@ -386,6 +386,7 @@ E0691: include_str!("./error_codes/E0691.md"),
 E0692: include_str!("./error_codes/E0692.md"),
 E0693: include_str!("./error_codes/E0693.md"),
 E0695: include_str!("./error_codes/E0695.md"),
+E0696: include_str!("./error_codes/E0696.md"),
 E0697: include_str!("./error_codes/E0697.md"),
 E0698: include_str!("./error_codes/E0698.md"),
 E0699: include_str!("./error_codes/E0699.md"),
@@ -431,6 +432,8 @@ E0748: include_str!("./error_codes/E0748.md"),
 E0749: include_str!("./error_codes/E0749.md"),
 E0750: include_str!("./error_codes/E0750.md"),
 E0751: include_str!("./error_codes/E0751.md"),
+E0752: include_str!("./error_codes/E0752.md"),
+E0753: include_str!("./error_codes/E0753.md"),
 ;
 //  E0006, // merged with E0005
 //  E0008, // cannot bind by-move into a pattern guard
@@ -602,7 +605,6 @@ E0751: include_str!("./error_codes/E0751.md"),
     E0687, // in-band lifetimes cannot be used in `fn`/`Fn` syntax
     E0688, // in-band lifetimes cannot be mixed with explicit lifetime binders
 //  E0694, // an unknown tool name found in scoped attributes
-    E0696, // `continue` pointing to a labeled block
 //  E0702, // replaced with a generic attribute input check
 //  E0707, // multiple elided lifetimes used in arguments of `async fn`
 //  E0709, // multiple different lifetimes used in arguments of `async fn`

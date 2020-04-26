@@ -11,7 +11,7 @@ use super::{
     FnVal, ImmTy, InterpCx, InterpResult, MPlaceTy, Machine, OpTy, PlaceTy, StackPopCleanup,
 };
 
-impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
+impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
     pub(super) fn eval_terminator(
         &mut self,
         terminator: &mir::Terminator<'tcx>,
@@ -19,7 +19,6 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         use rustc_middle::mir::TerminatorKind::*;
         match terminator.kind {
             Return => {
-                self.frame().return_place.map(|r| self.dump_place(*r));
                 self.pop_stack_frame(/* unwinding */ false)?
             }
 
@@ -52,8 +51,8 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
             }
 
             Call { ref func, ref args, destination, ref cleanup, .. } => {
-                let old_stack = self.cur_frame();
-                let old_bb = self.frame().block;
+                let old_stack = self.frame_idx();
+                let old_loc = self.frame().loc;
                 let func = self.eval_operand(func, None)?;
                 let (fn_val, abi) = match func.layout.ty.kind {
                     ty::FnPtr(sig) => {
@@ -80,7 +79,7 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
                 self.eval_fn_call(fn_val, abi, &args[..], ret, *cleanup)?;
                 // Sanity-check that `eval_fn_call` either pushed a new frame or
                 // did a jump to another block.
-                if self.cur_frame() == old_stack && self.frame().block == old_bb {
+                if self.frame_idx() == old_stack && self.frame().loc == old_loc {
                     span_bug!(terminator.source_info.span, "evaluating this call made no progress");
                 }
             }
@@ -372,7 +371,7 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
                 };
                 match res {
                     Err(err) => {
-                        self.stack.pop();
+                        self.stack_mut().pop();
                         Err(err)
                     }
                     Ok(()) => Ok(()),
