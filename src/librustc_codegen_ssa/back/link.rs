@@ -3,25 +3,21 @@ use rustc_fs_util::fix_windows_verbatim_for_gcc;
 use rustc_hir::def_id::CrateNum;
 use rustc_middle::middle::cstore::{EncodedMetadata, LibSource, NativeLibrary, NativeLibraryKind};
 use rustc_middle::middle::dependency_format::Linkage;
-use rustc_session::config::{
-    self, CFGuard, DebugInfo, OutputFilenames, OutputType, PrintRequest, Sanitizer,
-};
+use rustc_session::config::{self, CFGuard, CrateType, DebugInfo};
+use rustc_session::config::{OutputFilenames, OutputType, PrintRequest, Sanitizer};
 use rustc_session::output::{check_file_is_writeable, invalid_output_for_target, out_filename};
 use rustc_session::search_paths::PathKind;
 /// For all the linkers we support, and information they might
 /// need out of the shared crate context before we get rid of it.
 use rustc_session::{filesearch, Session};
 use rustc_span::symbol::Symbol;
-use rustc_target::spec::{LinkerFlavor, LldFlavor, PanicStrategy, RelroLevel};
+use rustc_target::spec::{LinkerFlavor, LldFlavor, PanicStrategy, RelocModel, RelroLevel};
 
 use super::archive::ArchiveBuilder;
 use super::command::Command;
-use super::linker::Linker;
+use super::linker::{self, Linker};
 use super::rpath::{self, RPathConfig};
-use crate::{
-    looks_like_rust_object_file, CodegenResults, CrateInfo, METADATA_FILENAME,
-    RLIB_BYTECODE_EXTENSION,
-};
+use crate::{looks_like_rust_object_file, CodegenResults, CrateInfo, METADATA_FILENAME};
 
 use cc::windows_registry;
 use tempfile::{Builder as TempFileBuilder, TempDir};
@@ -58,7 +54,7 @@ pub fn link_binary<'a, B: ArchiveBuilder<'a>>(
         // Ignore executable crates if we have -Z no-codegen, as they will error.
         if (sess.opts.debugging_opts.no_codegen || !sess.opts.output_types.should_codegen())
             && !output_metadata
-            && crate_type == config::CrateType::Executable
+            && crate_type == CrateType::Executable
         {
             continue;
         }
@@ -85,7 +81,7 @@ pub fn link_binary<'a, B: ArchiveBuilder<'a>>(
         if outputs.outputs.should_codegen() {
             let out_filename = out_filename(sess, crate_type, outputs, crate_name);
             match crate_type {
-                config::CrateType::Rlib => {
+                CrateType::Rlib => {
                     let _timer = sess.timer("link_rlib");
                     link_rlib::<B>(
                         sess,
@@ -96,7 +92,7 @@ pub fn link_binary<'a, B: ArchiveBuilder<'a>>(
                     )
                     .build();
                 }
-                config::CrateType::Staticlib => {
+                CrateType::Staticlib => {
                     link_staticlib::<B>(sess, codegen_results, &out_filename, &tmpdir);
                 }
                 _ => {
@@ -130,10 +126,6 @@ pub fn link_binary<'a, B: ArchiveBuilder<'a>>(
                     remove(sess, obj);
                 }
             }
-            for obj in codegen_results.modules.iter().filter_map(|m| m.bytecode_compressed.as_ref())
-            {
-                remove(sess, obj);
-            }
             if let Some(ref metadata_module) = codegen_results.metadata_module {
                 if let Some(ref obj) = metadata_module.object {
                     remove(sess, obj);
@@ -142,9 +134,6 @@ pub fn link_binary<'a, B: ArchiveBuilder<'a>>(
             if let Some(ref allocator_module) = codegen_results.allocator_module {
                 if let Some(ref obj) = allocator_module.object {
                     remove(sess, obj);
-                }
-                if let Some(ref bc) = allocator_module.bytecode_compressed {
-                    remove(sess, bc);
                 }
             }
         }
@@ -246,10 +235,10 @@ pub fn each_linked_rlib(
     let mut fmts = None;
     for (ty, list) in info.dependency_formats.iter() {
         match ty {
-            config::CrateType::Executable
-            | config::CrateType::Staticlib
-            | config::CrateType::Cdylib
-            | config::CrateType::ProcMacro => {
+            CrateType::Executable
+            | CrateType::Staticlib
+            | CrateType::Cdylib
+            | CrateType::ProcMacro => {
                 fmts = Some(list);
                 break;
             }
@@ -378,14 +367,6 @@ fn link_rlib<'a, B: ArchiveBuilder<'a>>(
             // contain the metadata in a separate file.
             ab.add_file(&emit_metadata(sess, &codegen_results.metadata, tmpdir));
 
-            // For LTO purposes, the bytecode of this library is also inserted
-            // into the archive.
-            for bytecode in
-                codegen_results.modules.iter().filter_map(|m| m.bytecode_compressed.as_ref())
-            {
-                ab.add_file(bytecode);
-            }
-
             // After adding all files to the archive, we need to update the
             // symbol table of the archive. This currently dies on macOS (see
             // #11162), and isn't necessary there anyway
@@ -479,7 +460,7 @@ fn link_staticlib<'a, B: ArchiveBuilder<'a>>(
 // links to all upstream files as well.
 fn link_natively<'a, B: ArchiveBuilder<'a>>(
     sess: &'a Session,
-    crate_type: config::CrateType,
+    crate_type: CrateType,
     out_filename: &Path,
     codegen_results: &CodegenResults,
     tmpdir: &Path,
@@ -497,6 +478,8 @@ fn link_natively<'a, B: ArchiveBuilder<'a>>(
         codegen_results,
         target_cpu,
     );
+
+    linker::disable_localization(&mut cmd);
 
     for &(ref k, ref v) in &sess.target.target.options.link_env {
         cmd.env(k, v);
@@ -680,13 +663,13 @@ fn link_natively<'a, B: ArchiveBuilder<'a>>(
     }
 }
 
-fn link_sanitizer_runtime(sess: &Session, crate_type: config::CrateType, linker: &mut dyn Linker) {
+fn link_sanitizer_runtime(sess: &Session, crate_type: CrateType, linker: &mut dyn Linker) {
     let sanitizer = match &sess.opts.debugging_opts.sanitizer {
         Some(s) => s,
         None => return,
     };
 
-    if crate_type != config::CrateType::Executable {
+    if crate_type != CrateType::Executable {
         return;
     }
 
@@ -842,7 +825,7 @@ fn preserve_objects_for_their_debuginfo(sess: &Session) -> bool {
         .crate_types
         .borrow()
         .iter()
-        .any(|&x| x != config::CrateType::Rlib && x != config::CrateType::Staticlib);
+        .any(|&x| x != CrateType::Rlib && x != CrateType::Staticlib);
     if !output_linked {
         return false;
     }
@@ -1148,8 +1131,8 @@ fn exec_linker(
 }
 
 /// Add begin object files defined by the target spec.
-fn add_pre_link_objects(cmd: &mut dyn Linker, sess: &Session, crate_type: config::CrateType) {
-    let pre_link_objects = if crate_type == config::CrateType::Executable {
+fn add_pre_link_objects(cmd: &mut dyn Linker, sess: &Session, crate_type: CrateType) {
+    let pre_link_objects = if crate_type == CrateType::Executable {
         &sess.target.target.options.pre_link_objects_exe
     } else {
         &sess.target.target.options.pre_link_objects_dll
@@ -1158,7 +1141,7 @@ fn add_pre_link_objects(cmd: &mut dyn Linker, sess: &Session, crate_type: config
         cmd.add_object(&get_object_file_path(sess, obj));
     }
 
-    if crate_type == config::CrateType::Executable && sess.crt_static(Some(crate_type)) {
+    if crate_type == CrateType::Executable && sess.crt_static(Some(crate_type)) {
         for obj in &sess.target.target.options.pre_link_objects_exe_crt {
             cmd.add_object(&get_object_file_path(sess, obj));
         }
@@ -1166,7 +1149,7 @@ fn add_pre_link_objects(cmd: &mut dyn Linker, sess: &Session, crate_type: config
 }
 
 /// Add end object files defined by the target spec.
-fn add_post_link_objects(cmd: &mut dyn Linker, sess: &Session, crate_type: config::CrateType) {
+fn add_post_link_objects(cmd: &mut dyn Linker, sess: &Session, crate_type: CrateType) {
     for obj in &sess.target.target.options.post_link_objects {
         cmd.add_object(&get_object_file_path(sess, obj));
     }
@@ -1183,7 +1166,7 @@ fn add_pre_link_args(
     cmd: &mut dyn Linker,
     sess: &Session,
     flavor: LinkerFlavor,
-    crate_type: config::CrateType,
+    crate_type: CrateType,
 ) {
     if let Some(args) = sess.target.target.options.pre_link_args.get(&flavor) {
         cmd.args(args);
@@ -1213,13 +1196,13 @@ fn add_late_link_args(
     cmd: &mut dyn Linker,
     sess: &Session,
     flavor: LinkerFlavor,
-    crate_type: config::CrateType,
+    crate_type: CrateType,
     codegen_results: &CodegenResults,
 ) {
     if let Some(args) = sess.target.target.options.late_link_args.get(&flavor) {
         cmd.args(args);
     }
-    let any_dynamic_crate = crate_type == config::CrateType::Dylib
+    let any_dynamic_crate = crate_type == CrateType::Dylib
         || codegen_results.crate_info.dependency_formats.iter().any(|(ty, list)| {
             *ty == crate_type && list.iter().any(|&linkage| linkage == Linkage::Dynamic)
         });
@@ -1259,13 +1242,13 @@ fn add_local_crate_allocator_objects(cmd: &mut dyn Linker, codegen_results: &Cod
 /// Add object files containing metadata for the current crate.
 fn add_local_crate_metadata_objects(
     cmd: &mut dyn Linker,
-    crate_type: config::CrateType,
+    crate_type: CrateType,
     codegen_results: &CodegenResults,
 ) {
     // When linking a dynamic library, we put the metadata into a section of the
     // executable. This metadata is in a separate object file from the main
     // object file, so we link that in here.
-    if crate_type == config::CrateType::Dylib || crate_type == config::CrateType::ProcMacro {
+    if crate_type == CrateType::Dylib || crate_type == CrateType::ProcMacro {
         if let Some(obj) = codegen_results.metadata_module.as_ref().and_then(|m| m.object.as_ref())
         {
             cmd.add_object(obj);
@@ -1279,7 +1262,7 @@ fn add_local_crate_metadata_objects(
 fn link_local_crate_native_libs_and_dependent_crate_libs<'a, B: ArchiveBuilder<'a>>(
     cmd: &mut dyn Linker,
     sess: &'a Session,
-    crate_type: config::CrateType,
+    crate_type: CrateType,
     codegen_results: &CodegenResults,
     tmpdir: &Path,
 ) {
@@ -1342,17 +1325,17 @@ fn add_position_independent_executable_args(
     cmd: &mut dyn Linker,
     sess: &Session,
     flavor: LinkerFlavor,
-    crate_type: config::CrateType,
+    crate_type: CrateType,
     codegen_results: &CodegenResults,
 ) {
-    if crate_type != config::CrateType::Executable {
+    if crate_type != CrateType::Executable {
         return;
     }
 
     if sess.target.target.options.position_independent_executables {
         let attr_link_args = &*codegen_results.crate_info.link_args;
         let mut user_defined_link_args = sess.opts.cg.link_args.iter().chain(attr_link_args);
-        if is_pic(sess)
+        if sess.relocation_model() == RelocModel::Pic
             && !sess.crt_static(Some(crate_type))
             && !user_defined_link_args.any(|x| x == "-static")
         {
@@ -1423,7 +1406,7 @@ fn linker_with_args<'a, B: ArchiveBuilder<'a>>(
     path: &Path,
     flavor: LinkerFlavor,
     sess: &'a Session,
-    crate_type: config::CrateType,
+    crate_type: CrateType,
     tmpdir: &Path,
     out_filename: &Path,
     codegen_results: &CodegenResults,
@@ -1479,7 +1462,7 @@ fn linker_with_args<'a, B: ArchiveBuilder<'a>>(
     cmd.output_filename(out_filename);
 
     // OBJECT-FILES-NO, AUDIT-ORDER
-    if crate_type == config::CrateType::Executable && sess.target.target.options.is_like_windows {
+    if crate_type == CrateType::Executable && sess.target.target.options.is_like_windows {
         if let Some(ref s) = codegen_results.windows_subsystem {
             cmd.subsystem(s);
         }
@@ -1502,7 +1485,7 @@ fn linker_with_args<'a, B: ArchiveBuilder<'a>>(
     // Try to strip as much out of the generated object by removing unused
     // sections if possible. See more comments in linker.rs
     if !sess.opts.cg.link_dead_code {
-        let keep_metadata = crate_type == config::CrateType::Dylib;
+        let keep_metadata = crate_type == CrateType::Dylib;
         cmd.gc_sections(keep_metadata);
     }
 
@@ -1538,10 +1521,10 @@ fn linker_with_args<'a, B: ArchiveBuilder<'a>>(
 
     // NO-OPT-OUT, OBJECT-FILES-NO, AUDIT-ORDER
     // Tell the linker what we're doing.
-    if crate_type != config::CrateType::Executable {
+    if crate_type != CrateType::Executable {
         cmd.build_dylib(out_filename);
     }
-    if crate_type == config::CrateType::Executable && sess.crt_static(Some(crate_type)) {
+    if crate_type == CrateType::Executable && sess.crt_static(Some(crate_type)) {
         cmd.build_static_executable();
     }
 
@@ -1635,7 +1618,7 @@ fn add_upstream_rust_crates<'a, B: ArchiveBuilder<'a>>(
     cmd: &mut dyn Linker,
     sess: &'a Session,
     codegen_results: &CodegenResults,
-    crate_type: config::CrateType,
+    crate_type: CrateType,
     tmpdir: &Path,
 ) {
     // All of the heavy lifting has previously been accomplished by the
@@ -1796,7 +1779,7 @@ fn add_upstream_rust_crates<'a, B: ArchiveBuilder<'a>>(
         sess: &'a Session,
         codegen_results: &CodegenResults,
         tmpdir: &Path,
-        crate_type: config::CrateType,
+        crate_type: CrateType,
         cnum: CrateNum,
     ) {
         let src = &codegen_results.crate_info.used_crate_source[&cnum];
@@ -1812,7 +1795,7 @@ fn add_upstream_rust_crates<'a, B: ArchiveBuilder<'a>>(
 
         if (!are_upstream_rust_objects_already_included(sess)
             || ignored_for_lto(sess, &codegen_results.crate_info, cnum))
-            && crate_type != config::CrateType::Dylib
+            && crate_type != CrateType::Dylib
             && !skip_native
         {
             cmd.link_rlib(&fix_windows_verbatim_for_gcc(cratepath));
@@ -1829,7 +1812,7 @@ fn add_upstream_rust_crates<'a, B: ArchiveBuilder<'a>>(
 
             let mut any_objects = false;
             for f in archive.src_files() {
-                if f.ends_with(RLIB_BYTECODE_EXTENSION) || f == METADATA_FILENAME {
+                if f == METADATA_FILENAME {
                     archive.remove_file(&f);
                     continue;
                 }
@@ -1873,7 +1856,7 @@ fn add_upstream_rust_crates<'a, B: ArchiveBuilder<'a>>(
             // Note, though, that we don't want to include the whole of a
             // compiler-builtins crate (e.g., compiler-rt) because it'll get
             // repeatedly linked anyway.
-            if crate_type == config::CrateType::Dylib
+            if crate_type == CrateType::Dylib
                 && codegen_results.crate_info.compiler_builtins != Some(cnum)
             {
                 cmd.link_whole_rlib(&fix_windows_verbatim_for_gcc(&dst));
@@ -1921,7 +1904,7 @@ fn add_upstream_native_libraries(
     cmd: &mut dyn Linker,
     sess: &Session,
     codegen_results: &CodegenResults,
-    crate_type: config::CrateType,
+    crate_type: CrateType,
 ) {
     // Be sure to use a topological sorting of crates because there may be
     // interdependencies between native libraries. When passing -nodefaultlibs,
@@ -1991,13 +1974,4 @@ fn are_upstream_rust_objects_already_included(sess: &Session) -> bool {
         }
         config::Lto::No | config::Lto::ThinLocal => false,
     }
-}
-
-fn is_pic(sess: &Session) -> bool {
-    let reloc_model_arg = match sess.opts.cg.relocation_model {
-        Some(ref s) => &s[..],
-        None => &sess.target.target.options.relocation_model[..],
-    };
-
-    reloc_model_arg == "pic"
 }

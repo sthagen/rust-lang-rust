@@ -60,6 +60,26 @@ It takes one of the following values:
 For example, for gcc flavor linkers, this issues the `-nodefaultlibs` flag to
 the linker.
 
+## embed-bitcode
+
+This flag controls whether or not the compiler puts LLVM bitcode into generated
+rlibs. It takes one of the following values:
+
+* `y`, `yes`, `on`, or no value: put bitcode in rlibs (the default).
+* `n`, `no`, or `off`: omit bitcode from rlibs.
+
+LLVM bitcode is only needed when link-time optimization (LTO) is being
+performed, but it is enabled by default for backwards compatibility reasons.
+
+The use of `-C embed-bitcode=no` can significantly improve compile times and
+reduce generated file sizes. For these reasons, Cargo uses `-C
+embed-bitcode=no` whenever possible. Likewise, if you are building directly
+with `rustc` we recommend using `-C embed-bitcode=no` whenever you are not
+using LTO.
+
+If combined with `-C lto`, `-C embed-bitcode=no` will cause `rustc` to abort
+at start-up, because the combination is invalid.
+
 ## extra-filename
 
 This option allows you to put extra data in each output filename. It takes a
@@ -319,11 +339,46 @@ to a valid `.profdata` file. See the chapter on
 
 ## relocation-model
 
-This option lets you choose which
-[relocation](https://en.wikipedia.org/wiki/Relocation_\(computing\)) model to
-use.
+This option controls generation of
+[position-independent code (PIC)](https://en.wikipedia.org/wiki/Position-independent_code).
 
-To find the valid options for this flag, run `rustc --print relocation-models`.
+Supported values for this option are:
+
+#### Primary relocation models
+
+- `static` - non-relocatable code, machine instructions may use absolute addressing modes.
+
+- `pic` - fully relocatable position independent code,
+machine instructions need to use relative addressing modes.  \
+Equivalent to the "uppercase" `-fPIC` or `-fPIE` options in other compilers,
+depending on the produced crate types.  \
+This is the default model for majority of supported targets.
+
+#### Special relocation models
+
+- `dynamic-no-pic` - relocatable external references, non-relocatable code.  \
+Only makes sense on Darwin and is rarely used.  \
+If StackOverflow tells you to use this as an opt-out of PIC or PIE, don't believe it,
+use `-C relocation-model=static` instead.
+- `ropi`, `rwpi` and `ropi-rwpi` - relocatable code and read-only data, relocatable read-write data,
+and combination of both, respectively.  \
+Only makes sense for certain embedded ARM targets.
+- `default` - relocation model default to the current target.  \
+Only makes sense as an override for some other explicitly specified relocation model
+previously set on the command line.
+
+Supported values can also be discovered by running `rustc --print relocation-models`.
+
+#### Linking effects
+
+In addition to codegen effects, `relocation-model` has effects during linking.
+
+If the relocation model is `pic` and the current target supports position-independent executables
+(PIE), the linker will be instructed (`-pie`) to produce one.  \
+If the target doesn't support both position-independent and statically linked executables,
+then `-C target-feature=+crt-static` "wins" over `-C relocation-model=pic`,
+and the linker is instructed (`-static`) to produce a statically linked
+but not position-independent executable.
 
 ## remark
 
@@ -386,26 +441,6 @@ This also supports the feature `+crt-static` and `-crt-static` to control
 
 Each target and [`target-cpu`](#target-cpu) has a default set of enabled
 features.
-
-## bitcode-in-rlib
-
-This flag controls whether or not the compiler puts compressed LLVM bitcode
-into generated rlibs. It takes one of the following values:
-
-* `y`, `yes`, `on`, or no value: put bitcode in rlibs (the default).
-* `n`, `no`, or `off`: omit bitcode from rlibs.
-
-LLVM bitcode is only needed when link-time optimization (LTO) is being
-performed, but it is enabled by default for backwards compatibility reasons.
-
-The use of `-C bitcode-in-rlib=no` can significantly improve compile times and
-reduce generated file sizes. For these reasons, Cargo uses `-C
-bitcode-in-rlib=no` whenever possible. Likewise, if you are building directly
-with `rustc` we recommend using `-C bitcode-in-rlib=no` whenever you are not
-using LTO.
-
-If combined with `-C lto`, `-C bitcode-in-rlib=no` will cause `rustc` to abort
-at start-up, because the combination is invalid.
 
 [option-emit]: ../command-line-arguments.md#option-emit
 [option-o-optimize]: ../command-line-arguments.md#option-o-optimize

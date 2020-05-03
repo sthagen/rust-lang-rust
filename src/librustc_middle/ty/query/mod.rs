@@ -1,4 +1,4 @@
-use crate::dep_graph::{self, DepConstructor, DepNode, DepNodeParams};
+use crate::dep_graph::{self, DepNode, DepNodeParams};
 use crate::hir::exports::Export;
 use crate::hir::map;
 use crate::infer::canonical::{self, Canonical};
@@ -27,7 +27,6 @@ use crate::traits::query::{
     OutlivesBound,
 };
 use crate::traits::specialization_graph;
-use crate::traits::Clauses;
 use crate::traits::{self, Vtable};
 use crate::ty::steal::Steal;
 use crate::ty::subst::{GenericArg, SubstsRef};

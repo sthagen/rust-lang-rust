@@ -96,7 +96,6 @@ pub mod error;
 pub mod fast_reject;
 pub mod flags;
 pub mod fold;
-pub mod free_region_map;
 pub mod inhabitedness;
 pub mod layout;
 pub mod normalize_erasing_regions;
@@ -257,13 +256,13 @@ impl AssocItem {
 /// it is relatively expensive. Instead, items are indexed by `Symbol` and hygienic comparison is
 /// done only on items with the same name.
 #[derive(Debug, Clone, PartialEq, HashStable)]
-pub struct AssociatedItems {
-    items: SortedIndexMultiMap<u32, Symbol, ty::AssocItem>,
+pub struct AssociatedItems<'tcx> {
+    items: SortedIndexMultiMap<u32, Symbol, &'tcx ty::AssocItem>,
 }
 
-impl AssociatedItems {
+impl<'tcx> AssociatedItems<'tcx> {
     /// Constructs an `AssociatedItems` map from a series of `ty::AssocItem`s in definition order.
-    pub fn new(items_in_def_order: impl IntoIterator<Item = ty::AssocItem>) -> Self {
+    pub fn new(items_in_def_order: impl IntoIterator<Item = &'tcx ty::AssocItem>) -> Self {
         let items = items_in_def_order.into_iter().map(|item| (item.ident.name, item)).collect();
         AssociatedItems { items }
     }
@@ -273,7 +272,7 @@ impl AssociatedItems {
     /// New code should avoid relying on definition order. If you need a particular associated item
     /// for a known trait, make that trait a lang item instead of indexing this array.
     pub fn in_definition_order(&self) -> impl '_ + Iterator<Item = &ty::AssocItem> {
-        self.items.iter().map(|(_, v)| v)
+        self.items.iter().map(|(_, v)| *v)
     }
 
     /// Returns an iterator over all associated items with the given name, ignoring hygiene.
@@ -281,7 +280,7 @@ impl AssociatedItems {
         &self,
         name: Symbol,
     ) -> impl '_ + Iterator<Item = &ty::AssocItem> {
-        self.items.get_by_key(&name)
+        self.items.get_by_key(&name).map(|v| *v)
     }
 
     /// Returns an iterator over all associated items with the given name.
@@ -2637,7 +2636,7 @@ pub enum ImplOverlapKind {
 
 impl<'tcx> TyCtxt<'tcx> {
     pub fn body_tables(self, body: hir::BodyId) -> &'tcx TypeckTables<'tcx> {
-        self.typeck_tables_of(self.hir().body_owner_def_id(body).to_def_id())
+        self.typeck_tables_of(self.hir().body_owner_def_id(body))
     }
 
     /// Returns an iterator of the `DefId`s for all body-owners in this
@@ -2672,7 +2671,7 @@ impl<'tcx> TyCtxt<'tcx> {
             .and_then(|def_id| self.hir().get(self.hir().as_local_hir_id(def_id)).ident())
     }
 
-    pub fn opt_associated_item(self, def_id: DefId) -> Option<AssocItem> {
+    pub fn opt_associated_item(self, def_id: DefId) -> Option<&'tcx AssocItem> {
         let is_associated_item = if let Some(def_id) = def_id.as_local() {
             match self.hir().get(self.hir().as_local_hir_id(def_id)) {
                 Node::TraitItem(_) | Node::ImplItem(_) => true,
@@ -2697,7 +2696,7 @@ impl<'tcx> TyCtxt<'tcx> {
     }
 
     /// Returns `true` if the impls are the same polarity and the trait either
-    /// has no items or is annotated #[marker] and prevents item overrides.
+    /// has no items or is annotated `#[marker]` and prevents item overrides.
     pub fn impls_are_allowed_to_overlap(
         self,
         def_id1: DefId,

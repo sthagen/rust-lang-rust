@@ -5,7 +5,6 @@ use super::symbol_export::symbol_name_for_instance_in_crate;
 
 use crate::{
     CachedModuleCodegen, CodegenResults, CompiledModule, CrateInfo, ModuleCodegen, ModuleKind,
-    RLIB_BYTECODE_EXTENSION,
 };
 
 use crate::traits::*;
@@ -29,14 +28,13 @@ use rustc_middle::middle::cstore::EncodedMetadata;
 use rustc_middle::middle::exported_symbols::SymbolExportLevel;
 use rustc_middle::ty::TyCtxt;
 use rustc_session::cgu_reuse_tracker::CguReuseTracker;
-use rustc_session::config::{
-    self, Lto, OutputFilenames, OutputType, Passes, Sanitizer, SwitchWithOptPath,
-};
+use rustc_session::config::{self, CrateType, Lto, OutputFilenames, OutputType};
+use rustc_session::config::{Passes, Sanitizer, SwitchWithOptPath};
 use rustc_session::Session;
 use rustc_span::hygiene::ExpnId;
 use rustc_span::source_map::SourceMap;
 use rustc_span::symbol::{sym, Symbol};
-use rustc_target::spec::MergeFunctions;
+use rustc_target::spec::{MergeFunctions, PanicStrategy};
 
 use std::any::Any;
 use std::fs;
@@ -100,7 +98,6 @@ pub struct ModuleConfig {
     pub emit_pre_lto_bc: bool,
     pub emit_no_opt_bc: bool,
     pub emit_bc: bool,
-    pub emit_bc_compressed: bool,
     pub emit_ir: bool,
     pub emit_asm: bool,
     pub emit_obj: EmitObj,
@@ -150,9 +147,10 @@ impl ModuleConfig {
             || sess.opts.cg.linker_plugin_lto.enabled()
         {
             EmitObj::Bitcode
-        } else if sess.opts.debugging_opts.embed_bitcode {
+        } else if need_crate_bitcode_for_rlib(sess) {
+            let force_full = need_crate_bitcode_for_rlib(sess);
             match sess.opts.optimize {
-                config::OptLevel::No | config::OptLevel::Less => {
+                config::OptLevel::No | config::OptLevel::Less if !force_full => {
                     EmitObj::ObjectCode(BitcodeSection::Marker)
                 }
                 _ => EmitObj::ObjectCode(BitcodeSection::Full),
@@ -204,16 +202,6 @@ impl ModuleConfig {
                 save_temps || sess.opts.output_types.contains_key(&OutputType::Bitcode),
                 save_temps
             ),
-            emit_bc_compressed: match kind {
-                ModuleKind::Regular | ModuleKind::Allocator => {
-                    // Emit compressed bitcode files for the crate if we're
-                    // emitting an rlib. Whenever an rlib is created, the
-                    // bitcode is inserted into the archive in order to allow
-                    // LTO against it.
-                    need_crate_bitcode_for_rlib(sess)
-                }
-                ModuleKind::Metadata => false,
-            },
             emit_ir: if_regular!(
                 sess.opts.output_types.contains_key(&OutputType::LlvmAssembly),
                 false
@@ -269,7 +257,6 @@ impl ModuleConfig {
 
     pub fn bitcode_needed(&self) -> bool {
         self.emit_bc
-            || self.emit_bc_compressed
             || self.emit_obj == EmitObj::Bitcode
             || self.emit_obj == EmitObj::ObjectCode(BitcodeSection::Full)
     }
@@ -300,7 +287,7 @@ pub struct CodegenContext<B: WriteBackendMethods> {
     pub fewer_names: bool,
     pub exported_symbols: Option<Arc<ExportedSymbols>>,
     pub opts: Arc<config::Options>,
-    pub crate_types: Vec<config::CrateType>,
+    pub crate_types: Vec<CrateType>,
     pub each_linked_rlib_for_lto: Vec<(CrateNum, PathBuf)>,
     pub output_filenames: Arc<OutputFilenames>,
     pub regular_module_config: Arc<ModuleConfig>,
@@ -386,8 +373,8 @@ pub struct CompiledModules {
 }
 
 fn need_crate_bitcode_for_rlib(sess: &Session) -> bool {
-    sess.opts.cg.bitcode_in_rlib
-        && sess.crate_types.borrow().contains(&config::CrateType::Rlib)
+    sess.opts.cg.embed_bitcode
+        && sess.crate_types.borrow().contains(&CrateType::Rlib)
         && sess.opts.output_types.contains_key(&OutputType::Exe)
 }
 
@@ -494,9 +481,6 @@ fn copy_all_cgu_workproducts_to_incr_comp_cache_dir(
         }
         if let Some(ref path) = module.bytecode {
             files.push((WorkProductFileKind::Bytecode, path.clone()));
-        }
-        if let Some(ref path) = module.bytecode_compressed {
-            files.push((WorkProductFileKind::BytecodeCompressed, path.clone()));
         }
 
         if let Some((id, product)) =
@@ -775,7 +759,7 @@ fn execute_optimize_work_item<B: ExtraBackendMethods>(
     // require LTO so the request for LTO is always unconditionally
     // passed down to the backend, but we don't actually want to do
     // anything about it yet until we've got a final product.
-    let is_rlib = cgcx.crate_types.len() == 1 && cgcx.crate_types[0] == config::CrateType::Rlib;
+    let is_rlib = cgcx.crate_types.len() == 1 && cgcx.crate_types[0] == CrateType::Rlib;
 
     // Metadata modules never participate in LTO regardless of the lto
     // settings.
@@ -834,7 +818,6 @@ fn execute_copy_from_cache_work_item<B: ExtraBackendMethods>(
     let incr_comp_session_dir = cgcx.incr_comp_session_dir.as_ref().unwrap();
     let mut object = None;
     let mut bytecode = None;
-    let mut bytecode_compressed = None;
     for (kind, saved_file) in &module.source.saved_files {
         let obj_out = match kind {
             WorkProductFileKind::Object => {
@@ -845,14 +828,6 @@ fn execute_copy_from_cache_work_item<B: ExtraBackendMethods>(
             WorkProductFileKind::Bytecode => {
                 let path = cgcx.output_filenames.temp_path(OutputType::Bitcode, Some(&module.name));
                 bytecode = Some(path.clone());
-                path
-            }
-            WorkProductFileKind::BytecodeCompressed => {
-                let path = cgcx
-                    .output_filenames
-                    .temp_path(OutputType::Bitcode, Some(&module.name))
-                    .with_extension(RLIB_BYTECODE_EXTENSION);
-                bytecode_compressed = Some(path.clone());
                 path
             }
         };
@@ -876,14 +851,12 @@ fn execute_copy_from_cache_work_item<B: ExtraBackendMethods>(
 
     assert_eq!(object.is_some(), module_config.emit_obj != EmitObj::None);
     assert_eq!(bytecode.is_some(), module_config.emit_bc);
-    assert_eq!(bytecode_compressed.is_some(), module_config.emit_bc_compressed);
 
     Ok(WorkItemResult::Compiled(CompiledModule {
         name: module.name,
         kind: ModuleKind::Regular,
         object,
         bytecode,
-        bytecode_compressed,
     }))
 }
 
@@ -1021,7 +994,7 @@ fn start_executing_work<B: ExtraBackendMethods>(
         crate_types: sess.crate_types.borrow().clone(),
         each_linked_rlib_for_lto,
         lto: sess.lto(),
-        no_landing_pads: sess.no_landing_pads(),
+        no_landing_pads: sess.panic_strategy() == PanicStrategy::Abort,
         fewer_names: sess.fewer_names(),
         save_temps: sess.opts.cg.save_temps,
         opts: Arc::new(sess.opts.clone()),
@@ -1037,7 +1010,7 @@ fn start_executing_work<B: ExtraBackendMethods>(
         regular_module_config: regular_config,
         metadata_module_config: metadata_config,
         allocator_module_config: allocator_config,
-        tm_factory: TargetMachineFactory(backend.target_machine_factory(tcx.sess, ol, false)),
+        tm_factory: TargetMachineFactory(backend.target_machine_factory(tcx.sess, ol)),
         total_cgus,
         msvc_imps_needed: msvc_imps_needed(tcx),
         target_pointer_width: tcx.sess.target.target.target_pointer_width.clone(),
@@ -1839,7 +1812,7 @@ fn msvc_imps_needed(tcx: TyCtxt<'_>) -> bool {
     );
 
     tcx.sess.target.target.options.is_like_msvc &&
-        tcx.sess.crate_types.borrow().iter().any(|ct| *ct == config::CrateType::Rlib) &&
+        tcx.sess.crate_types.borrow().iter().any(|ct| *ct == CrateType::Rlib) &&
     // ThinLTO can't handle this workaround in all cases, so we don't
     // emit the `__imp_` symbols. Instead we make them unnecessary by disallowing
     // dynamic linking when linker plugin LTO is enabled.

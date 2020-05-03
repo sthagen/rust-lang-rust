@@ -1,11 +1,9 @@
 //! Propagates constants for early reporting of statically known
 //! assertion failures
 
-use std::borrow::Cow;
 use std::cell::Cell;
 
 use rustc_ast::ast::Mutability;
-use rustc_data_structures::fx::FxHashMap;
 use rustc_hir::def::DefKind;
 use rustc_hir::HirId;
 use rustc_index::bit_set::BitSet;
@@ -29,9 +27,9 @@ use rustc_trait_selection::traits;
 
 use crate::const_eval::error_to_const_error;
 use crate::interpret::{
-    self, intern_const_alloc_recursive, AllocId, Allocation, Frame, ImmTy, Immediate, InternKind,
-    InterpCx, LocalState, LocalValue, Memory, MemoryKind, OpTy, Operand as InterpOperand, PlaceTy,
-    Pointer, ScalarMaybeUndef, StackPopCleanup,
+    self, compile_time_machine, intern_const_alloc_recursive, AllocId, Allocation, Frame, ImmTy,
+    Immediate, InternKind, InterpCx, LocalState, LocalValue, Memory, MemoryKind, OpTy,
+    Operand as InterpOperand, PlaceTy, Pointer, ScalarMaybeUndef, StackPopCleanup,
 };
 use crate::transform::{MirPass, MirSource};
 
@@ -45,8 +43,8 @@ macro_rules! throw_machine_stop_str {
         // We make a new local type for it. The type itself does not carry any information,
         // but its vtable (for the `MachineStopType` trait) does.
         struct Zst;
-        // Debug-printing this type shows the desired string.
-        impl std::fmt::Debug for Zst {
+        // Printing this type shows the desired string.
+        impl std::fmt::Display for Zst {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 write!(f, $($tt)*)
             }
@@ -116,8 +114,7 @@ impl<'tcx> MirPass<'tcx> for ConstProp {
             .predicates_of(source.def_id())
             .predicates
             .iter()
-            .filter_map(|(p, _)| if p.is_global() { Some(*p) } else { None })
-            .collect();
+            .filter_map(|(p, _)| if p.is_global() { Some(*p) } else { None });
         if !traits::normalize_and_test_predicates(
             tcx,
             traits::elaborate_predicates(tcx, predicates).map(|o| o.predicate).collect(),
@@ -163,27 +160,9 @@ impl<'mir, 'tcx> ConstPropMachine<'mir, 'tcx> {
 }
 
 impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for ConstPropMachine<'mir, 'tcx> {
-    type MemoryKind = !;
-    type PointerTag = ();
-    type ExtraFnVal = !;
+    compile_time_machine!(<'mir, 'tcx>);
 
-    type FrameExtra = ();
     type MemoryExtra = ();
-    type AllocExtra = ();
-
-    type MemoryMap = FxHashMap<AllocId, (MemoryKind<!>, Allocation)>;
-
-    const GLOBAL_KIND: Option<!> = None; // no copying of globals from `tcx` to machine memory
-
-    #[inline(always)]
-    fn enforce_alignment(_memory_extra: &Self::MemoryExtra) -> bool {
-        false
-    }
-
-    #[inline(always)]
-    fn enforce_validity(_ecx: &InterpCx<'mir, 'tcx, Self>) -> bool {
-        false
-    }
 
     fn find_mir_or_eval_fn(
         _ecx: &mut InterpCx<'mir, 'tcx, Self>,
@@ -193,16 +172,6 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for ConstPropMachine<'mir, 'tcx>
         _unwind: Option<BasicBlock>,
     ) -> InterpResult<'tcx, Option<&'mir Body<'tcx>>> {
         Ok(None)
-    }
-
-    fn call_extra_fn(
-        _ecx: &mut InterpCx<'mir, 'tcx, Self>,
-        fn_val: !,
-        _args: &[OpTy<'tcx>],
-        _ret: Option<(PlaceTy<'tcx>, BasicBlock)>,
-        _unwind: Option<BasicBlock>,
-    ) -> InterpResult<'tcx> {
-        match fn_val {}
     }
 
     fn call_intrinsic(
@@ -236,20 +205,6 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for ConstPropMachine<'mir, 'tcx>
         // We can't do this because aliasing of memory can differ between const eval and llvm
         throw_machine_stop_str!("pointer arithmetic or comparisons aren't supported in ConstProp")
     }
-
-    #[inline(always)]
-    fn init_allocation_extra<'b>(
-        _memory_extra: &(),
-        _id: AllocId,
-        alloc: Cow<'b, Allocation>,
-        _kind: Option<MemoryKind<!>>,
-    ) -> (Cow<'b, Allocation<Self::PointerTag>>, Self::PointerTag) {
-        // We do not use a tag so we can just cheaply forward the allocation
-        (alloc, ())
-    }
-
-    #[inline(always)]
-    fn tag_global_base_pointer(_memory_extra: &(), _id: AllocId) -> Self::PointerTag {}
 
     fn box_alloc(
         _ecx: &mut InterpCx<'mir, 'tcx, Self>,
@@ -292,14 +247,6 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for ConstPropMachine<'mir, 'tcx>
     }
 
     #[inline(always)]
-    fn init_frame_extra(
-        _ecx: &mut InterpCx<'mir, 'tcx, Self>,
-        frame: Frame<'mir, 'tcx>,
-    ) -> InterpResult<'tcx, Frame<'mir, 'tcx>> {
-        Ok(frame)
-    }
-
-    #[inline(always)]
     fn stack(
         ecx: &'a InterpCx<'mir, 'tcx, Self>,
     ) -> &'a [Frame<'mir, 'tcx, Self::PointerTag, Self::FrameExtra>] {
@@ -327,6 +274,8 @@ struct ConstPropagator<'mir, 'tcx> {
     // Because we have `MutVisitor` we can't obtain the `SourceInfo` from a `Location`. So we store
     // the last known `SourceInfo` here and just keep revisiting it.
     source_info: Option<SourceInfo>,
+    // Locals we need to forget at the end of the current block
+    locals_of_current_block: BitSet<Local>,
 }
 
 impl<'mir, 'tcx> LayoutOf for ConstPropagator<'mir, 'tcx> {
@@ -396,6 +345,7 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
             //FIXME(wesleywiser) we can't steal this because `Visitor::super_visit_body()` needs it
             local_decls: body.local_decls.clone(),
             source_info: None,
+            locals_of_current_block: BitSet::new_empty(body.local_decls.len()),
         }
     }
 
@@ -410,8 +360,10 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
         }
     }
 
-    fn remove_const(&mut self, local: Local) {
-        self.ecx.frame_mut().locals[local] =
+    /// Remove `local` from the pool of `Locals`. Allows writing to them,
+    /// but not reading from them anymore.
+    fn remove_const(ecx: &mut InterpCx<'mir, 'tcx, ConstPropMachine<'mir, 'tcx>>, local: Local) {
+        ecx.frame_mut().locals[local] =
             LocalState { value: LocalValue::Uninitialized, layout: Cell::new(None) };
     }
 
@@ -442,6 +394,7 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
         }
     }
 
+    /// Returns the value, if any, of evaluating `c`.
     fn eval_constant(&mut self, c: &Constant<'tcx>, source_info: SourceInfo) -> Option<OpTy<'tcx>> {
         // FIXME we need to revisit this for #67176
         if c.needs_subst() {
@@ -482,11 +435,14 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
         }
     }
 
+    /// Returns the value, if any, of evaluating `place`.
     fn eval_place(&mut self, place: Place<'tcx>) -> Option<OpTy<'tcx>> {
         trace!("eval_place(place={:?})", place);
         self.use_ecx(|this| this.ecx.eval_place_to_op(place, None))
     }
 
+    /// Returns the value, if any, of evaluating `op`. Calls upon `eval_constant`
+    /// or `eval_place`, depending on the variant of `Operand` used.
     fn eval_operand(&mut self, op: &Operand<'tcx>, source_info: SourceInfo) -> Option<OpTy<'tcx>> {
         match *op {
             Operand::Constant(ref c) => self.eval_constant(c, source_info),
@@ -645,6 +601,7 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
         })
     }
 
+    /// Creates a new `Operand::Constant` from a `Scalar` value
     fn operand_from_scalar(&self, scalar: Scalar, ty: Ty<'tcx>, span: Span) -> Operand<'tcx> {
         Operand::Constant(Box::new(Constant {
             span,
@@ -690,6 +647,7 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
                     // Found a value represented as a pair. For now only do cont-prop if type of
                     // Rvalue is also a pair with two scalars. The more general case is more
                     // complicated to implement so we'll do it later.
+                    // FIXME: implement the general case stated above ^.
                     let ty = &value.layout.ty.kind;
                     // Only do it for tuples
                     if let ty::Tuple(substs) = ty {
@@ -726,6 +684,7 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
         }
     }
 
+    /// Returns `true` if and only if this `op` should be const-propagated into.
     fn should_const_prop(&mut self, op: OpTy<'tcx>) -> bool {
         let mir_opt_level = self.tcx.sess.opts.debugging_opts.mir_opt_level;
 
@@ -757,6 +716,8 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
 enum ConstPropMode {
     /// The `Local` can be propagated into and reads of this `Local` can also be propagated.
     FullConstProp,
+    /// The `Local` can only be propagated into and from its own block.
+    OnlyInsideOwnBlock,
     /// The `Local` can be propagated into but reads cannot be propagated.
     OnlyPropagateInto,
     /// No propagation is allowed at all.
@@ -765,28 +726,41 @@ enum ConstPropMode {
 
 struct CanConstProp {
     can_const_prop: IndexVec<Local, ConstPropMode>,
-    // false at the beginning, once set, there are not allowed to be any more assignments
+    // False at the beginning. Once set, no more assignments are allowed to that local.
     found_assignment: BitSet<Local>,
+    // Cache of locals' information
+    local_kinds: IndexVec<Local, LocalKind>,
 }
 
 impl CanConstProp {
-    /// returns true if `local` can be propagated
+    /// Returns true if `local` can be propagated
     fn check(body: &Body<'_>) -> IndexVec<Local, ConstPropMode> {
         let mut cpv = CanConstProp {
             can_const_prop: IndexVec::from_elem(ConstPropMode::FullConstProp, &body.local_decls),
             found_assignment: BitSet::new_empty(body.local_decls.len()),
+            local_kinds: IndexVec::from_fn_n(
+                |local| body.local_kind(local),
+                body.local_decls.len(),
+            ),
         };
         for (local, val) in cpv.can_const_prop.iter_enumerated_mut() {
-            // cannot use args at all
-            // cannot use locals because if x < y { y - x } else { x - y } would
+            // Cannot use args at all
+            // Cannot use locals because if x < y { y - x } else { x - y } would
             //        lint for x != y
             // FIXME(oli-obk): lint variables until they are used in a condition
             // FIXME(oli-obk): lint if return value is constant
-            let local_kind = body.local_kind(local);
-
-            if local_kind == LocalKind::Arg || local_kind == LocalKind::Var {
+            if cpv.local_kinds[local] == LocalKind::Arg {
                 *val = ConstPropMode::OnlyPropagateInto;
-                trace!("local {:?} can't be const propagated because it's not a temporary", local);
+                trace!(
+                    "local {:?} can't be const propagated because it's a function argument",
+                    local
+                );
+            } else if cpv.local_kinds[local] == LocalKind::Var {
+                *val = ConstPropMode::OnlyInsideOwnBlock;
+                trace!(
+                    "local {:?} will only be propagated inside its block, because it's a user variable",
+                    local
+                );
             }
         }
         cpv.visit_body(&body);
@@ -812,8 +786,12 @@ impl<'tcx> Visitor<'tcx> for CanConstProp {
             | NonMutatingUse(NonMutatingUseContext::Move)
             | NonMutatingUse(NonMutatingUseContext::Inspect)
             | NonMutatingUse(NonMutatingUseContext::Projection)
-            | MutatingUse(MutatingUseContext::Projection)
             | NonUse(_) => {}
+            MutatingUse(MutatingUseContext::Projection) => {
+                if self.local_kinds[local] != LocalKind::Temp {
+                    self.can_const_prop[local] = ConstPropMode::NoPropagation;
+                }
+            }
             _ => {
                 trace!("local {:?} can't be propagaged because it's used: {:?}", local, context);
                 self.can_const_prop[local] = ConstPropMode::NoPropagation;
@@ -850,25 +828,35 @@ impl<'mir, 'tcx> MutVisitor<'tcx> for ConstPropagator<'mir, 'tcx> {
                 if let Some(local) = place.as_local() {
                     let can_const_prop = self.can_const_prop[local];
                     if let Some(()) = self.const_prop(rval, place_layout, source_info, place) {
-                        if can_const_prop == ConstPropMode::FullConstProp
-                            || can_const_prop == ConstPropMode::OnlyPropagateInto
-                        {
+                        if can_const_prop != ConstPropMode::NoPropagation {
+                            // This will return None for Locals that are from other blocks,
+                            // so it should be okay to propagate from here on down.
                             if let Some(value) = self.get_const(local) {
                                 if self.should_const_prop(value) {
                                     trace!("replacing {:?} with {:?}", rval, value);
                                     self.replace_with_const(rval, value, statement.source_info);
-
-                                    if can_const_prop == ConstPropMode::FullConstProp {
+                                    if can_const_prop == ConstPropMode::FullConstProp
+                                        || can_const_prop == ConstPropMode::OnlyInsideOwnBlock
+                                    {
                                         trace!("propagated into {:?}", local);
                                     }
+                                }
+                                if can_const_prop == ConstPropMode::OnlyInsideOwnBlock {
+                                    trace!(
+                                        "found local restricted to its block. Will remove it from const-prop after block is finished. Local: {:?}",
+                                        local
+                                    );
+                                    self.locals_of_current_block.insert(local);
                                 }
                             }
                         }
                     }
-                    if self.can_const_prop[local] != ConstPropMode::FullConstProp {
+                    if self.can_const_prop[local] == ConstPropMode::OnlyPropagateInto
+                        || self.can_const_prop[local] == ConstPropMode::NoPropagation
+                    {
                         trace!("can't propagate into {:?}", local);
                         if local != RETURN_PLACE {
-                            self.remove_const(local);
+                            Self::remove_const(&mut self.ecx, local);
                         }
                     }
                 }
@@ -903,11 +891,11 @@ impl<'mir, 'tcx> MutVisitor<'tcx> for ConstPropagator<'mir, 'tcx> {
                     let expected = ScalarMaybeUndef::from(Scalar::from_bool(*expected));
                     let value_const = self.ecx.read_scalar(value).unwrap();
                     if expected != value_const {
-                        // poison all places this operand references so that further code
+                        // Poison all places this operand references so that further code
                         // doesn't use the invalid value
                         match cond {
                             Operand::Move(ref place) | Operand::Copy(ref place) => {
-                                self.remove_const(place.local);
+                                Self::remove_const(&mut self.ecx, place.local);
                             }
                             Operand::Constant(_) => {}
                         }
@@ -969,7 +957,7 @@ impl<'mir, 'tcx> MutVisitor<'tcx> for ConstPropagator<'mir, 'tcx> {
                     }
                 }
             }
-            //none of these have Operands to const-propagate
+            // None of these have Operands to const-propagate
             TerminatorKind::Goto { .. }
             | TerminatorKind::Resume
             | TerminatorKind::Abort
@@ -984,5 +972,13 @@ impl<'mir, 'tcx> MutVisitor<'tcx> for ConstPropagator<'mir, 'tcx> {
             //FIXME(wesleywiser) Call does have Operands that could be const-propagated
             TerminatorKind::Call { .. } => {}
         }
+        // We remove all Locals which are restricted in propagation to their containing blocks.
+        // We wouldn't need to clone, but the borrow checker can't see that we're not aliasing
+        // the locals_of_current_block field, so we need to clone it first.
+        // let ecx = &mut self.ecx;
+        for local in self.locals_of_current_block.iter() {
+            Self::remove_const(&mut self.ecx, local);
+        }
+        self.locals_of_current_block.clear();
     }
 }

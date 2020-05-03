@@ -21,8 +21,8 @@ use rustc_target::spec::PanicStrategy;
 
 use super::lints;
 
-crate fn mir_built(tcx: TyCtxt<'_>, def_id: DefId) -> &ty::steal::Steal<Body<'_>> {
-    tcx.alloc_steal_mir(mir_build(tcx, def_id.expect_local()))
+crate fn mir_built(tcx: TyCtxt<'_>, def_id: LocalDefId) -> ty::steal::Steal<Body<'_>> {
+    tcx.alloc_steal_mir(mir_build(tcx, def_id))
 }
 
 /// Construct the MIR for a given `DefId`.
@@ -181,7 +181,7 @@ fn mir_build(tcx: TyCtxt<'_>, def_id: LocalDefId) -> Body<'_> {
             build::construct_const(cx, body_id, return_ty, return_ty_span)
         };
 
-        lints::check(tcx, &body, def_id.to_def_id());
+        lints::check(tcx, &body, def_id);
 
         // The borrow checker will replace all the regions here with its own
         // inference variables. There's no point having non-erased regions here.
@@ -242,6 +242,9 @@ enum BlockFrame {
         ///
         /// Example: `let _ = { STMT_1; EXPR };`
         tail_result_is_ignored: bool,
+
+        /// `Span` of the tail expression.
+        span: Span,
     },
 
     /// Generic mark meaning that the block occurred as a subexpression
@@ -369,8 +372,8 @@ impl BlockContext {
             match bf {
                 BlockFrame::SubExpr => continue,
                 BlockFrame::Statement { .. } => break,
-                &BlockFrame::TailExpr { tail_result_is_ignored } => {
-                    return Some(BlockTailInfo { tail_result_is_ignored });
+                &BlockFrame::TailExpr { tail_result_is_ignored, span } => {
+                    return Some(BlockTailInfo { tail_result_is_ignored, span });
                 }
             }
         }
@@ -394,7 +397,7 @@ impl BlockContext {
 
             // otherwise: use accumulated is_ignored state.
             Some(
-                BlockFrame::TailExpr { tail_result_is_ignored: ignored }
+                BlockFrame::TailExpr { tail_result_is_ignored: ignored, .. }
                 | BlockFrame::Statement { ignores_expr_result: ignored },
             ) => *ignored,
         }
@@ -530,11 +533,6 @@ fn should_abort_on_panic(tcx: TyCtxt<'_>, fn_def_id: LocalDefId, _abi: Abi) -> b
 
     // We never unwind, so it's not relevant to stop an unwind.
     if tcx.sess.panic_strategy() != PanicStrategy::Unwind {
-        return false;
-    }
-
-    // We cannot add landing pads, so don't add one.
-    if tcx.sess.no_landing_pads() {
         return false;
     }
 

@@ -117,8 +117,8 @@ use crate::ty::subst::GenericArgKind;
 use crate::ty::{self, Instance, Ty, TyCtxt};
 
 pub use self::error::{
-    struct_error, ConstEvalErr, ConstEvalRawResult, ConstEvalResult, ErrorHandled, FrameInfo,
-    InterpError, InterpErrorInfo, InterpResult, InvalidProgramInfo, MachineStopType,
+    struct_error, CheckInAllocMsg, ConstEvalErr, ConstEvalRawResult, ConstEvalResult, ErrorHandled,
+    FrameInfo, InterpError, InterpErrorInfo, InterpResult, InvalidProgramInfo, MachineStopType,
     ResourceExhaustionInfo, UndefinedBehaviorInfo, UnsupportedOpInfo,
 };
 
@@ -126,7 +126,7 @@ pub use self::value::{get_slice_bytes, ConstValue, RawConst, Scalar, ScalarMaybe
 
 pub use self::allocation::{Allocation, AllocationExtra, Relocations, UndefMask};
 
-pub use self::pointer::{CheckInAllocMsg, Pointer, PointerArithmetic};
+pub use self::pointer::{Pointer, PointerArithmetic};
 
 /// Uniquely identifies one of the following:
 /// - A constant
@@ -168,15 +168,17 @@ pub enum LitToConstError {
 #[derive(Copy, Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct AllocId(pub u64);
 
+// We want the `Debug` output to be readable as it is used by `derive(Debug)` for
+// all the Miri types.
 impl fmt::Debug for AllocId {
-    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(self, fmt)
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if f.alternate() { write!(f, "a{}", self.0) } else { write!(f, "alloc{}", self.0) }
     }
 }
 
 impl fmt::Display for AllocId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "alloc{}", self.0)
+        fmt::Debug::fmt(self, f)
     }
 }
 

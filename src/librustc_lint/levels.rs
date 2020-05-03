@@ -22,7 +22,7 @@ use rustc_span::symbol::{sym, Symbol};
 
 use std::cmp;
 
-fn lint_levels(tcx: TyCtxt<'_>, cnum: CrateNum) -> &LintLevelMap {
+fn lint_levels(tcx: TyCtxt<'_>, cnum: CrateNum) -> LintLevelMap {
     assert_eq!(cnum, LOCAL_CRATE);
     let store = unerased_lint_store(tcx);
     let levels = LintLevelsBuilder::new(tcx.sess, false, &store);
@@ -37,7 +37,7 @@ fn lint_levels(tcx: TyCtxt<'_>, cnum: CrateNum) -> &LintLevelMap {
     intravisit::walk_crate(&mut builder, krate);
     builder.levels.pop(push);
 
-    tcx.arena.alloc(builder.levels.build_map())
+    builder.levels.build_map()
 }
 
 pub struct LintLevelsBuilder<'s> {
@@ -103,8 +103,8 @@ impl<'s> LintLevelsBuilder<'s> {
     /// * It'll validate all lint-related attributes in `attrs`
     /// * It'll mark all lint-related attributes as used
     /// * Lint levels will be updated based on the attributes provided
-    /// * Lint attributes are validated, e.g., a #[forbid] can't be switched to
-    ///   #[allow]
+    /// * Lint attributes are validated, e.g., a `#[forbid]` can't be switched to
+    ///   `#[allow]`
     ///
     /// Don't forget to call `pop`!
     pub fn push(&mut self, attrs: &[ast::Attribute], store: &LintStore) -> BuilderPush {

@@ -4,33 +4,7 @@ use rustc_macros::HashStable;
 use rustc_target::abi::{HasDataLayout, Size};
 
 use std::convert::TryFrom;
-use std::fmt::{self, Display};
-
-/// Used by `check_in_alloc` to indicate context of check
-#[derive(Debug, Copy, Clone, RustcEncodable, RustcDecodable, HashStable)]
-pub enum CheckInAllocMsg {
-    MemoryAccessTest,
-    NullPointerTest,
-    PointerArithmeticTest,
-    InboundsTest,
-}
-
-impl Display for CheckInAllocMsg {
-    /// When this is printed as an error the context looks like this
-    /// "{test name} failed: pointer must be in-bounds at offset..."
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}",
-            match *self {
-                CheckInAllocMsg::MemoryAccessTest => "Memory access",
-                CheckInAllocMsg::NullPointerTest => "Null pointer test",
-                CheckInAllocMsg::PointerArithmeticTest => "Pointer arithmetic",
-                CheckInAllocMsg::InboundsTest => "Inbounds test",
-            }
-        )
-    }
-}
+use std::fmt;
 
 ////////////////////////////////////////////////////////////////////////////////
 // Pointer arithmetic
@@ -101,33 +75,47 @@ pub trait PointerArithmetic: HasDataLayout {
 
 impl<T: HasDataLayout> PointerArithmetic for T {}
 
-/// `Pointer` is generic over the type that represents a reference to `Allocation`s,
-/// thus making it possible for the most convenient representation to be used in
-/// each context.
+/// Represents a pointer in the Miri engine.
 ///
-/// Defaults to the index based and loosely coupled `AllocId`.
-///
-/// `Pointer` is also generic over the `Tag` associated with each pointer,
+/// `Pointer` is generic over the `Tag` associated with each pointer,
 /// which is used to do provenance tracking during execution.
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, RustcEncodable, RustcDecodable, Hash)]
 #[derive(HashStable)]
-pub struct Pointer<Tag = (), Id = AllocId> {
-    pub alloc_id: Id,
+pub struct Pointer<Tag = ()> {
+    pub alloc_id: AllocId,
     pub offset: Size,
     pub tag: Tag,
 }
 
 static_assert_size!(Pointer, 16);
 
-impl<Tag: fmt::Debug, Id: fmt::Debug> fmt::Debug for Pointer<Tag, Id> {
+// We want the `Debug` output to be readable as it is used by `derive(Debug)` for
+// all the Miri types.
+// We have to use `Debug` output for the tag, because `()` does not implement
+// `Display` so we cannot specialize that.
+impl<Tag: fmt::Debug> fmt::Debug for Pointer<Tag> {
     default fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}+0x{:x}[{:?}]", self.alloc_id, self.offset.bytes(), self.tag)
+        if f.alternate() {
+            write!(f, "{:#?}+0x{:x}[{:?}]", self.alloc_id, self.offset.bytes(), self.tag)
+        } else {
+            write!(f, "{:?}+0x{:x}[{:?}]", self.alloc_id, self.offset.bytes(), self.tag)
+        }
     }
 }
 // Specialization for no tag
-impl<Id: fmt::Debug> fmt::Debug for Pointer<(), Id> {
+impl fmt::Debug for Pointer<()> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}+0x{:x}", self.alloc_id, self.offset.bytes())
+        if f.alternate() {
+            write!(f, "{:#?}+0x{:x}", self.alloc_id, self.offset.bytes())
+        } else {
+            write!(f, "{:?}+0x{:x}", self.alloc_id, self.offset.bytes())
+        }
+    }
+}
+
+impl<Tag: fmt::Debug> fmt::Display for Pointer<Tag> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self, f)
     }
 }
 

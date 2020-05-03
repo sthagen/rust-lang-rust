@@ -30,7 +30,7 @@ use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::profiling::print_time_passes_entry;
 use rustc_data_structures::sync::{par_iter, Lock, ParallelIterator};
 use rustc_hir as hir;
-use rustc_hir::def_id::{DefId, LOCAL_CRATE};
+use rustc_hir::def_id::{LocalDefId, LOCAL_CRATE};
 use rustc_hir::lang_items::StartFnLangItem;
 use rustc_index::vec::Idx;
 use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrs;
@@ -397,7 +397,7 @@ pub fn maybe_create_entry_wrapper<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
         None => return None,
     };
 
-    let instance = Instance::mono(cx.tcx(), main_def_id);
+    let instance = Instance::mono(cx.tcx(), main_def_id.to_def_id());
 
     if !cx.codegen_unit().contains_item(&MonoItem::Fn(instance)) {
         // We want to create the wrapper in the same codegen unit as Rust's main
@@ -416,7 +416,7 @@ pub fn maybe_create_entry_wrapper<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
         cx: &'a Bx::CodegenCx,
         sp: Span,
         rust_main: Bx::Value,
-        rust_main_def_id: DefId,
+        rust_main_def_id: LocalDefId,
         use_start_lang_item: bool,
     ) -> Bx::Function {
         // The entry function is either `int main(void)` or `int main(int argc, char **argv)`,
@@ -539,7 +539,7 @@ pub fn codegen_crate<B: ExtraBackendMethods>(
     // unnecessarily.
     if tcx.dep_graph.is_fully_enabled() {
         for cgu in codegen_units {
-            tcx.codegen_unit(cgu.name());
+            tcx.ensure().codegen_unit(cgu.name());
         }
     }
 
@@ -908,7 +908,7 @@ pub fn provide_both(providers: &mut Providers<'_>) {
             .map(|id| &module_map[&id])
             .flat_map(|module| module.foreign_items.iter().cloned())
             .collect();
-        tcx.arena.alloc(dllimports)
+        dllimports
     };
 
     providers.is_dllimport_foreign_item =

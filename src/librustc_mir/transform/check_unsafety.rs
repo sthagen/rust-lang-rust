@@ -19,6 +19,7 @@ use crate::util;
 
 pub struct UnsafetyChecker<'a, 'tcx> {
     body: &'a Body<'tcx>,
+    body_did: LocalDefId,
     const_context: bool,
     min_const_fn: bool,
     violations: Vec<UnsafetyViolation>,
@@ -35,6 +36,7 @@ impl<'a, 'tcx> UnsafetyChecker<'a, 'tcx> {
         const_context: bool,
         min_const_fn: bool,
         body: &'a Body<'tcx>,
+        body_did: LocalDefId,
         tcx: TyCtxt<'tcx>,
         param_env: ty::ParamEnv<'tcx>,
     ) -> Self {
@@ -44,6 +46,7 @@ impl<'a, 'tcx> UnsafetyChecker<'a, 'tcx> {
         }
         Self {
             body,
+            body_did,
             const_context,
             min_const_fn,
             violations: vec![],
@@ -86,6 +89,10 @@ impl<'a, 'tcx> Visitor<'tcx> for UnsafetyChecker<'a, 'tcx> {
                          undefined behavior",
                         UnsafetyViolationKind::GeneralAndConstFn,
                     )
+                }
+
+                if let ty::FnDef(func_id, _) = func_ty.kind {
+                    self.check_target_features(func_id);
                 }
             }
         }
@@ -132,7 +139,7 @@ impl<'a, 'tcx> Visitor<'tcx> for UnsafetyChecker<'a, 'tcx> {
                 }
                 &AggregateKind::Closure(def_id, _) | &AggregateKind::Generator(def_id, _, _) => {
                     let UnsafetyCheckResult { violations, unsafe_blocks } =
-                        self.tcx.unsafety_check_result(def_id);
+                        self.tcx.unsafety_check_result(def_id.expect_local());
                     self.register_violations(&violations, &unsafe_blocks);
                 }
             },
@@ -436,6 +443,22 @@ impl<'a, 'tcx> UnsafetyChecker<'a, 'tcx> {
             }
         }
     }
+
+    /// Checks whether calling `func_did` needs an `unsafe` context or not, i.e. whether
+    /// the called function has target features the calling function hasn't.
+    fn check_target_features(&mut self, func_did: DefId) {
+        let callee_features = &self.tcx.codegen_fn_attrs(func_did).target_features;
+        let self_features = &self.tcx.codegen_fn_attrs(self.body_did).target_features;
+
+        // Is `callee_features` a subset of `calling_features`?
+        if !callee_features.iter().all(|feature| self_features.contains(feature)) {
+            self.require_unsafe(
+                "call to function with `#[target_feature]`",
+                "can only be called if the required target features are available",
+                UnsafetyViolationKind::GeneralAndConstFn,
+            )
+        }
+    }
 }
 
 pub(crate) fn provide(providers: &mut Providers<'_>) {
@@ -485,7 +508,7 @@ fn check_unused_unsafe(
     intravisit::Visitor::visit_body(&mut visitor, body);
 }
 
-fn unsafety_check_result(tcx: TyCtxt<'_>, def_id: DefId) -> UnsafetyCheckResult {
+fn unsafety_check_result(tcx: TyCtxt<'_>, def_id: LocalDefId) -> UnsafetyCheckResult {
     debug!("unsafety_violations({:?})", def_id);
 
     // N.B., this borrow is valid because all the consumers of
@@ -494,21 +517,19 @@ fn unsafety_check_result(tcx: TyCtxt<'_>, def_id: DefId) -> UnsafetyCheckResult 
 
     let param_env = tcx.param_env(def_id);
 
-    let id = tcx.hir().as_local_hir_id(def_id.expect_local());
+    let id = tcx.hir().as_local_hir_id(def_id);
     let (const_context, min_const_fn) = match tcx.hir().body_owner_kind(id) {
         hir::BodyOwnerKind::Closure => (false, false),
-        hir::BodyOwnerKind::Fn => (is_const_fn(tcx, def_id), is_min_const_fn(tcx, def_id)),
+        hir::BodyOwnerKind::Fn => {
+            (is_const_fn(tcx, def_id.to_def_id()), is_min_const_fn(tcx, def_id.to_def_id()))
+        }
         hir::BodyOwnerKind::Const | hir::BodyOwnerKind::Static(_) => (true, false),
     };
-    let mut checker = UnsafetyChecker::new(const_context, min_const_fn, body, tcx, param_env);
+    let mut checker =
+        UnsafetyChecker::new(const_context, min_const_fn, body, def_id, tcx, param_env);
     checker.visit_body(&body);
 
-    check_unused_unsafe(
-        tcx,
-        def_id.expect_local(),
-        &checker.used_unsafe,
-        &mut checker.inherited_blocks,
-    );
+    check_unused_unsafe(tcx, def_id, &checker.used_unsafe, &mut checker.inherited_blocks);
     UnsafetyCheckResult {
         violations: checker.violations.into(),
         unsafe_blocks: checker.inherited_blocks.into(),
@@ -600,7 +621,8 @@ pub fn check_unsafety(tcx: TyCtxt<'_>, def_id: DefId) {
         return;
     }
 
-    let UnsafetyCheckResult { violations, unsafe_blocks } = tcx.unsafety_check_result(def_id);
+    let UnsafetyCheckResult { violations, unsafe_blocks } =
+        tcx.unsafety_check_result(def_id.expect_local());
 
     for &UnsafetyViolation { source_info, description, details, kind } in violations.iter() {
         // Report an error.
@@ -619,7 +641,7 @@ pub fn check_unsafety(tcx: TyCtxt<'_>, def_id: DefId) {
             }
             UnsafetyViolationKind::BorrowPacked(lint_hir_id) => {
                 if let Some(impl_def_id) = builtin_derive_def_id(tcx, def_id) {
-                    tcx.unsafe_derive_on_repr_packed(impl_def_id);
+                    tcx.ensure().unsafe_derive_on_repr_packed(impl_def_id);
                 } else {
                     tcx.struct_span_lint_hir(
                         SAFE_PACKED_BORROWS,

@@ -365,7 +365,7 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> Memory<'mir, 'tcx, M> {
                 assert!(size.bytes() == 0);
                 // Must be non-NULL.
                 if bits == 0 {
-                    throw_ub!(InvalidIntPointerUsage(0))
+                    throw_ub!(DanglingIntPointer(0, msg))
                 }
                 // Must be aligned.
                 if let Some(align) = align {
@@ -453,7 +453,9 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> Memory<'mir, 'tcx, M> {
                 // thing here: one maps to `GlobalAlloc::Static`, this is the "lazy" ID,
                 // and the other one is maps to `GlobalAlloc::Memory`, this is returned by
                 // `const_eval_raw` and it is the "resolved" ID.
-                // The resolved ID is never used by the interpreted progrma, it is hidden.
+                // The resolved ID is never used by the interpreted program, it is hidden.
+                // This is relied upon for soundness of const-patterns; a pointer to the resolved
+                // ID would "sidestep" the checks that make sure consts do not point to statics!
                 // The `GlobalAlloc::Memory` branch here is still reachable though; when a static
                 // contains a reference to memory that was created during its evaluation (i.e., not
                 // to another static), those inner references only exist in "resolved" form.
@@ -672,7 +674,7 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> Memory<'mir, 'tcx, M> {
     /// control for this.
     pub fn dump_allocs(&self, mut allocs: Vec<AllocId>) {
         // Cannot be a closure because it is generic in `Tag`, `Extra`.
-        fn write_allocation_track_relocs<'tcx, Tag, Extra>(
+        fn write_allocation_track_relocs<'tcx, Tag: Copy + fmt::Debug, Extra>(
             tcx: TyCtxtAt<'tcx>,
             allocs_to_print: &mut VecDeque<AllocId>,
             alloc: &Allocation<Tag, Extra>,

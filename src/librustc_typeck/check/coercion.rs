@@ -74,7 +74,7 @@ use rustc_trait_selection::traits::{self, ObligationCause, ObligationCauseCode};
 use smallvec::{smallvec, SmallVec};
 use std::ops::Deref;
 
-struct Coerce<'a, 'tcx> {
+pub struct Coerce<'a, 'tcx> {
     fcx: &'a FnCtxt<'a, 'tcx>,
     cause: ObligationCause<'tcx>,
     use_lub: bool,
@@ -107,6 +107,7 @@ fn coerce_mutbls<'tcx>(
     }
 }
 
+/// Do not require any adjustments, i.e. coerce `x -> x`.
 fn identity(_: Ty<'_>) -> Vec<Adjustment<'_>> {
     vec![]
 }
@@ -115,6 +116,7 @@ fn simple(kind: Adjust<'tcx>) -> impl FnOnce(Ty<'tcx>) -> Vec<Adjustment<'tcx>> 
     move |target| vec![Adjustment { kind, target }]
 }
 
+/// This always returns `Ok(...)`.
 fn success<'tcx>(
     adj: Vec<Adjustment<'tcx>>,
     target: Ty<'tcx>,
@@ -124,7 +126,7 @@ fn success<'tcx>(
 }
 
 impl<'f, 'tcx> Coerce<'f, 'tcx> {
-    fn new(
+    pub fn new(
         fcx: &'f FnCtxt<'f, 'tcx>,
         cause: ObligationCause<'tcx>,
         allow_two_phase: AllowTwoPhase,
@@ -132,7 +134,8 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
         Coerce { fcx, cause, allow_two_phase, use_lub: false }
     }
 
-    fn unify(&self, a: Ty<'tcx>, b: Ty<'tcx>) -> InferResult<'tcx, Ty<'tcx>> {
+    pub fn unify(&self, a: Ty<'tcx>, b: Ty<'tcx>) -> InferResult<'tcx, Ty<'tcx>> {
+        debug!("unify(a: {:?}, b: {:?}, use_lub: {})", a, b, self.use_lub);
         self.commit_if_ok(|_| {
             if self.use_lub {
                 self.at(&self.cause, self.fcx.param_env).lub(b, a)
@@ -211,12 +214,9 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
             ty::RawPtr(mt_b) => {
                 return self.coerce_unsafe_ptr(a, b, mt_b.mutbl);
             }
-
-            ty::Ref(r_b, ty, mutbl) => {
-                let mt_b = ty::TypeAndMut { ty, mutbl };
-                return self.coerce_borrowed_pointer(a, b, r_b, mt_b);
+            ty::Ref(r_b, _, mutbl_b) => {
+                return self.coerce_borrowed_pointer(a, b, r_b, mutbl_b);
             }
-
             _ => {}
         }
 
@@ -255,7 +255,7 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
         a: Ty<'tcx>,
         b: Ty<'tcx>,
         r_b: ty::Region<'tcx>,
-        mt_b: TypeAndMut<'tcx>,
+        mutbl_b: hir::Mutability,
     ) -> CoerceResult<'tcx> {
         debug!("coerce_borrowed_pointer(a={:?}, b={:?})", a, b);
 
@@ -268,7 +268,7 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
         let (r_a, mt_a) = match a.kind {
             ty::Ref(r_a, ty, mutbl) => {
                 let mt_a = ty::TypeAndMut { ty, mutbl };
-                coerce_mutbls(mt_a.mutbl, mt_b.mutbl)?;
+                coerce_mutbls(mt_a.mutbl, mutbl_b)?;
                 (r_a, mt_a)
             }
             _ => return self.unify_and(a, b, identity),
@@ -364,7 +364,7 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
                 r_a // [3] above
             } else {
                 if r_borrow_var.is_none() {
-                    // create var lazilly, at most once
+                    // create var lazily, at most once
                     let coercion = Coercion(span);
                     let r = self.next_region_var(coercion);
                     r_borrow_var = Some(r); // [4] above
@@ -375,7 +375,7 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
                 r,
                 TypeAndMut {
                     ty: referent_ty,
-                    mutbl: mt_b.mutbl, // [1] above
+                    mutbl: mutbl_b, // [1] above
                 },
             );
             match self.unify(derefd_ty_a, b) {
@@ -417,11 +417,11 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
             // `self.x` both have `&mut `type would be a move of
             // `self.x`, but we auto-coerce it to `foo(&mut *self.x)`,
             // which is a borrow.
-            assert_eq!(mt_b.mutbl, hir::Mutability::Not); // can only coerce &T -> &U
+            assert_eq!(mutbl_b, hir::Mutability::Not); // can only coerce &T -> &U
             return success(vec![], ty, obligations);
         }
 
-        let needs = Needs::maybe_mut_place(mt_b.mutbl);
+        let needs = Needs::maybe_mut_place(mutbl_b);
         let InferOk { value: mut adjustments, obligations: o } =
             autoderef.adjust_steps_as_infer_ok(self, needs);
         obligations.extend(o);
@@ -433,7 +433,7 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
             ty::Ref(r_borrow, _, _) => r_borrow,
             _ => span_bug!(span, "expected a ref type, got {:?}", ty),
         };
-        let mutbl = match mt_b.mutbl {
+        let mutbl = match mutbl_b {
             hir::Mutability::Not => AutoBorrowMutability::Not,
             hir::Mutability::Mut => {
                 AutoBorrowMutability::Mut { allow_two_phase_borrow: self.allow_two_phase }
@@ -691,12 +691,22 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
         debug!("coerce_from_fn_item(a={:?}, b={:?})", a, b);
 
         match b.kind {
-            ty::FnPtr(_) => {
+            ty::FnPtr(b_sig) => {
                 let a_sig = a.fn_sig(self.tcx);
                 // Intrinsics are not coercible to function pointers
                 if a_sig.abi() == Abi::RustIntrinsic || a_sig.abi() == Abi::PlatformIntrinsic {
                     return Err(TypeError::IntrinsicCast);
                 }
+
+                // Safe `#[target_feature]` functions are not assignable to safe fn pointers (RFC 2396).
+                if let ty::FnDef(def_id, _) = a.kind {
+                    if b_sig.unsafety() == hir::Unsafety::Normal
+                        && !self.tcx.codegen_fn_attrs(def_id).target_features.is_empty()
+                    {
+                        return Err(TypeError::TargetFeatureCast(def_id));
+                    }
+                }
+
                 let InferOk { value: a_sig, mut obligations } =
                     self.normalize_associated_types_in_as_infer_ok(self.cause.span, &a_sig);
 
@@ -774,10 +784,10 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
             ty::RawPtr(mt) => (false, mt),
             _ => return self.unify_and(a, b, identity),
         };
+        coerce_mutbls(mt_a.mutbl, mutbl_b)?;
 
         // Check that the types which they point at are compatible.
         let a_unsafe = self.tcx.mk_ptr(ty::TypeAndMut { mutbl: mutbl_b, ty: mt_a.ty });
-        coerce_mutbls(mt_a.mutbl, mutbl_b)?;
         // Although references and unsafe ptrs have the same
         // representation, we still register an Adjust::DerefRef so that
         // regionck knows that the region for `a` must be valid here.

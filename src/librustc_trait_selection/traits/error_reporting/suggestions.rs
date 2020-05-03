@@ -84,6 +84,8 @@ pub trait InferCtxtExt<'tcx> {
         trait_ref: &ty::Binder<ty::TraitRef<'tcx>>,
     );
 
+    fn return_type_span(&self, obligation: &PredicateObligation<'tcx>) -> Option<Span>;
+
     fn suggest_impl_trait(
         &self,
         err: &mut DiagnosticBuilder<'tcx>,
@@ -761,6 +763,17 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
         }
     }
 
+    fn return_type_span(&self, obligation: &PredicateObligation<'tcx>) -> Option<Span> {
+        let hir = self.tcx.hir();
+        let parent_node = hir.get_parent_node(obligation.cause.body_id);
+        let sig = match hir.find(parent_node) {
+            Some(hir::Node::Item(hir::Item { kind: hir::ItemKind::Fn(sig, ..), .. })) => sig,
+            _ => return None,
+        };
+
+        if let hir::FnRetTy::Return(ret_ty) = sig.decl.output { Some(ret_ty.span) } else { None }
+    }
+
     /// If all conditions are met to identify a returned `dyn Trait`, suggest using `impl Trait` if
     /// applicable and signal that the error has been expanded appropriately and needs to be
     /// emitted.
@@ -1230,7 +1243,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
         let tables: &TypeckTables<'tcx> = match &in_progress_tables {
             Some(t) if t.hir_owner.map(|owner| owner.to_def_id()) == Some(generator_did_root) => t,
             _ => {
-                query_tables = self.tcx.typeck_tables_of(generator_did);
+                query_tables = self.tcx.typeck_tables_of(generator_did.expect_local());
                 &query_tables
             }
         };

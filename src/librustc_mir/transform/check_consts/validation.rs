@@ -8,7 +8,6 @@ use rustc_middle::mir::visit::{MutatingUseContext, NonMutatingUseContext, PlaceC
 use rustc_middle::mir::*;
 use rustc_middle::ty::cast::CastTy;
 use rustc_middle::ty::{self, Instance, InstanceDef, TyCtxt};
-use rustc_span::symbol::sym;
 use rustc_span::Span;
 use rustc_trait_selection::traits::error_reporting::InferCtxtExt;
 use rustc_trait_selection::traits::{self, TraitEngine};
@@ -17,7 +16,7 @@ use std::borrow::Cow;
 use std::ops::Deref;
 
 use super::ops::{self, NonConstOp};
-use super::qualifs::{self, HasMutInterior, NeedsDrop};
+use super::qualifs::{self, CustomEq, HasMutInterior, NeedsDrop};
 use super::resolver::FlowSensitiveAnalysis;
 use super::{is_lang_panic_fn, ConstCx, ConstKind, Qualif};
 use crate::const_eval::{is_const_fn, is_unstable_const_fn};
@@ -142,9 +141,35 @@ impl Qualifs<'mir, 'tcx> {
 
         let return_loc = ccx.body.terminator_loc(return_block);
 
+        let custom_eq = match ccx.const_kind() {
+            // We don't care whether a `const fn` returns a value that is not structurally
+            // matchable. Functions calls are opaque and always use type-based qualification, so
+            // this value should never be used.
+            ConstKind::ConstFn => true,
+
+            // If we know that all values of the return type are structurally matchable, there's no
+            // need to run dataflow.
+            ConstKind::Const | ConstKind::Static | ConstKind::StaticMut
+                if !CustomEq::in_any_value_of_ty(ccx, ccx.body.return_ty()) =>
+            {
+                false
+            }
+
+            ConstKind::Const | ConstKind::Static | ConstKind::StaticMut => {
+                let mut cursor = FlowSensitiveAnalysis::new(CustomEq, ccx)
+                    .into_engine(ccx.tcx, &ccx.body, ccx.def_id)
+                    .iterate_to_fixpoint()
+                    .into_results_cursor(&ccx.body);
+
+                cursor.seek_after(return_loc);
+                cursor.contains(RETURN_PLACE)
+            }
+        };
+
         ConstQualifs {
             needs_drop: self.needs_drop(ccx, RETURN_PLACE, return_loc),
             has_mut_interior: self.has_mut_interior(ccx, RETURN_PLACE, return_loc),
+            custom_eq,
         }
     }
 }
@@ -198,7 +223,7 @@ impl Validator<'mir, 'tcx> {
 
         // Ensure that the end result is `Sync` in a non-thread local `static`.
         let should_check_for_sync =
-            const_kind == Some(ConstKind::Static) && !tcx.has_attr(def_id, sym::thread_local);
+            const_kind == Some(ConstKind::Static) && !tcx.is_thread_local_static(def_id);
 
         if should_check_for_sync {
             let hir_id = tcx.hir().as_local_hir_id(def_id.expect_local());
@@ -241,8 +266,7 @@ impl Validator<'mir, 'tcx> {
     }
 
     fn check_static(&mut self, def_id: DefId, span: Span) {
-        let is_thread_local = self.tcx.has_attr(def_id, sym::thread_local);
-        if is_thread_local {
+        if self.tcx.is_thread_local_static(def_id) {
             self.check_op_spanned(ops::ThreadLocalAccess, span)
         } else {
             self.check_op_spanned(ops::StaticAccess, span)
@@ -448,6 +472,7 @@ impl Visitor<'tcx> for Validator<'mir, 'tcx> {
             }
 
             ProjectionElem::ConstantIndex { .. }
+            | ProjectionElem::Downcast(..)
             | ProjectionElem::Subslice { .. }
             | ProjectionElem::Field(..)
             | ProjectionElem::Index(_) => {
@@ -459,10 +484,6 @@ impl Visitor<'tcx> for Validator<'mir, 'tcx> {
 
                     _ => {}
                 }
-            }
-
-            ProjectionElem::Downcast(..) => {
-                self.check_op(ops::Downcast);
             }
         }
     }

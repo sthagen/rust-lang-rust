@@ -317,20 +317,30 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                                 .starts_with("std::convert::From<std::option::NoneError");
                         let should_convert_result_to_option = format!("{}", trait_ref)
                             .starts_with("<std::option::NoneError as std::convert::From<");
-                        if is_try && is_from && should_convert_option_to_result {
-                            err.span_suggestion_verbose(
-                                span.shrink_to_lo(),
-                                "consider converting the `Option<T>` into a `Result<T, _>` using `Option::ok_or` or `Option::ok_or_else`",
-                                ".ok_or_else(|| /* error value */)".to_string(),
-                                Applicability::HasPlaceholders,
-                            );
-                        } else if is_try && is_from && should_convert_result_to_option {
-                            err.span_suggestion_verbose(
-                                span.shrink_to_lo(),
-                                "consider converting the `Result<T, _>` into an `Option<T>` using `Result::ok`",
-                                ".ok()".to_string(),
-                                Applicability::MachineApplicable,
-                            );
+                        if is_try && is_from {
+                            if should_convert_option_to_result {
+                                err.span_suggestion_verbose(
+                                    span.shrink_to_lo(),
+                                    "consider converting the `Option<T>` into a `Result<T, _>` \
+                                     using `Option::ok_or` or `Option::ok_or_else`",
+                                    ".ok_or_else(|| /* error value */)".to_string(),
+                                    Applicability::HasPlaceholders,
+                                );
+                            } else if should_convert_result_to_option {
+                                err.span_suggestion_verbose(
+                                    span.shrink_to_lo(),
+                                    "consider converting the `Result<T, _>` into an `Option<T>` \
+                                     using `Result::ok`",
+                                    ".ok()".to_string(),
+                                    Applicability::MachineApplicable,
+                                );
+                            }
+                            if let Some(ret_span) = self.return_type_span(obligation) {
+                                err.span_label(
+                                    ret_span,
+                                    &format!("expected `{}` because of this", trait_ref.self_ty()),
+                                );
+                            }
                         }
 
                         let explanation =
@@ -1007,7 +1017,7 @@ impl<'a, 'tcx> InferCtxtPrivExt<'tcx> for InferCtxt<'a, 'tcx> {
             }
         };
 
-        for obligation in super::elaborate_predicates(self.tcx, vec![*cond]) {
+        for obligation in super::elaborate_predicates(self.tcx, std::iter::once(*cond)) {
             if let ty::Predicate::Trait(implication, _) = obligation.predicate {
                 let error = error.to_poly_trait_ref();
                 let implication = implication.to_poly_trait_ref();
@@ -1208,8 +1218,7 @@ impl<'a, 'tcx> InferCtxtPrivExt<'tcx> for InferCtxt<'a, 'tcx> {
 
         match simp {
             Some(simp) => all_impls
-                .iter()
-                .filter_map(|&def_id| {
+                .filter_map(|def_id| {
                     let imp = self.tcx.impl_trait_ref(def_id).unwrap();
                     let imp_simp = fast_reject::simplify_type(self.tcx, imp.self_ty(), true);
                     if let Some(imp_simp) = imp_simp {
@@ -1217,13 +1226,10 @@ impl<'a, 'tcx> InferCtxtPrivExt<'tcx> for InferCtxt<'a, 'tcx> {
                             return None;
                         }
                     }
-
                     Some(imp)
                 })
                 .collect(),
-            None => {
-                all_impls.iter().map(|&def_id| self.tcx.impl_trait_ref(def_id).unwrap()).collect()
-            }
+            None => all_impls.map(|def_id| self.tcx.impl_trait_ref(def_id).unwrap()).collect(),
         }
     }
 

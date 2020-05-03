@@ -191,7 +191,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                     .ty;
             let needs_note = match ty.kind {
                 ty::Closure(id, _) => {
-                    let tables = self.infcx.tcx.typeck_tables_of(id);
+                    let tables = self.infcx.tcx.typeck_tables_of(id.expect_local());
                     let hir_id = self.infcx.tcx.hir().as_local_hir_id(id.expect_local());
 
                     tables.closure_kind_origins().get(hir_id).is_none()
@@ -582,8 +582,10 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
     ///
     /// This is used when creating error messages like below:
     ///
-    /// >  cannot borrow `a.u` (via `a.u.z.c`) as immutable because it is also borrowed as
-    /// >  mutable (via `a.u.s.b`) [E0502]
+    /// ```text
+    /// cannot borrow `a.u` (via `a.u.z.c`) as immutable because it is also borrowed as
+    /// mutable (via `a.u.s.b`) [E0502]
+    /// ```
     pub(in crate::borrow_check) fn describe_place_for_conflicting_borrow(
         &self,
         first_borrowed_place: Place<'tcx>,
@@ -880,7 +882,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                                 match &self
                                     .infcx
                                     .tcx
-                                    .typeck_tables_of(self.mir_def_id)
+                                    .typeck_tables_of(def_id)
                                     .node_type(fn_hir_id)
                                     .kind
                                 {

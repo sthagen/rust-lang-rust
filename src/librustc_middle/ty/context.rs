@@ -16,7 +16,6 @@ use crate::middle::stability;
 use crate::mir::interpret::{Allocation, ConstValue, Scalar};
 use crate::mir::{interpret, Body, Field, Local, Place, PlaceElem, ProjectionKind, Promoted};
 use crate::traits;
-use crate::traits::{Clause, Clauses, Goal, GoalKind, Goals};
 use crate::ty::query;
 use crate::ty::steal::Steal;
 use crate::ty::subst::{GenericArg, InternalSubsts, Subst, SubstsRef};
@@ -55,8 +54,7 @@ use rustc_hir::{HirId, Node, TraitCandidate};
 use rustc_hir::{ItemKind, ItemLocalId, ItemLocalMap, ItemLocalSet};
 use rustc_index::vec::{Idx, IndexVec};
 use rustc_macros::HashStable;
-use rustc_session::config::CrateType;
-use rustc_session::config::{BorrowckMode, OutputFilenames};
+use rustc_session::config::{BorrowckMode, CrateType, OutputFilenames};
 use rustc_session::lint::{Level, Lint};
 use rustc_session::Session;
 use rustc_span::source_map::MultiSpan;
@@ -92,9 +90,6 @@ pub struct CtxtInterners<'tcx> {
     region: InternedSet<'tcx, RegionKind>,
     existential_predicates: InternedSet<'tcx, List<ExistentialPredicate<'tcx>>>,
     predicates: InternedSet<'tcx, List<Predicate<'tcx>>>,
-    clauses: InternedSet<'tcx, List<Clause<'tcx>>>,
-    goal: InternedSet<'tcx, GoalKind<'tcx>>,
-    goal_list: InternedSet<'tcx, List<Goal<'tcx>>>,
     projs: InternedSet<'tcx, List<ProjectionKind>>,
     place_elems: InternedSet<'tcx, List<PlaceElem<'tcx>>>,
     const_: InternedSet<'tcx, Const<'tcx>>,
@@ -111,9 +106,6 @@ impl<'tcx> CtxtInterners<'tcx> {
             existential_predicates: Default::default(),
             canonical_var_infos: Default::default(),
             predicates: Default::default(),
-            clauses: Default::default(),
-            goal: Default::default(),
-            goal_list: Default::default(),
             projs: Default::default(),
             place_elems: Default::default(),
             const_: Default::default(),
@@ -945,11 +937,11 @@ pub struct GlobalCtxt<'tcx> {
 
     pub queries: query::Queries<'tcx>,
 
-    maybe_unused_trait_imports: FxHashSet<DefId>,
+    maybe_unused_trait_imports: FxHashSet<LocalDefId>,
     maybe_unused_extern_crates: Vec<(DefId, Span)>,
     /// A map of glob use to a set of names it actually imports. Currently only
     /// used in save-analysis.
-    glob_map: FxHashMap<DefId, FxHashSet<ast::Name>>,
+    glob_map: FxHashMap<LocalDefId, FxHashSet<ast::Name>>,
     /// Extern prelude entries. The value is `true` if the entry was introduced
     /// via `extern crate` item and not `--extern` option or compiler built-in.
     pub extern_prelude: FxHashMap<ast::Name, bool>,
@@ -991,22 +983,15 @@ pub struct GlobalCtxt<'tcx> {
 }
 
 impl<'tcx> TyCtxt<'tcx> {
-    pub fn alloc_steal_mir(self, mir: Body<'tcx>) -> &'tcx Steal<Body<'tcx>> {
-        self.arena.alloc(Steal::new(mir))
+    pub fn alloc_steal_mir(self, mir: Body<'tcx>) -> Steal<Body<'tcx>> {
+        Steal::new(mir)
     }
 
     pub fn alloc_steal_promoted(
         self,
         promoted: IndexVec<Promoted, Body<'tcx>>,
-    ) -> &'tcx Steal<IndexVec<Promoted, Body<'tcx>>> {
-        self.arena.alloc(Steal::new(promoted))
-    }
-
-    pub fn intern_promoted(
-        self,
-        promoted: IndexVec<Promoted, Body<'tcx>>,
-    ) -> &'tcx IndexVec<Promoted, Body<'tcx>> {
-        self.arena.alloc(promoted)
+    ) -> Steal<IndexVec<Promoted, Body<'tcx>>> {
+        Steal::new(promoted)
     }
 
     pub fn alloc_adt_def(
@@ -1016,8 +1001,7 @@ impl<'tcx> TyCtxt<'tcx> {
         variants: IndexVec<VariantIdx, ty::VariantDef>,
         repr: ReprOptions,
     ) -> &'tcx ty::AdtDef {
-        let def = ty::AdtDef::new(self, did, kind, variants, repr);
-        self.arena.alloc(def)
+        self.arena.alloc(ty::AdtDef::new(self, did, kind, variants, repr))
     }
 
     pub fn intern_const_alloc(self, alloc: Allocation) -> &'tcx Allocation {
@@ -1165,7 +1149,7 @@ impl<'tcx> TyCtxt<'tcx> {
             maybe_unused_trait_imports: resolutions
                 .maybe_unused_trait_imports
                 .into_iter()
-                .map(|id| definitions.local_def_id(id).to_def_id())
+                .map(|id| definitions.local_def_id(id))
                 .collect(),
             maybe_unused_extern_crates: resolutions
                 .maybe_unused_extern_crates
@@ -1175,7 +1159,7 @@ impl<'tcx> TyCtxt<'tcx> {
             glob_map: resolutions
                 .glob_map
                 .into_iter()
-                .map(|(id, names)| (definitions.local_def_id(id).to_def_id(), names))
+                .map(|(id, names)| (definitions.local_def_id(id), names))
                 .collect(),
             extern_prelude: resolutions.extern_prelude,
             untracked_crate: krate,
@@ -1581,11 +1565,8 @@ macro_rules! nop_list_lift {
 
 nop_lift! {type_; Ty<'a> => Ty<'tcx>}
 nop_lift! {region; Region<'a> => Region<'tcx>}
-nop_lift! {goal; Goal<'a> => Goal<'tcx>}
 nop_lift! {const_; &'a Const<'a> => &'tcx Const<'tcx>}
 
-nop_list_lift! {goal_list; Goal<'a> => Goal<'tcx>}
-nop_list_lift! {clauses; Clause<'a> => Clause<'tcx>}
 nop_list_lift! {type_list; Ty<'a> => Ty<'tcx>}
 nop_list_lift! {existential_predicates; ExistentialPredicate<'a> => ExistentialPredicate<'tcx>}
 nop_list_lift! {predicates; Predicate<'a> => Predicate<'tcx>}
@@ -1996,12 +1977,6 @@ impl<'tcx> Borrow<RegionKind> for Interned<'tcx, RegionKind> {
     }
 }
 
-impl<'tcx> Borrow<GoalKind<'tcx>> for Interned<'tcx, GoalKind<'tcx>> {
-    fn borrow<'a>(&'a self) -> &'a GoalKind<'tcx> {
-        &self.0
-    }
-}
-
 impl<'tcx> Borrow<[ExistentialPredicate<'tcx>]>
     for Interned<'tcx, List<ExistentialPredicate<'tcx>>>
 {
@@ -2019,18 +1994,6 @@ impl<'tcx> Borrow<[Predicate<'tcx>]> for Interned<'tcx, List<Predicate<'tcx>>> {
 impl<'tcx> Borrow<Const<'tcx>> for Interned<'tcx, Const<'tcx>> {
     fn borrow<'a>(&'a self) -> &'a Const<'tcx> {
         &self.0
-    }
-}
-
-impl<'tcx> Borrow<[Clause<'tcx>]> for Interned<'tcx, List<Clause<'tcx>>> {
-    fn borrow<'a>(&'a self) -> &'a [Clause<'tcx>] {
-        &self.0[..]
-    }
-}
-
-impl<'tcx> Borrow<[Goal<'tcx>]> for Interned<'tcx, List<Goal<'tcx>>> {
-    fn borrow<'a>(&'a self) -> &'a [Goal<'tcx>] {
-        &self.0[..]
     }
 }
 
@@ -2060,11 +2023,7 @@ macro_rules! direct_interners {
     }
 }
 
-direct_interners!(
-    region: mk_region(RegionKind),
-    goal: mk_goal(GoalKind<'tcx>),
-    const_: mk_const(Const<'tcx>)
-);
+direct_interners!(region: mk_region(RegionKind), const_: mk_const(Const<'tcx>));
 
 macro_rules! slice_interners {
     ($($field:ident: $method:ident($ty:ty)),+) => (
@@ -2084,8 +2043,6 @@ slice_interners!(
     canonical_var_infos: _intern_canonical_var_infos(CanonicalVarInfo),
     existential_predicates: _intern_existential_predicates(ExistentialPredicate<'tcx>),
     predicates: _intern_predicates(Predicate<'tcx>),
-    clauses: _intern_clauses(Clause<'tcx>),
-    goal_list: _intern_goals(Goal<'tcx>),
     projs: _intern_projs(ProjectionKind),
     place_elems: _intern_place_elems(PlaceElem<'tcx>)
 );
@@ -2473,14 +2430,6 @@ impl<'tcx> TyCtxt<'tcx> {
         if ts.is_empty() { List::empty() } else { self._intern_canonical_var_infos(ts) }
     }
 
-    pub fn intern_clauses(self, ts: &[Clause<'tcx>]) -> Clauses<'tcx> {
-        if ts.is_empty() { List::empty() } else { self._intern_clauses(ts) }
-    }
-
-    pub fn intern_goals(self, ts: &[Goal<'tcx>]) -> Goals<'tcx> {
-        if ts.is_empty() { List::empty() } else { self._intern_goals(ts) }
-    }
-
     pub fn mk_fn_sig<I>(
         self,
         inputs: I,
@@ -2536,14 +2485,6 @@ impl<'tcx> TyCtxt<'tcx> {
 
     pub fn mk_substs_trait(self, self_ty: Ty<'tcx>, rest: &[GenericArg<'tcx>]) -> SubstsRef<'tcx> {
         self.mk_substs(iter::once(self_ty.into()).chain(rest.iter().cloned()))
-    }
-
-    pub fn mk_clauses<I: InternAs<[Clause<'tcx>], Clauses<'tcx>>>(self, iter: I) -> I::Output {
-        iter.intern_with(|xs| self.intern_clauses(xs))
-    }
-
-    pub fn mk_goals<I: InternAs<[Goal<'tcx>], Goals<'tcx>>>(self, iter: I) -> I::Output {
-        iter.intern_with(|xs| self.intern_goals(xs))
     }
 
     /// Walks upwards from `id` to find a node which might change lint levels with attributes.
@@ -2716,10 +2657,8 @@ pub fn provide(providers: &mut ty::query::Providers<'_>) {
         assert_eq!(cnum, LOCAL_CRATE);
         &tcx.maybe_unused_extern_crates[..]
     };
-    providers.names_imported_by_glob_use = |tcx, id| {
-        assert_eq!(id.krate, LOCAL_CRATE);
-        tcx.arena.alloc(tcx.glob_map.get(&id).cloned().unwrap_or_default())
-    };
+    providers.names_imported_by_glob_use =
+        |tcx, id| tcx.arena.alloc(tcx.glob_map.get(&id).cloned().unwrap_or_default());
 
     providers.lookup_stability = |tcx, id| {
         let id = tcx.hir().local_def_id_to_hir_id(id.expect_local());
@@ -2747,7 +2686,7 @@ pub fn provide(providers: &mut ty::query::Providers<'_>) {
     };
     providers.features_query = |tcx, cnum| {
         assert_eq!(cnum, LOCAL_CRATE);
-        tcx.arena.alloc(tcx.sess.features_untracked().clone())
+        tcx.sess.features_untracked()
     };
     providers.is_panic_runtime = |tcx, cnum| {
         assert_eq!(cnum, LOCAL_CRATE);

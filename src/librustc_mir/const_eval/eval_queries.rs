@@ -193,7 +193,7 @@ fn validate_and_turn_into_const<'tcx>(
                     mplace.into(),
                     path,
                     &mut ref_tracking,
-                    /*may_ref_to_static*/ is_static,
+                    /*may_ref_to_static*/ ecx.memory.extra.can_access_statics,
                 )?;
             }
         }
@@ -289,9 +289,11 @@ pub fn const_eval_raw_provider<'tcx>(
     let cid = key.value;
     let def_id = cid.instance.def.def_id();
 
-    if def_id.is_local() && tcx.has_typeck_tables(def_id) {
-        if let Some(error_reported) = tcx.typeck_tables_of(def_id).tainted_by_errors {
-            return Err(ErrorHandled::Reported(error_reported));
+    if let Some(def_id) = def_id.as_local() {
+        if tcx.has_typeck_tables(def_id) {
+            if let Some(error_reported) = tcx.typeck_tables_of(def_id).tainted_by_errors {
+                return Err(ErrorHandled::Reported(error_reported));
+            }
         }
     }
 

@@ -1,3 +1,10 @@
+use std::collections::BTreeSet;
+use std::fmt::Write as _;
+use std::fmt::{Debug, Display};
+use std::fs;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+
 use super::graphviz::write_mir_fn_graphviz;
 use crate::transform::MirSource;
 use either::Either;
@@ -5,18 +12,12 @@ use rustc_data_structures::fx::FxHashMap;
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
 use rustc_index::vec::Idx;
 use rustc_middle::mir::interpret::{
-    read_target_uint, AllocId, Allocation, ConstValue, GlobalAlloc,
+    read_target_uint, AllocId, Allocation, ConstValue, GlobalAlloc, Pointer,
 };
 use rustc_middle::mir::visit::Visitor;
 use rustc_middle::mir::*;
 use rustc_middle::ty::{self, TyCtxt, TypeFoldable, TypeVisitor};
 use rustc_target::abi::Size;
-use std::collections::BTreeSet;
-use std::fmt::Display;
-use std::fmt::Write as _;
-use std::fs;
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
 
 const INDENT: &str = "    ";
 /// Alignment for lining up comments following MIR statements
@@ -305,9 +306,9 @@ where
         let indented_body = format!("{0}{0}{1:?};", INDENT, statement);
         writeln!(
             w,
-            "{:A$} // {:?}: {}",
+            "{:A$} // {}{}",
             indented_body,
-            current_location,
+            if tcx.sess.verbose() { format!("{:?}: ", current_location) } else { String::new() },
             comment(tcx, statement.source_info),
             A = ALIGN,
         )?;
@@ -326,9 +327,9 @@ where
     let indented_terminator = format!("{0}{0}{1:?};", INDENT, data.terminator().kind);
     writeln!(
         w,
-        "{:A$} // {:?}: {}",
+        "{:A$} // {}{}",
         indented_terminator,
-        current_location,
+        if tcx.sess.verbose() { format!("{:?}: ", current_location) } else { String::new() },
         comment(tcx, data.terminator().source_info),
         A = ALIGN,
     )?;
@@ -455,7 +456,7 @@ fn write_scope_tree(
         )?;
     }
 
-    // Local variable types (including the user's name in a comment).
+    // Local variable types.
     for (local, local_decl) in body.local_decls.iter_enumerated() {
         if (1..body.arg_count + 1).contains(&local.index()) {
             // Skip over argument locals, they're printed in the signature.
@@ -635,7 +636,7 @@ pub fn write_allocations<'tcx>(
 /// After the hex dump, an ascii dump follows, replacing all unprintable characters (control
 /// characters or characters whose value is larger than 127) with a `.`
 /// This also prints relocations adequately.
-pub fn write_allocation<Tag, Extra>(
+pub fn write_allocation<Tag: Copy + Debug, Extra>(
     tcx: TyCtxt<'tcx>,
     alloc: &Allocation<Tag, Extra>,
     w: &mut dyn Write,
@@ -679,7 +680,7 @@ fn write_allocation_newline(
 /// The `prefix` argument allows callers to add an arbitrary prefix before each line (even if there
 /// is only one line). Note that your prefix should contain a trailing space as the lines are
 /// printed directly after it.
-fn write_allocation_bytes<Tag, Extra>(
+fn write_allocation_bytes<Tag: Copy + Debug, Extra>(
     tcx: TyCtxt<'tcx>,
     alloc: &Allocation<Tag, Extra>,
     w: &mut dyn Write,
@@ -715,14 +716,20 @@ fn write_allocation_bytes<Tag, Extra>(
         if i != line_start {
             write!(w, " ")?;
         }
-        if let Some(&(_, target_id)) = alloc.relocations().get(&i) {
+        if let Some(&(tag, target_id)) = alloc.relocations().get(&i) {
             // Memory with a relocation must be defined
             let j = i.bytes_usize();
             let offset =
                 alloc.inspect_with_undef_and_ptr_outside_interpreter(j..j + ptr_size.bytes_usize());
             let offset = read_target_uint(tcx.data_layout.endian, offset).unwrap();
+            let offset = Size::from_bytes(offset);
             let relocation_width = |bytes| bytes * 3;
-            let mut target = format!("{}+{}", target_id, offset);
+            let ptr = Pointer::new_with_tag(target_id, offset, tag);
+            let mut target = format!("{:?}", ptr);
+            if target.len() > relocation_width(ptr_size.bytes_usize() - 1) {
+                // This is too long, try to save some space.
+                target = format!("{:#?}", ptr);
+            }
             if ((i - line_start) + ptr_size).bytes_usize() > BYTES_PER_LINE {
                 // This branch handles the situation where a relocation starts in the current line
                 // but ends in the next one.
@@ -868,5 +875,9 @@ fn write_user_type_annotations(body: &Body<'_>, w: &mut dyn Write) -> io::Result
 }
 
 pub fn dump_mir_def_ids(tcx: TyCtxt<'_>, single: Option<DefId>) -> Vec<DefId> {
-    if let Some(i) = single { vec![i] } else { tcx.mir_keys(LOCAL_CRATE).iter().cloned().collect() }
+    if let Some(i) = single {
+        vec![i]
+    } else {
+        tcx.mir_keys(LOCAL_CRATE).iter().map(|def_id| def_id.to_def_id()).collect()
+    }
 }

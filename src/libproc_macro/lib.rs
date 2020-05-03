@@ -303,7 +303,7 @@ impl Span {
     /// definition site (local variables, labels, `$crate`) and sometimes at the macro
     /// call site (everything else).
     /// The span location is taken from the call-site.
-    #[unstable(feature = "proc_macro_mixed_site", issue = "65049")]
+    #[stable(feature = "proc_macro_mixed_site", since = "1.45.0")]
     pub fn mixed_site() -> Span {
         Span(bridge::client::Span::mixed_site())
     }
@@ -351,14 +351,14 @@ impl Span {
 
     /// Creates a new span with the same line/column information as `self` but
     /// that resolves symbols as though it were at `other`.
-    #[stable(feature = "proc_macro_span_resolved_at", since = "1.43.0")]
+    #[stable(feature = "proc_macro_span_resolved_at", since = "1.45.0")]
     pub fn resolved_at(&self, other: Span) -> Span {
         Span(self.0.resolved_at(other.0))
     }
 
     /// Creates a new span with the same name resolution behavior as `self` but
     /// with the line/column information of `other`.
-    #[stable(feature = "proc_macro_span_located_at", since = "1.43.0")]
+    #[stable(feature = "proc_macro_span_located_at", since = "1.45.0")]
     pub fn located_at(&self, other: Span) -> Span {
         other.resolved_at(*self)
     }

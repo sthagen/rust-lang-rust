@@ -199,9 +199,9 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
             // generators and closures.
             ty::Closure(def_id, _) | ty::Generator(def_id, _, _) => {
                 let mut name = None;
-                if def_id.is_local() {
+                if let Some(def_id) = def_id.as_local() {
                     let tables = self.ecx.tcx.typeck_tables_of(def_id);
-                    if let Some(upvars) = tables.upvar_list.get(&def_id) {
+                    if let Some(upvars) = tables.upvar_list.get(&def_id.to_def_id()) {
                         // Sometimes the index is beyond the number of upvars (seen
                         // for a generator).
                         if let Some((&var_hir_id, _)) = upvars.get_index(field) {
@@ -360,10 +360,10 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
                     place.ptr, size, align
                 );
                 match err.kind {
-                    err_ub!(InvalidIntPointerUsage(0)) => {
+                    err_ub!(DanglingIntPointer(0, _)) => {
                         throw_validation_failure!(format_args!("a NULL {}", kind), self.path)
                     }
-                    err_ub!(InvalidIntPointerUsage(i)) => throw_validation_failure!(
+                    err_ub!(DanglingIntPointer(i, _)) => throw_validation_failure!(
                         format_args!("a {} to unallocated address {}", kind, i),
                         self.path
                     ),
@@ -404,18 +404,26 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
                 // Skip validation entirely for some external statics
                 let alloc_kind = self.ecx.tcx.alloc_map.lock().get(ptr.alloc_id);
                 if let Some(GlobalAlloc::Static(did)) = alloc_kind {
-                    // `extern static` cannot be validated as they have no body.
-                    // FIXME: Statics from other crates are also skipped.
-                    // They might be checked at a different type, but for now we
-                    // want to avoid recursing too deeply.  This is not sound!
-                    if !did.is_local() || self.ecx.tcx.is_foreign_item(did) {
-                        return Ok(());
-                    }
+                    // See const_eval::machine::MemoryExtra::can_access_statics for why
+                    // this check is so important.
+                    // This check is reachable when the const just referenced the static,
+                    // but never read it (so we never entered `before_access_global`).
+                    // We also need to do it here instead of going on to avoid running
+                    // into the `before_access_global` check during validation.
                     if !self.may_ref_to_static && self.ecx.tcx.is_static(did) {
                         throw_validation_failure!(
                             format_args!("a {} pointing to a static variable", kind),
                             self.path
                         );
+                    }
+                    // `extern static` cannot be validated as they have no body.
+                    // FIXME: Statics from other crates are also skipped.
+                    // They might be checked at a different type, but for now we
+                    // want to avoid recursing too deeply.  We might miss const-invalid data,
+                    // but things are still sound otherwise (in particular re: consts
+                    // referring to statics).
+                    if !did.is_local() || self.ecx.tcx.is_foreign_item(did) {
+                        return Ok(());
                     }
                 }
             }

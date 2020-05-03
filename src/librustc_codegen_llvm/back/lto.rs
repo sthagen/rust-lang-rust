@@ -1,4 +1,3 @@
-use crate::back::bytecode::DecodedBytecode;
 use crate::back::write::{
     self, save_temp_bitcode, to_llvm_opt_settings, with_llvm_pmb, DiagnosticHandlers,
 };
@@ -10,7 +9,7 @@ use rustc_codegen_ssa::back::lto::{LtoModuleCodegen, SerializedModule, ThinModul
 use rustc_codegen_ssa::back::symbol_export;
 use rustc_codegen_ssa::back::write::{CodegenContext, FatLTOInput, ModuleConfig};
 use rustc_codegen_ssa::traits::*;
-use rustc_codegen_ssa::{ModuleCodegen, ModuleKind, RLIB_BYTECODE_EXTENSION};
+use rustc_codegen_ssa::{looks_like_rust_object_file, ModuleCodegen, ModuleKind};
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_errors::{FatalError, Handler};
 use rustc_hir::def_id::LOCAL_CRATE;
@@ -18,7 +17,7 @@ use rustc_middle::bug;
 use rustc_middle::dep_graph::WorkProduct;
 use rustc_middle::middle::exported_symbols::SymbolExportLevel;
 use rustc_session::cgu_reuse_tracker::CguReuse;
-use rustc_session::config::{self, Lto};
+use rustc_session::config::{self, CrateType, Lto};
 
 use std::ffi::{CStr, CString};
 use std::fs::File;
@@ -34,13 +33,10 @@ use std::sync::Arc;
 /// compilation session.
 pub const THIN_LTO_IMPORTS_INCR_COMP_FILE_NAME: &str = "thin-lto-past-imports.bin";
 
-pub fn crate_type_allows_lto(crate_type: config::CrateType) -> bool {
+pub fn crate_type_allows_lto(crate_type: CrateType) -> bool {
     match crate_type {
-        config::CrateType::Executable
-        | config::CrateType::Staticlib
-        | config::CrateType::Cdylib => true,
-
-        config::CrateType::Dylib | config::CrateType::Rlib | config::CrateType::ProcMacro => false,
+        CrateType::Executable | CrateType::Staticlib | CrateType::Cdylib => true,
+        CrateType::Dylib | CrateType::Rlib | CrateType::ProcMacro => false,
     }
 }
 
@@ -111,27 +107,44 @@ fn prepare_lto(
             }
 
             let archive = ArchiveRO::open(&path).expect("wanted an rlib");
-            let bytecodes = archive
+            let obj_files = archive
                 .iter()
                 .filter_map(|child| child.ok().and_then(|c| c.name().map(|name| (name, c))))
-                .filter(|&(name, _)| name.ends_with(RLIB_BYTECODE_EXTENSION));
-            for (name, data) in bytecodes {
-                let _timer =
-                    cgcx.prof.generic_activity_with_arg("LLVM_lto_load_upstream_bitcode", name);
-                info!("adding bytecode {}", name);
-                let bc_encoded = data.data();
-
-                let (bc, id) = match DecodedBytecode::new(bc_encoded) {
-                    Ok(b) => Ok((b.bytecode(), b.identifier().to_string())),
-                    Err(e) => Err(diag_handler.fatal(&e)),
-                }?;
-                let bc = SerializedModule::FromRlib(bc);
-                upstream_modules.push((bc, CString::new(id).unwrap()));
+                .filter(|&(name, _)| looks_like_rust_object_file(name));
+            for (name, child) in obj_files {
+                info!("adding bitcode from {}", name);
+                match get_bitcode_slice_from_object_data(child.data()) {
+                    Ok(data) => {
+                        let module = SerializedModule::FromRlib(data.to_vec());
+                        upstream_modules.push((module, CString::new(name).unwrap()));
+                    }
+                    Err(msg) => return Err(diag_handler.fatal(&msg)),
+                }
             }
         }
     }
 
     Ok((symbol_white_list, upstream_modules))
+}
+
+fn get_bitcode_slice_from_object_data(obj: &[u8]) -> Result<&[u8], String> {
+    let mut len = 0;
+    let data =
+        unsafe { llvm::LLVMRustGetBitcodeSliceFromObjectData(obj.as_ptr(), obj.len(), &mut len) };
+    if !data.is_null() {
+        assert!(len != 0);
+        let bc = unsafe { slice::from_raw_parts(data, len) };
+
+        // `bc` must be a sub-slice of `obj`.
+        assert!(obj.as_ptr() <= bc.as_ptr());
+        assert!(bc[bc.len()..bc.len()].as_ptr() <= obj[obj.len()..obj.len()].as_ptr());
+
+        Ok(bc)
+    } else {
+        assert!(len == 0);
+        let msg = llvm::last_error().unwrap_or_else(|| "unknown LLVM error".to_string());
+        Err(format!("failed to get bitcode from object file for LTO ({})", msg))
+    }
 }
 
 /// Performs fat LTO by merging all modules into a single one and returning it

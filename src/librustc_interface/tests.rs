@@ -14,7 +14,8 @@ use rustc_session::{build_session, Session};
 use rustc_span::edition::{Edition, DEFAULT_EDITION};
 use rustc_span::symbol::sym;
 use rustc_span::SourceFileHashAlgorithm;
-use rustc_target::spec::{LinkerFlavor, MergeFunctions, PanicStrategy, RelroLevel};
+use rustc_target::spec::{LinkerFlavor, MergeFunctions, PanicStrategy};
+use rustc_target::spec::{RelocModel, RelroLevel, TlsModel};
 use std::collections::{BTreeMap, BTreeSet};
 use std::iter::FromIterator;
 use std::path::PathBuf;
@@ -409,10 +410,10 @@ fn test_codegen_options_tracking_hash() {
 
     // Make sure that changing a [TRACKED] option changes the hash.
     // This list is in alphabetical order.
-    tracked!(bitcode_in_rlib, false);
     tracked!(code_model, Some(String::from("code model")));
     tracked!(debug_assertions, Some(true));
     tracked!(debuginfo, 0xdeadbeef);
+    tracked!(embed_bitcode, false);
     tracked!(force_frame_pointers, Some(false));
     tracked!(inline_threshold, Some(0xf007ba11));
     tracked!(linker_plugin_lto, LinkerPluginLto::LinkerPluginAuto);
@@ -430,7 +431,7 @@ fn test_codegen_options_tracking_hash() {
     tracked!(prefer_dynamic, true);
     tracked!(profile_generate, SwitchWithOptPath::Enabled(None));
     tracked!(profile_use, Some(PathBuf::from("abc")));
-    tracked!(relocation_model, Some(String::from("relocation model")));
+    tracked!(relocation_model, Some(RelocModel::Pic));
     tracked!(soft_float, true);
     tracked!(target_cpu, Some(String::from("abc")));
     tracked!(target_feature, String::from("all the features, all of them"));
@@ -528,7 +529,6 @@ fn test_debugging_options_tracking_hash() {
     tracked!(debug_macros, true);
     tracked!(dep_info_omit_d_target, true);
     tracked!(dual_proc_macros, true);
-    tracked!(embed_bitcode, true);
     tracked!(fewer_names, true);
     tracked!(force_overflow_checks, Some(true));
     tracked!(force_unstable_if_unmarked, true);
@@ -545,7 +545,6 @@ fn test_debugging_options_tracking_hash() {
     tracked!(new_llvm_pass_manager, true);
     tracked!(no_codegen, true);
     tracked!(no_generate_arange_section, true);
-    tracked!(no_landing_pads, true);
     tracked!(no_link, true);
     tracked!(no_profiler_runtime, true);
     tracked!(osx_rpath_install_name, true);
@@ -567,7 +566,7 @@ fn test_debugging_options_tracking_hash() {
     tracked!(symbol_mangling_version, SymbolManglingVersion::V0);
     tracked!(teach, true);
     tracked!(thinlto, Some(true));
-    tracked!(tls_model, Some(String::from("tls model")));
+    tracked!(tls_model, Some(TlsModel::GeneralDynamic));
     tracked!(treat_err_as_bug, Some(1));
     tracked!(unleash_the_miri_inside_of_you, true);
     tracked!(verify_llvm_ir, true);

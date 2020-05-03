@@ -232,8 +232,8 @@ pub fn std_cargo(builder: &Builder<'_>, target: Interned<String>, stage: u32, ca
         }
     }
 
-    // By default, rustc uses `-Cbitcode-in-rlib=yes`, and Cargo overrides that
-    // with `-Cbitcode-in-rlib=no` for non-LTO builds. However, libstd must be
+    // By default, rustc uses `-Cembed-bitcode=yes`, and Cargo overrides that
+    // with `-Cembed-bitcode=no` for non-LTO builds. However, libstd must be
     // built with bitcode so that the produced rlibs can be used for both LTO
     // builds (which use bitcode) and non-LTO builds (which use object code).
     // So we override the override here!
@@ -241,7 +241,7 @@ pub fn std_cargo(builder: &Builder<'_>, target: Interned<String>, stage: u32, ca
     // But we don't bother for the stage 0 compiler because it's never used
     // with LTO.
     if stage >= 1 {
-        cargo.rustflag("-Cbitcode-in-rlib=yes");
+        cargo.rustflag("-Cembed-bitcode=yes");
     }
 }
 
@@ -517,9 +517,13 @@ pub fn rustc_cargo_env(builder: &Builder<'_>, cargo: &mut Cargo, target: Interne
     // librustc_llvm and librustc_codegen_llvm.
     //
     // Note that this is disabled if LLVM itself is disabled or we're in a check
-    // build, where if we're in a check build there's no need to build all of
-    // LLVM and such.
-    if builder.config.llvm_enabled() && builder.kind != Kind::Check {
+    // build. If we are in a check build we still go ahead here presuming we've
+    // detected that LLVM is alreay built and good to go which helps prevent
+    // busting caches (e.g. like #71152).
+    if builder.config.llvm_enabled()
+        && (builder.kind != Kind::Check
+            || crate::native::prebuilt_llvm_config(builder, target).is_ok())
+    {
         if builder.is_rust_llvm(target) {
             cargo.env("LLVM_RUSTLLVM", "1");
         }
@@ -1011,5 +1015,8 @@ pub enum CargoMessage<'a> {
     },
     BuildScriptExecuted {
         package_id: Cow<'a, str>,
+    },
+    BuildFinished {
+        success: bool,
     },
 }

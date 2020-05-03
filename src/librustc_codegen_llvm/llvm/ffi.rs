@@ -445,8 +445,7 @@ pub struct SanitizerOptions {
 /// LLVMRelocMode
 #[derive(Copy, Clone, PartialEq)]
 #[repr(C)]
-pub enum RelocMode {
-    Default,
+pub enum RelocModel {
     Static,
     PIC,
     DynamicNoPic,
@@ -1946,7 +1945,7 @@ extern "C" {
         Features: *const c_char,
         Abi: *const c_char,
         Model: CodeModel,
-        Reloc: RelocMode,
+        Reloc: RelocModel,
         Level: CodeGenOptLevel,
         UseSoftFP: bool,
         PositionIndependentExecutable: bool,
@@ -2138,6 +2137,11 @@ extern "C" {
         len: usize,
         Identifier: *const c_char,
     ) -> Option<&Module>;
+    pub fn LLVMRustGetBitcodeSliceFromObjectData(
+        Data: *const u8,
+        len: usize,
+        out_len: &mut usize,
+    ) -> *const u8;
     pub fn LLVMRustThinLTOGetDICompileUnit(
         M: &Module,
         CU1: &mut *mut c_void,

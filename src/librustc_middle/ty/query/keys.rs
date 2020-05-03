@@ -2,7 +2,6 @@
 
 use crate::infer::canonical::Canonical;
 use crate::mir;
-use crate::traits;
 use crate::ty::fast_reject::SimplifiedType;
 use crate::ty::subst::{GenericArg, SubstsRef};
 use crate::ty::{self, Ty, TyCtxt};
@@ -107,6 +106,17 @@ impl Key for DefId {
 }
 
 impl Key for (DefId, DefId) {
+    type CacheSelector = DefaultCacheSelector;
+
+    fn query_crate(&self) -> CrateNum {
+        self.0.krate
+    }
+    fn default_span(&self, tcx: TyCtxt<'_>) -> Span {
+        self.1.default_span(tcx)
+    }
+}
+
+impl Key for (DefId, LocalDefId) {
     type CacheSelector = DefaultCacheSelector;
 
     fn query_crate(&self) -> CrateNum {
@@ -246,17 +256,6 @@ impl<'tcx, T: Key> Key for ty::ParamEnvAnd<'tcx, T> {
     }
     fn default_span(&self, tcx: TyCtxt<'_>) -> Span {
         self.value.default_span(tcx)
-    }
-}
-
-impl<'tcx> Key for traits::Environment<'tcx> {
-    type CacheSelector = DefaultCacheSelector;
-
-    fn query_crate(&self) -> CrateNum {
-        LOCAL_CRATE
-    }
-    fn default_span(&self, _: TyCtxt<'_>) -> Span {
-        DUMMY_SP
     }
 }
 

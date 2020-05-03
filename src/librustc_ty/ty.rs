@@ -220,9 +220,9 @@ fn associated_item_def_ids(tcx: TyCtxt<'_>, def_id: DefId) -> &[DefId] {
     }
 }
 
-fn associated_items(tcx: TyCtxt<'_>, def_id: DefId) -> &ty::AssociatedItems {
+fn associated_items(tcx: TyCtxt<'_>, def_id: DefId) -> ty::AssociatedItems<'_> {
     let items = tcx.associated_item_def_ids(def_id).iter().map(|did| tcx.associated_item(*did));
-    tcx.arena.alloc(ty::AssociatedItems::new(items))
+    ty::AssociatedItems::new(items)
 }
 
 fn def_span(tcx: TyCtxt<'_>, def_id: DefId) -> Span {
@@ -307,7 +307,7 @@ fn instance_def_size_estimate<'tcx>(
 
 /// If `def_id` is an issue 33140 hack impl, returns its self type; otherwise, returns `None`.
 ///
-/// See [`ImplOverlapKind::Issue33140`] for more details.
+/// See [`ty::ImplOverlapKind::Issue33140`] for more details.
 fn issue33140_self_ty(tcx: TyCtxt<'_>, def_id: DefId) -> Option<Ty<'_>> {
     debug!("issue33140_self_ty({:?})", def_id);
 

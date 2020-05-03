@@ -1,7 +1,7 @@
 use crate::cgu_reuse_tracker::CguReuseTracker;
 use crate::code_stats::CodeStats;
 pub use crate::code_stats::{DataTypeKind, FieldInfo, SizeKind, VariantInfo};
-use crate::config::{self, OutputType, PrintRequest, Sanitizer, SwitchWithOptPath};
+use crate::config::{self, CrateType, OutputType, PrintRequest, Sanitizer, SwitchWithOptPath};
 use crate::filesearch;
 use crate::lint;
 use crate::parse::ParseSess;
@@ -22,7 +22,7 @@ use rustc_errors::{Applicability, DiagnosticBuilder, DiagnosticId, ErrorReported
 use rustc_span::edition::Edition;
 use rustc_span::source_map::{self, FileLoader, MultiSpan, RealFileLoader, SourceMap, Span};
 use rustc_span::SourceFileHashAlgorithm;
-use rustc_target::spec::{PanicStrategy, RelroLevel, Target, TargetTriple};
+use rustc_target::spec::{PanicStrategy, RelocModel, RelroLevel, Target, TargetTriple, TlsModel};
 
 use std::cell::{self, RefCell};
 use std::env;
@@ -73,7 +73,7 @@ pub struct Session {
     /// (sub)diagnostics that have been set once, but should not be set again,
     /// in order to avoid redundantly verbose output (Issue #24690, #44953).
     pub one_time_diagnostics: Lock<FxHashSet<(DiagnosticMessageId, Option<Span>, String)>>,
-    pub crate_types: Once<Vec<config::CrateType>>,
+    pub crate_types: Once<Vec<CrateType>>,
     /// The `crate_disambiguator` is constructed out of all the `-C metadata`
     /// arguments passed to the compiler. Its value together with the crate-name
     /// forms a unique global identifier for the crate. It is used to allow
@@ -540,9 +540,6 @@ impl Session {
         self.opts.debugging_opts.fewer_names || !more_names
     }
 
-    pub fn no_landing_pads(&self) -> bool {
-        self.opts.debugging_opts.no_landing_pads || self.panic_strategy() == PanicStrategy::Abort
-    }
     pub fn unstable_options(&self) -> bool {
         self.opts.debugging_opts.unstable_options
     }
@@ -555,7 +552,7 @@ impl Session {
     }
 
     /// Check whether this compile session and crate type use static crt.
-    pub fn crt_static(&self, crate_type: Option<config::CrateType>) -> bool {
+    pub fn crt_static(&self, crate_type: Option<CrateType>) -> bool {
         // If the target does not opt in to crt-static support, use its default.
         if self.target.target.options.crt_static_respected {
             self.crt_static_feature(crate_type)
@@ -565,15 +562,15 @@ impl Session {
     }
 
     /// Check whether this compile session and crate type use `crt-static` feature.
-    pub fn crt_static_feature(&self, crate_type: Option<config::CrateType>) -> bool {
+    pub fn crt_static_feature(&self, crate_type: Option<CrateType>) -> bool {
         let requested_features = self.opts.cg.target_feature.split(',');
         let found_negative = requested_features.clone().any(|r| r == "-crt-static");
         let found_positive = requested_features.clone().any(|r| r == "+crt-static");
 
         if found_positive || found_negative {
             found_positive
-        } else if crate_type == Some(config::CrateType::ProcMacro)
-            || crate_type == None && self.opts.crate_types.contains(&config::CrateType::ProcMacro)
+        } else if crate_type == Some(CrateType::ProcMacro)
+            || crate_type == None && self.opts.crate_types.contains(&CrateType::ProcMacro)
         {
             // FIXME: When crate_type is not available,
             // we use compiler options to determine the crate_type.
@@ -582,6 +579,14 @@ impl Session {
         } else {
             self.target.target.options.crt_static_default
         }
+    }
+
+    pub fn relocation_model(&self) -> RelocModel {
+        self.opts.cg.relocation_model.unwrap_or(self.target.target.options.relocation_model)
+    }
+
+    pub fn tls_model(&self) -> TlsModel {
+        self.opts.debugging_opts.tls_model.unwrap_or(self.target.target.options.tls_model)
     }
 
     pub fn must_not_eliminate_frame_pointers(&self) -> bool {

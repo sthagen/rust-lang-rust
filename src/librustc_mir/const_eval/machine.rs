@@ -1,7 +1,7 @@
 use rustc_middle::mir;
 use rustc_middle::ty::layout::HasTyCtxt;
 use rustc_middle::ty::{self, Ty};
-use std::borrow::{Borrow, Cow};
+use std::borrow::Borrow;
 use std::collections::hash_map::Entry;
 use std::hash::Hash;
 
@@ -13,8 +13,8 @@ use rustc_middle::mir::AssertMessage;
 use rustc_span::symbol::Symbol;
 
 use crate::interpret::{
-    self, AllocId, Allocation, Frame, GlobalId, ImmTy, InterpCx, InterpResult, Memory, MemoryKind,
-    OpTy, PlaceTy, Pointer, Scalar,
+    self, compile_time_machine, AllocId, Allocation, Frame, GlobalId, ImmTy, InterpCx,
+    InterpResult, Memory, OpTy, PlaceTy, Pointer, Scalar,
 };
 
 use super::error::*;
@@ -99,7 +99,12 @@ pub struct CompileTimeInterpreter<'mir, 'tcx> {
 
 #[derive(Copy, Clone, Debug)]
 pub struct MemoryExtra {
-    /// Whether this machine may read from statics
+    /// We need to make sure consts never point to anything mutable, even recursively. That is
+    /// relied on for pattern matching on consts with references.
+    /// To achieve this, two pieces have to work together:
+    /// * Interning makes everything outside of statics immutable.
+    /// * Pointers to allocations inside of statics can never leak outside, to a non-static global.
+    /// This boolean here controls the second part.
     pub(super) can_access_statics: bool,
 }
 
@@ -171,29 +176,9 @@ impl interpret::MayLeak for ! {
 }
 
 impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for CompileTimeInterpreter<'mir, 'tcx> {
-    type MemoryKind = !;
-    type PointerTag = ();
-    type ExtraFnVal = !;
+    compile_time_machine!(<'mir, 'tcx>);
 
-    type FrameExtra = ();
     type MemoryExtra = MemoryExtra;
-    type AllocExtra = ();
-
-    type MemoryMap = FxHashMap<AllocId, (MemoryKind<!>, Allocation)>;
-
-    const GLOBAL_KIND: Option<!> = None; // no copying of globals from `tcx` to machine memory
-
-    #[inline(always)]
-    fn enforce_alignment(_memory_extra: &Self::MemoryExtra) -> bool {
-        // We do not check for alignment to avoid having to carry an `Align`
-        // in `ConstValue::ByRef`.
-        false
-    }
-
-    #[inline(always)]
-    fn enforce_validity(_ecx: &InterpCx<'mir, 'tcx, Self>) -> bool {
-        false // for now, we don't enforce validity
-    }
 
     fn find_mir_or_eval_fn(
         ecx: &mut InterpCx<'mir, 'tcx, Self>,
@@ -239,16 +224,6 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for CompileTimeInterpreter<'mir,
                 return Err(err);
             }
         }))
-    }
-
-    fn call_extra_fn(
-        _ecx: &mut InterpCx<'mir, 'tcx, Self>,
-        fn_val: !,
-        _args: &[OpTy<'tcx>],
-        _ret: Option<(PlaceTy<'tcx>, mir::BasicBlock)>,
-        _unwind: Option<mir::BasicBlock>,
-    ) -> InterpResult<'tcx> {
-        match fn_val {}
     }
 
     fn call_intrinsic(
@@ -310,20 +285,6 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for CompileTimeInterpreter<'mir,
         Err(ConstEvalErrKind::NeedsRfc("pointer arithmetic or comparison".to_string()).into())
     }
 
-    #[inline(always)]
-    fn init_allocation_extra<'b>(
-        _memory_extra: &MemoryExtra,
-        _id: AllocId,
-        alloc: Cow<'b, Allocation>,
-        _kind: Option<MemoryKind<!>>,
-    ) -> (Cow<'b, Allocation<Self::PointerTag>>, Self::PointerTag) {
-        // We do not use a tag so we can just cheaply forward the allocation
-        (alloc, ())
-    }
-
-    #[inline(always)]
-    fn tag_global_base_pointer(_memory_extra: &MemoryExtra, _id: AllocId) -> Self::PointerTag {}
-
     fn box_alloc(
         _ecx: &mut InterpCx<'mir, 'tcx, Self>,
         _dest: PlaceTy<'tcx>,
@@ -343,14 +304,6 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for CompileTimeInterpreter<'mir,
         }
 
         Ok(())
-    }
-
-    #[inline(always)]
-    fn init_frame_extra(
-        _ecx: &mut InterpCx<'mir, 'tcx, Self>,
-        frame: Frame<'mir, 'tcx>,
-    ) -> InterpResult<'tcx, Frame<'mir, 'tcx>> {
-        Ok(frame)
     }
 
     #[inline(always)]
@@ -389,6 +342,10 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for CompileTimeInterpreter<'mir,
             } else if static_def_id.is_some() {
                 // Machine configuration does not allow us to read statics
                 // (e.g., `const` initializer).
+                // See const_eval::machine::MemoryExtra::can_access_statics for why
+                // this check is so important: if we could read statics, we could read pointers
+                // to mutable allocations *inside* statics. These allocations are not themselves
+                // statics, so pointers to them can get around the check in `validity.rs`.
                 Err(ConstEvalErrKind::ConstAccessesStatic.into())
             } else {
                 // Immutable global, this read is fine.

@@ -6,7 +6,8 @@ use crate::search_paths::SearchPath;
 use crate::utils::NativeLibraryKind;
 
 use rustc_target::spec::TargetTriple;
-use rustc_target::spec::{LinkerFlavor, MergeFunctions, PanicStrategy, RelroLevel};
+use rustc_target::spec::{LinkerFlavor, MergeFunctions, PanicStrategy};
+use rustc_target::spec::{RelocModel, RelroLevel, TlsModel};
 
 use rustc_feature::UnstableFeatures;
 use rustc_span::edition::Edition;
@@ -265,14 +266,15 @@ macro_rules! options {
         pub const parse_merge_functions: &str = "one of: `disabled`, `trampolines`, or `aliases`";
         pub const parse_symbol_mangling_version: &str = "either `legacy` or `v0` (RFC 2603)";
         pub const parse_src_file_hash: &str = "either `md5` or `sha1`";
+        pub const parse_relocation_model: &str =
+            "one of supported relocation models (`rustc --print relocation-models`)";
+        pub const parse_tls_model: &str =
+            "one of supported TLS models (`rustc --print tls-models`)";
     }
 
     #[allow(dead_code)]
     mod $mod_set {
-        use super::{$struct_name, Passes, Sanitizer, LtoCli, LinkerPluginLto, SwitchWithOptPath,
-            SymbolManglingVersion, CFGuard, SourceFileHashAlgorithm};
-        use rustc_target::spec::{LinkerFlavor, MergeFunctions, PanicStrategy, RelroLevel};
-        use std::path::PathBuf;
+        use super::*;
         use std::str::FromStr;
 
         // Sometimes different options need to build a common structure.
@@ -598,6 +600,23 @@ macro_rules! options {
             true
         }
 
+        fn parse_relocation_model(slot: &mut Option<RelocModel>, v: Option<&str>) -> bool {
+            match v.and_then(|s| RelocModel::from_str(s).ok()) {
+                Some(relocation_model) => *slot = Some(relocation_model),
+                None if v == Some("default") => *slot = None,
+                _ => return false,
+            }
+            true
+        }
+
+        fn parse_tls_model(slot: &mut Option<TlsModel>, v: Option<&str>) -> bool {
+            match v.and_then(|s| TlsModel::from_str(s).ok()) {
+                Some(tls_model) => *slot = Some(tls_model),
+                _ => return false,
+            }
+            true
+        }
+
         fn parse_symbol_mangling_version(
             slot: &mut SymbolManglingVersion,
             v: Option<&str>,
@@ -632,8 +651,6 @@ options! {CodegenOptions, CodegenSetter, basic_codegen_options,
 
     ar: String = (String::new(), parse_string, [UNTRACKED],
         "this option is deprecated and does nothing"),
-    bitcode_in_rlib: bool = (true, parse_bool, [TRACKED],
-        "emit bitcode in rlibs (default: yes)"),
     code_model: Option<String> = (None, parse_opt_string, [TRACKED],
         "choose the code model to use (`rustc --print code-models` for details)"),
     codegen_units: Option<usize> = (None, parse_opt_uint, [UNTRACKED],
@@ -645,6 +662,8 @@ options! {CodegenOptions, CodegenSetter, basic_codegen_options,
         2 = full debug info with variable and type information; default: 0)"),
     default_linker_libraries: bool = (false, parse_bool, [UNTRACKED],
         "allow the linker to link its default libraries (default: no)"),
+    embed_bitcode: bool = (true, parse_bool, [TRACKED],
+        "emit bitcode in rlibs (default: yes)"),
     extra_filename: String = (String::new(), parse_string, [UNTRACKED],
         "extra data to put in each output filename"),
     force_frame_pointers: Option<bool> = (None, parse_opt_bool, [TRACKED],
@@ -697,8 +716,9 @@ options! {CodegenOptions, CodegenSetter, basic_codegen_options,
         "compile the program with profiling instrumentation"),
     profile_use: Option<PathBuf> = (None, parse_opt_pathbuf, [TRACKED],
         "use the given `.profdata` file for profile-guided optimization"),
-    relocation_model: Option<String> = (None, parse_opt_string, [TRACKED],
-        "choose the relocation model to use (`rustc --print relocation-models` for details)"),
+    relocation_model: Option<RelocModel> = (None, parse_relocation_model, [TRACKED],
+        "control generation of position-independent code (PIC) \
+        (`rustc --print relocation-models` for details)"),
     remark: Passes = (Passes::Some(Vec::new()), parse_passes, [UNTRACKED],
         "print remarks for these optimization passes (space separated, or \"all\")"),
     rpath: bool = (false, parse_bool, [UNTRACKED],
@@ -786,8 +806,6 @@ options! {DebuggingOptions, DebuggingSetter, basic_debugging_options,
         "exclude the pass number when dumping MIR (used in tests) (default: no)"),
     dump_mir_graphviz: bool = (false, parse_bool, [UNTRACKED],
         "in addition to `.mir` files, create graphviz `.dot` files (default: no)"),
-    embed_bitcode: bool = (false, parse_bool, [TRACKED],
-        "embed LLVM bitcode in object files (default: no)"),
     emit_stack_sizes: bool = (false, parse_bool, [UNTRACKED],
         "emit a section containing stack size metadata (default: no)"),
     fewer_names: bool = (false, parse_bool, [TRACKED],
@@ -858,8 +876,6 @@ options! {DebuggingOptions, DebuggingSetter, basic_debugging_options,
         "omit DWARF address ranges that give faster lookups"),
     no_interleave_lints: bool = (false, parse_no_flag, [UNTRACKED],
         "execute lints separately; allows benchmarking individual lints"),
-    no_landing_pads: bool = (false, parse_no_flag, [TRACKED],
-        "omit landing pads for unwinding"),
     no_leak_check: bool = (false, parse_no_flag, [UNTRACKED],
         "disable the 'leak check' for subtyping; unsound, but useful for tests"),
     no_link: bool = (false, parse_no_flag, [TRACKED],
@@ -968,7 +984,7 @@ options! {DebuggingOptions, DebuggingSetter, basic_debugging_options,
         "measure time of each LLVM pass (default: no)"),
     time_passes: bool = (false, parse_bool, [UNTRACKED],
         "measure time of each rustc pass (default: no)"),
-    tls_model: Option<String> = (None, parse_opt_string, [TRACKED],
+    tls_model: Option<TlsModel> = (None, parse_tls_model, [TRACKED],
         "choose the TLS model to use (`rustc --print tls-models` for details)"),
     trace_macros: bool = (false, parse_bool, [UNTRACKED],
         "for every macro invocation, print its name and arguments (default: no)"),

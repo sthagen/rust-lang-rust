@@ -6,10 +6,10 @@ use rustc_hir as hir;
 use rustc_hir::def_id::{DefId, DefIdMap, LocalDefId};
 use rustc_hir::Node;
 use rustc_infer::infer::error_reporting::unexpected_hidden_region_diagnostic;
+use rustc_infer::infer::free_regions::FreeRegionRelations;
 use rustc_infer::infer::type_variable::{TypeVariableOrigin, TypeVariableOriginKind};
 use rustc_infer::infer::{self, InferCtxt, InferOk};
 use rustc_middle::ty::fold::{BottomUpFolder, TypeFoldable, TypeFolder, TypeVisitor};
-use rustc_middle::ty::free_region_map::FreeRegionRelations;
 use rustc_middle::ty::subst::{GenericArg, GenericArgKind, InternalSubsts, SubstsRef};
 use rustc_middle::ty::{self, GenericParamDefKind, Ty, TyCtxt};
 use rustc_session::config::nightly_options;
@@ -418,7 +418,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
             let opaque_type = tcx.mk_opaque(def_id, opaque_defn.substs);
 
             let required_region_bounds =
-                required_region_bounds(tcx, opaque_type, bounds.predicates);
+                required_region_bounds(tcx, opaque_type, bounds.predicates.into_iter());
             debug_assert!(!required_region_bounds.is_empty());
 
             for required_region in required_region_bounds {
@@ -1137,7 +1137,8 @@ impl<'a, 'tcx> Instantiator<'a, 'tcx> {
 
         debug!("instantiate_opaque_types: bounds={:?}", bounds);
 
-        let required_region_bounds = required_region_bounds(tcx, ty, bounds.predicates.clone());
+        let required_region_bounds =
+            required_region_bounds(tcx, ty, bounds.predicates.iter().cloned());
         debug!("instantiate_opaque_types: required_region_bounds={:?}", required_region_bounds);
 
         // Make sure that we are in fact defining the *entire* type
@@ -1259,17 +1260,15 @@ pub fn may_define_opaque_type(
 crate fn required_region_bounds(
     tcx: TyCtxt<'tcx>,
     erased_self_ty: Ty<'tcx>,
-    predicates: Vec<ty::Predicate<'tcx>>,
+    predicates: impl Iterator<Item = ty::Predicate<'tcx>>,
 ) -> Vec<ty::Region<'tcx>> {
-    debug!(
-        "required_region_bounds(erased_self_ty={:?}, predicates={:?})",
-        erased_self_ty, predicates
-    );
+    debug!("required_region_bounds(erased_self_ty={:?})", erased_self_ty);
 
     assert!(!erased_self_ty.has_escaping_bound_vars());
 
     traits::elaborate_predicates(tcx, predicates)
         .filter_map(|obligation| {
+            debug!("required_region_bounds(obligation={:?})", obligation);
             match obligation.predicate {
                 ty::Predicate::Projection(..)
                 | ty::Predicate::Trait(..)

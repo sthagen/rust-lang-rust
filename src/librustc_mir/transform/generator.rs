@@ -68,6 +68,7 @@ use rustc_middle::ty::subst::SubstsRef;
 use rustc_middle::ty::GeneratorSubsts;
 use rustc_middle::ty::{self, AdtDef, Ty, TyCtxt};
 use rustc_target::abi::VariantIdx;
+use rustc_target::spec::PanicStrategy;
 use std::borrow::Cow;
 use std::iter;
 
@@ -210,8 +211,7 @@ struct TransformVisitor<'tcx> {
     remap: FxHashMap<Local, (Ty<'tcx>, VariantIdx, usize)>,
 
     // A map from a suspension point in a block to the locals which have live storage at that point
-    // FIXME(eddyb) This should use `IndexVec<BasicBlock, Option<_>>`.
-    storage_liveness: FxHashMap<BasicBlock, liveness::LiveVarSet>,
+    storage_liveness: IndexVec<BasicBlock, Option<liveness::LiveVarSet>>,
 
     // A list of suspension points, generated during the transform
     suspension_points: Vec<SuspensionPoint<'tcx>>,
@@ -338,7 +338,7 @@ impl MutVisitor<'tcx> for TransformVisitor<'tcx> {
                     resume,
                     resume_arg,
                     drop,
-                    storage_liveness: self.storage_liveness.get(&block).unwrap().clone(),
+                    storage_liveness: self.storage_liveness[block].clone().unwrap(),
                 });
 
                 VariantIdx::new(state)
@@ -404,8 +404,7 @@ fn replace_local<'tcx>(
         is_block_tail: None,
         local_info: LocalInfo::Other,
     };
-    let new_local = Local::new(body.local_decls.len());
-    body.local_decls.push(new_decl);
+    let new_local = body.local_decls.push(new_decl);
     body.local_decls.swap(local, new_local);
 
     RenameLocalVisitor { from: local, to: new_local, tcx }.visit_body(body);
@@ -431,7 +430,7 @@ struct LivenessInfo {
 
     /// For every suspending block, the locals which are storage-live across
     /// that suspension point.
-    storage_liveness: FxHashMap<BasicBlock, liveness::LiveVarSet>,
+    storage_liveness: IndexVec<BasicBlock, Option<liveness::LiveVarSet>>,
 }
 
 fn locals_live_across_suspend_points(
@@ -472,7 +471,7 @@ fn locals_live_across_suspend_points(
     let mut liveness = liveness::liveness_of_locals(body);
     liveness::dump_mir(tcx, "generator_liveness", source, body_ref, &liveness);
 
-    let mut storage_liveness_map = FxHashMap::default();
+    let mut storage_liveness_map = IndexVec::from_elem(None, body.basic_blocks());
     let mut live_locals_at_suspension_points = Vec::new();
 
     for (block, data) in body.basic_blocks().iter_enumerated() {
@@ -502,7 +501,7 @@ fn locals_live_across_suspend_points(
 
             // Store the storage liveness for later use so we can restore the state
             // after a suspension point
-            storage_liveness_map.insert(block, storage_liveness);
+            storage_liveness_map[block] = Some(storage_liveness);
 
             requires_storage_cursor.seek_before(loc);
             let storage_required = requires_storage_cursor.get().clone();
@@ -690,7 +689,7 @@ fn compute_layout<'tcx>(
 ) -> (
     FxHashMap<Local, (Ty<'tcx>, VariantIdx, usize)>,
     GeneratorLayout<'tcx>,
-    FxHashMap<BasicBlock, liveness::LiveVarSet>,
+    IndexVec<BasicBlock, Option<liveness::LiveVarSet>>,
 ) {
     // Use a liveness analysis to compute locals which are live across a suspension point
     let LivenessInfo {
@@ -925,14 +924,12 @@ fn create_generator_drop_shim<'tcx>(
 }
 
 fn insert_term_block<'tcx>(body: &mut Body<'tcx>, kind: TerminatorKind<'tcx>) -> BasicBlock {
-    let term_block = BasicBlock::new(body.basic_blocks().len());
     let source_info = source_info(body);
     body.basic_blocks_mut().push(BasicBlockData {
         statements: Vec::new(),
         terminator: Some(Terminator { source_info, kind }),
         is_cleanup: false,
-    });
-    term_block
+    })
 }
 
 fn insert_panic_block<'tcx>(
@@ -982,7 +979,7 @@ fn can_return<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>) -> bool {
 
 fn can_unwind<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>) -> bool {
     // Nothing can unwind when landing pads are off.
-    if tcx.sess.no_landing_pads() {
+    if tcx.sess.panic_strategy() == PanicStrategy::Abort {
         return false;
     }
 
@@ -1030,9 +1027,8 @@ fn create_generator_resume_function<'tcx>(
 
     // Poison the generator when it unwinds
     if can_unwind {
-        let poison_block = BasicBlock::new(body.basic_blocks().len());
         let source_info = source_info(body);
-        body.basic_blocks_mut().push(BasicBlockData {
+        let poison_block = body.basic_blocks_mut().push(BasicBlockData {
             statements: vec![transform.set_discr(VariantIdx::new(POISONED), source_info)],
             terminator: Some(Terminator { source_info, kind: TerminatorKind::Resume }),
             is_cleanup: true,
@@ -1105,21 +1101,19 @@ fn source_info(body: &Body<'_>) -> SourceInfo {
 fn insert_clean_drop(body: &mut Body<'_>) -> BasicBlock {
     let return_block = insert_term_block(body, TerminatorKind::Return);
 
-    // Create a block to destroy an unresumed generators. This can only destroy upvars.
-    let drop_clean = BasicBlock::new(body.basic_blocks().len());
     let term = TerminatorKind::Drop {
         location: Place::from(SELF_ARG),
         target: return_block,
         unwind: None,
     };
     let source_info = source_info(body);
+
+    // Create a block to destroy an unresumed generators. This can only destroy upvars.
     body.basic_blocks_mut().push(BasicBlockData {
         statements: Vec::new(),
         terminator: Some(Terminator { source_info, kind: term }),
         is_cleanup: false,
-    });
-
-    drop_clean
+    })
 }
 
 /// An operation that can be performed on a generator.
@@ -1151,7 +1145,6 @@ fn create_cases<'tcx>(
         .filter_map(|point| {
             // Find the target for this suspension point, if applicable
             operation.target_block(point).map(|target| {
-                let block = BasicBlock::new(body.basic_blocks().len());
                 let mut statements = Vec::new();
 
                 // Create StorageLive instructions for locals with live storage
@@ -1186,7 +1179,7 @@ fn create_cases<'tcx>(
                 }
 
                 // Then jump to the real target
-                body.basic_blocks_mut().push(BasicBlockData {
+                let block = body.basic_blocks_mut().push(BasicBlockData {
                     statements,
                     terminator: Some(Terminator {
                         source_info,

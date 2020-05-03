@@ -13,6 +13,8 @@
 #include "llvm/IR/AssemblyAnnotationWriter.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/Object/ObjectFile.h"
+#include "llvm/Object/IRObjectFile.h"
 #include "llvm/Passes/PassBuilder.h"
 #if LLVM_VERSION_GE(9, 0)
 #include "llvm/Passes/StandardInstrumentations.h"
@@ -346,8 +348,7 @@ static PassBuilder::OptimizationLevel fromRust(LLVMRustPassBuilderOptLevel Level
   }
 }
 
-enum class LLVMRustRelocMode {
-  Default,
+enum class LLVMRustRelocModel {
   Static,
   PIC,
   DynamicNoPic,
@@ -356,21 +357,19 @@ enum class LLVMRustRelocMode {
   ROPIRWPI,
 };
 
-static Optional<Reloc::Model> fromRust(LLVMRustRelocMode RustReloc) {
+static Reloc::Model fromRust(LLVMRustRelocModel RustReloc) {
   switch (RustReloc) {
-  case LLVMRustRelocMode::Default:
-    return None;
-  case LLVMRustRelocMode::Static:
+  case LLVMRustRelocModel::Static:
     return Reloc::Static;
-  case LLVMRustRelocMode::PIC:
+  case LLVMRustRelocModel::PIC:
     return Reloc::PIC_;
-  case LLVMRustRelocMode::DynamicNoPic:
+  case LLVMRustRelocModel::DynamicNoPic:
     return Reloc::DynamicNoPIC;
-  case LLVMRustRelocMode::ROPI:
+  case LLVMRustRelocModel::ROPI:
     return Reloc::ROPI;
-  case LLVMRustRelocMode::RWPI:
+  case LLVMRustRelocModel::RWPI:
     return Reloc::RWPI;
-  case LLVMRustRelocMode::ROPIRWPI:
+  case LLVMRustRelocModel::ROPIRWPI:
     return Reloc::ROPI_RWPI;
   }
   report_fatal_error("Bad RelocModel.");
@@ -440,7 +439,7 @@ extern "C" const char* LLVMRustGetHostCPUName(size_t *len) {
 
 extern "C" LLVMTargetMachineRef LLVMRustCreateTargetMachine(
     const char *TripleStr, const char *CPU, const char *Feature,
-    const char *ABIStr, LLVMRustCodeModel RustCM, LLVMRustRelocMode RustReloc,
+    const char *ABIStr, LLVMRustCodeModel RustCM, LLVMRustRelocModel RustReloc,
     LLVMRustCodeGenOptLevel RustOptLevel, bool UseSoftFloat,
     bool PositionIndependentExecutable, bool FunctionSections,
     bool DataSections,
@@ -1476,6 +1475,32 @@ LLVMRustParseBitcodeForLTO(LLVMContextRef Context,
     return nullptr;
   }
   return wrap(std::move(*SrcOrError).release());
+}
+
+// Find the bitcode section in the object file data and return it as a slice.
+// Fail if the bitcode section is present but empty.
+//
+// On success, the return value is the pointer to the start of the slice and
+// `out_len` is filled with the (non-zero) length. On failure, the return value
+// is `nullptr` and `out_len` is set to zero.
+extern "C" const char*
+LLVMRustGetBitcodeSliceFromObjectData(const char *data,
+                                      size_t len,
+                                      size_t *out_len) {
+  *out_len = 0;
+
+  StringRef Data(data, len);
+  MemoryBufferRef Buffer(Data, ""); // The id is unused.
+
+  Expected<MemoryBufferRef> BitcodeOrError =
+    object::IRObjectFile::findBitcodeInMemBuffer(Buffer);
+  if (!BitcodeOrError) {
+    LLVMRustSetLastError(toString(BitcodeOrError.takeError()).c_str());
+    return nullptr;
+  }
+
+  *out_len = BitcodeOrError->getBufferSize();
+  return BitcodeOrError->getBufferStart();
 }
 
 // Rewrite all `DICompileUnit` pointers to the `DICompileUnit` specified. See

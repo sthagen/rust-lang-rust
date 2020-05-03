@@ -16,12 +16,12 @@ use rustc_middle::bug;
 use rustc_middle::mir::mono::CodegenUnit;
 use rustc_middle::ty::layout::{HasParamEnv, LayoutError, TyAndLayout};
 use rustc_middle::ty::{self, Instance, Ty, TyCtxt};
-use rustc_session::config::{self, CFGuard, DebugInfo};
+use rustc_session::config::{CFGuard, CrateType, DebugInfo};
 use rustc_session::Session;
 use rustc_span::source_map::{Span, DUMMY_SP};
 use rustc_span::symbol::Symbol;
 use rustc_target::abi::{HasDataLayout, LayoutOf, PointeeInfo, Size, TargetDataLayout, VariantIdx};
-use rustc_target::spec::{HasTargetSpec, Target};
+use rustc_target::spec::{HasTargetSpec, RelocModel, Target, TlsModel};
 
 use std::cell::{Cell, RefCell};
 use std::ffi::CStr;
@@ -49,12 +49,13 @@ pub struct CodegenCx<'ll, 'tcx> {
     pub const_cstr_cache: RefCell<FxHashMap<Symbol, &'ll Value>>,
 
     /// Reverse-direction for const ptrs cast from globals.
-    /// Key is a Value holding a *T,
-    /// Val is a Value holding a *[T].
+    ///
+    /// Key is a Value holding a `*T`,
+    /// Val is a Value holding a `*[T]`.
     ///
     /// Needed because LLVM loses pointer->pointee association
     /// when we ptrcast, and we have to ptrcast during codegen
-    /// of a [T] const because we form a slice, a (*T,usize) pair, not
+    /// of a `[T]` const because we form a slice, a `(*T,usize)` pair, not
     /// a pointer to an LLVM array type. Similar for trait objects.
     pub const_unsized: RefCell<FxHashMap<&'ll Value, &'ll Value>>,
 
@@ -87,44 +88,24 @@ pub struct CodegenCx<'ll, 'tcx> {
     local_gen_sym_counter: Cell<usize>,
 }
 
-pub fn get_reloc_model(sess: &Session) -> llvm::RelocMode {
-    let reloc_model_arg = match sess.opts.cg.relocation_model {
-        Some(ref s) => &s[..],
-        None => &sess.target.target.options.relocation_model[..],
-    };
-
-    match crate::back::write::RELOC_MODEL_ARGS.iter().find(|&&arg| arg.0 == reloc_model_arg) {
-        Some(x) => x.1,
-        _ => {
-            sess.err(&format!("{:?} is not a valid relocation mode", reloc_model_arg));
-            sess.abort_if_errors();
-            bug!();
-        }
+fn to_llvm_tls_model(tls_model: TlsModel) -> llvm::ThreadLocalMode {
+    match tls_model {
+        TlsModel::GeneralDynamic => llvm::ThreadLocalMode::GeneralDynamic,
+        TlsModel::LocalDynamic => llvm::ThreadLocalMode::LocalDynamic,
+        TlsModel::InitialExec => llvm::ThreadLocalMode::InitialExec,
+        TlsModel::LocalExec => llvm::ThreadLocalMode::LocalExec,
     }
 }
 
-fn get_tls_model(sess: &Session) -> llvm::ThreadLocalMode {
-    let tls_model_arg = match sess.opts.debugging_opts.tls_model {
-        Some(ref s) => &s[..],
-        None => &sess.target.target.options.tls_model[..],
-    };
-
-    match crate::back::write::TLS_MODEL_ARGS.iter().find(|&&arg| arg.0 == tls_model_arg) {
-        Some(x) => x.1,
-        _ => {
-            sess.err(&format!("{:?} is not a valid TLS model", tls_model_arg));
-            sess.abort_if_errors();
-            bug!();
-        }
-    }
-}
-
-fn is_any_library(sess: &Session) -> bool {
-    sess.crate_types.borrow().iter().any(|ty| *ty != config::CrateType::Executable)
-}
-
-pub fn is_pie_binary(sess: &Session) -> bool {
-    !is_any_library(sess) && get_reloc_model(sess) == llvm::RelocMode::PIC
+/// PIE is potentially more effective than PIC, but can only be used in executables.
+/// If all our outputs are executables, then we can relax PIC to PIE when producing object code.
+/// If the list of crate types is not yet known we conservatively return `false`.
+pub fn all_outputs_are_pic_executables(sess: &Session) -> bool {
+    sess.relocation_model() == RelocModel::Pic
+        && sess
+            .crate_types
+            .try_get()
+            .map_or(false, |crate_types| crate_types.iter().all(|ty| *ty == CrateType::Executable))
 }
 
 fn strip_function_ptr_alignment(data_layout: String) -> String {
@@ -157,7 +138,7 @@ pub unsafe fn create_module(
 
     // Ensure the data-layout values hardcoded remain the defaults.
     if sess.target.target.options.is_builtin {
-        let tm = crate::back::write::create_informational_target_machine(&tcx.sess, false);
+        let tm = crate::back::write::create_informational_target_machine(tcx.sess);
         llvm::LLVMRustSetDataLayoutFromTargetMachine(llmod, tm);
         llvm::LLVMRustDisposeTargetMachine(tm);
 
@@ -200,11 +181,11 @@ pub unsafe fn create_module(
     let llvm_target = SmallCStr::new(&sess.target.target.llvm_target);
     llvm::LLVMRustSetNormalizedTarget(llmod, llvm_target.as_ptr());
 
-    if get_reloc_model(sess) == llvm::RelocMode::PIC {
+    if sess.relocation_model() == RelocModel::Pic {
         llvm::LLVMRustSetModulePICLevel(llmod);
     }
 
-    if is_pie_binary(sess) {
+    if all_outputs_are_pic_executables(sess) {
         llvm::LLVMRustSetModulePIELevel(llmod);
     }
 
@@ -281,7 +262,7 @@ impl<'ll, 'tcx> CodegenCx<'ll, 'tcx> {
 
         let check_overflow = tcx.sess.overflow_checks();
 
-        let tls_model = get_tls_model(&tcx.sess);
+        let tls_model = to_llvm_tls_model(tcx.sess.tls_model());
 
         let (llcx, llmod) = (&*llvm_module.llcx, llvm_module.llmod());
 

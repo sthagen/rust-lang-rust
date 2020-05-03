@@ -25,9 +25,9 @@ mod tests;
 /// involved. This type is excellent for building your own data structures like Vec and VecDeque.
 /// In particular:
 ///
-/// * Produces `Unique::empty()` on zero-sized types.
-/// * Produces `Unique::empty()` on zero-length allocations.
-/// * Avoids freeing `Unique::empty()`.
+/// * Produces `Unique::dangling()` on zero-sized types.
+/// * Produces `Unique::dangling()` on zero-length allocations.
+/// * Avoids freeing `Unique::dangling()`.
 /// * Catches all overflows in capacity computations (promotes them to "capacity overflow" panics).
 /// * Guards against 32-bit systems allocating more than isize::MAX bytes.
 /// * Guards against overflowing your length.
@@ -125,7 +125,7 @@ impl<T, A: AllocRef> RawVec<T, A> {
     /// the returned `RawVec`.
     pub const fn new_in(alloc: A) -> Self {
         // `cap: 0` means "unallocated". zero-sized types are ignored.
-        Self { ptr: Unique::empty(), cap: 0, alloc }
+        Self { ptr: Unique::dangling(), cap: 0, alloc }
     }
 
     /// Like `with_capacity`, but parameterized over the choice of
@@ -151,7 +151,7 @@ impl<T, A: AllocRef> RawVec<T, A> {
 
             let memory = alloc.alloc(layout, init).unwrap_or_else(|_| handle_alloc_error(layout));
             Self {
-                ptr: memory.ptr.cast().into(),
+                ptr: unsafe { Unique::new_unchecked(memory.ptr.cast().as_ptr()) },
                 cap: Self::capacity_from_bytes(memory.size),
                 alloc,
             }
@@ -172,7 +172,7 @@ impl<T, A: AllocRef> RawVec<T, A> {
     }
 
     /// Gets a raw pointer to the start of the allocation. Note that this is
-    /// `Unique::empty()` if `capacity == 0` or `T` is zero-sized. In the former case, you must
+    /// `Unique::dangling()` if `capacity == 0` or `T` is zero-sized. In the former case, you must
     /// be careful.
     pub fn ptr(&self) -> *mut T {
         self.ptr.as_ptr()
@@ -469,7 +469,7 @@ impl<T, A: AllocRef> RawVec<T, A> {
     }
 
     fn set_memory(&mut self, memory: MemoryBlock) {
-        self.ptr = memory.ptr.cast().into();
+        self.ptr = unsafe { Unique::new_unchecked(memory.ptr.cast().as_ptr()) };
         self.cap = Self::capacity_from_bytes(memory.size);
     }
 
