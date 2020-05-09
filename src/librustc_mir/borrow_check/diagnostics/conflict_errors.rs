@@ -10,10 +10,9 @@ use rustc_middle::mir::{
     FakeReadCause, Local, LocalDecl, LocalInfo, LocalKind, Location, Operand, Place, PlaceRef,
     ProjectionElem, Rvalue, Statement, StatementKind, TerminatorKind, VarBindingForm,
 };
-use rustc_middle::ty::{self, Ty};
+use rustc_middle::ty::{self, suggest_constraining_type_param, Ty};
 use rustc_span::source_map::DesugaringKind;
 use rustc_span::Span;
-use rustc_trait_selection::traits::error_reporting::suggest_constraining_type_param;
 
 use crate::dataflow::drop_flag_effects;
 use crate::dataflow::indexes::{MoveOutIndex, MovePathIndex};
@@ -1448,15 +1447,15 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         let (place_description, assigned_span) = match local_decl {
             Some(LocalDecl {
                 local_info:
-                    LocalInfo::User(
+                    Some(box LocalInfo::User(
                         ClearCrossCrate::Clear
                         | ClearCrossCrate::Set(BindingForm::Var(VarBindingForm {
                             opt_match_place: None,
                             ..
                         })),
-                    )
-                    | LocalInfo::StaticRef { .. }
-                    | LocalInfo::Other,
+                    ))
+                    | Some(box LocalInfo::StaticRef { .. })
+                    | None,
                 ..
             })
             | None => (self.describe_any_place(place.as_ref()), assigned_span),

@@ -13,6 +13,7 @@
 //! move analysis runs after promotion on broken MIR.
 
 use rustc_ast::ast::LitKind;
+use rustc_hir as hir;
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::traversal::ReversePostorder;
 use rustc_middle::mir::visit::{MutVisitor, MutatingUseContext, PlaceContext, Visitor};
@@ -30,7 +31,7 @@ use std::cell::Cell;
 use std::{cmp, iter, mem};
 
 use crate::const_eval::{is_const_fn, is_unstable_const_fn};
-use crate::transform::check_consts::{is_lang_panic_fn, qualifs, ConstCx, ConstKind};
+use crate::transform::check_consts::{is_lang_panic_fn, qualifs, ConstCx};
 use crate::transform::{MirPass, MirSource};
 
 /// A `MirPass` for promotion.
@@ -352,7 +353,9 @@ impl<'tcx> Validator<'_, 'tcx> {
                             // In theory, any zero-sized value could be borrowed
                             // mutably without consequences. However, only &mut []
                             // is allowed right now, and only in functions.
-                            if self.const_kind == Some(ConstKind::StaticMut) {
+                            if self.const_kind
+                                == Some(hir::ConstContext::Static(hir::Mutability::Mut))
+                            {
                                 // Inside a `static mut`, &mut [...] is also allowed.
                                 match ty.kind {
                                     ty::Array(..) | ty::Slice(_) => {}
@@ -517,7 +520,7 @@ impl<'tcx> Validator<'_, 'tcx> {
                 if let Some(def_id) = c.check_static_ptr(self.tcx) {
                     // Only allow statics (not consts) to refer to other statics.
                     // FIXME(eddyb) does this matter at all for promotion?
-                    let is_static = self.const_kind.map_or(false, |k| k.is_static());
+                    let is_static = matches!(self.const_kind, Some(hir::ConstContext::Static(_)));
                     if !is_static {
                         return Err(Unpromotable);
                     }
@@ -607,7 +610,7 @@ impl<'tcx> Validator<'_, 'tcx> {
                     // In theory, any zero-sized value could be borrowed
                     // mutably without consequences. However, only &mut []
                     // is allowed right now, and only in functions.
-                    if self.const_kind == Some(ConstKind::StaticMut) {
+                    if self.const_kind == Some(hir::ConstContext::Static(hir::Mutability::Mut)) {
                         // Inside a `static mut`, &mut [...] is also allowed.
                         match ty.kind {
                             ty::Array(..) | ty::Slice(_) => {}
@@ -775,7 +778,7 @@ impl<'a, 'tcx> Promoter<'a, 'tcx> {
         self.promoted.basic_blocks_mut().push(BasicBlockData {
             statements: vec![],
             terminator: Some(Terminator {
-                source_info: SourceInfo { span, scope: OUTERMOST_SOURCE_SCOPE },
+                source_info: SourceInfo::outermost(span),
                 kind: TerminatorKind::Return,
             }),
             is_cleanup: false,
@@ -786,7 +789,7 @@ impl<'a, 'tcx> Promoter<'a, 'tcx> {
         let last = self.promoted.basic_blocks().last().unwrap();
         let data = &mut self.promoted[last];
         data.statements.push(Statement {
-            source_info: SourceInfo { span, scope: OUTERMOST_SOURCE_SCOPE },
+            source_info: SourceInfo::outermost(span),
             kind: StatementKind::Assign(box (Place::from(dest), rvalue)),
         });
     }
@@ -815,7 +818,7 @@ impl<'a, 'tcx> Promoter<'a, 'tcx> {
         }
 
         let num_stmts = self.source[loc.block].statements.len();
-        let new_temp = self.promoted.local_decls.push(LocalDecl::new_temp(
+        let new_temp = self.promoted.local_decls.push(LocalDecl::new(
             self.source.local_decls[temp].ty,
             self.source.local_decls[temp].source_info.span,
         ));
@@ -915,7 +918,7 @@ impl<'a, 'tcx> Promoter<'a, 'tcx> {
             let tcx = self.tcx;
             let mut promoted_operand = |ty, span| {
                 promoted.span = span;
-                promoted.local_decls[RETURN_PLACE] = LocalDecl::new_return_place(ty, span);
+                promoted.local_decls[RETURN_PLACE] = LocalDecl::new(ty, span);
 
                 Operand::Constant(Box::new(Constant {
                     span,
@@ -963,7 +966,7 @@ impl<'a, 'tcx> Promoter<'a, 'tcx> {
                             // Create a temp to hold the promoted reference.
                             // This is because `*r` requires `r` to be a local,
                             // otherwise we would use the `promoted` directly.
-                            let mut promoted_ref = LocalDecl::new_temp(ref_ty, span);
+                            let mut promoted_ref = LocalDecl::new(ref_ty, span);
                             promoted_ref.source_info = statement.source_info;
                             let promoted_ref = local_decls.push(promoted_ref);
                             assert_eq!(self.temps.push(TempState::Unpromotable), promoted_ref);
@@ -1081,8 +1084,7 @@ pub fn promote_candidates<'tcx>(
         }
 
         // Declare return place local so that `mir::Body::new` doesn't complain.
-        let initial_locals =
-            iter::once(LocalDecl::new_return_place(tcx.types.never, body.span)).collect();
+        let initial_locals = iter::once(LocalDecl::new(tcx.types.never, body.span)).collect();
 
         let mut promoted = Body::new(
             IndexVec::new(),

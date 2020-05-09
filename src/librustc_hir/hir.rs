@@ -1291,6 +1291,53 @@ impl BodyOwnerKind {
     }
 }
 
+/// The kind of an item that requires const-checking.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConstContext {
+    /// A `const fn`.
+    ConstFn,
+
+    /// A `static` or `static mut`.
+    Static(Mutability),
+
+    /// A `const`, associated `const`, or other const context.
+    ///
+    /// Other contexts include:
+    /// - Array length expressions
+    /// - Enum discriminants
+    /// - Const generics
+    ///
+    /// For the most part, other contexts are treated just like a regular `const`, so they are
+    /// lumped into the same category.
+    Const,
+}
+
+impl ConstContext {
+    /// A description of this const context that can appear between backticks in an error message.
+    ///
+    /// E.g. `const` or `static mut`.
+    pub fn keyword_name(self) -> &'static str {
+        match self {
+            Self::Const => "const",
+            Self::Static(Mutability::Not) => "static",
+            Self::Static(Mutability::Mut) => "static mut",
+            Self::ConstFn => "const fn",
+        }
+    }
+}
+
+/// A colloquial, trivially pluralizable description of this const context for use in error
+/// messages.
+impl fmt::Display for ConstContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Self::Const => write!(f, "constant"),
+            Self::Static(_) => write!(f, "static"),
+            Self::ConstFn => write!(f, "constant function"),
+        }
+    }
+}
+
 /// A literal.
 pub type Lit = Spanned<LitKind>;
 
@@ -2626,8 +2673,42 @@ impl Node<'_> {
         match self {
             Node::TraitItem(TraitItem { generics, .. })
             | Node::ImplItem(ImplItem { generics, .. })
-            | Node::Item(Item { kind: ItemKind::Fn(_, generics, _), .. }) => Some(generics),
+            | Node::Item(Item {
+                kind:
+                    ItemKind::Trait(_, _, generics, ..)
+                    | ItemKind::Impl { generics, .. }
+                    | ItemKind::Fn(_, generics, _),
+                ..
+            }) => Some(generics),
             _ => None,
+        }
+    }
+
+    pub fn hir_id(&self) -> Option<HirId> {
+        match self {
+            Node::Item(Item { hir_id, .. })
+            | Node::ForeignItem(ForeignItem { hir_id, .. })
+            | Node::TraitItem(TraitItem { hir_id, .. })
+            | Node::ImplItem(ImplItem { hir_id, .. })
+            | Node::Field(StructField { hir_id, .. })
+            | Node::AnonConst(AnonConst { hir_id, .. })
+            | Node::Expr(Expr { hir_id, .. })
+            | Node::Stmt(Stmt { hir_id, .. })
+            | Node::Ty(Ty { hir_id, .. })
+            | Node::Binding(Pat { hir_id, .. })
+            | Node::Pat(Pat { hir_id, .. })
+            | Node::Arm(Arm { hir_id, .. })
+            | Node::Block(Block { hir_id, .. })
+            | Node::Local(Local { hir_id, .. })
+            | Node::MacroDef(MacroDef { hir_id, .. })
+            | Node::Lifetime(Lifetime { hir_id, .. })
+            | Node::Param(Param { hir_id, .. })
+            | Node::GenericParam(GenericParam { hir_id, .. }) => Some(*hir_id),
+            Node::TraitRef(TraitRef { hir_ref_id, .. }) => Some(*hir_ref_id),
+            Node::PathSegment(PathSegment { hir_id, .. }) => *hir_id,
+            Node::Variant(Variant { id, .. }) => Some(*id),
+            Node::Ctor(variant) => variant.ctor_hir_id(),
+            Node::Crate(_) | Node::Visibility(_) => None,
         }
     }
 }

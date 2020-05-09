@@ -78,7 +78,6 @@ static STABLE_TOOLS: &[(&str, &str)] = &[
     ("edition-guide", "src/doc/edition-guide"),
     ("rls", "src/tools/rls"),
     ("rustfmt", "src/tools/rustfmt"),
-    ("clippy-driver", "src/tools/clippy"),
 ];
 
 // These tools are permitted to not build on the beta/stable channels.
@@ -89,7 +88,7 @@ static STABLE_TOOLS: &[(&str, &str)] = &[
 static NIGHTLY_TOOLS: &[(&str, &str)] = &[
     ("miri", "src/tools/miri"),
     ("embedded-book", "src/doc/embedded-book"),
-    ("rustc-dev-guide", "src/doc/rustc-dev-guide"),
+    // ("rustc-dev-guide", "src/doc/rustc-dev-guide"),
 ];
 
 fn print_error(tool: &str, submodule: &str) {

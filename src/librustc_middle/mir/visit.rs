@@ -242,10 +242,10 @@ macro_rules! make_mir_visitor {
             ) {
                 let span = body.span;
                 if let Some(yield_ty) = &$($mutability)? body.yield_ty {
-                    self.visit_ty(yield_ty, TyContext::YieldTy(SourceInfo {
-                        span,
-                        scope: OUTERMOST_SOURCE_SCOPE,
-                    }));
+                    self.visit_ty(
+                        yield_ty,
+                        TyContext::YieldTy(SourceInfo::outermost(span))
+                    );
                 }
 
                 // for best performance, we want to use an iterator rather
@@ -263,10 +263,10 @@ macro_rules! make_mir_visitor {
                     self.visit_source_scope_data(scope);
                 }
 
-                self.visit_ty(&$($mutability)? body.return_ty(), TyContext::ReturnTy(SourceInfo {
-                    span: body.span,
-                    scope: OUTERMOST_SOURCE_SCOPE,
-                }));
+                self.visit_ty(
+                    &$($mutability)? body.return_ty(),
+                    TyContext::ReturnTy(SourceInfo::outermost(body.span))
+                );
 
                 for local in body.local_decls.indices() {
                     self.visit_local_decl(local, & $($mutability)? body.local_decls[local]);
@@ -510,7 +510,7 @@ macro_rules! make_mir_visitor {
                         self.visit_operand(value, source_location);
                         self.visit_place(
                             resume_arg,
-                            PlaceContext::MutatingUse(MutatingUseContext::Store),
+                            PlaceContext::MutatingUse(MutatingUseContext::Yield),
                             source_location,
                         );
                     }
@@ -715,8 +715,10 @@ macro_rules! make_mir_visitor {
                     local,
                     source_info: *source_info,
                 });
-                for (user_ty, _) in & $($mutability)? user_ty.contents {
-                    self.visit_user_type_projection(user_ty);
+                if let Some(user_ty) = user_ty {
+                    for (user_ty, _) in & $($mutability)? user_ty.contents {
+                        self.visit_user_type_projection(user_ty);
+                    }
                 }
                 self.visit_source_info(source_info);
             }
@@ -1052,6 +1054,8 @@ pub enum MutatingUseContext {
     AsmOutput,
     /// Destination of a call.
     Call,
+    /// Destination of a yield.
+    Yield,
     /// Being dropped.
     Drop,
     /// Mutable borrow.

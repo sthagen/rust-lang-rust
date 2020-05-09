@@ -415,6 +415,7 @@ fn test_codegen_options_tracking_hash() {
     tracked!(debuginfo, 0xdeadbeef);
     tracked!(embed_bitcode, false);
     tracked!(force_frame_pointers, Some(false));
+    tracked!(force_unwind_tables, Some(true));
     tracked!(inline_threshold, Some(0xf007ba11));
     tracked!(linker_plugin_lto, LinkerPluginLto::LinkerPluginAuto);
     tracked!(llvm_args, vec![String::from("1"), String::from("2")]);
@@ -558,7 +559,7 @@ fn test_debugging_options_tracking_hash() {
     tracked!(sanitizer, Some(Sanitizer::Address));
     tracked!(sanitizer_memory_track_origins, 2);
     tracked!(sanitizer_recover, vec![Sanitizer::Address]);
-    tracked!(saturating_float_casts, true);
+    tracked!(saturating_float_casts, Some(true));
     tracked!(share_generics, Some(true));
     tracked!(show_span, Some(String::from("abc")));
     tracked!(src_hash_algorithm, Some(SourceFileHashAlgorithm::Sha1));

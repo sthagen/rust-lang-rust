@@ -1,7 +1,7 @@
 //! The `Visitor` responsible for actually checking a `mir::Body` for invalid operations.
 
 use rustc_errors::struct_span_err;
-use rustc_hir::lang_items;
+use rustc_hir::{self as hir, lang_items};
 use rustc_hir::{def_id::DefId, HirId};
 use rustc_infer::infer::TyCtxtInferExt;
 use rustc_middle::mir::visit::{MutatingUseContext, NonMutatingUseContext, PlaceContext, Visitor};
@@ -18,9 +18,9 @@ use std::ops::Deref;
 use super::ops::{self, NonConstOp};
 use super::qualifs::{self, CustomEq, HasMutInterior, NeedsDrop};
 use super::resolver::FlowSensitiveAnalysis;
-use super::{is_lang_panic_fn, ConstCx, ConstKind, Qualif};
+use super::{is_lang_panic_fn, ConstCx, Qualif};
 use crate::const_eval::{is_const_fn, is_unstable_const_fn};
-use crate::dataflow::MaybeMutBorrowedLocals;
+use crate::dataflow::impls::MaybeMutBorrowedLocals;
 use crate::dataflow::{self, Analysis};
 
 // We are using `MaybeMutBorrowedLocals` as a proxy for whether an item may have been mutated
@@ -61,7 +61,7 @@ impl Qualifs<'mir, 'tcx> {
                 .into_results_cursor(&body)
         });
 
-        indirectly_mutable.seek_before(location);
+        indirectly_mutable.seek_before_primary_effect(location);
         indirectly_mutable.get().contains(local)
     }
 
@@ -88,7 +88,7 @@ impl Qualifs<'mir, 'tcx> {
                 .into_results_cursor(&body)
         });
 
-        needs_drop.seek_before(location);
+        needs_drop.seek_before_primary_effect(location);
         needs_drop.get().contains(local) || self.indirectly_mutable(ccx, local, location)
     }
 
@@ -115,7 +115,7 @@ impl Qualifs<'mir, 'tcx> {
                 .into_results_cursor(&body)
         });
 
-        has_mut_interior.seek_before(location);
+        has_mut_interior.seek_before_primary_effect(location);
         has_mut_interior.get().contains(local) || self.indirectly_mutable(ccx, local, location)
     }
 
@@ -145,23 +145,19 @@ impl Qualifs<'mir, 'tcx> {
             // We don't care whether a `const fn` returns a value that is not structurally
             // matchable. Functions calls are opaque and always use type-based qualification, so
             // this value should never be used.
-            ConstKind::ConstFn => true,
+            hir::ConstContext::ConstFn => true,
 
             // If we know that all values of the return type are structurally matchable, there's no
             // need to run dataflow.
-            ConstKind::Const | ConstKind::Static | ConstKind::StaticMut
-                if !CustomEq::in_any_value_of_ty(ccx, ccx.body.return_ty()) =>
-            {
-                false
-            }
+            _ if !CustomEq::in_any_value_of_ty(ccx, ccx.body.return_ty()) => false,
 
-            ConstKind::Const | ConstKind::Static | ConstKind::StaticMut => {
+            hir::ConstContext::Const | hir::ConstContext::Static(_) => {
                 let mut cursor = FlowSensitiveAnalysis::new(CustomEq, ccx)
                     .into_engine(ccx.tcx, &ccx.body, ccx.def_id)
                     .iterate_to_fixpoint()
                     .into_results_cursor(&ccx.body);
 
-                cursor.seek_after(return_loc);
+                cursor.seek_after_primary_effect(return_loc);
                 cursor.contains(RETURN_PLACE)
             }
         };
@@ -198,7 +194,7 @@ impl Validator<'mir, 'tcx> {
     pub fn check_body(&mut self) {
         let ConstCx { tcx, body, def_id, const_kind, .. } = *self.ccx;
 
-        let use_min_const_fn_checks = (const_kind == Some(ConstKind::ConstFn)
+        let use_min_const_fn_checks = (const_kind == Some(hir::ConstContext::ConstFn)
             && crate::const_eval::is_min_const_fn(tcx, def_id))
             && !tcx.sess.opts.debugging_opts.unleash_the_miri_inside_of_you;
 
@@ -222,8 +218,9 @@ impl Validator<'mir, 'tcx> {
         self.visit_body(&body);
 
         // Ensure that the end result is `Sync` in a non-thread local `static`.
-        let should_check_for_sync =
-            const_kind == Some(ConstKind::Static) && !tcx.is_thread_local_static(def_id);
+        let should_check_for_sync = const_kind
+            == Some(hir::ConstContext::Static(hir::Mutability::Not))
+            && !tcx.is_thread_local_static(def_id);
 
         if should_check_for_sync {
             let hir_id = tcx.hir().as_local_hir_id(def_id.expect_local());
@@ -247,12 +244,12 @@ impl Validator<'mir, 'tcx> {
             return;
         }
 
-        // If an operation is supported in miri (and is not already controlled by a feature gate) it
-        // can be turned on with `-Zunleash-the-miri-inside-of-you`.
-        let is_unleashable = O::IS_SUPPORTED_IN_MIRI && O::feature_gate().is_none();
+        // If an operation is supported in miri it can be turned on with
+        // `-Zunleash-the-miri-inside-of-you`.
+        let is_unleashable = O::IS_SUPPORTED_IN_MIRI;
 
         if is_unleashable && self.tcx.sess.opts.debugging_opts.unleash_the_miri_inside_of_you {
-            self.tcx.sess.span_warn(span, "skipping const checks");
+            self.tcx.sess.miri_unleashed_feature(span, O::feature_gate());
             return;
         }
 
@@ -351,7 +348,9 @@ impl Visitor<'tcx> for Validator<'mir, 'tcx> {
                 let ty = place.ty(self.body, self.tcx).ty;
                 let is_allowed = match ty.kind {
                     // Inside a `static mut`, `&mut [...]` is allowed.
-                    ty::Array(..) | ty::Slice(_) if self.const_kind() == ConstKind::StaticMut => {
+                    ty::Array(..) | ty::Slice(_)
+                        if self.const_kind() == hir::ConstContext::Static(hir::Mutability::Mut) =>
+                    {
                         true
                     }
 
@@ -456,7 +455,7 @@ impl Visitor<'tcx> for Validator<'mir, 'tcx> {
                     if proj_base.is_empty() {
                         if let (local, []) = (place_local, proj_base) {
                             let decl = &self.body.local_decls[local];
-                            if let LocalInfo::StaticRef { def_id, .. } = decl.local_info {
+                            if let Some(box LocalInfo::StaticRef { def_id, .. }) = decl.local_info {
                                 let span = decl.source_info.span;
                                 self.check_static(def_id, span);
                                 return;

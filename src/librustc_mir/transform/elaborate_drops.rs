@@ -1,10 +1,10 @@
 use crate::dataflow;
+use crate::dataflow::impls::{MaybeInitializedPlaces, MaybeUninitializedPlaces};
 use crate::dataflow::move_paths::{LookupResult, MoveData, MovePathIndex};
 use crate::dataflow::on_lookup_result_bits;
 use crate::dataflow::MoveDataParamEnv;
 use crate::dataflow::{on_all_children_bits, on_all_drop_children_bits};
 use crate::dataflow::{Analysis, ResultsCursor};
-use crate::dataflow::{MaybeInitializedPlaces, MaybeUninitializedPlaces};
 use crate::transform::{MirPass, MirSource};
 use crate::util::elaborate_drops::{elaborate_drop, DropFlagState, Unwind};
 use crate::util::elaborate_drops::{DropElaborator, DropFlagMode, DropStyle};
@@ -101,7 +101,7 @@ fn find_dead_unwinds<'tcx>(
             }
         };
 
-        flow_inits.seek_before(body.terminator_loc(bb));
+        flow_inits.seek_before_primary_effect(body.terminator_loc(bb));
         debug!(
             "find_dead_unwinds @ {:?}: path({:?})={:?}; init_data={:?}",
             bb,
@@ -131,8 +131,8 @@ struct InitializationData<'mir, 'tcx> {
 
 impl InitializationData<'_, '_> {
     fn seek_before(&mut self, loc: Location) {
-        self.inits.seek_before(loc);
-        self.uninits.seek_before(loc);
+        self.inits.seek_before_primary_effect(loc);
+        self.uninits.seek_before_primary_effect(loc);
     }
 
     fn maybe_live_dead(&self, path: MovePathIndex) -> (bool, bool) {

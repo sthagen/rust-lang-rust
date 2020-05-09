@@ -5036,8 +5036,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         expected: Ty<'tcx>,
         found: Ty<'tcx>,
     ) {
-        if let Some((sp, msg, suggestion)) = self.check_ref(expr, found, expected) {
-            err.span_suggestion(sp, msg, suggestion, Applicability::MachineApplicable);
+        if let Some((sp, msg, suggestion, applicability)) = self.check_ref(expr, found, expected) {
+            err.span_suggestion(sp, msg, suggestion, applicability);
         } else if let (ty::FnDef(def_id, ..), true) =
             (&found.kind, self.suggest_fn_call(err, expr, expected, found))
         {
@@ -5387,7 +5387,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             _ => return None,
         };
         let last_expr_ty = self.node_ty(last_expr.hir_id);
-        if self.can_sub(self.param_env, last_expr_ty, expected_ty).is_err() {
+        if matches!(last_expr_ty.kind, ty::Error)
+            || self.can_sub(self.param_env, last_expr_ty, expected_ty).is_err()
+        {
             return None;
         }
         let original_span = original_sp(last_stmt.span, blk.span);

@@ -472,8 +472,10 @@ fn write_scope_tree(
 
         let mut indented_decl =
             format!("{0:1$}let {2}{3:?}: {4:?}", INDENT, indent, mut_str, local, local_decl.ty);
-        for user_ty in local_decl.user_ty.projections() {
-            write!(indented_decl, " as {:?}", user_ty).unwrap();
+        if let Some(user_ty) = &local_decl.user_ty {
+            for user_ty in user_ty.projections() {
+                write!(indented_decl, " as {:?}", user_ty).unwrap();
+            }
         }
         indented_decl.push_str(";");
 
@@ -774,7 +776,7 @@ fn write_allocation_bytes<Tag: Copy + Debug, Extra>(
                 ascii.push('╼');
                 i += ptr_size;
             }
-        } else if alloc.undef_mask().is_range_defined(i, i + Size::from_bytes(1)).is_ok() {
+        } else if alloc.init_mask().is_range_initialized(i, i + Size::from_bytes(1)).is_ok() {
             let j = i.bytes_usize();
 
             // Checked definedness (and thus range) and relocations. This access also doesn't

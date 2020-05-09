@@ -10,7 +10,7 @@ path = "lib.rs"
 doctest = false
 
 [dependencies]
-ena = "0.13.1"
+ena = "0.14"
 indexmap = "1"
 log = "0.4"
 jobserver_crate = { version = "0.1.13", package = "jobserver" }
@@ -28,6 +28,7 @@ rustc_index = { path = "../librustc_index", package = "rustc_index" }
 bitflags = "1.2.1"
 measureme = "0.7.1"
 libc = "0.2"
+stacker = "0.1.6"
 
 [dependencies.parking_lot]
 version = "0.10"

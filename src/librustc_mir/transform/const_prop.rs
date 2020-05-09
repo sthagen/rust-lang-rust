@@ -29,7 +29,7 @@ use crate::const_eval::error_to_const_error;
 use crate::interpret::{
     self, compile_time_machine, intern_const_alloc_recursive, AllocId, Allocation, Frame, ImmTy,
     Immediate, InternKind, InterpCx, LocalState, LocalValue, Memory, MemoryKind, OpTy,
-    Operand as InterpOperand, PlaceTy, Pointer, ScalarMaybeUndef, StackPopCleanup,
+    Operand as InterpOperand, PlaceTy, Pointer, ScalarMaybeUninit, StackPopCleanup,
 };
 use crate::transform::{MirPass, MirSource};
 
@@ -549,11 +549,6 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
             return None;
         }
 
-        // FIXME we need to revisit this for #67176
-        if rvalue.needs_subst() {
-            return None;
-        }
-
         // Perform any special handling for specific Rvalue types.
         // Generally, checks here fall into one of two categories:
         //   1. Additional checking to provide useful lints to the user
@@ -592,6 +587,11 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
             }
 
             _ => {}
+        }
+
+        // FIXME we need to revisit this for #67176
+        if rvalue.needs_subst() {
+            return None;
         }
 
         self.use_ecx(|this| {
@@ -633,7 +633,7 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
 
         if let Some(Ok(imm)) = imm {
             match *imm {
-                interpret::Immediate::Scalar(ScalarMaybeUndef::Scalar(scalar)) => {
+                interpret::Immediate::Scalar(ScalarMaybeUninit::Scalar(scalar)) => {
                     *rval = Rvalue::Use(self.operand_from_scalar(
                         scalar,
                         value.layout.ty,
@@ -641,8 +641,8 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
                     ));
                 }
                 Immediate::ScalarPair(
-                    ScalarMaybeUndef::Scalar(one),
-                    ScalarMaybeUndef::Scalar(two),
+                    ScalarMaybeUninit::Scalar(one),
+                    ScalarMaybeUninit::Scalar(two),
                 ) => {
                     // Found a value represented as a pair. For now only do cont-prop if type of
                     // Rvalue is also a pair with two scalars. The more general case is more
@@ -693,12 +693,12 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
         }
 
         match *op {
-            interpret::Operand::Immediate(Immediate::Scalar(ScalarMaybeUndef::Scalar(s))) => {
+            interpret::Operand::Immediate(Immediate::Scalar(ScalarMaybeUninit::Scalar(s))) => {
                 s.is_bits()
             }
             interpret::Operand::Immediate(Immediate::ScalarPair(
-                ScalarMaybeUndef::Scalar(l),
-                ScalarMaybeUndef::Scalar(r),
+                ScalarMaybeUninit::Scalar(l),
+                ScalarMaybeUninit::Scalar(r),
             )) => l.is_bits() && r.is_bits(),
             interpret::Operand::Indirect(_) if mir_opt_level >= 2 => {
                 let mplace = op.assert_mem_place(&self.ecx);
@@ -787,6 +787,7 @@ impl<'tcx> Visitor<'tcx> for CanConstProp {
             | NonMutatingUse(NonMutatingUseContext::Inspect)
             | NonMutatingUse(NonMutatingUseContext::Projection)
             | NonUse(_) => {}
+            // FIXME(felix91gr): explain the reasoning behind this
             MutatingUse(MutatingUseContext::Projection) => {
                 if self.local_kinds[local] != LocalKind::Temp {
                     self.can_const_prop[local] = ConstPropMode::NoPropagation;
@@ -888,7 +889,7 @@ impl<'mir, 'tcx> MutVisitor<'tcx> for ConstPropagator<'mir, 'tcx> {
             TerminatorKind::Assert { expected, ref msg, ref mut cond, .. } => {
                 if let Some(value) = self.eval_operand(&cond, source_info) {
                     trace!("assertion on {:?} should be {:?}", value, expected);
-                    let expected = ScalarMaybeUndef::from(Scalar::from_bool(*expected));
+                    let expected = ScalarMaybeUninit::from(Scalar::from_bool(*expected));
                     let value_const = self.ecx.read_scalar(value).unwrap();
                     if expected != value_const {
                         // Poison all places this operand references so that further code
@@ -935,7 +936,7 @@ impl<'mir, 'tcx> MutVisitor<'tcx> for ConstPropagator<'mir, 'tcx> {
                         );
                     } else {
                         if self.should_const_prop(value) {
-                            if let ScalarMaybeUndef::Scalar(scalar) = value_const {
+                            if let ScalarMaybeUninit::Scalar(scalar) = value_const {
                                 *cond = self.operand_from_scalar(
                                     scalar,
                                     self.tcx.types.bool,
@@ -949,7 +950,7 @@ impl<'mir, 'tcx> MutVisitor<'tcx> for ConstPropagator<'mir, 'tcx> {
             TerminatorKind::SwitchInt { ref mut discr, switch_ty, .. } => {
                 if let Some(value) = self.eval_operand(&discr, source_info) {
                     if self.should_const_prop(value) {
-                        if let ScalarMaybeUndef::Scalar(scalar) =
+                        if let ScalarMaybeUninit::Scalar(scalar) =
                             self.ecx.read_scalar(value).unwrap()
                         {
                             *discr = self.operand_from_scalar(scalar, switch_ty, source_info.span);
@@ -969,13 +970,58 @@ impl<'mir, 'tcx> MutVisitor<'tcx> for ConstPropagator<'mir, 'tcx> {
             | TerminatorKind::GeneratorDrop
             | TerminatorKind::FalseEdges { .. }
             | TerminatorKind::FalseUnwind { .. } => {}
-            //FIXME(wesleywiser) Call does have Operands that could be const-propagated
-            TerminatorKind::Call { .. } => {}
+            // Every argument in our function calls can be const propagated.
+            TerminatorKind::Call { ref mut args, .. } => {
+                let mir_opt_level = self.tcx.sess.opts.debugging_opts.mir_opt_level;
+                // Constant Propagation into function call arguments is gated
+                // under mir-opt-level 2, because LLVM codegen gives performance
+                // regressions with it.
+                if mir_opt_level >= 2 {
+                    for opr in args {
+                        /*
+                          The following code would appear to be incomplete, because
+                          the function `Operand::place()` returns `None` if the
+                          `Operand` is of the variant `Operand::Constant`. In this
+                          context however, that variant will never appear. This is why:
+
+                          When constructing the MIR, all function call arguments are
+                          copied into `Locals` of `LocalKind::Temp`. At least, all arguments
+                          that are not unsized (Less than 0.1% are unsized. See #71170
+                          to learn more about those).
+
+                          This means that, conversely, all `Operands` found as function call
+                          arguments are of the variant `Operand::Copy`. This allows us to
+                          simplify our handling of `Operands` in this case.
+                        */
+                        if let Some(l) = opr.place().and_then(|p| p.as_local()) {
+                            if let Some(value) = self.get_const(l) {
+                                if self.should_const_prop(value) {
+                                    // FIXME(felix91gr): this code only handles `Scalar` cases.
+                                    // For now, we're not handling `ScalarPair` cases because
+                                    // doing so here would require a lot of code duplication.
+                                    // We should hopefully generalize `Operand` handling into a fn,
+                                    // and use it to do const-prop here and everywhere else
+                                    // where it makes sense.
+                                    if let interpret::Operand::Immediate(
+                                        interpret::Immediate::Scalar(ScalarMaybeUninit::Scalar(
+                                            scalar,
+                                        )),
+                                    ) = *value
+                                    {
+                                        *opr = self.operand_from_scalar(
+                                            scalar,
+                                            value.layout.ty,
+                                            source_info.span,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
         // We remove all Locals which are restricted in propagation to their containing blocks.
-        // We wouldn't need to clone, but the borrow checker can't see that we're not aliasing
-        // the locals_of_current_block field, so we need to clone it first.
-        // let ecx = &mut self.ecx;
         for local in self.locals_of_current_block.iter() {
             Self::remove_const(&mut self.ecx, local);
         }

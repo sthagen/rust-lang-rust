@@ -1,13 +1,14 @@
 //! Concrete error types for all operations which may be invalid in a certain const context.
 
 use rustc_errors::struct_span_err;
+use rustc_hir as hir;
 use rustc_hir::def_id::DefId;
 use rustc_session::config::nightly_options;
 use rustc_session::parse::feature_err;
 use rustc_span::symbol::sym;
 use rustc_span::{Span, Symbol};
 
-use super::{ConstCx, ConstKind};
+use super::ConstCx;
 
 /// An operation that is not *always* allowed in a const context.
 pub trait NonConstOp: std::fmt::Debug {
@@ -39,6 +40,9 @@ pub trait NonConstOp: std::fmt::Debug {
             "{} contains unimplemented expression type",
             ccx.const_kind()
         );
+        if let Some(feat) = Self::feature_gate() {
+            err.help(&format!("add `#![feature({})]` to the crate attributes to enable", feat));
+        }
         if ccx.tcx.sess.teach(&err.get_code().unwrap()) {
             err.note(
                 "A function call isn't allowed in the const's initialization expression \
@@ -323,7 +327,7 @@ impl NonConstOp for RawPtrToIntCast {
 pub struct StaticAccess;
 impl NonConstOp for StaticAccess {
     fn is_allowed_in_item(&self, ccx: &ConstCx<'_, '_>) -> bool {
-        ccx.const_kind().is_static()
+        matches!(ccx.const_kind(), hir::ConstContext::Static(_))
     }
 
     fn emit_error(&self, ccx: &ConstCx<'_, '_>, span: Span) {
@@ -371,7 +375,7 @@ pub struct UnionAccess;
 impl NonConstOp for UnionAccess {
     fn is_allowed_in_item(&self, ccx: &ConstCx<'_, '_>) -> bool {
         // Union accesses are stable in all contexts except `const fn`.
-        ccx.const_kind() != ConstKind::ConstFn
+        ccx.const_kind() != hir::ConstContext::ConstFn
             || ccx.tcx.features().enabled(Self::feature_gate().unwrap())
     }
 
