@@ -10,7 +10,6 @@ use crate::build::ForGuard::{self, OutsideGuard, RefWithinGuard};
 use crate::build::{BlockAnd, BlockAndExtension, Builder};
 use crate::build::{GuardFrame, GuardFrameLocal, LocalsForNode};
 use crate::hair::{self, *};
-use rustc_ast::ast::Name;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_hir::HirId;
 use rustc_index::bit_set::BitSet;
@@ -18,6 +17,7 @@ use rustc_middle::middle::region;
 use rustc_middle::mir::*;
 use rustc_middle::ty::{self, CanonicalUserTypeAnnotation, Ty};
 use rustc_span::Span;
+use rustc_span::symbol::Symbol;
 use rustc_target::abi::VariantIdx;
 use smallvec::{smallvec, SmallVec};
 
@@ -511,7 +511,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         opt_match_place: Option<(Option<&Place<'tcx>>, Span)>,
     ) -> Option<SourceScope> {
         debug!("declare_bindings: pattern={:?}", pattern);
-        self.visit_bindings(
+        self.visit_primary_bindings(
             &pattern,
             UserTypeProjections::none(),
             &mut |this, mutability, name, mode, var, span, ty, user_ty| {
@@ -563,14 +563,17 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         self.schedule_drop(span, region_scope, local_id, DropKind::Value);
     }
 
-    pub(super) fn visit_bindings(
+    /// Visit all of the primary bindings in a patterns, that is, visit the
+    /// leftmost occurrence of each variable bound in a pattern. A variable
+    /// will occur more than once in an or-pattern.
+    pub(super) fn visit_primary_bindings(
         &mut self,
         pattern: &Pat<'tcx>,
         pattern_user_ty: UserTypeProjections,
         f: &mut impl FnMut(
             &mut Self,
             Mutability,
-            Name,
+            Symbol,
             BindingMode,
             HirId,
             Span,
@@ -578,12 +581,26 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             UserTypeProjections,
         ),
     ) {
-        debug!("visit_bindings: pattern={:?} pattern_user_ty={:?}", pattern, pattern_user_ty);
+        debug!(
+            "visit_primary_bindings: pattern={:?} pattern_user_ty={:?}",
+            pattern, pattern_user_ty
+        );
         match *pattern.kind {
-            PatKind::Binding { mutability, name, mode, var, ty, ref subpattern, .. } => {
-                f(self, mutability, name, mode, var, pattern.span, ty, pattern_user_ty.clone());
+            PatKind::Binding {
+                mutability,
+                name,
+                mode,
+                var,
+                ty,
+                ref subpattern,
+                is_primary,
+                ..
+            } => {
+                if is_primary {
+                    f(self, mutability, name, mode, var, pattern.span, ty, pattern_user_ty.clone());
+                }
                 if let Some(subpattern) = subpattern.as_ref() {
-                    self.visit_bindings(subpattern, pattern_user_ty, f);
+                    self.visit_primary_bindings(subpattern, pattern_user_ty, f);
                 }
             }
 
@@ -592,20 +609,24 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 let from = u32::try_from(prefix.len()).unwrap();
                 let to = u32::try_from(suffix.len()).unwrap();
                 for subpattern in prefix {
-                    self.visit_bindings(subpattern, pattern_user_ty.clone().index(), f);
+                    self.visit_primary_bindings(subpattern, pattern_user_ty.clone().index(), f);
                 }
                 for subpattern in slice {
-                    self.visit_bindings(subpattern, pattern_user_ty.clone().subslice(from, to), f);
+                    self.visit_primary_bindings(
+                        subpattern,
+                        pattern_user_ty.clone().subslice(from, to),
+                        f,
+                    );
                 }
                 for subpattern in suffix {
-                    self.visit_bindings(subpattern, pattern_user_ty.clone().index(), f);
+                    self.visit_primary_bindings(subpattern, pattern_user_ty.clone().index(), f);
                 }
             }
 
             PatKind::Constant { .. } | PatKind::Range { .. } | PatKind::Wild => {}
 
             PatKind::Deref { ref subpattern } => {
-                self.visit_bindings(subpattern, pattern_user_ty.deref(), f);
+                self.visit_primary_bindings(subpattern, pattern_user_ty.deref(), f);
             }
 
             PatKind::AscribeUserType {
@@ -630,14 +651,14 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                     projs: Vec::new(),
                 };
                 let subpattern_user_ty = pattern_user_ty.push_projection(&projection, user_ty_span);
-                self.visit_bindings(subpattern, subpattern_user_ty, f)
+                self.visit_primary_bindings(subpattern, subpattern_user_ty, f)
             }
 
             PatKind::Leaf { ref subpatterns } => {
                 for subpattern in subpatterns {
                     let subpattern_user_ty = pattern_user_ty.clone().leaf(subpattern.field);
-                    debug!("visit_bindings: subpattern_user_ty={:?}", subpattern_user_ty);
-                    self.visit_bindings(&subpattern.pattern, subpattern_user_ty, f);
+                    debug!("visit_primary_bindings: subpattern_user_ty={:?}", subpattern_user_ty);
+                    self.visit_primary_bindings(&subpattern.pattern, subpattern_user_ty, f);
                 }
             }
 
@@ -645,11 +666,17 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 for subpattern in subpatterns {
                     let subpattern_user_ty =
                         pattern_user_ty.clone().variant(adt_def, variant_index, subpattern.field);
-                    self.visit_bindings(&subpattern.pattern, subpattern_user_ty, f);
+                    self.visit_primary_bindings(&subpattern.pattern, subpattern_user_ty, f);
                 }
             }
             PatKind::Or { ref pats } => {
-                self.visit_bindings(&pats[0], pattern_user_ty, f);
+                // In cases where we recover from errors the primary bindings
+                // may not all be in the leftmost subpattern. For example in
+                // `let (x | y) = ...`, the primary binding of `y` occurs in
+                // the right subpattern
+                for subpattern in pats {
+                    self.visit_primary_bindings(subpattern, pattern_user_ty.clone(), f);
+                }
             }
         }
     }
@@ -737,7 +764,7 @@ fn traverse_candidate<'pat, 'tcx: 'pat, C, T, I>(
 struct Binding<'tcx> {
     span: Span,
     source: Place<'tcx>,
-    name: Name,
+    name: Symbol,
     var_id: HirId,
     var_ty: Ty<'tcx>,
     mutability: Mutability,
@@ -1924,7 +1951,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         source_info: SourceInfo,
         visibility_scope: SourceScope,
         mutability: Mutability,
-        name: Name,
+        name: Symbol,
         mode: BindingMode,
         var_id: HirId,
         var_ty: Ty<'tcx>,
@@ -1955,7 +1982,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             is_block_tail: None,
             local_info: Some(box LocalInfo::User(ClearCrossCrate::Set(BindingForm::Var(VarBindingForm {
                 binding_mode,
-                // hypothetically, `visit_bindings` could try to unzip
+                // hypothetically, `visit_primary_bindings` could try to unzip
                 // an outermost hir::Ty as we descend, matching up
                 // idents in pat; but complex w/ unclear UI payoff.
                 // Instead, just abandon providing diagnostic info.
