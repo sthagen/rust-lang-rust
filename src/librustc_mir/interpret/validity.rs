@@ -15,7 +15,7 @@ use rustc_middle::mir::interpret::{InterpError, InterpErrorInfo};
 use rustc_middle::ty;
 use rustc_middle::ty::layout::TyAndLayout;
 use rustc_span::symbol::{sym, Symbol};
-use rustc_target::abi::{Abi, LayoutOf, Scalar, VariantIdx, Variants};
+use rustc_target::abi::{Abi, LayoutOf, Scalar, Size, VariantIdx, Variants};
 
 use std::hash::Hash;
 
@@ -366,7 +366,7 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
         let place = try_validation!(
             self.ecx.ref_to_mplace(value),
             self.path,
-            err_ub!(InvalidUninitBytes(..)) => { "uninitialized {}", kind },
+            err_ub!(InvalidUninitBytes { .. }) => { "uninitialized {}", kind },
         );
         if place.layout.is_unsized() {
             self.check_wide_ptr_meta(place.meta, place.layout)?;
@@ -514,7 +514,7 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
                 let place = try_validation!(
                     self.ecx.ref_to_mplace(self.ecx.read_immediate(value)?),
                     self.path,
-                    err_ub!(InvalidUninitBytes(..)) => { "uninitialized raw pointer" },
+                    err_ub!(InvalidUninitBytes { .. } ) => { "uninitialized raw pointer" },
                 );
                 if place.layout.is_unsized() {
                     self.check_wide_ptr_meta(place.meta, place.layout)?;
@@ -566,7 +566,6 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
             | ty::Bound(..)
             | ty::Param(..)
             | ty::Opaque(..)
-            | ty::UnnormalizedProjection(..)
             | ty::Projection(..)
             | ty::GeneratorWitness(..) => bug!("Encountered invalid type {:?}", ty),
         }
@@ -593,7 +592,7 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
         let value = try_validation!(
             value.not_undef(),
             self.path,
-            err_ub!(InvalidUninitBytes(..)) => { "{}", value }
+            err_ub!(InvalidUninitBytes { .. }) => { "{}", value }
                 expected { "something {}", wrapping_range_format(valid_range, max_hi) },
         );
         let bits = match value.to_bits_or_ptr(op.layout.size, self.ecx) {
@@ -744,10 +743,11 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValueVisitor<'mir, 'tcx, M>
         match op.layout.ty.kind {
             ty::Str => {
                 let mplace = op.assert_mem_place(self.ecx); // strings are never immediate
+                let len = mplace.len(self.ecx)?;
                 try_validation!(
-                    self.ecx.read_str(mplace),
+                    self.ecx.memory.read_bytes(mplace.ptr, Size::from_bytes(len)),
                     self.path,
-                    err_ub!(InvalidStr(..)) => { "uninitialized or non-UTF-8 data in str" },
+                    err_ub!(InvalidUninitBytes(..)) => { "uninitialized data in `str`" },
                 );
             }
             ty::Array(tys, ..) | ty::Slice(tys)
@@ -803,12 +803,14 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValueVisitor<'mir, 'tcx, M>
                         // For some errors we might be able to provide extra information.
                         // (This custom logic does not fit the `try_validation!` macro.)
                         match err.kind {
-                            err_ub!(InvalidUninitBytes(Some(ptr))) => {
+                            err_ub!(InvalidUninitBytes(Some(access))) => {
                                 // Some byte was uninitialized, determine which
                                 // element that byte belongs to so we can
                                 // provide an index.
-                                let i = usize::try_from(ptr.offset.bytes() / layout.size.bytes())
-                                    .unwrap();
+                                let i = usize::try_from(
+                                    access.uninit_ptr.offset.bytes() / layout.size.bytes(),
+                                )
+                                .unwrap();
                                 self.path.push(PathElem::ArrayElem(i));
 
                                 throw_validation_failure!(self.path, { "uninitialized bytes" })

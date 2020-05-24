@@ -124,6 +124,8 @@ pub enum Attribute {
     NonLazyBind = 23,
     OptimizeNone = 24,
     ReturnsTwice = 25,
+    ReadNone = 26,
+    InaccessibleMemOnly = 27,
 }
 
 /// LLVMIntPredicate
@@ -458,9 +460,7 @@ pub enum RelocModel {
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub enum CodeModel {
-    // FIXME: figure out if this variant is needed at all.
-    #[allow(dead_code)]
-    Other,
+    Tiny,
     Small,
     Kernel,
     Medium,
@@ -1655,7 +1655,6 @@ extern "C" {
 
     pub fn LLVMRustDIBuilderCreateSubroutineType(
         Builder: &DIBuilder<'a>,
-        File: &'a DIFile,
         ParameterTypes: &'a DIArray,
     ) -> &'a DICompositeType;
 
@@ -1682,7 +1681,6 @@ extern "C" {
         Name: *const c_char,
         NameLen: size_t,
         SizeInBits: u64,
-        AlignInBits: u32,
         Encoding: c_uint,
     ) -> &'a DIBasicType;
 
@@ -1880,9 +1878,6 @@ extern "C" {
         Name: *const c_char,
         NameLen: size_t,
         Ty: &'a DIType,
-        File: &'a DIFile,
-        LineNo: c_uint,
-        ColumnNo: c_uint,
     ) -> &'a DITemplateTypeParameter;
 
     pub fn LLVMRustDIBuilderCreateNameSpace(
@@ -1948,7 +1943,6 @@ extern "C" {
         Reloc: RelocModel,
         Level: CodeGenOptLevel,
         UseSoftFP: bool,
-        PositionIndependentExecutable: bool,
         FunctionSections: bool,
         DataSections: bool,
         TrapUnreachable: bool,
@@ -2000,6 +1994,7 @@ extern "C" {
         SLPVectorize: bool,
         LoopVectorize: bool,
         DisableSimplifyLibCalls: bool,
+        EmitLifetimeMarkers: bool,
         SanitizerOptions: Option<&SanitizerOptions>,
         PGOGenPath: *const c_char,
         PGOUsePath: *const c_char,

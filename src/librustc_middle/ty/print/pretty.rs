@@ -1,5 +1,4 @@
 use crate::middle::cstore::{ExternCrate, ExternCrateSource};
-use crate::middle::region;
 use crate::mir::interpret::{sign_extend, truncate, AllocId, ConstValue, Pointer, Scalar};
 use crate::ty::layout::IntegerExt;
 use crate::ty::subst::{GenericArg, GenericArgKind, Subst};
@@ -540,9 +539,6 @@ pub trait PrettyPrinter<'tcx>:
                 p!(print_def_path(def_id, &[]));
             }
             ty::Projection(ref data) => p!(print(data)),
-            ty::UnnormalizedProjection(ref data) => {
-                p!(write("Unnormalized("), print(data), write(")"))
-            }
             ty::Placeholder(placeholder) => p!(write("Placeholder({:?})", placeholder)),
             ty::Opaque(def_id, substs) => {
                 // FIXME(eddyb) print this with `print_def_path`.
@@ -701,12 +697,14 @@ pub trait PrettyPrinter<'tcx>:
                 if self.tcx().sess.verbose() {
                     p!(write("{:?}", sz));
                 } else if let ty::ConstKind::Unevaluated(..) = sz.val {
-                    // do not try to evaluate unevaluated constants. If we are const evaluating an
+                    // Do not try to evaluate unevaluated constants. If we are const evaluating an
                     // array length anon const, rustc will (with debug assertions) print the
                     // constant's path. Which will end up here again.
                     p!(write("_"));
                 } else if let Some(n) = sz.val.try_to_bits(self.tcx().data_layout.pointer_size) {
                     p!(write("{}", n));
+                } else if let ty::ConstKind::Param(param) = sz.val {
+                    p!(write("{}", param));
                 } else {
                     p!(write("_"));
                 }
@@ -1589,9 +1587,9 @@ impl<F: fmt::Write> PrettyPrinter<'tcx> for FmtPrinter<'_, 'tcx, F> {
                 false
             }
 
-            ty::ReScope(_) | ty::ReVar(_) if identify_regions => true,
+            ty::ReVar(_) if identify_regions => true,
 
-            ty::ReVar(_) | ty::ReScope(_) | ty::ReErased => false,
+            ty::ReVar(_) | ty::ReErased => false,
 
             ty::ReStatic | ty::ReEmpty(_) => true,
         }
@@ -1667,32 +1665,12 @@ impl<F: fmt::Write> FmtPrinter<'_, '_, F> {
                     }
                 }
             }
-            ty::ReScope(scope) if identify_regions => {
-                match scope.data {
-                    region::ScopeData::Node => p!(write("'{}s", scope.item_local_id().as_usize())),
-                    region::ScopeData::CallSite => {
-                        p!(write("'{}cs", scope.item_local_id().as_usize()))
-                    }
-                    region::ScopeData::Arguments => {
-                        p!(write("'{}as", scope.item_local_id().as_usize()))
-                    }
-                    region::ScopeData::Destruction => {
-                        p!(write("'{}ds", scope.item_local_id().as_usize()))
-                    }
-                    region::ScopeData::Remainder(first_statement_index) => p!(write(
-                        "'{}_{}rs",
-                        scope.item_local_id().as_usize(),
-                        first_statement_index.index()
-                    )),
-                }
-                return Ok(self);
-            }
             ty::ReVar(region_vid) if identify_regions => {
                 p!(write("{:?}", region_vid));
                 return Ok(self);
             }
             ty::ReVar(_) => {}
-            ty::ReScope(_) | ty::ReErased => {}
+            ty::ReErased => {}
             ty::ReStatic => {
                 p!(write("'static"));
                 return Ok(self);
@@ -2032,32 +2010,39 @@ define_print_and_forward_display! {
     }
 
     ty::Predicate<'tcx> {
-        match *self {
-            ty::Predicate::Trait(ref data, constness) => {
+        match self.kind() {
+            &ty::PredicateKind::Trait(ref data, constness) => {
                 if let hir::Constness::Const = constness {
                     p!(write("const "));
                 }
                 p!(print(data))
             }
-            ty::Predicate::Subtype(ref predicate) => p!(print(predicate)),
-            ty::Predicate::RegionOutlives(ref predicate) => p!(print(predicate)),
-            ty::Predicate::TypeOutlives(ref predicate) => p!(print(predicate)),
-            ty::Predicate::Projection(ref predicate) => p!(print(predicate)),
-            ty::Predicate::WellFormed(ty) => p!(print(ty), write(" well-formed")),
-            ty::Predicate::ObjectSafe(trait_def_id) => {
+            ty::PredicateKind::Subtype(predicate) => p!(print(predicate)),
+            ty::PredicateKind::RegionOutlives(predicate) => p!(print(predicate)),
+            ty::PredicateKind::TypeOutlives(predicate) => p!(print(predicate)),
+            ty::PredicateKind::Projection(predicate) => p!(print(predicate)),
+            ty::PredicateKind::WellFormed(ty) => p!(print(ty), write(" well-formed")),
+            &ty::PredicateKind::ObjectSafe(trait_def_id) => {
                 p!(write("the trait `"),
                    print_def_path(trait_def_id, &[]),
                    write("` is object-safe"))
             }
-            ty::Predicate::ClosureKind(closure_def_id, _closure_substs, kind) => {
+            &ty::PredicateKind::ClosureKind(closure_def_id, _closure_substs, kind) => {
                 p!(write("the closure `"),
                    print_value_path(closure_def_id, &[]),
                    write("` implements the trait `{}`", kind))
             }
-            ty::Predicate::ConstEvaluatable(def_id, substs) => {
+            &ty::PredicateKind::ConstEvaluatable(def_id, substs) => {
                 p!(write("the constant `"),
                    print_value_path(def_id, substs),
                    write("` can be evaluated"))
+            }
+            ty::PredicateKind::ConstEquate(c1, c2) => {
+                p!(write("the constant `"),
+                   print(c1),
+                   write("` equals `"),
+                   print(c2),
+                   write("`"))
             }
         }
     }

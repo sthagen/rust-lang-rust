@@ -3,11 +3,10 @@ use crate::config::*;
 use crate::early_error;
 use crate::lint;
 use crate::search_paths::SearchPath;
-use crate::utils::NativeLibraryKind;
+use crate::utils::NativeLibKind;
 
-use rustc_target::spec::TargetTriple;
-use rustc_target::spec::{LinkerFlavor, MergeFunctions, PanicStrategy};
-use rustc_target::spec::{RelocModel, RelroLevel, TlsModel};
+use rustc_target::spec::{CodeModel, LinkerFlavor, MergeFunctions, PanicStrategy};
+use rustc_target::spec::{RelocModel, RelroLevel, TargetTriple, TlsModel};
 
 use rustc_feature::UnstableFeatures;
 use rustc_span::edition::Edition;
@@ -94,7 +93,7 @@ top_level_options!(
         describe_lints: bool [UNTRACKED],
         output_types: OutputTypes [TRACKED],
         search_paths: Vec<SearchPath> [UNTRACKED],
-        libs: Vec<(String, Option<String>, Option<NativeLibraryKind>)> [TRACKED],
+        libs: Vec<(String, Option<String>, NativeLibKind)> [TRACKED],
         maybe_sysroot: Option<PathBuf> [UNTRACKED],
 
         target_triple: TargetTriple [TRACKED],
@@ -253,6 +252,7 @@ macro_rules! options {
         pub const parse_sanitizer_list: &str = "comma separated list of sanitizers";
         pub const parse_sanitizer_memory_track_origins: &str = "0, 1, or 2";
         pub const parse_cfguard: &str = "either `disabled`, `nochecks`, or `checks`";
+        pub const parse_strip: &str = "either `none`, `debuginfo`, or `symbols`";
         pub const parse_linker_flavor: &str = ::rustc_target::spec::LinkerFlavor::one_of();
         pub const parse_optimization_fuel: &str = "crate=integer";
         pub const parse_unpretty: &str = "`string` or `string=string`";
@@ -268,8 +268,11 @@ macro_rules! options {
         pub const parse_src_file_hash: &str = "either `md5` or `sha1`";
         pub const parse_relocation_model: &str =
             "one of supported relocation models (`rustc --print relocation-models`)";
+        pub const parse_code_model: &str =
+            "one of supported code models (`rustc --print code-models`)";
         pub const parse_tls_model: &str =
             "one of supported TLS models (`rustc --print tls-models`)";
+        pub const parse_target_feature: &str = parse_string;
     }
 
     #[allow(dead_code)]
@@ -491,6 +494,16 @@ macro_rules! options {
             }
         }
 
+        fn parse_strip(slot: &mut Strip, v: Option<&str>) -> bool {
+            match v {
+                Some("none") => *slot = Strip::None,
+                Some("debuginfo") => *slot = Strip::Debuginfo,
+                Some("symbols") => *slot = Strip::Symbols,
+                _ => return false,
+            }
+            true
+        }
+
         fn parse_cfguard(slot: &mut CFGuard, v: Option<&str>) -> bool {
             match v {
                 Some("disabled") => *slot = CFGuard::Disabled,
@@ -609,6 +622,14 @@ macro_rules! options {
             true
         }
 
+        fn parse_code_model(slot: &mut Option<CodeModel>, v: Option<&str>) -> bool {
+            match v.and_then(|s| CodeModel::from_str(s).ok()) {
+                Some(code_model) => *slot = Some(code_model),
+                _ => return false,
+            }
+            true
+        }
+
         fn parse_tls_model(slot: &mut Option<TlsModel>, v: Option<&str>) -> bool {
             match v.and_then(|s| TlsModel::from_str(s).ok()) {
                 Some(tls_model) => *slot = Some(tls_model),
@@ -636,6 +657,19 @@ macro_rules! options {
             }
             true
         }
+
+        fn parse_target_feature(slot: &mut String, v: Option<&str>) -> bool {
+            match v {
+                Some(s) => {
+                    if !slot.is_empty() {
+                        slot.push_str(",");
+                    }
+                    slot.push_str(s);
+                    true
+                }
+                None => false,
+            }
+        }
     }
 ) }
 
@@ -651,7 +685,7 @@ options! {CodegenOptions, CodegenSetter, basic_codegen_options,
 
     ar: String = (String::new(), parse_string, [UNTRACKED],
         "this option is deprecated and does nothing"),
-    code_model: Option<String> = (None, parse_opt_string, [TRACKED],
+    code_model: Option<CodeModel> = (None, parse_code_model, [TRACKED],
         "choose the code model to use (`rustc --print code-models` for details)"),
     codegen_units: Option<usize> = (None, parse_opt_uint, [UNTRACKED],
         "divide crate into N units to optimize in parallel"),
@@ -731,7 +765,7 @@ options! {CodegenOptions, CodegenSetter, basic_codegen_options,
         "use soft float ABI (*eabihf targets only) (default: no)"),
     target_cpu: Option<String> = (None, parse_opt_string, [TRACKED],
         "select target processor (`rustc --print target-cpus` for details)"),
-    target_feature: String = (String::new(), parse_string, [TRACKED],
+    target_feature: String = (String::new(), parse_target_feature, [TRACKED],
         "target specific attributes. (`rustc --print target-features` for details). \
         This feature is unsafe."),
 
@@ -964,9 +998,8 @@ options! {DebuggingOptions, DebuggingSetter, basic_debugging_options,
         "exclude spans when debug-printing compiler state (default: no)"),
     src_hash_algorithm: Option<SourceFileHashAlgorithm> = (None, parse_src_file_hash, [TRACKED],
         "hash algorithm of source files in debug info (`md5`, or `sha1`)"),
-    strip_debuginfo_if_disabled: bool = (false, parse_bool, [TRACKED],
-        "tell the linker to strip debuginfo when building without debuginfo enabled \
-        (default: no)"),
+    strip: Strip = (Strip::None, parse_strip, [UNTRACKED],
+        "tell the linker which information to strip (`none` (default), `debuginfo` or `symbols`)"),
     symbol_mangling_version: SymbolManglingVersion = (SymbolManglingVersion::Legacy,
         parse_symbol_mangling_version, [TRACKED],
         "which mangling version to use for symbol names"),

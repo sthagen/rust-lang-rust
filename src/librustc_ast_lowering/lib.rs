@@ -33,7 +33,7 @@
 #![feature(array_value_iter)]
 #![feature(crate_visibility_modifier)]
 #![feature(marker_trait_attr)]
-#![feature(specialization)]
+#![feature(specialization)] // FIXME: min_specialization does not work
 #![feature(or_patterns)]
 #![recursion_limit = "256"]
 
@@ -269,7 +269,7 @@ pub fn lower_crate<'a, 'hir>(
     let _prof_timer = sess.prof.verbose_generic_activity("hir_lowering");
 
     LoweringContext {
-        crate_root: sess.parse_sess.injected_crate_name.try_get().copied(),
+        crate_root: sess.parse_sess.injected_crate_name.get().copied(),
         sess,
         resolver,
         nt_to_tokenstream,

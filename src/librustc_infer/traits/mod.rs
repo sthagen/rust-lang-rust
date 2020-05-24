@@ -10,7 +10,7 @@ pub mod util;
 
 use rustc_hir as hir;
 use rustc_middle::ty::error::{ExpectedFound, TypeError};
-use rustc_middle::ty::{self, Ty};
+use rustc_middle::ty::{self, Const, Ty};
 use rustc_span::Span;
 
 pub use self::FulfillmentErrorCode::*;
@@ -59,7 +59,7 @@ pub type TraitObligation<'tcx> = Obligation<'tcx, ty::PolyTraitPredicate<'tcx>>;
 
 // `PredicateObligation` is used a lot. Make sure it doesn't unintentionally get bigger.
 #[cfg(target_arch = "x86_64")]
-static_assert_size!(PredicateObligation<'_>, 112);
+static_assert_size!(PredicateObligation<'_>, 88);
 
 pub type Obligations<'tcx, O> = Vec<Obligation<'tcx, O>>;
 pub type PredicateObligations<'tcx> = Vec<PredicateObligation<'tcx>>;
@@ -81,6 +81,7 @@ pub enum FulfillmentErrorCode<'tcx> {
     CodeSelectionError(SelectionError<'tcx>),
     CodeProjectionError(MismatchedProjectionTypes<'tcx>),
     CodeSubtypeError(ExpectedFound<Ty<'tcx>>, TypeError<'tcx>), // always comes from a SubtypePredicate
+    CodeConstEquateError(ExpectedFound<&'tcx Const<'tcx>>, TypeError<'tcx>),
     CodeAmbiguity,
 }
 

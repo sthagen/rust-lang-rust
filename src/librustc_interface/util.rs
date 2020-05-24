@@ -42,14 +42,17 @@ use std::{panic, thread};
 /// features is available on the target machine, by querying LLVM.
 pub fn add_configuration(
     cfg: &mut CrateConfig,
-    sess: &Session,
+    sess: &mut Session,
     codegen_backend: &dyn CodegenBackend,
 ) {
     let tf = sym::target_feature;
 
-    cfg.extend(codegen_backend.target_features(sess).into_iter().map(|feat| (tf, Some(feat))));
+    let target_features = codegen_backend.target_features(sess);
+    sess.target_features.extend(target_features.iter().cloned());
 
-    if sess.crt_static_feature(None) {
+    cfg.extend(target_features.into_iter().map(|feat| (tf, Some(feat))));
+
+    if sess.crt_static(None) {
         cfg.insert((tf, Some(Symbol::intern("crt-static"))));
     }
 }
@@ -75,7 +78,7 @@ pub fn create_session(
     let codegen_backend = get_codegen_backend(&sess);
 
     let mut cfg = config::build_configuration(&sess, config::to_crate_config(cfg));
-    add_configuration(&mut cfg, &sess, &*codegen_backend);
+    add_configuration(&mut cfg, &mut sess, &*codegen_backend);
     sess.parse_sess.config = cfg;
 
     (Lrc::new(sess), Lrc::new(codegen_backend), source_map)
@@ -403,7 +406,7 @@ pub(crate) fn compute_crate_disambiguator(session: &Session) -> CrateDisambiguat
 
     // Also incorporate crate type, so that we don't get symbol conflicts when
     // linking against a library of the same name, if this is an executable.
-    let is_exe = session.crate_types.borrow().contains(&CrateType::Executable);
+    let is_exe = session.crate_types().contains(&CrateType::Executable);
     hasher.write(if is_exe { b"exe" } else { b"lib" });
 
     CrateDisambiguator::from(hasher.finish::<Fingerprint>())

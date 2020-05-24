@@ -18,9 +18,7 @@ use rustc_hir::lang_items;
 use rustc_hir::{AnonConst, GenericParamKind};
 use rustc_index::vec::Idx;
 use rustc_middle::hir::map::Map;
-use rustc_middle::middle::cstore::{
-    EncodedMetadata, ForeignModule, LinkagePreference, NativeLibrary,
-};
+use rustc_middle::middle::cstore::{EncodedMetadata, ForeignModule, LinkagePreference, NativeLib};
 use rustc_middle::middle::dependency_format::Linkage;
 use rustc_middle::middle::exported_symbols::{
     metadata_symbol_name, ExportedSymbol, SymbolExportLevel,
@@ -418,7 +416,7 @@ impl<'tcx> EncodeContext<'tcx> {
     }
 
     fn encode_crate_root(&mut self) -> Lazy<CrateRoot<'tcx>> {
-        let is_proc_macro = self.tcx.sess.crate_types.borrow().contains(&CrateType::ProcMacro);
+        let is_proc_macro = self.tcx.sess.crate_types().contains(&CrateType::ProcMacro);
 
         let mut i = self.position();
 
@@ -1355,7 +1353,7 @@ impl EncodeContext<'tcx> {
         self.encode_promoted_mir(def_id);
     }
 
-    fn encode_native_libraries(&mut self) -> Lazy<[NativeLibrary]> {
+    fn encode_native_libraries(&mut self) -> Lazy<[NativeLib]> {
         let used_libraries = self.tcx.native_libraries(LOCAL_CRATE);
         self.lazy(used_libraries.iter().cloned())
     }
@@ -1366,7 +1364,7 @@ impl EncodeContext<'tcx> {
     }
 
     fn encode_proc_macros(&mut self) -> Option<Lazy<[DefIndex]>> {
-        let is_proc_macro = self.tcx.sess.crate_types.borrow().contains(&CrateType::ProcMacro);
+        let is_proc_macro = self.tcx.sess.crate_types().contains(&CrateType::ProcMacro);
         if is_proc_macro {
             let tcx = self.tcx;
             Some(self.lazy(tcx.hir().krate().proc_macros.iter().map(|p| p.owner.local_def_index)))

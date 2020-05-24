@@ -28,6 +28,7 @@ pub mod generator;
 pub mod inline;
 pub mod instcombine;
 pub mod no_landing_pads;
+pub mod nrvo;
 pub mod promote_consts;
 pub mod qualify_min_const_fn;
 pub mod remove_noop_landing_pads;
@@ -317,13 +318,14 @@ fn run_optimization_passes<'tcx>(
         //   2. It creates additional possibilities for some MIR optimizations to trigger
         // FIXME(#70073): Why is this done here and not in `post_borrowck_cleanup`?
         &deaggregator::Deaggregator,
+        &simplify_try::SimplifyArmIdentity,
+        &simplify_try::SimplifyBranchSame,
         &copy_prop::CopyPropagation,
         &simplify_branches::SimplifyBranches::new("after-copy-prop"),
         &remove_noop_landing_pads::RemoveNoopLandingPads,
         &simplify::SimplifyCfg::new("after-remove-noop-landing-pads"),
-        &simplify_try::SimplifyArmIdentity,
-        &simplify_try::SimplifyBranchSame,
         &simplify::SimplifyCfg::new("final"),
+        &nrvo::RenameReturnPlace,
         &simplify::SimplifyLocals,
     ];
 

@@ -13,7 +13,7 @@ use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_data_structures::jobserver::{self, Client};
 use rustc_data_structures::profiling::{duration_to_secs_str, SelfProfiler, SelfProfilerRef};
 use rustc_data_structures::sync::{
-    self, AtomicU64, AtomicUsize, Lock, Lrc, Once, OneThread, Ordering, Ordering::SeqCst,
+    self, AtomicU64, AtomicUsize, Lock, Lrc, OnceCell, OneThread, Ordering, Ordering::SeqCst,
 };
 use rustc_errors::annotate_snippet_emitter_writer::AnnotateSnippetEmitterWriter;
 use rustc_errors::emitter::{Emitter, EmitterWriter, HumanReadableErrorType};
@@ -23,13 +23,16 @@ use rustc_errors::{Applicability, DiagnosticBuilder, DiagnosticId, ErrorReported
 use rustc_span::edition::Edition;
 use rustc_span::source_map::{self, FileLoader, MultiSpan, RealFileLoader, SourceMap, Span};
 use rustc_span::{SourceFileHashAlgorithm, Symbol};
-use rustc_target::spec::{PanicStrategy, RelocModel, RelroLevel, Target, TargetTriple, TlsModel};
+use rustc_target::asm::InlineAsmArch;
+use rustc_target::spec::{CodeModel, PanicStrategy, RelocModel, RelroLevel};
+use rustc_target::spec::{Target, TargetTriple, TlsModel};
 
 use std::cell::{self, RefCell};
 use std::env;
 use std::io::Write;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -74,25 +77,25 @@ pub struct Session {
     /// (sub)diagnostics that have been set once, but should not be set again,
     /// in order to avoid redundantly verbose output (Issue #24690, #44953).
     pub one_time_diagnostics: Lock<FxHashSet<(DiagnosticMessageId, Option<Span>, String)>>,
-    pub crate_types: Once<Vec<CrateType>>,
+    crate_types: OnceCell<Vec<CrateType>>,
     /// The `crate_disambiguator` is constructed out of all the `-C metadata`
     /// arguments passed to the compiler. Its value together with the crate-name
     /// forms a unique global identifier for the crate. It is used to allow
     /// multiple crates with the same name to coexist. See the
     /// `rustc_codegen_llvm::back::symbol_names` module for more information.
-    pub crate_disambiguator: Once<CrateDisambiguator>,
+    pub crate_disambiguator: OnceCell<CrateDisambiguator>,
 
-    features: Once<rustc_feature::Features>,
+    features: OnceCell<rustc_feature::Features>,
 
     /// The maximum recursion limit for potentially infinitely recursive
     /// operations such as auto-dereference and monomorphization.
-    pub recursion_limit: Once<usize>,
+    pub recursion_limit: OnceCell<usize>,
 
     /// The maximum length of types during monomorphization.
-    pub type_length_limit: Once<usize>,
+    pub type_length_limit: OnceCell<usize>,
 
     /// The maximum blocks a const expression can evaluate.
-    pub const_eval_limit: Once<usize>,
+    pub const_eval_limit: OnceCell<usize>,
 
     incr_comp_session: OneThread<RefCell<IncrCompSession>>,
     /// Used for incremental compilation tests. Will only be populated if
@@ -157,6 +160,12 @@ pub struct Session {
     /// if Rust was built with path remapping to `/rustc/$hash` enabled
     /// (the `rust.remap-debuginfo` option in `config.toml`).
     pub real_rust_source_base_dir: Option<PathBuf>,
+
+    /// Architecture to use for interpreting asm!.
+    pub asm_arch: Option<InlineAsmArch>,
+
+    /// Set of enabled features for the current target.
+    pub target_features: FxHashSet<Symbol>,
 }
 
 pub struct PerfStats {
@@ -235,7 +244,27 @@ impl Session {
     }
 
     pub fn local_crate_disambiguator(&self) -> CrateDisambiguator {
-        *self.crate_disambiguator.get()
+        self.crate_disambiguator.get().copied().unwrap()
+    }
+
+    pub fn crate_types(&self) -> &[CrateType] {
+        self.crate_types.get().unwrap().as_slice()
+    }
+
+    pub fn init_crate_types(&self, crate_types: Vec<CrateType>) {
+        self.crate_types.set(crate_types).expect("`crate_types` was initialized twice")
+    }
+
+    pub fn recursion_limit(&self) -> usize {
+        self.recursion_limit.get().copied().unwrap()
+    }
+
+    pub fn type_length_limit(&self) -> usize {
+        self.type_length_limit.get().copied().unwrap()
+    }
+
+    pub fn const_eval_limit(&self) -> usize {
+        self.const_eval_limit.get().copied().unwrap()
     }
 
     pub fn struct_span_warn<S: Into<MultiSpan>>(&self, sp: S, msg: &str) -> DiagnosticBuilder<'_> {
@@ -491,11 +520,14 @@ impl Session {
     /// dependency tracking. Use tcx.features() instead.
     #[inline]
     pub fn features_untracked(&self) -> &rustc_feature::Features {
-        self.features.get()
+        self.features.get().unwrap()
     }
 
     pub fn init_features(&self, features: rustc_feature::Features) {
-        self.features.set(features);
+        match self.features.set(features) {
+            Ok(()) => {}
+            Err(_) => panic!("`features` was initialized twice"),
+        }
     }
 
     /// Calculates the flavor of LTO to use for this compilation.
@@ -598,16 +630,11 @@ impl Session {
 
     /// Check whether this compile session and crate type use static crt.
     pub fn crt_static(&self, crate_type: Option<CrateType>) -> bool {
-        // If the target does not opt in to crt-static support, use its default.
-        if self.target.target.options.crt_static_respected {
-            self.crt_static_feature(crate_type)
-        } else {
-            self.target.target.options.crt_static_default
+        if !self.target.target.options.crt_static_respected {
+            // If the target does not opt in to crt-static support, use its default.
+            return self.target.target.options.crt_static_default;
         }
-    }
 
-    /// Check whether this compile session and crate type use `crt-static` feature.
-    pub fn crt_static_feature(&self, crate_type: Option<CrateType>) -> bool {
         let requested_features = self.opts.cg.target_feature.split(',');
         let found_negative = requested_features.clone().any(|r| r == "-crt-static");
         let found_positive = requested_features.clone().any(|r| r == "+crt-static");
@@ -628,6 +655,10 @@ impl Session {
 
     pub fn relocation_model(&self) -> RelocModel {
         self.opts.cg.relocation_model.unwrap_or(self.target.target.options.relocation_model)
+    }
+
+    pub fn code_model(&self) -> Option<CodeModel> {
+        self.opts.cg.code_model.or(self.target.target.options.code_model)
     }
 
     pub fn tls_model(&self) -> TlsModel {
@@ -813,7 +844,7 @@ impl Session {
                 let mut fuel = self.optimization_fuel.lock();
                 ret = fuel.remaining != 0;
                 if fuel.remaining == 0 && !fuel.out_of_fuel {
-                    eprintln!("optimization-fuel-exhausted: {}", msg());
+                    self.warn(&format!("optimization-fuel-exhausted: {}", msg()));
                     fuel.out_of_fuel = true;
                 } else if fuel.remaining > 0 {
                     fuel.remaining -= 1;
@@ -940,6 +971,16 @@ impl Session {
         // If user didn't explicitly forced us to use / skip the PLT,
         // then try to skip it where possible.
         dbg_opts.plt.unwrap_or(needs_plt || !full_relro)
+    }
+
+    /// Checks if LLVM lifetime markers should be emitted.
+    pub fn emit_lifetime_markers(&self) -> bool {
+        match self.opts.debugging_opts.sanitizer {
+            // AddressSanitizer uses lifetimes to detect use after scope bugs.
+            // MemorySanitizer uses lifetimes to detect use of uninitialized stack variables.
+            Some(Sanitizer::Address | Sanitizer::Memory) => true,
+            _ => self.opts.optimize != config::OptLevel::No,
+        }
     }
 }
 
@@ -1173,6 +1214,12 @@ pub fn build_session_with_source_map(
         if candidate.join("src/libstd/lib.rs").is_file() { Some(candidate) } else { None }
     };
 
+    let asm_arch = if target_cfg.target.options.allow_asm {
+        InlineAsmArch::from_str(&target_cfg.target.arch).ok()
+    } else {
+        None
+    };
+
     let sess = Session {
         target: target_cfg,
         host,
@@ -1184,12 +1231,12 @@ pub fn build_session_with_source_map(
         local_crate_source_file,
         working_dir,
         one_time_diagnostics: Default::default(),
-        crate_types: Once::new(),
-        crate_disambiguator: Once::new(),
-        features: Once::new(),
-        recursion_limit: Once::new(),
-        type_length_limit: Once::new(),
-        const_eval_limit: Once::new(),
+        crate_types: OnceCell::new(),
+        crate_disambiguator: OnceCell::new(),
+        features: OnceCell::new(),
+        recursion_limit: OnceCell::new(),
+        type_length_limit: OnceCell::new(),
+        const_eval_limit: OnceCell::new(),
         incr_comp_session: OneThread::new(RefCell::new(IncrCompSession::NotInitialized)),
         cgu_reuse_tracker,
         prof,
@@ -1213,6 +1260,8 @@ pub fn build_session_with_source_map(
         ctfe_backtrace,
         miri_unleashed_features: Lock::new(Default::default()),
         real_rust_source_base_dir,
+        asm_arch,
+        target_features: FxHashSet::default(),
     };
 
     validate_commandline_args_with_session_available(&sess);

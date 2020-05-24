@@ -203,6 +203,10 @@ static Attribute::AttrKind fromRust(LLVMRustAttribute Kind) {
     return Attribute::OptimizeNone;
   case ReturnsTwice:
     return Attribute::ReturnsTwice;
+  case ReadNone:
+    return Attribute::ReadNone;
+  case InaccessibleMemOnly:
+    return Attribute::InaccessibleMemOnly;
   }
   report_fatal_error("bad AttributeKind");
 }
@@ -716,7 +720,6 @@ extern "C" LLVMMetadataRef LLVMRustDIBuilderCreateFile(
 
 extern "C" LLVMMetadataRef
 LLVMRustDIBuilderCreateSubroutineType(LLVMRustDIBuilderRef Builder,
-                                      LLVMMetadataRef File,
                                       LLVMMetadataRef ParameterTypes) {
   return wrap(Builder->createSubroutineType(
       DITypeRefArray(unwrap<MDTuple>(ParameterTypes))));
@@ -751,7 +754,7 @@ extern "C" LLVMMetadataRef LLVMRustDIBuilderCreateFunction(
 
 extern "C" LLVMMetadataRef LLVMRustDIBuilderCreateBasicType(
     LLVMRustDIBuilderRef Builder, const char *Name, size_t NameLen,
-    uint64_t SizeInBits, uint32_t AlignInBits, unsigned Encoding) {
+    uint64_t SizeInBits, unsigned Encoding) {
   return wrap(Builder->createBasicType(StringRef(Name, NameLen), SizeInBits, Encoding));
 }
 
@@ -960,9 +963,7 @@ extern "C" LLVMMetadataRef LLVMRustDIBuilderCreateUnionType(
 
 extern "C" LLVMMetadataRef LLVMRustDIBuilderCreateTemplateTypeParameter(
     LLVMRustDIBuilderRef Builder, LLVMMetadataRef Scope,
-    const char *Name, size_t NameLen,
-    LLVMMetadataRef Ty, LLVMMetadataRef File, unsigned LineNo,
-    unsigned ColumnNo) {
+    const char *Name, size_t NameLen, LLVMMetadataRef Ty) {
   return wrap(Builder->createTemplateTypeParameter(
       unwrapDI<DIDescriptor>(Scope), StringRef(Name, NameLen), unwrapDI<DIType>(Ty)));
 }

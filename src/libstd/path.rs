@@ -157,10 +157,10 @@ pub enum Prefix<'a> {
         #[stable(feature = "rust1", since = "1.0.0")] &'a OsStr,
     ),
 
-    /// Verbatim disk prefix, e.g., `\\?\C:\`.
+    /// Verbatim disk prefix, e.g., `\\?\C:`.
     ///
     /// Verbatim disk prefixes consist of `\\?\` immediately followed by the
-    /// drive letter and `:\`.
+    /// drive letter and `:`.
     #[stable(feature = "rust1", since = "1.0.0")]
     VerbatimDisk(#[stable(feature = "rust1", since = "1.0.0")] u8),
 
@@ -1430,6 +1430,17 @@ impl From<&Path> for Box<Path> {
         let boxed: Box<OsStr> = path.inner.into();
         let rw = Box::into_raw(boxed) as *mut Path;
         unsafe { Box::from_raw(rw) }
+    }
+}
+
+#[stable(feature = "box_from_cow", since = "1.45.0")]
+impl From<Cow<'_, Path>> for Box<Path> {
+    #[inline]
+    fn from(cow: Cow<'_, Path>) -> Box<Path> {
+        match cow {
+            Cow::Borrowed(path) => Box::from(path),
+            Cow::Owned(path) => Box::from(path),
+        }
     }
 }
 

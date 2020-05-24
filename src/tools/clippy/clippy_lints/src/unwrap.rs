@@ -1,10 +1,14 @@
-use crate::utils::{higher::if_block, is_type_diagnostic_item, span_lint_and_then, usage::is_potentially_mutated};
+use crate::utils::{
+    differing_macro_contexts, higher::if_block, is_type_diagnostic_item, span_lint_and_then,
+    usage::is_potentially_mutated,
+};
 use if_chain::if_chain;
 use rustc_hir::intravisit::{walk_expr, walk_fn, FnKind, NestedVisitorMap, Visitor};
 use rustc_hir::{BinOpKind, Body, Expr, ExprKind, FnDecl, HirId, Path, QPath, UnOp};
 use rustc_lint::{LateContext, LateLintPass};
 use rustc_middle::hir::map::Map;
 use rustc_middle::lint::in_external_macro;
+use rustc_middle::ty::Ty;
 use rustc_session::{declare_lint_pass, declare_tool_lint};
 use rustc_span::source_map::Span;
 
@@ -73,6 +77,8 @@ struct UnwrapInfo<'tcx> {
     ident: &'tcx Path<'tcx>,
     /// The check, like `x.is_ok()`
     check: &'tcx Expr<'tcx>,
+    /// The branch where the check takes place, like `if x.is_ok() { .. }`
+    branch: &'tcx Expr<'tcx>,
     /// Whether `is_some()` or `is_ok()` was called (as opposed to `is_err()` or `is_none()`).
     safe_to_unwrap: bool,
 }
@@ -82,27 +88,35 @@ struct UnwrapInfo<'tcx> {
 fn collect_unwrap_info<'a, 'tcx>(
     cx: &'a LateContext<'a, 'tcx>,
     expr: &'tcx Expr<'_>,
+    branch: &'tcx Expr<'_>,
     invert: bool,
 ) -> Vec<UnwrapInfo<'tcx>> {
+    fn is_relevant_option_call(cx: &LateContext<'_, '_>, ty: Ty<'_>, method_name: &str) -> bool {
+        is_type_diagnostic_item(cx, ty, sym!(option_type)) && ["is_some", "is_none"].contains(&method_name)
+    }
+
+    fn is_relevant_result_call(cx: &LateContext<'_, '_>, ty: Ty<'_>, method_name: &str) -> bool {
+        is_type_diagnostic_item(cx, ty, sym!(result_type)) && ["is_ok", "is_err"].contains(&method_name)
+    }
+
     if let ExprKind::Binary(op, left, right) = &expr.kind {
         match (invert, op.node) {
             (false, BinOpKind::And) | (false, BinOpKind::BitAnd) | (true, BinOpKind::Or) | (true, BinOpKind::BitOr) => {
-                let mut unwrap_info = collect_unwrap_info(cx, left, invert);
-                unwrap_info.append(&mut collect_unwrap_info(cx, right, invert));
+                let mut unwrap_info = collect_unwrap_info(cx, left, branch, invert);
+                unwrap_info.append(&mut collect_unwrap_info(cx, right, branch, invert));
                 return unwrap_info;
             },
             _ => (),
         }
     } else if let ExprKind::Unary(UnOp::UnNot, expr) = &expr.kind {
-        return collect_unwrap_info(cx, expr, !invert);
+        return collect_unwrap_info(cx, expr, branch, !invert);
     } else {
         if_chain! {
             if let ExprKind::MethodCall(method_name, _, args) = &expr.kind;
             if let ExprKind::Path(QPath::Resolved(None, path)) = &args[0].kind;
             let ty = cx.tables.expr_ty(&args[0]);
-            if is_type_diagnostic_item(cx, ty, sym!(option_type)) || is_type_diagnostic_item(cx, ty, sym!(result_type));
             let name = method_name.ident.as_str();
-            if ["is_some", "is_none", "is_ok", "is_err"].contains(&&*name);
+            if is_relevant_option_call(cx, ty, &name) || is_relevant_result_call(cx, ty, &name);
             then {
                 assert!(args.len() == 1);
                 let unwrappable = match name.as_ref() {
@@ -111,7 +125,7 @@ fn collect_unwrap_info<'a, 'tcx>(
                     _ => unreachable!(),
                 };
                 let safe_to_unwrap = unwrappable != invert;
-                return vec![UnwrapInfo { ident: path, check: expr, safe_to_unwrap }];
+                return vec![UnwrapInfo { ident: path, check: expr, branch, safe_to_unwrap }];
             }
         }
     }
@@ -121,7 +135,7 @@ fn collect_unwrap_info<'a, 'tcx>(
 impl<'a, 'tcx> UnwrappableVariablesVisitor<'a, 'tcx> {
     fn visit_branch(&mut self, cond: &'tcx Expr<'_>, branch: &'tcx Expr<'_>, else_branch: bool) {
         let prev_len = self.unwrappables.len();
-        for unwrap_info in collect_unwrap_info(self.cx, cond, else_branch) {
+        for unwrap_info in collect_unwrap_info(self.cx, cond, branch, else_branch) {
             if is_potentially_mutated(unwrap_info.ident, cond, self.cx)
                 || is_potentially_mutated(unwrap_info.ident, branch, self.cx)
             {
@@ -158,6 +172,9 @@ impl<'a, 'tcx> Visitor<'tcx> for UnwrappableVariablesVisitor<'a, 'tcx> {
                 let call_to_unwrap = method_name.ident.name == sym!(unwrap);
                 if let Some(unwrappable) = self.unwrappables.iter()
                     .find(|u| u.ident.res == path.res);
+                // Span contexts should not differ with the conditional branch
+                if !differing_macro_contexts(unwrappable.branch.span, expr.span);
+                if !differing_macro_contexts(unwrappable.branch.span, unwrappable.check.span);
                 then {
                     if call_to_unwrap == unwrappable.safe_to_unwrap {
                         span_lint_and_then(

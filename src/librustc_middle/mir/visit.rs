@@ -427,11 +427,27 @@ macro_rules! make_mir_visitor {
                     TerminatorKind::Goto { .. } |
                     TerminatorKind::Resume |
                     TerminatorKind::Abort |
-                    TerminatorKind::Return |
                     TerminatorKind::GeneratorDrop |
                     TerminatorKind::Unreachable |
                     TerminatorKind::FalseEdges { .. } |
                     TerminatorKind::FalseUnwind { .. } => {
+                    }
+
+                    TerminatorKind::Return => {
+                        // `return` logically moves from the return place `_0`. Note that the place
+                        // cannot be changed by any visitor, though.
+                        let $($mutability)? local = RETURN_PLACE;
+                        self.visit_local(
+                            & $($mutability)? local,
+                            PlaceContext::NonMutatingUse(NonMutatingUseContext::Move),
+                            source_location,
+                        );
+
+                        assert_eq!(
+                            local,
+                            RETURN_PLACE,
+                            "`MutVisitor` tried to mutate return place of `return` terminator"
+                        );
                     }
 
                     TerminatorKind::SwitchInt {
@@ -515,6 +531,44 @@ macro_rules! make_mir_visitor {
                         );
                     }
 
+                    TerminatorKind::InlineAsm {
+                        template: _,
+                        operands,
+                        options: _,
+                        destination: _,
+                    } => {
+                        for op in operands {
+                            match op {
+                                InlineAsmOperand::In { value, .. }
+                                | InlineAsmOperand::Const { value } => {
+                                    self.visit_operand(value, source_location);
+                                }
+                                InlineAsmOperand::Out { place, .. } => {
+                                    if let Some(place) = place {
+                                        self.visit_place(
+                                            place,
+                                            PlaceContext::MutatingUse(MutatingUseContext::Store),
+                                            source_location,
+                                        );
+                                    }
+                                }
+                                InlineAsmOperand::InOut { in_value, out_place, .. } => {
+                                    self.visit_operand(in_value, source_location);
+                                    if let Some(out_place) = out_place {
+                                        self.visit_place(
+                                            out_place,
+                                            PlaceContext::MutatingUse(MutatingUseContext::Store),
+                                            source_location,
+                                        );
+                                    }
+                                }
+                                InlineAsmOperand::SymFn { value }
+                                | InlineAsmOperand::SymStatic { value } => {
+                                    self.visit_constant(value, source_location);
+                                }
+                            }
+                        }
+                    }
                 }
             }
 

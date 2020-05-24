@@ -28,8 +28,8 @@ use rustc_ast::visit::{FnCtxt, FnKind};
 use rustc_ast_pretty::pprust::{self, expr_to_string};
 use rustc_data_structures::fx::FxHashSet;
 use rustc_errors::{Applicability, DiagnosticBuilder};
-use rustc_feature::Stability;
 use rustc_feature::{deprecated_attributes, AttributeGate, AttributeTemplate, AttributeType};
+use rustc_feature::{GateIssue, Stability};
 use rustc_hir as hir;
 use rustc_hir::def::{DefKind, Res};
 use rustc_hir::def_id::DefId;
@@ -1202,13 +1202,13 @@ declare_lint_pass!(
 impl<'a, 'tcx> LateLintPass<'a, 'tcx> for TrivialConstraints {
     fn check_item(&mut self, cx: &LateContext<'a, 'tcx>, item: &'tcx hir::Item<'tcx>) {
         use rustc_middle::ty::fold::TypeFoldable;
-        use rustc_middle::ty::Predicate::*;
+        use rustc_middle::ty::PredicateKind::*;
 
         if cx.tcx.features().trivial_bounds {
             let def_id = cx.tcx.hir().local_def_id(item.hir_id);
             let predicates = cx.tcx.predicates_of(def_id);
             for &(predicate, span) in predicates.predicates {
-                let predicate_kind_name = match predicate {
+                let predicate_kind_name = match predicate.kind() {
                     Trait(..) => "Trait",
                     TypeOutlives(..) |
                     RegionOutlives(..) => "Lifetime",
@@ -1221,7 +1221,8 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for TrivialConstraints {
                     ObjectSafe(..) |
                     ClosureKind(..) |
                     Subtype(..) |
-                    ConstEvaluatable(..) => continue,
+                    ConstEvaluatable(..) |
+                    ConstEquate(..) => continue,
                 };
                 if predicate.is_global() {
                     cx.struct_span_lint(TRIVIAL_BOUNDS, span, |lint| {
@@ -1496,8 +1497,8 @@ impl ExplicitOutlivesRequirements {
     ) -> Vec<ty::Region<'tcx>> {
         inferred_outlives
             .iter()
-            .filter_map(|(pred, _)| match pred {
-                ty::Predicate::RegionOutlives(outlives) => {
+            .filter_map(|(pred, _)| match pred.kind() {
+                ty::PredicateKind::RegionOutlives(outlives) => {
                     let outlives = outlives.skip_binder();
                     match outlives.0 {
                         ty::ReEarlyBound(ebr) if ebr.index == index => Some(outlives.1),
@@ -1515,8 +1516,8 @@ impl ExplicitOutlivesRequirements {
     ) -> Vec<ty::Region<'tcx>> {
         inferred_outlives
             .iter()
-            .filter_map(|(pred, _)| match pred {
-                ty::Predicate::TypeOutlives(outlives) => {
+            .filter_map(|(pred, _)| match pred.kind() {
+                ty::PredicateKind::TypeOutlives(outlives) => {
                     let outlives = outlives.skip_binder();
                     outlives.0.is_param(index).then_some(outlives.1)
                 }
@@ -1817,13 +1818,21 @@ impl EarlyLintPass for IncompleteFeatures {
             .map(|(name, span, _)| (name, span))
             .chain(features.declared_lib_features.iter().map(|(name, span)| (name, span)))
             .filter(|(name, _)| rustc_feature::INCOMPLETE_FEATURES.iter().any(|f| name == &f))
-            .for_each(|(name, &span)| {
+            .for_each(|(&name, &span)| {
                 cx.struct_span_lint(INCOMPLETE_FEATURES, span, |lint| {
-                    lint.build(&format!(
-                        "the feature `{}` is incomplete and may cause the compiler to crash",
+                    let mut builder = lint.build(&format!(
+                        "the feature `{}` is incomplete and may not be safe to use \
+                         and/or cause compiler crashes",
                         name,
-                    ))
-                    .emit()
+                    ));
+                    if let Some(n) = rustc_feature::find_feature_issue(name, GateIssue::Language) {
+                        builder.note(&format!(
+                            "see issue #{} <https://github.com/rust-lang/rust/issues/{}> \
+                             for more information",
+                            n, n,
+                        ));
+                    }
+                    builder.emit();
                 })
             });
     }

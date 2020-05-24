@@ -10,6 +10,7 @@ use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_errors::struct_span_err;
 use rustc_hir as hir;
 use rustc_hir::def_id::{DefId, LocalDefId};
+use rustc_hir::lang_items::{CoerceUnsizedTraitLangItem, CopyTraitLangItem, SizedTraitLangItem};
 use rustc_index::vec::{Idx, IndexVec};
 use rustc_infer::infer::canonical::QueryRegionConstraints;
 use rustc_infer::infer::outlives::env::RegionBoundPairs;
@@ -26,8 +27,8 @@ use rustc_middle::ty::cast::CastTy;
 use rustc_middle::ty::fold::TypeFoldable;
 use rustc_middle::ty::subst::{GenericArgKind, Subst, SubstsRef, UserSubsts};
 use rustc_middle::ty::{
-    self, CanonicalUserTypeAnnotation, CanonicalUserTypeAnnotations, RegionVid, ToPolyTraitRef, Ty,
-    TyCtxt, UserType, UserTypeAnnotationIndex,
+    self, CanonicalUserTypeAnnotation, CanonicalUserTypeAnnotations, RegionVid, ToPolyTraitRef,
+    ToPredicate, Ty, TyCtxt, UserType, UserTypeAnnotationIndex,
 };
 use rustc_span::{Span, DUMMY_SP};
 use rustc_target::abi::VariantIdx;
@@ -108,26 +109,22 @@ mod relate_tys;
 ///
 /// - `infcx` -- inference context to use
 /// - `param_env` -- parameter environment to use for trait solving
-/// - `mir` -- MIR to type-check
-/// - `mir_def_id` -- DefId from which the MIR is derived (must be local)
-/// - `region_bound_pairs` -- the implied outlives obligations between type parameters
-///   and lifetimes (e.g., `&'a T` implies `T: 'a`)
-/// - `implicit_region_bound` -- a region which all generic parameters are assumed
-///   to outlive; should represent the fn body
-/// - `input_tys` -- fully liberated, but **not** normalized, expected types of the arguments;
-///   the types of the input parameters found in the MIR itself will be equated with these
-/// - `output_ty` -- fully liberated, but **not** normalized, expected return type;
-///   the type for the RETURN_PLACE will be equated with this
-/// - `liveness` -- results of a liveness computation on the MIR; used to create liveness
-///   constraints for the regions in the types of variables
+/// - `body` -- MIR body to type-check
+/// - `promoted` -- map of promoted constants within `body`
+/// - `mir_def_id` -- `LocalDefId` from which the MIR is derived
+/// - `universal_regions` -- the universal regions from `body`s function signature
+/// - `location_table` -- MIR location map of `body`
+/// - `borrow_set` -- information about borrows occurring in `body`
+/// - `all_facts` -- when using Polonius, this is the generated set of Polonius facts
 /// - `flow_inits` -- results of a maybe-init dataflow analysis
 /// - `move_data` -- move-data constructed when performing the maybe-init dataflow analysis
+/// - `elements` -- MIR region map
 pub(crate) fn type_check<'mir, 'tcx>(
     infcx: &InferCtxt<'_, 'tcx>,
     param_env: ty::ParamEnv<'tcx>,
     body: &Body<'tcx>,
     promoted: &IndexVec<Promoted, Body<'tcx>>,
-    mir_def_id: DefId,
+    mir_def_id: LocalDefId,
     universal_regions: &Rc<UniversalRegions<'tcx>>,
     location_table: &LocationTable,
     borrow_set: &BorrowSet<'tcx>,
@@ -191,7 +188,7 @@ pub(crate) fn type_check<'mir, 'tcx>(
 
 fn type_check_internal<'a, 'tcx, R>(
     infcx: &'a InferCtxt<'a, 'tcx>,
-    mir_def_id: DefId,
+    mir_def_id: LocalDefId,
     param_env: ty::ParamEnv<'tcx>,
     body: &'a Body<'tcx>,
     promoted: &'a IndexVec<Promoted, Body<'tcx>>,
@@ -271,7 +268,7 @@ struct TypeVerifier<'a, 'b, 'tcx> {
     body: &'b Body<'tcx>,
     promoted: &'b IndexVec<Promoted, Body<'tcx>>,
     last_span: Span,
-    mir_def_id: DefId,
+    mir_def_id: LocalDefId,
     errors_reported: bool,
 }
 
@@ -506,7 +503,7 @@ impl<'a, 'b, 'tcx> TypeVerifier<'a, 'b, 'tcx> {
         if let PlaceContext::NonMutatingUse(NonMutatingUseContext::Copy) = context {
             let tcx = self.tcx();
             let trait_ref = ty::TraitRef {
-                def_id: tcx.lang_items().copy_trait().unwrap(),
+                def_id: tcx.require_lang_item(CopyTraitLangItem, Some(self.last_span)),
                 substs: tcx.mk_substs_trait(place_ty.ty, &[]),
             };
 
@@ -815,7 +812,7 @@ struct TypeChecker<'a, 'tcx> {
     /// User type annotations are shared between the main MIR and the MIR of
     /// all of the promoted items.
     user_type_annotations: &'a CanonicalUserTypeAnnotations<'tcx>,
-    mir_def_id: DefId,
+    mir_def_id: LocalDefId,
     region_bound_pairs: &'a RegionBoundPairs<'tcx>,
     implicit_region_bound: ty::Region<'tcx>,
     reported_errors: FxHashSet<(Ty<'tcx>, Span)>,
@@ -963,7 +960,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
     fn new(
         infcx: &'a InferCtxt<'a, 'tcx>,
         body: &'a Body<'tcx>,
-        mir_def_id: DefId,
+        mir_def_id: LocalDefId,
         param_env: ty::ParamEnv<'tcx>,
         region_bound_pairs: &'a RegionBoundPairs<'tcx>,
         implicit_region_bound: ty::Region<'tcx>,
@@ -1019,7 +1016,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                     }
 
                     self.prove_predicate(
-                        ty::Predicate::WellFormed(inferred_ty),
+                        ty::PredicateKind::WellFormed(inferred_ty).to_predicate(self.tcx()),
                         Locations::All(span),
                         ConstraintCategory::TypeAnnotation,
                     );
@@ -1142,7 +1139,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                 // When you have `let x: impl Foo = ...` in a closure,
                 // the resulting inferend values are stored with the
                 // def-id of the base function.
-                let parent_def_id = self.tcx().closure_base_def_id(self.mir_def_id);
+                let parent_def_id = self.tcx().closure_base_def_id(self.mir_def_id.to_def_id());
                 return self.eq_opaque_type_and_type(sub, sup, parent_def_id, locations, category);
             } else {
                 return Err(terr);
@@ -1271,7 +1268,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                     obligations.obligations.push(traits::Obligation::new(
                         ObligationCause::dummy(),
                         param_env,
-                        ty::Predicate::WellFormed(revealed_ty),
+                        ty::PredicateKind::WellFormed(revealed_ty).to_predicate(infcx.tcx),
                     ));
                     obligations.add(
                         infcx
@@ -1472,7 +1469,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                 self.check_rvalue(body, rv, location);
                 if !self.tcx().features().unsized_locals {
                     let trait_ref = ty::TraitRef {
-                        def_id: tcx.lang_items().sized_trait().unwrap(),
+                        def_id: tcx.require_lang_item(SizedTraitLangItem, Some(self.last_span)),
                         substs: tcx.mk_substs_trait(place_ty, &[]),
                     };
                     self.prove_trait_ref(
@@ -1551,7 +1548,8 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
             | TerminatorKind::Unreachable
             | TerminatorKind::Drop { .. }
             | TerminatorKind::FalseEdges { .. }
-            | TerminatorKind::FalseUnwind { .. } => {
+            | TerminatorKind::FalseUnwind { .. }
+            | TerminatorKind::InlineAsm { .. } => {
                 // no checks needed for these
             }
 
@@ -1614,7 +1612,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                 self.check_call_dest(body, term, &sig, destination, term_location);
 
                 self.prove_predicates(
-                    sig.inputs_and_output.iter().map(|ty| ty::Predicate::WellFormed(ty)),
+                    sig.inputs_and_output.iter().map(|ty| ty::PredicateKind::WellFormed(ty)),
                     term_location.to_locations(),
                     ConstraintCategory::Boring,
                 );
@@ -1858,6 +1856,11 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                     self.assert_iscleanup(body, block_data, unwind, true);
                 }
             }
+            TerminatorKind::InlineAsm { ref destination, .. } => {
+                if let &Some(target) = destination {
+                    self.assert_iscleanup(body, block_data, target, is_cleanup);
+                }
+            }
         }
     }
 
@@ -1994,7 +1997,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                         if !self.infcx.type_is_copy_modulo_regions(self.param_env, ty, span) {
                             let ccx = ConstCx::new_with_param_env(
                                 tcx,
-                                self.mir_def_id.expect_local(),
+                                self.mir_def_id,
                                 body,
                                 self.param_env,
                             );
@@ -2010,21 +2013,23 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                                 &traits::Obligation::new(
                                     ObligationCause::new(
                                         span,
-                                        self.tcx()
-                                            .hir()
-                                            .local_def_id_to_hir_id(self.mir_def_id.expect_local()),
+                                        self.tcx().hir().local_def_id_to_hir_id(self.mir_def_id),
                                         traits::ObligationCauseCode::RepeatVec(should_suggest),
                                     ),
                                     self.param_env,
-                                    ty::Predicate::Trait(
+                                    ty::PredicateKind::Trait(
                                         ty::Binder::bind(ty::TraitPredicate {
                                             trait_ref: ty::TraitRef::new(
-                                                self.tcx().lang_items().copy_trait().unwrap(),
+                                                self.tcx().require_lang_item(
+                                                    CopyTraitLangItem,
+                                                    Some(self.last_span),
+                                                ),
                                                 tcx.mk_substs_trait(ty, &[]),
                                             ),
                                         }),
                                         hir::Constness::NotConst,
-                                    ),
+                                    )
+                                    .to_predicate(self.tcx()),
                                 ),
                                 &traits::SelectionError::Unimplemented,
                                 false,
@@ -2043,7 +2048,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                 }
 
                 let trait_ref = ty::TraitRef {
-                    def_id: tcx.lang_items().sized_trait().unwrap(),
+                    def_id: tcx.require_lang_item(SizedTraitLangItem, Some(self.last_span)),
                     substs: tcx.mk_substs_trait(ty, &[]),
                 };
 
@@ -2090,7 +2095,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                             ty::Closure(_, substs) => substs.as_closure().sig(),
                             _ => bug!(),
                         };
-                        let ty_fn_ptr_from = tcx.coerce_closure_fn_ty(sig, *unsafety);
+                        let ty_fn_ptr_from = tcx.mk_fn_ptr(tcx.signature_unclosure(sig, *unsafety));
 
                         if let Err(terr) = self.eq_types(
                             ty_fn_ptr_from,
@@ -2141,7 +2146,10 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                     CastKind::Pointer(PointerCast::Unsize) => {
                         let &ty = ty;
                         let trait_ref = ty::TraitRef {
-                            def_id: tcx.lang_items().coerce_unsized_trait().unwrap(),
+                            def_id: tcx.require_lang_item(
+                                CoerceUnsizedTraitLangItem,
+                                Some(self.last_span),
+                            ),
                             substs: tcx.mk_substs_trait(op.ty(body, tcx), &[ty.into()]),
                         };
 
@@ -2679,7 +2687,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
         category: ConstraintCategory,
     ) {
         self.prove_predicates(
-            Some(ty::Predicate::Trait(
+            Some(ty::PredicateKind::Trait(
                 trait_ref.to_poly_trait_ref().to_poly_trait_predicate(),
                 hir::Constness::NotConst,
             )),
@@ -2701,11 +2709,12 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
 
     fn prove_predicates(
         &mut self,
-        predicates: impl IntoIterator<Item = ty::Predicate<'tcx>>,
+        predicates: impl IntoIterator<Item = impl ToPredicate<'tcx>>,
         locations: Locations,
         category: ConstraintCategory,
     ) {
         for predicate in predicates {
+            let predicate = predicate.to_predicate(self.tcx());
             debug!("prove_predicates(predicate={:?}, locations={:?})", predicate, locations,);
 
             self.prove_predicate(predicate, locations, category);

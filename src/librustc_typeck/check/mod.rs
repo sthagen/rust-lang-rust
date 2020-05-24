@@ -100,17 +100,19 @@ use rustc_hir::def::{CtorOf, DefKind, Res};
 use rustc_hir::def_id::{CrateNum, DefId, DefIdMap, DefIdSet, LocalDefId, LOCAL_CRATE};
 use rustc_hir::intravisit::{self, NestedVisitorMap, Visitor};
 use rustc_hir::itemlikevisit::ItemLikeVisitor;
-use rustc_hir::lang_items;
+use rustc_hir::lang_items::{
+    FutureTraitLangItem, PinTypeLangItem, SizedTraitLangItem, VaListTypeLangItem,
+};
 use rustc_hir::{ExprKind, GenericArg, HirIdMap, Item, ItemKind, Node, PatKind, QPath};
 use rustc_index::bit_set::BitSet;
 use rustc_index::vec::Idx;
+use rustc_infer::infer;
 use rustc_infer::infer::canonical::{Canonical, OriginalQueryValues, QueryResponse};
 use rustc_infer::infer::error_reporting::TypeAnnotationNeeded::E0282;
 use rustc_infer::infer::type_variable::{TypeVariableOrigin, TypeVariableOriginKind};
 use rustc_infer::infer::unify_key::{ConstVariableOrigin, ConstVariableOriginKind};
-use rustc_infer::infer::{self, InferCtxt, InferOk, InferResult, TyCtxtInferExt};
+use rustc_infer::infer::{InferCtxt, InferOk, InferResult, RegionVariableOrigin, TyCtxtInferExt};
 use rustc_middle::hir::map::blocks::FnLikeNode;
-use rustc_middle::middle::region;
 use rustc_middle::mir::interpret::ConstValue;
 use rustc_middle::ty::adjustment::{
     Adjust, Adjustment, AllowTwoPhase, AutoBorrow, AutoBorrowMutability, PointerCast,
@@ -665,13 +667,6 @@ impl Inherited<'a, 'tcx> {
         let tcx = infcx.tcx;
         let item_id = tcx.hir().local_def_id_to_hir_id(def_id);
         let body_id = tcx.hir().maybe_body_owned_by(item_id);
-        let implicit_region_bound = body_id.map(|body_id| {
-            let body = tcx.hir().body(body_id);
-            tcx.mk_region(ty::ReScope(region::Scope {
-                id: body.value.hir_id.local_id,
-                data: region::ScopeData::CallSite,
-            }))
-        });
 
         Inherited {
             tables: MaybeInProgressTables { maybe_tables: infcx.in_progress_tables },
@@ -684,7 +679,7 @@ impl Inherited<'a, 'tcx> {
             deferred_generator_interiors: RefCell::new(Vec::new()),
             opaque_types: RefCell::new(Default::default()),
             opaque_types_vars: RefCell::new(Default::default()),
-            implicit_region_bound,
+            implicit_region_bound: None,
             body_id,
         }
     }
@@ -831,13 +826,6 @@ fn primary_body_of(
 }
 
 fn has_typeck_tables(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
-    // FIXME(#71104) some `LocalDefId` do not seem to have a corresponding `HirId`.
-    if let Some(def_id) = def_id.as_local() {
-        if tcx.hir().opt_local_def_id_to_hir_id(def_id).is_none() {
-            return false;
-        }
-    }
-
     // Closures' tables come from their outermost function,
     // as they are part of the same "inference environment".
     let outer_def_id = tcx.closure_base_def_id(def_id);
@@ -1342,14 +1330,9 @@ fn check_fn<'a, 'tcx>(
     // C-variadic fns also have a `VaList` input that's not listed in `fn_sig`
     // (as it's created inside the body itself, not passed in from outside).
     let maybe_va_list = if fn_sig.c_variadic {
-        let va_list_did = tcx.require_lang_item(
-            lang_items::VaListTypeLangItem,
-            Some(body.params.last().unwrap().span),
-        );
-        let region = tcx.mk_region(ty::ReScope(region::Scope {
-            id: body.value.hir_id.local_id,
-            data: region::ScopeData::CallSite,
-        }));
+        let span = body.params.last().unwrap().span;
+        let va_list_did = tcx.require_lang_item(VaListTypeLangItem, Some(span));
+        let region = fcx.next_region_var(RegionVariableOrigin::MiscVariable(span));
 
         Some(tcx.type_of(va_list_did).subst(tcx, &[region.into()]))
     } else {
@@ -1465,7 +1448,7 @@ fn check_fn<'a, 'tcx>(
                 inherited.register_predicate(traits::Obligation::new(
                     cause,
                     param_env,
-                    trait_ref.without_const().to_predicate(),
+                    trait_ref.without_const().to_predicate(tcx),
                 ));
             }
         }
@@ -1654,6 +1637,16 @@ fn check_opaque_for_inheriting_lifetimes(tcx: TyCtxt<'tcx>, def_id: LocalDefId, 
             }
 
             r.super_visit_with(self)
+        }
+
+        fn visit_const(&mut self, c: &'tcx ty::Const<'tcx>) -> bool {
+            if let ty::ConstKind::Unevaluated(..) = c.val {
+                // FIXME(#72219) We currenctly don't detect lifetimes within substs
+                // which would violate this check. Even though the particular substitution is not used
+                // within the const, this should still be fixed.
+                return false;
+            }
+            c.super_visit_with(self)
         }
     }
 
@@ -2220,8 +2213,8 @@ fn bounds_from_generic_predicates(
     let mut projections = vec![];
     for (predicate, _) in predicates.predicates {
         debug!("predicate {:?}", predicate);
-        match predicate {
-            ty::Predicate::Trait(trait_predicate, _) => {
+        match predicate.kind() {
+            ty::PredicateKind::Trait(trait_predicate, _) => {
                 let entry = types.entry(trait_predicate.skip_binder().self_ty()).or_default();
                 let def_id = trait_predicate.skip_binder().def_id();
                 if Some(def_id) != tcx.lang_items().sized_trait() {
@@ -2230,7 +2223,7 @@ fn bounds_from_generic_predicates(
                     entry.push(trait_predicate.skip_binder().def_id());
                 }
             }
-            ty::Predicate::Projection(projection_pred) => {
+            ty::PredicateKind::Projection(projection_pred) => {
                 projections.push(projection_pred);
             }
             _ => {}
@@ -2766,8 +2759,8 @@ impl<'a, 'tcx> AstConv<'tcx> for FnCtxt<'a, 'tcx> {
         ty::GenericPredicates {
             parent: None,
             predicates: tcx.arena.alloc_from_iter(self.param_env.caller_bounds.iter().filter_map(
-                |&predicate| match predicate {
-                    ty::Predicate::Trait(ref data, _)
+                |&predicate| match predicate.kind() {
+                    ty::PredicateKind::Trait(ref data, _)
                         if data.skip_binder().self_ty().is_param(index) =>
                     {
                         // HACK(eddyb) should get the original `Span`.
@@ -3303,7 +3296,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         code: traits::ObligationCauseCode<'tcx>,
     ) {
         if !ty.references_error() {
-            let lang_item = self.tcx.require_lang_item(lang_items::SizedTraitLangItem, None);
+            let lang_item = self.tcx.require_lang_item(SizedTraitLangItem, None);
             self.require_type_meets(ty, span, code, lang_item);
         }
     }
@@ -3376,7 +3369,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             self.register_predicate(traits::Obligation::new(
                 cause,
                 self.param_env,
-                ty::Predicate::ConstEvaluatable(def_id, substs),
+                ty::PredicateKind::ConstEvaluatable(def_id, substs).to_predicate(self.tcx),
             ));
         }
 
@@ -3425,7 +3418,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         self.register_predicate(traits::Obligation::new(
             cause,
             self.param_env,
-            ty::Predicate::WellFormed(ty),
+            ty::PredicateKind::WellFormed(ty).to_predicate(self.tcx),
         ));
     }
 
@@ -3854,17 +3847,20 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             .borrow()
             .pending_obligations()
             .into_iter()
-            .filter_map(move |obligation| match obligation.predicate {
-                ty::Predicate::Projection(ref data) => {
+            .filter_map(move |obligation| match obligation.predicate.kind() {
+                ty::PredicateKind::Projection(ref data) => {
                     Some((data.to_poly_trait_ref(self.tcx), obligation))
                 }
-                ty::Predicate::Trait(ref data, _) => Some((data.to_poly_trait_ref(), obligation)),
-                ty::Predicate::Subtype(..) => None,
-                ty::Predicate::RegionOutlives(..) => None,
-                ty::Predicate::TypeOutlives(..) => None,
-                ty::Predicate::WellFormed(..) => None,
-                ty::Predicate::ObjectSafe(..) => None,
-                ty::Predicate::ConstEvaluatable(..) => None,
+                ty::PredicateKind::Trait(ref data, _) => {
+                    Some((data.to_poly_trait_ref(), obligation))
+                }
+                ty::PredicateKind::Subtype(..) => None,
+                ty::PredicateKind::RegionOutlives(..) => None,
+                ty::PredicateKind::TypeOutlives(..) => None,
+                ty::PredicateKind::WellFormed(..) => None,
+                ty::PredicateKind::ObjectSafe(..) => None,
+                ty::PredicateKind::ConstEvaluatable(..) => None,
+                ty::PredicateKind::ConstEquate(..) => None,
                 // N.B., this predicate is created by breaking down a
                 // `ClosureType: FnFoo()` predicate, where
                 // `ClosureType` represents some `Closure`. It can't
@@ -3873,7 +3869,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 // this closure yet; this is exactly why the other
                 // code is looking for a self type of a unresolved
                 // inference variable.
-                ty::Predicate::ClosureKind(..) => None,
+                ty::PredicateKind::ClosureKind(..) => None,
             })
             .filter(move |(tr, _)| self.self_type_matches_expected_vid(*tr, ty_var_root))
     }
@@ -4202,7 +4198,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 continue;
             }
 
-            if let ty::Predicate::Trait(predicate, _) = error.obligation.predicate {
+            if let ty::PredicateKind::Trait(predicate, _) = error.obligation.predicate.kind() {
                 // Collect the argument position for all arguments that could have caused this
                 // `FulfillmentError`.
                 let mut referenced_in = final_arg_types
@@ -4249,7 +4245,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             if let hir::ExprKind::Path(qpath) = &path.kind {
                 if let hir::QPath::Resolved(_, path) = &qpath {
                     for error in errors {
-                        if let ty::Predicate::Trait(predicate, _) = error.obligation.predicate {
+                        if let ty::PredicateKind::Trait(predicate, _) =
+                            error.obligation.predicate.kind()
+                        {
                             // If any of the type arguments in this path segment caused the
                             // `FullfillmentError`, point at its span (#61860).
                             for arg in path
@@ -5142,7 +5140,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             _ => {}
         }
         let boxed_found = self.tcx.mk_box(found);
-        let new_found = self.tcx.mk_lang_item(boxed_found, lang_items::PinTypeLangItem).unwrap();
+        let new_found = self.tcx.mk_lang_item(boxed_found, PinTypeLangItem).unwrap();
         if let (true, Ok(snippet)) = (
             self.can_coerce(new_found, expected),
             self.sess().source_map().span_to_snippet(expr.span),
@@ -5289,6 +5287,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         expected: Ty<'tcx>,
         found: Ty<'tcx>,
     ) {
+        debug!("suggest_missing_await: expr={:?} expected={:?}, found={:?}", expr, expected, found);
         // `.await` is not permitted outside of `async` bodies, so don't bother to suggest if the
         // body isn't `async`.
         let item_id = self.tcx().hir().get_parent_node(self.body_id);
@@ -5298,7 +5297,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 let sp = expr.span;
                 // Check for `Future` implementations by constructing a predicate to
                 // prove: `<T as Future>::Output == U`
-                let future_trait = self.tcx.lang_items().future_trait().unwrap();
+                let future_trait = self.tcx.require_lang_item(FutureTraitLangItem, Some(sp));
                 let item_def_id = self
                     .tcx
                     .associated_items(future_trait)
@@ -5306,22 +5305,26 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     .next()
                     .unwrap()
                     .def_id;
+                // `<T as Future>::Output`
+                let projection_ty = ty::ProjectionTy {
+                    // `T`
+                    substs: self
+                        .tcx
+                        .mk_substs_trait(found, self.fresh_substs_for_item(sp, item_def_id)),
+                    // `Future::Output`
+                    item_def_id,
+                };
+
                 let predicate =
-                    ty::Predicate::Projection(ty::Binder::bind(ty::ProjectionPredicate {
-                        // `<T as Future>::Output`
-                        projection_ty: ty::ProjectionTy {
-                            // `T`
-                            substs: self.tcx.mk_substs_trait(
-                                found,
-                                self.fresh_substs_for_item(sp, item_def_id),
-                            ),
-                            // `Future::Output`
-                            item_def_id,
-                        },
+                    ty::PredicateKind::Projection(ty::Binder::bind(ty::ProjectionPredicate {
+                        projection_ty,
                         ty: expected,
-                    }));
+                    }))
+                    .to_predicate(self.tcx);
                 let obligation = traits::Obligation::new(self.misc(sp), self.param_env, predicate);
+
                 debug!("suggest_missing_await: trying obligation {:?}", obligation);
+
                 if self.infcx.predicate_may_hold(&obligation) {
                     debug!("suggest_missing_await: obligation held: {:?}", obligation);
                     if let Ok(code) = self.sess().source_map().span_to_snippet(sp) {

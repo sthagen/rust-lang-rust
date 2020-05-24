@@ -430,7 +430,7 @@ fn check_recursion_limit<'tcx>(
     // Code that needs to instantiate the same function recursively
     // more than the recursion limit is assumed to be causing an
     // infinite expansion.
-    if adjusted_recursion_depth > *tcx.sess.recursion_limit.get() {
+    if adjusted_recursion_depth > tcx.sess.recursion_limit() {
         let error = format!("reached the recursion limit while instantiating `{}`", instance);
         if let Some(def_id) = def_id.as_local() {
             let hir_id = tcx.hir().as_local_hir_id(def_id);
@@ -463,8 +463,7 @@ fn check_type_length_limit<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>) {
     // which means that rustc basically hangs.
     //
     // Bail out in these cases to avoid that bad user experience.
-    let type_length_limit = *tcx.sess.type_length_limit.get();
-    if type_length > type_length_limit {
+    if type_length > tcx.sess.type_length_limit() {
         // The instance name is already known to be too long for rustc.
         // Show only the first and last 32 characters to avoid blasting
         // the user's terminal with thousands of lines of type-name.
@@ -580,10 +579,8 @@ impl<'a, 'tcx> MirVisitor<'tcx> for MirNeighborCollector<'a, 'tcx> {
             }
             mir::Rvalue::NullaryOp(mir::NullOp::Box, _) => {
                 let tcx = self.tcx;
-                let exchange_malloc_fn_def_id = tcx
-                    .lang_items()
-                    .require(ExchangeMallocFnLangItem)
-                    .unwrap_or_else(|e| tcx.sess.fatal(&e));
+                let exchange_malloc_fn_def_id =
+                    tcx.require_lang_item(ExchangeMallocFnLangItem, None);
                 let instance = Instance::mono(tcx, exchange_malloc_fn_def_id);
                 if should_monomorphize_locally(tcx, &instance) {
                     self.output.push(create_fn_mono_item(instance));
@@ -641,7 +638,8 @@ impl<'a, 'tcx> MirVisitor<'tcx> for MirNeighborCollector<'a, 'tcx> {
             | mir::TerminatorKind::Abort
             | mir::TerminatorKind::Return
             | mir::TerminatorKind::Unreachable
-            | mir::TerminatorKind::Assert { .. } => {}
+            | mir::TerminatorKind::Assert { .. }
+            | mir::TerminatorKind::InlineAsm { .. } => {}
             mir::TerminatorKind::GeneratorDrop
             | mir::TerminatorKind::Yield { .. }
             | mir::TerminatorKind::FalseEdges { .. }

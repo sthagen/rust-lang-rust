@@ -651,7 +651,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         M::after_stack_push(self)?;
         info!("ENTERING({}) {}", self.frame_idx(), self.frame().instance);
 
-        if self.stack().len() > *self.tcx.sess.recursion_limit.get() {
+        if self.stack().len() > self.tcx.sess.recursion_limit() {
             throw_exhaust!(StackFrameLimitReached)
         } else {
             Ok(())
@@ -871,6 +871,9 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         // Our result will later be validated anyway, and there seems no good reason
         // to have to fail early here.  This is also more consistent with
         // `Memory::get_static_alloc` which has to use `const_eval_raw` to avoid cycles.
+        // FIXME: We can hit delay_span_bug if this is an invalid const, interning finds
+        // that problem, but we never run validation to show an error. Can we ensure
+        // this does not happen?
         let val = self.tcx.const_eval_raw(param_env.and(gid))?;
         self.raw_const_to_mplace(val)
     }

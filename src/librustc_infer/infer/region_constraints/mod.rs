@@ -758,11 +758,9 @@ impl<'tcx> RegionConstraintCollector<'_, 'tcx> {
 
     pub fn universe(&self, region: Region<'tcx>) -> ty::UniverseIndex {
         match *region {
-            ty::ReScope(..)
-            | ty::ReStatic
-            | ty::ReErased
-            | ty::ReFree(..)
-            | ty::ReEarlyBound(..) => ty::UniverseIndex::ROOT,
+            ty::ReStatic | ty::ReErased | ty::ReFree(..) | ty::ReEarlyBound(..) => {
+                ty::UniverseIndex::ROOT
+            }
             ty::ReEmpty(ui) => ui,
             ty::RePlaceholder(placeholder) => placeholder.universe,
             ty::ReVar(vid) => self.var_universe(vid),
@@ -784,7 +782,7 @@ impl<'tcx> RegionConstraintCollector<'_, 'tcx> {
         )
     }
 
-    /// See [`RegionInference::region_constraints_added_in_snapshot`].
+    /// See `InferCtxt::region_constraints_added_in_snapshot`.
     pub fn region_constraints_added_in_snapshot(&self, mark: &Snapshot<'tcx>) -> Option<bool> {
         self.undo_log
             .region_constraints_in_snapshot(mark)

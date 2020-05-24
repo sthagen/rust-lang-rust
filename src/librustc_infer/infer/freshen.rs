@@ -127,7 +127,6 @@ impl<'a, 'tcx> TypeFolder<'tcx> for TypeFreshener<'a, 'tcx> {
             ty::ReStatic
             | ty::ReEarlyBound(..)
             | ty::ReFree(_)
-            | ty::ReScope(_)
             | ty::ReVar(_)
             | ty::RePlaceholder(..)
             | ty::ReEmpty(_)
@@ -204,7 +203,6 @@ impl<'a, 'tcx> TypeFolder<'tcx> for TypeFreshener<'a, 'tcx> {
             | ty::Never
             | ty::Tuple(..)
             | ty::Projection(..)
-            | ty::UnnormalizedProjection(..)
             | ty::Foreign(..)
             | ty::Param(..)
             | ty::Closure(..)

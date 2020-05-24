@@ -32,6 +32,7 @@
 #![feature(const_panic)]
 #![feature(const_transmute)]
 #![feature(core_intrinsics)]
+#![feature(discriminant_kind)]
 #![feature(drain_filter)]
 #![feature(never_type)]
 #![feature(exhaustive_patterns)]
@@ -41,7 +42,7 @@
 #![feature(option_expect_none)]
 #![feature(or_patterns)]
 #![feature(range_is_empty)]
-#![feature(specialization)]
+#![feature(specialization)] // FIXME: min_specialization does not work
 #![feature(track_caller)]
 #![feature(trusted_len)]
 #![feature(vec_remove_item)]

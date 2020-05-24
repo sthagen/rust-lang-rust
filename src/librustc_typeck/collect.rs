@@ -528,7 +528,7 @@ fn type_param_predicates(
                     if param_id == item_hir_id {
                         let identity_trait_ref = ty::TraitRef::identity(tcx, item_def_id);
                         extend =
-                            Some((identity_trait_ref.without_const().to_predicate(), item.span));
+                            Some((identity_trait_ref.without_const().to_predicate(tcx), item.span));
                     }
                     generics
                 }
@@ -548,8 +548,10 @@ fn type_param_predicates(
     let extra_predicates = extend.into_iter().chain(
         icx.type_parameter_bounds_in_generics(ast_generics, param_id, ty, OnlySelfBounds(true))
             .into_iter()
-            .filter(|(predicate, _)| match predicate {
-                ty::Predicate::Trait(ref data, _) => data.skip_binder().self_ty().is_param(index),
+            .filter(|(predicate, _)| match predicate.kind() {
+                ty::PredicateKind::Trait(ref data, _) => {
+                    data.skip_binder().self_ty().is_param(index)
+                }
                 _ => false,
             }),
     );
@@ -994,7 +996,7 @@ fn super_predicates_of(tcx: TyCtxt<'_>, trait_def_id: DefId) -> ty::GenericPredi
     // which will, in turn, reach indirect supertraits.
     for &(pred, span) in superbounds {
         debug!("superbound: {:?}", pred);
-        if let ty::Predicate::Trait(bound, _) = pred {
+        if let ty::PredicateKind::Trait(bound, _) = pred.kind() {
             tcx.at(span).super_predicates_of(bound.def_id());
         }
     }
@@ -1164,7 +1166,8 @@ fn generics_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::Generics {
             let parent_id = tcx.hir().get_parent_item(hir_id);
             Some(tcx.hir().local_def_id(parent_id).to_def_id())
         }
-        // FIXME(#43408) enable this always when we get lazy normalization.
+        // FIXME(#43408) always enable this once `lazy_normalization` is
+        // stable enough and does not need a feature gate anymore.
         Node::AnonConst(_) => {
             let parent_id = tcx.hir().get_parent_item(hir_id);
             let parent_def_id = tcx.hir().local_def_id(parent_id);
@@ -1172,7 +1175,7 @@ fn generics_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::Generics {
             // HACK(eddyb) this provides the correct generics when
             // `feature(const_generics)` is enabled, so that const expressions
             // used with const generics, e.g. `Foo<{N+1}>`, can work at all.
-            if tcx.features().const_generics {
+            if tcx.lazy_normalization() {
                 Some(parent_def_id.to_def_id())
             } else {
                 let parent_node = tcx.hir().get(tcx.hir().get_parent_node(hir_id));
@@ -1654,7 +1657,7 @@ fn predicates_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::GenericPredicates<'_> {
         let span = tcx.sess.source_map().guess_head_span(tcx.def_span(def_id));
         result.predicates =
             tcx.arena.alloc_from_iter(result.predicates.iter().copied().chain(std::iter::once((
-                ty::TraitRef::identity(tcx, def_id).without_const().to_predicate(),
+                ty::TraitRef::identity(tcx, def_id).without_const().to_predicate(tcx),
                 span,
             ))));
     }
@@ -1829,7 +1832,7 @@ fn explicit_predicates_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::GenericPredicat
     // set of defaults that can be incorporated into another impl.
     if let Some(trait_ref) = is_default_impl_trait {
         predicates.push((
-            trait_ref.to_poly_trait_ref().without_const().to_predicate(),
+            trait_ref.to_poly_trait_ref().without_const().to_predicate(tcx),
             tcx.def_span(def_id),
         ));
     }
@@ -1852,7 +1855,7 @@ fn explicit_predicates_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::GenericPredicat
                     hir::GenericBound::Outlives(lt) => {
                         let bound = AstConv::ast_region_to_region(&icx, &lt, None);
                         let outlives = ty::Binder::bind(ty::OutlivesPredicate(region, bound));
-                        predicates.push((outlives.to_predicate(), lt.span));
+                        predicates.push((outlives.to_predicate(tcx), lt.span));
                     }
                     _ => bug!(),
                 });
@@ -1898,7 +1901,8 @@ fn explicit_predicates_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::GenericPredicat
                         let re_root_empty = tcx.lifetimes.re_root_empty;
                         let predicate = ty::OutlivesPredicate(ty, re_root_empty);
                         predicates.push((
-                            ty::Predicate::TypeOutlives(ty::Binder::dummy(predicate)),
+                            ty::PredicateKind::TypeOutlives(ty::Binder::dummy(predicate))
+                                .to_predicate(tcx),
                             span,
                         ));
                     }
@@ -1927,7 +1931,10 @@ fn explicit_predicates_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::GenericPredicat
                         &hir::GenericBound::Outlives(ref lifetime) => {
                             let region = AstConv::ast_region_to_region(&icx, lifetime, None);
                             let pred = ty::Binder::bind(ty::OutlivesPredicate(ty, region));
-                            predicates.push((ty::Predicate::TypeOutlives(pred), lifetime.span))
+                            predicates.push((
+                                ty::PredicateKind::TypeOutlives(pred).to_predicate(tcx),
+                                lifetime.span,
+                            ))
                         }
                     }
                 }
@@ -1944,7 +1951,7 @@ fn explicit_predicates_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::GenericPredicat
                     };
                     let pred = ty::Binder::bind(ty::OutlivesPredicate(r1, r2));
 
-                    (ty::Predicate::RegionOutlives(pred), span)
+                    (ty::PredicateKind::RegionOutlives(pred).to_predicate(icx.tcx), span)
                 }))
             }
 
@@ -2115,7 +2122,7 @@ fn predicates_from_bound<'tcx>(
         hir::GenericBound::Outlives(ref lifetime) => {
             let region = astconv.ast_region_to_region(lifetime, None);
             let pred = ty::Binder::bind(ty::OutlivesPredicate(param_ty, region));
-            vec![(ty::Predicate::TypeOutlives(pred), lifetime.span)]
+            vec![(ty::PredicateKind::TypeOutlives(pred).to_predicate(astconv.tcx()), lifetime.span)]
         }
     }
 }
@@ -2278,6 +2285,7 @@ fn from_target_feature(
                 Some(sym::hexagon_target_feature) => rust_features.hexagon_target_feature,
                 Some(sym::powerpc_target_feature) => rust_features.powerpc_target_feature,
                 Some(sym::mips_target_feature) => rust_features.mips_target_feature,
+                Some(sym::riscv_target_feature) => rust_features.riscv_target_feature,
                 Some(sym::avx512_target_feature) => rust_features.avx512_target_feature,
                 Some(sym::mmx_target_feature) => rust_features.mmx_target_feature,
                 Some(sym::sse4a_target_feature) => rust_features.sse4a_target_feature,
@@ -2369,6 +2377,43 @@ fn codegen_fn_attrs(tcx: TyCtxt<'_>, id: DefId) -> CodegenFnAttrs {
                     attr.span,
                     E0724,
                     "`#[ffi_returns_twice]` may only be used on foreign functions"
+                )
+                .emit();
+            }
+        } else if attr.check_name(sym::ffi_pure) {
+            if tcx.is_foreign_item(id) {
+                if attrs.iter().any(|a| a.check_name(sym::ffi_const)) {
+                    // `#[ffi_const]` functions cannot be `#[ffi_pure]`
+                    struct_span_err!(
+                        tcx.sess,
+                        attr.span,
+                        E0757,
+                        "`#[ffi_const]` function cannot be `#[ffi_pure]`"
+                    )
+                    .emit();
+                } else {
+                    codegen_fn_attrs.flags |= CodegenFnAttrFlags::FFI_PURE;
+                }
+            } else {
+                // `#[ffi_pure]` is only allowed on foreign functions
+                struct_span_err!(
+                    tcx.sess,
+                    attr.span,
+                    E0755,
+                    "`#[ffi_pure]` may only be used on foreign functions"
+                )
+                .emit();
+            }
+        } else if attr.check_name(sym::ffi_const) {
+            if tcx.is_foreign_item(id) {
+                codegen_fn_attrs.flags |= CodegenFnAttrFlags::FFI_CONST;
+            } else {
+                // `#[ffi_const]` is only allowed on foreign functions
+                struct_span_err!(
+                    tcx.sess,
+                    attr.span,
+                    E0756,
+                    "`#[ffi_const]` may only be used on foreign functions"
                 )
                 .emit();
             }

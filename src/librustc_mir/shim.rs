@@ -1,5 +1,6 @@
 use rustc_hir as hir;
 use rustc_hir::def_id::DefId;
+use rustc_hir::lang_items::FnMutTraitLangItem;
 use rustc_middle::mir::*;
 use rustc_middle::ty::query::Providers;
 use rustc_middle::ty::subst::{InternalSubsts, Subst};
@@ -70,7 +71,7 @@ fn make_shim<'tcx>(tcx: TyCtxt<'tcx>, instance: ty::InstanceDef<'tcx>) -> Body<'
             build_call_shim(tcx, instance, None, CallKind::Direct(def_id), None)
         }
         ty::InstanceDef::ClosureOnceShim { call_once: _ } => {
-            let fn_mut = tcx.lang_items().fn_mut_trait().unwrap();
+            let fn_mut = tcx.require_lang_item(FnMutTraitLangItem, None);
             let call_mut = tcx
                 .associated_items(fn_mut)
                 .in_definition_order()
@@ -276,7 +277,18 @@ impl<'a, 'tcx> DropElaborator<'a, 'tcx> for DropShimElaborator<'a, 'tcx> {
     }
 
     fn drop_style(&self, _path: Self::Path, mode: DropFlagMode) -> DropStyle {
-        if let DropFlagMode::Shallow = mode { DropStyle::Static } else { DropStyle::Open }
+        match mode {
+            DropFlagMode::Shallow => {
+                // Drops for the contained fields are "shallow" and "static" - they will simply call
+                // the field's own drop glue.
+                DropStyle::Static
+            }
+            DropFlagMode::Deep => {
+                // The top-level drop is "deep" and "open" - it will be elaborated to a drop ladder
+                // dropping each field contained in the value.
+                DropStyle::Open
+            }
+        }
     }
 
     fn get_drop_flag(&mut self, _path: Self::Path) -> Option<Operand<'tcx>> {

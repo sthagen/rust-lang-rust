@@ -1243,7 +1243,7 @@ pub(crate) mod builtin {
     /// be disabled. See [`debug_assert!`] for assertions that are not enabled in
     /// release builds by default.
     ///
-    /// Unsafe code relies on `assert!` to enforce run-time invariants that, if
+    /// Unsafe code may rely on `assert!` to enforce run-time invariants that, if
     /// violated could lead to unsafety.
     ///
     /// Other use-cases of `assert!` include testing and enforcing run-time
@@ -1293,30 +1293,21 @@ pub(crate) mod builtin {
     /// [unstable book]: ../unstable-book/library-features/asm.html
     #[unstable(
         feature = "asm",
-        issue = "70173",
+        issue = "72016",
         reason = "inline assembly is not stable enough for use and is subject to change"
-    )]
-    #[cfg_attr(
-        not(bootstrap),
-        rustc_deprecated(
-            since = "1.44.0",
-            reason = "the syntax of asm! will change soon, use llvm_asm! to avoid breakage",
-            suggestion = "llvm_asm",
-        )
     )]
     #[rustc_builtin_macro]
     #[macro_export]
     macro_rules! asm {
-        ("assembly template"
-                        : $("output"(operand),)*
-                        : $("input"(operand),)*
-                        : $("clobbers",)*
-                        : $("options",)*) => {
+        ("assembly template",
+            $(operands,)*
+            $(options($(option),*))?
+        ) => {
             /* compiler built-in */
         };
     }
 
-    /// Inline assembly.
+    /// LLVM-style inline assembly.
     ///
     /// Read the [unstable book] for the usage.
     ///
@@ -1324,7 +1315,7 @@ pub(crate) mod builtin {
     #[unstable(
         feature = "llvm_asm",
         issue = "70173",
-        reason = "inline assembly is not stable enough for use and is subject to change"
+        reason = "LLVM-style inline assembly will never be stabilized, prefer using asm! instead"
     )]
     #[rustc_builtin_macro]
     #[macro_export]

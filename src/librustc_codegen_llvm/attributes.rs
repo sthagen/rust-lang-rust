@@ -284,6 +284,12 @@ pub fn from_fn_attrs(cx: &CodegenCx<'ll, 'tcx>, llfn: &'ll Value, instance: ty::
     if codegen_fn_attrs.flags.contains(CodegenFnAttrFlags::FFI_RETURNS_TWICE) {
         Attribute::ReturnsTwice.apply_llfn(Function, llfn);
     }
+    if codegen_fn_attrs.flags.contains(CodegenFnAttrFlags::FFI_PURE) {
+        Attribute::ReadOnly.apply_llfn(Function, llfn);
+    }
+    if codegen_fn_attrs.flags.contains(CodegenFnAttrFlags::FFI_CONST) {
+        Attribute::ReadNone.apply_llfn(Function, llfn);
+    }
     if codegen_fn_attrs.flags.contains(CodegenFnAttrFlags::NAKED) {
         naked(llfn, true);
     }
@@ -361,8 +367,8 @@ pub fn provide(providers: &mut Providers<'_>) {
 
 pub fn provide_extern(providers: &mut Providers<'_>) {
     providers.wasm_import_module_map = |tcx, cnum| {
-        // Build up a map from DefId to a `NativeLibrary` structure, where
-        // `NativeLibrary` internally contains information about
+        // Build up a map from DefId to a `NativeLib` structure, where
+        // `NativeLib` internally contains information about
         // `#[link(wasm_import_module = "...")]` for example.
         let native_libs = tcx.native_libraries(cnum);
 

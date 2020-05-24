@@ -5,7 +5,7 @@ pub use crate::options::*;
 
 use crate::lint;
 use crate::search_paths::SearchPath;
-use crate::utils::NativeLibraryKind;
+use crate::utils::NativeLibKind;
 use crate::{early_error, early_warn, Session};
 
 use rustc_data_structures::fx::FxHashSet;
@@ -67,6 +67,19 @@ impl FromStr for Sanitizer {
             _ => Err(()),
         }
     }
+}
+
+/// The different settings that the `-Z strip` flag can have.
+#[derive(Clone, Copy, PartialEq, Hash, Debug)]
+pub enum Strip {
+    /// Do not strip at all.
+    None,
+
+    /// Strip debuginfo.
+    Debuginfo,
+
+    /// Strip all symbols.
+    Symbols,
 }
 
 /// The different settings that the `-Z control_flow_guard` flag can have.
@@ -1311,10 +1324,6 @@ fn collect_print_requests(
         prints.push(PrintRequest::TargetFeatures);
         cg.target_feature = String::new();
     }
-    if cg.code_model.as_ref().map_or(false, |s| s == "help") {
-        prints.push(PrintRequest::CodeModels);
-        cg.code_model = None;
-    }
 
     prints.extend(matches.opt_strs("print").into_iter().map(|s| match &*s {
         "crate-name" => PrintRequest::CrateName,
@@ -1443,7 +1452,7 @@ fn select_debuginfo(
 fn parse_libs(
     matches: &getopts::Matches,
     error_format: ErrorOutputType,
-) -> Vec<(String, Option<String>, Option<NativeLibraryKind>)> {
+) -> Vec<(String, Option<String>, NativeLibKind)> {
     matches
         .opt_strs("l")
         .into_iter()
@@ -1453,13 +1462,11 @@ fn parse_libs(
             let mut parts = s.splitn(2, '=');
             let kind = parts.next().unwrap();
             let (name, kind) = match (parts.next(), kind) {
-                (None, name) => (name, None),
-                (Some(name), "dylib") => (name, Some(NativeLibraryKind::NativeUnknown)),
-                (Some(name), "framework") => (name, Some(NativeLibraryKind::NativeFramework)),
-                (Some(name), "static") => (name, Some(NativeLibraryKind::NativeStatic)),
-                (Some(name), "static-nobundle") => {
-                    (name, Some(NativeLibraryKind::NativeStaticNobundle))
-                }
+                (None, name) => (name, NativeLibKind::Unspecified),
+                (Some(name), "dylib") => (name, NativeLibKind::Dylib),
+                (Some(name), "framework") => (name, NativeLibKind::Framework),
+                (Some(name), "static") => (name, NativeLibKind::StaticBundle),
+                (Some(name), "static-nobundle") => (name, NativeLibKind::StaticNoBundle),
                 (_, s) => {
                     early_error(
                         error_format,
@@ -1471,9 +1478,7 @@ fn parse_libs(
                     );
                 }
             };
-            if kind == Some(NativeLibraryKind::NativeStaticNobundle)
-                && !nightly_options::is_nightly_build()
-            {
+            if kind == NativeLibKind::StaticNoBundle && !nightly_options::is_nightly_build() {
                 early_error(
                     error_format,
                     "the library kind 'static-nobundle' is only \
@@ -1994,10 +1999,10 @@ crate mod dep_tracking {
         SymbolManglingVersion,
     };
     use crate::lint;
-    use crate::utils::NativeLibraryKind;
+    use crate::utils::NativeLibKind;
     use rustc_feature::UnstableFeatures;
     use rustc_span::edition::Edition;
-    use rustc_target::spec::{MergeFunctions, PanicStrategy, RelocModel};
+    use rustc_target::spec::{CodeModel, MergeFunctions, PanicStrategy, RelocModel};
     use rustc_target::spec::{RelroLevel, TargetTriple, TlsModel};
     use std::collections::hash_map::DefaultHasher;
     use std::collections::BTreeMap;
@@ -2047,12 +2052,12 @@ crate mod dep_tracking {
     impl_dep_tracking_hash_via_hash!(Option<Vec<String>>);
     impl_dep_tracking_hash_via_hash!(Option<MergeFunctions>);
     impl_dep_tracking_hash_via_hash!(Option<RelocModel>);
+    impl_dep_tracking_hash_via_hash!(Option<CodeModel>);
     impl_dep_tracking_hash_via_hash!(Option<TlsModel>);
     impl_dep_tracking_hash_via_hash!(Option<PanicStrategy>);
     impl_dep_tracking_hash_via_hash!(Option<RelroLevel>);
     impl_dep_tracking_hash_via_hash!(Option<lint::Level>);
     impl_dep_tracking_hash_via_hash!(Option<PathBuf>);
-    impl_dep_tracking_hash_via_hash!(Option<NativeLibraryKind>);
     impl_dep_tracking_hash_via_hash!(CrateType);
     impl_dep_tracking_hash_via_hash!(MergeFunctions);
     impl_dep_tracking_hash_via_hash!(PanicStrategy);
@@ -2063,7 +2068,7 @@ crate mod dep_tracking {
     impl_dep_tracking_hash_via_hash!(DebugInfo);
     impl_dep_tracking_hash_via_hash!(UnstableFeatures);
     impl_dep_tracking_hash_via_hash!(OutputTypes);
-    impl_dep_tracking_hash_via_hash!(NativeLibraryKind);
+    impl_dep_tracking_hash_via_hash!(NativeLibKind);
     impl_dep_tracking_hash_via_hash!(Sanitizer);
     impl_dep_tracking_hash_via_hash!(Option<Sanitizer>);
     impl_dep_tracking_hash_via_hash!(CFGuard);
@@ -2078,11 +2083,7 @@ crate mod dep_tracking {
     impl_dep_tracking_hash_for_sortable_vec_of!(PathBuf);
     impl_dep_tracking_hash_for_sortable_vec_of!(CrateType);
     impl_dep_tracking_hash_for_sortable_vec_of!((String, lint::Level));
-    impl_dep_tracking_hash_for_sortable_vec_of!((
-        String,
-        Option<String>,
-        Option<NativeLibraryKind>
-    ));
+    impl_dep_tracking_hash_for_sortable_vec_of!((String, Option<String>, NativeLibKind));
     impl_dep_tracking_hash_for_sortable_vec_of!((String, u64));
     impl_dep_tracking_hash_for_sortable_vec_of!(Sanitizer);
 

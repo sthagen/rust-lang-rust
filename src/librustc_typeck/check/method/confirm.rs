@@ -468,7 +468,9 @@ impl<'a, 'tcx> ConfirmContext<'a, 'tcx> {
 
             match expr.kind {
                 hir::ExprKind::Index(ref base_expr, ref index_expr) => {
-                    let index_expr_ty = self.node_ty(index_expr.hir_id);
+                    // We need to get the final type in case dereferences were needed for the trait
+                    // to apply (#72002).
+                    let index_expr_ty = self.tables.borrow().expr_ty_adjusted(index_expr);
                     self.convert_place_op_to_mutable(
                         PlaceOp::Index,
                         expr,
@@ -572,8 +574,8 @@ impl<'a, 'tcx> ConfirmContext<'a, 'tcx> {
         };
 
         traits::elaborate_predicates(self.tcx, predicates.predicates.iter().copied())
-            .filter_map(|obligation| match obligation.predicate {
-                ty::Predicate::Trait(trait_pred, _) if trait_pred.def_id() == sized_def_id => {
+            .filter_map(|obligation| match obligation.predicate.kind() {
+                ty::PredicateKind::Trait(trait_pred, _) if trait_pred.def_id() == sized_def_id => {
                     let span = predicates
                         .predicates
                         .iter()

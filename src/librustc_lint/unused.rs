@@ -146,7 +146,9 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for UnusedResults {
                 ty::Opaque(def, _) => {
                     let mut has_emitted = false;
                     for (predicate, _) in cx.tcx.predicates_of(def).predicates {
-                        if let ty::Predicate::Trait(ref poly_trait_predicate, _) = predicate {
+                        if let ty::PredicateKind::Trait(ref poly_trait_predicate, _) =
+                            predicate.kind()
+                        {
                             let trait_ref = poly_trait_predicate.skip_binder().trait_ref;
                             let def_id = trait_ref.def_id;
                             let descr_pre =
@@ -380,11 +382,27 @@ trait UnusedDelimLint {
     );
 
     fn is_expr_delims_necessary(inner: &ast::Expr, followed_by_block: bool) -> bool {
-        followed_by_block
-            && match inner.kind {
-                ExprKind::Ret(_) | ExprKind::Break(..) => true,
-                _ => parser::contains_exterior_struct_lit(&inner),
+        // Prevent false-positives in cases like `fn x() -> u8 { ({ 0 } + 1) }`
+        let lhs_needs_parens = {
+            let mut innermost = inner;
+            loop {
+                if let ExprKind::Binary(_, lhs, _rhs) = &innermost.kind {
+                    innermost = lhs;
+                    if !rustc_ast::util::classify::expr_requires_semi_to_be_stmt(innermost) {
+                        break true;
+                    }
+                } else {
+                    break false;
+                }
             }
+        };
+
+        lhs_needs_parens
+            || (followed_by_block
+                && match inner.kind {
+                    ExprKind::Ret(_) | ExprKind::Break(..) => true,
+                    _ => parser::contains_exterior_struct_lit(&inner),
+                })
     }
 
     fn emit_unused_delims_expr(

@@ -1,4 +1,4 @@
-use crate::consts::{constant, Constant};
+use crate::consts::constant;
 use crate::reexport::Name;
 use crate::utils::paths;
 use crate::utils::usage::{is_unused, mutated_variables};
@@ -8,17 +8,16 @@ use crate::utils::{
     multispan_sugg, snippet, snippet_opt, snippet_with_applicability, span_lint, span_lint_and_help,
     span_lint_and_sugg, span_lint_and_then, SpanlessEq,
 };
-use crate::utils::{is_type_diagnostic_item, qpath_res, same_tys, sext, sugg};
+use crate::utils::{is_type_diagnostic_item, qpath_res, same_tys, sugg};
 use if_chain::if_chain;
-use itertools::Itertools;
 use rustc_ast::ast;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_errors::Applicability;
 use rustc_hir::def::{DefKind, Res};
 use rustc_hir::intravisit::{walk_block, walk_expr, walk_pat, walk_stmt, NestedVisitorMap, Visitor};
 use rustc_hir::{
-    def_id, BinOpKind, BindingAnnotation, Block, BorrowKind, Expr, ExprKind, GenericArg, HirId, LoopSource,
-    MatchSource, Mutability, Node, Pat, PatKind, QPath, Stmt, StmtKind,
+    def_id, BinOpKind, BindingAnnotation, Block, BorrowKind, Expr, ExprKind, GenericArg, HirId, InlineAsmOperand,
+    LoopSource, MatchSource, Mutability, Node, Pat, PatKind, QPath, Stmt, StmtKind,
 };
 use rustc_infer::infer::TyCtxtInferExt;
 use rustc_lint::{LateContext, LateLintPass, LintContext};
@@ -169,7 +168,7 @@ declare_clippy_lint! {
 }
 
 declare_clippy_lint! {
-    /// **What it does:** Checks for `for` loops over `Option` values.
+    /// **What it does:** Checks for `for` loops over `Option` or `Result` values.
     ///
     /// **Why is this bad?** Readability. This is more clearly expressed as an `if
     /// let`.
@@ -177,47 +176,38 @@ declare_clippy_lint! {
     /// **Known problems:** None.
     ///
     /// **Example:**
-    /// ```ignore
-    /// for x in option {
-    ///     ..
+    /// ```rust
+    /// # let opt = Some(1);
+    ///
+    /// // Bad
+    /// for x in opt {
+    ///     // ..
+    /// }
+    ///
+    /// // Good
+    /// if let Some(x) = opt {
+    ///     // ..
     /// }
     /// ```
     ///
-    /// This should be
-    /// ```ignore
-    /// if let Some(x) = option {
-    ///     ..
+    /// // or
+    ///
+    /// ```rust
+    /// # let res: Result<i32, std::io::Error> = Ok(1);
+    ///
+    /// // Bad
+    /// for x in &res {
+    ///     // ..
+    /// }
+    ///
+    /// // Good
+    /// if let Ok(x) = res {
+    ///     // ..
     /// }
     /// ```
-    pub FOR_LOOP_OVER_OPTION,
+    pub FOR_LOOPS_OVER_FALLIBLES,
     correctness,
-    "for-looping over an `Option`, which is more clearly expressed as an `if let`"
-}
-
-declare_clippy_lint! {
-    /// **What it does:** Checks for `for` loops over `Result` values.
-    ///
-    /// **Why is this bad?** Readability. This is more clearly expressed as an `if
-    /// let`.
-    ///
-    /// **Known problems:** None.
-    ///
-    /// **Example:**
-    /// ```ignore
-    /// for x in result {
-    ///     ..
-    /// }
-    /// ```
-    ///
-    /// This should be
-    /// ```ignore
-    /// if let Ok(x) = result {
-    ///     ..
-    /// }
-    /// ```
-    pub FOR_LOOP_OVER_RESULT,
-    correctness,
-    "for-looping over a `Result`, which is more clearly expressed as an `if let`"
+    "for-looping over an `Option` or a `Result`, which is more clearly expressed as an `if let`"
 }
 
 declare_clippy_lint! {
@@ -269,30 +259,6 @@ declare_clippy_lint! {
     pub NEEDLESS_COLLECT,
     perf,
     "collecting an iterator when collect is not needed"
-}
-
-declare_clippy_lint! {
-    /// **What it does:** Checks for loops over ranges `x..y` where both `x` and `y`
-    /// are constant and `x` is greater or equal to `y`, unless the range is
-    /// reversed or has a negative `.step_by(_)`.
-    ///
-    /// **Why is it bad?** Such loops will either be skipped or loop until
-    /// wrap-around (in debug code, this may `panic!()`). Both options are probably
-    /// not intended.
-    ///
-    /// **Known problems:** The lint cannot catch loops over dynamically defined
-    /// ranges. Doing this would require simulating all possible inputs and code
-    /// paths through the program, which would be complex and error-prone.
-    ///
-    /// **Example:**
-    /// ```ignore
-    /// for x in 5..10 - 5 {
-    ///     ..
-    /// } // oops, stray `-`
-    /// ```
-    pub REVERSE_RANGE_LOOP,
-    correctness,
-    "iteration over an empty range, such as `10..0` or `5..5`"
 }
 
 declare_clippy_lint! {
@@ -460,11 +426,9 @@ declare_lint_pass!(Loops => [
     EXPLICIT_ITER_LOOP,
     EXPLICIT_INTO_ITER_LOOP,
     ITER_NEXT_LOOP,
-    FOR_LOOP_OVER_RESULT,
-    FOR_LOOP_OVER_OPTION,
+    FOR_LOOPS_OVER_FALLIBLES,
     WHILE_LET_LOOP,
     NEEDLESS_COLLECT,
-    REVERSE_RANGE_LOOP,
     EXPLICIT_COUNTER_LOOP,
     EMPTY_LOOP,
     WHILE_LET_ON_ITERATOR,
@@ -729,6 +693,20 @@ fn never_loop_expr(expr: &Expr<'_>, main_loop_id: HirId) -> NeverLoopResult {
                 NeverLoopResult::AlwaysBreak
             }
         },
+        ExprKind::InlineAsm(ref asm) => asm
+            .operands
+            .iter()
+            .map(|o| match o {
+                InlineAsmOperand::In { expr, .. }
+                | InlineAsmOperand::InOut { expr, .. }
+                | InlineAsmOperand::Const { expr }
+                | InlineAsmOperand::Sym { expr } => never_loop_expr(expr, main_loop_id),
+                InlineAsmOperand::Out { expr, .. } => never_loop_expr_all(&mut expr.iter(), main_loop_id),
+                InlineAsmOperand::SplitInOut { in_expr, out_expr, .. } => {
+                    never_loop_expr_all(&mut once(in_expr).chain(out_expr.iter()), main_loop_id)
+                },
+            })
+            .fold(NeverLoopResult::Otherwise, combine_both),
         ExprKind::Struct(_, _, None)
         | ExprKind::Yield(_, _)
         | ExprKind::Closure(_, _, _, _, _)
@@ -762,7 +740,6 @@ fn check_for_loop<'a, 'tcx>(
     expr: &'tcx Expr<'_>,
 ) {
     check_for_loop_range(cx, pat, arg, body, expr);
-    check_for_loop_reverse_range(cx, arg, expr);
     check_for_loop_arg(cx, pat, arg, expr);
     check_for_loop_explicit_counter(cx, pat, arg, body, expr);
     check_for_loop_over_map_kv(cx, pat, arg, body, expr);
@@ -772,40 +749,48 @@ fn check_for_loop<'a, 'tcx>(
 
 fn same_var<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, expr: &Expr<'_>, var: HirId) -> bool {
     if_chain! {
-        if let ExprKind::Path(ref qpath) = expr.kind;
-        if let QPath::Resolved(None, ref path) = *qpath;
+        if let ExprKind::Path(qpath) = &expr.kind;
+        if let QPath::Resolved(None, path) = qpath;
         if path.segments.len() == 1;
         if let Res::Local(local_id) = qpath_res(cx, qpath, expr.hir_id);
-        // our variable!
-        if local_id == var;
         then {
-            return true;
+            // our variable!
+            local_id == var
+        } else {
+            false
         }
     }
+}
 
-    false
+#[derive(Clone, Copy)]
+enum OffsetSign {
+    Positive,
+    Negative,
 }
 
 struct Offset {
     value: String,
-    negate: bool,
+    sign: OffsetSign,
 }
 
 impl Offset {
-    fn negative(s: String) -> Self {
-        Self { value: s, negate: true }
+    fn negative(value: String) -> Self {
+        Self {
+            value,
+            sign: OffsetSign::Negative,
+        }
     }
 
-    fn positive(s: String) -> Self {
+    fn positive(value: String) -> Self {
         Self {
-            value: s,
-            negate: false,
+            value,
+            sign: OffsetSign::Positive,
         }
     }
 }
 
-struct FixedOffsetVar {
-    var_name: String,
+struct FixedOffsetVar<'hir> {
+    var: &'hir Expr<'hir>,
     offset: Offset,
 }
 
@@ -819,10 +804,20 @@ fn is_slice_like<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, ty: Ty<'_>) -> bool {
     is_slice || is_type_diagnostic_item(cx, ty, sym!(vec_type)) || is_type_diagnostic_item(cx, ty, sym!(vecdeque_type))
 }
 
-fn get_fixed_offset_var<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, expr: &Expr<'_>, var: HirId) -> Option<FixedOffsetVar> {
+fn fetch_cloned_expr<'tcx>(expr: &'tcx Expr<'tcx>) -> &'tcx Expr<'tcx> {
+    if_chain! {
+        if let ExprKind::MethodCall(method, _, args) = expr.kind;
+        if method.ident.name == sym!(clone);
+        if args.len() == 1;
+        if let Some(arg) = args.get(0);
+        then { arg } else { expr }
+    }
+}
+
+fn get_offset<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, idx: &Expr<'_>, var: HirId) -> Option<Offset> {
     fn extract_offset<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, e: &Expr<'_>, var: HirId) -> Option<String> {
-        match e.kind {
-            ExprKind::Lit(ref l) => match l.node {
+        match &e.kind {
+            ExprKind::Lit(l) => match l.node {
                 ast::LitKind::Int(x, _ty) => Some(x.to_string()),
                 _ => None,
             },
@@ -831,115 +826,139 @@ fn get_fixed_offset_var<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, expr: &Expr<'_>, v
         }
     }
 
-    if let ExprKind::Index(ref seqexpr, ref idx) = expr.kind {
-        let ty = cx.tables.expr_ty(seqexpr);
-        if !is_slice_like(cx, ty) {
-            return None;
-        }
-
-        let offset = match idx.kind {
-            ExprKind::Binary(op, ref lhs, ref rhs) => match op.node {
-                BinOpKind::Add => {
-                    let offset_opt = if same_var(cx, lhs, var) {
-                        extract_offset(cx, rhs, var)
-                    } else if same_var(cx, rhs, var) {
-                        extract_offset(cx, lhs, var)
-                    } else {
-                        None
-                    };
-
-                    offset_opt.map(Offset::positive)
-                },
-                BinOpKind::Sub if same_var(cx, lhs, var) => extract_offset(cx, rhs, var).map(Offset::negative),
-                _ => None,
-            },
-            ExprKind::Path(..) => {
-                if same_var(cx, idx, var) {
-                    Some(Offset::positive("0".into()))
+    match idx.kind {
+        ExprKind::Binary(op, lhs, rhs) => match op.node {
+            BinOpKind::Add => {
+                let offset_opt = if same_var(cx, lhs, var) {
+                    extract_offset(cx, rhs, var)
+                } else if same_var(cx, rhs, var) {
+                    extract_offset(cx, lhs, var)
                 } else {
                     None
-                }
+                };
+
+                offset_opt.map(Offset::positive)
             },
+            BinOpKind::Sub if same_var(cx, lhs, var) => extract_offset(cx, rhs, var).map(Offset::negative),
             _ => None,
-        };
-
-        offset.map(|o| FixedOffsetVar {
-            var_name: snippet_opt(cx, seqexpr.span).unwrap_or_else(|| "???".into()),
-            offset: o,
-        })
-    } else {
-        None
+        },
+        ExprKind::Path(..) if same_var(cx, idx, var) => Some(Offset::positive("0".into())),
+        _ => None,
     }
 }
 
-fn fetch_cloned_fixed_offset_var<'a, 'tcx>(
-    cx: &LateContext<'a, 'tcx>,
-    expr: &Expr<'_>,
-    var: HirId,
-) -> Option<FixedOffsetVar> {
-    if_chain! {
-        if let ExprKind::MethodCall(ref method, _, ref args) = expr.kind;
-        if method.ident.name == sym!(clone);
-        if args.len() == 1;
-        if let Some(arg) = args.get(0);
-        then {
-            return get_fixed_offset_var(cx, arg, var);
-        }
-    }
-
-    get_fixed_offset_var(cx, expr, var)
-}
-
-fn get_indexed_assignments<'a, 'tcx>(
-    cx: &LateContext<'a, 'tcx>,
-    body: &Expr<'_>,
-    var: HirId,
-) -> Vec<(FixedOffsetVar, FixedOffsetVar)> {
-    fn get_assignment<'a, 'tcx>(
-        cx: &LateContext<'a, 'tcx>,
-        e: &Expr<'_>,
-        var: HirId,
-    ) -> Option<(FixedOffsetVar, FixedOffsetVar)> {
-        if let ExprKind::Assign(ref lhs, ref rhs, _) = e.kind {
-            match (
-                get_fixed_offset_var(cx, lhs, var),
-                fetch_cloned_fixed_offset_var(cx, rhs, var),
-            ) {
-                (Some(offset_left), Some(offset_right)) => {
-                    // Source and destination must be different
-                    if offset_left.var_name == offset_right.var_name {
-                        None
-                    } else {
-                        Some((offset_left, offset_right))
-                    }
-                },
-                _ => None,
-            }
+fn get_assignments<'tcx>(body: &'tcx Expr<'tcx>) -> impl Iterator<Item = Option<(&'tcx Expr<'tcx>, &'tcx Expr<'tcx>)>> {
+    fn get_assignment<'tcx>(e: &'tcx Expr<'tcx>) -> Option<(&'tcx Expr<'tcx>, &'tcx Expr<'tcx>)> {
+        if let ExprKind::Assign(lhs, rhs, _) = e.kind {
+            Some((lhs, rhs))
         } else {
             None
         }
     }
 
-    if let ExprKind::Block(ref b, _) = body.kind {
-        let Block {
-            ref stmts, ref expr, ..
-        } = **b;
+    // This is one of few ways to return different iterators
+    // derived from: https://stackoverflow.com/questions/29760668/conditionally-iterate-over-one-of-several-possible-iterators/52064434#52064434
+    let mut iter_a = None;
+    let mut iter_b = None;
 
-        stmts
+    if let ExprKind::Block(b, _) = body.kind {
+        let Block { stmts, expr, .. } = *b;
+
+        iter_a = stmts
             .iter()
-            .map(|stmt| match stmt.kind {
+            .filter_map(|stmt| match stmt.kind {
                 StmtKind::Local(..) | StmtKind::Item(..) => None,
-                StmtKind::Expr(ref e) | StmtKind::Semi(ref e) => Some(get_assignment(cx, e, var)),
+                StmtKind::Expr(e) | StmtKind::Semi(e) => Some(e),
             })
-            .chain(expr.as_ref().into_iter().map(|e| Some(get_assignment(cx, &*e, var))))
-            .filter_map(|op| op)
-            .collect::<Option<Vec<_>>>()
-            .unwrap_or_default()
+            .chain(expr.into_iter())
+            .map(get_assignment)
+            .into()
     } else {
-        get_assignment(cx, body, var).into_iter().collect()
+        iter_b = Some(get_assignment(body))
     }
+
+    iter_a.into_iter().flatten().chain(iter_b.into_iter())
 }
 
+fn build_manual_memcpy_suggestion<'a, 'tcx>(
+    cx: &LateContext<'a, 'tcx>,
+    start: &Expr<'_>,
+    end: &Expr<'_>,
+    limits: ast::RangeLimits,
+    dst_var: FixedOffsetVar<'_>,
+    src_var: FixedOffsetVar<'_>,
+) -> String {
+    fn print_sum(arg1: &str, arg2: &Offset) -> String {
+        match (arg1, &arg2.value[..], arg2.sign) {
+            ("0", "0", _) => "0".into(),
+            ("0", x, OffsetSign::Positive) | (x, "0", _) => x.into(),
+            ("0", x, OffsetSign::Negative) => format!("-{}", x),
+            (x, y, OffsetSign::Positive) => format!("({} + {})", x, y),
+            (x, y, OffsetSign::Negative) => {
+                if x == y {
+                    "0".into()
+                } else {
+                    format!("({} - {})", x, y)
+                }
+            },
+        }
+    }
+
+    fn print_offset(start_str: &str, inline_offset: &Offset) -> String {
+        let offset = print_sum(start_str, inline_offset);
+        if offset.as_str() == "0" {
+            "".into()
+        } else {
+            offset
+        }
+    }
+
+    let print_limit = |end: &Expr<'_>, offset: Offset, var: &Expr<'_>| {
+        if_chain! {
+            if let ExprKind::MethodCall(method, _, len_args) = end.kind;
+            if method.ident.name == sym!(len);
+            if len_args.len() == 1;
+            if let Some(arg) = len_args.get(0);
+            if var_def_id(cx, arg) == var_def_id(cx, var);
+            then {
+                match offset.sign {
+                    OffsetSign::Negative => format!("({} - {})", snippet(cx, end.span, "<src>.len()"), offset.value),
+                    OffsetSign::Positive => "".into(),
+                }
+            } else {
+                let end_str = match limits {
+                    ast::RangeLimits::Closed => {
+                        let end = sugg::Sugg::hir(cx, end, "<count>");
+                        format!("{}", end + sugg::ONE)
+                    },
+                    ast::RangeLimits::HalfOpen => format!("{}", snippet(cx, end.span, "..")),
+                };
+
+                print_sum(&end_str, &offset)
+            }
+        }
+    };
+
+    let start_str = snippet(cx, start.span, "").to_string();
+    let dst_offset = print_offset(&start_str, &dst_var.offset);
+    let dst_limit = print_limit(end, dst_var.offset, dst_var.var);
+    let src_offset = print_offset(&start_str, &src_var.offset);
+    let src_limit = print_limit(end, src_var.offset, src_var.var);
+
+    let dst_var_name = snippet_opt(cx, dst_var.var.span).unwrap_or_else(|| "???".into());
+    let src_var_name = snippet_opt(cx, src_var.var.span).unwrap_or_else(|| "???".into());
+
+    let dst = if dst_offset == "" && dst_limit == "" {
+        dst_var_name
+    } else {
+        format!("{}[{}..{}]", dst_var_name, dst_offset, dst_limit)
+    };
+
+    format!(
+        "{}.clone_from_slice(&{}[{}..{}])",
+        dst, src_var_name, src_offset, src_limit
+    )
+}
 /// Checks for for loops that sequentially copy items from one slice-like
 /// object to another.
 fn detect_manual_memcpy<'a, 'tcx>(
@@ -951,93 +970,43 @@ fn detect_manual_memcpy<'a, 'tcx>(
 ) {
     if let Some(higher::Range {
         start: Some(start),
-        ref end,
+        end: Some(end),
         limits,
     }) = higher::range(cx, arg)
     {
         // the var must be a single name
         if let PatKind::Binding(_, canonical_id, _, _) = pat.kind {
-            let print_sum = |arg1: &Offset, arg2: &Offset| -> String {
-                match (&arg1.value[..], arg1.negate, &arg2.value[..], arg2.negate) {
-                    ("0", _, "0", _) => "".into(),
-                    ("0", _, x, false) | (x, false, "0", false) => x.into(),
-                    ("0", _, x, true) | (x, false, "0", true) => format!("-{}", x),
-                    (x, false, y, false) => format!("({} + {})", x, y),
-                    (x, false, y, true) => {
-                        if x == y {
-                            "0".into()
-                        } else {
-                            format!("({} - {})", x, y)
-                        }
-                    },
-                    (x, true, y, false) => {
-                        if x == y {
-                            "0".into()
-                        } else {
-                            format!("({} - {})", y, x)
-                        }
-                    },
-                    (x, true, y, true) => format!("-({} + {})", x, y),
-                }
-            };
-
-            let print_limit = |end: &Option<&Expr<'_>>, offset: Offset, var_name: &str| {
-                if let Some(end) = *end {
-                    if_chain! {
-                        if let ExprKind::MethodCall(ref method, _, ref len_args) = end.kind;
-                        if method.ident.name == sym!(len);
-                        if len_args.len() == 1;
-                        if let Some(arg) = len_args.get(0);
-                        if snippet(cx, arg.span, "??") == var_name;
-                        then {
-                            return if offset.negate {
-                                format!("({} - {})", snippet(cx, end.span, "<src>.len()"), offset.value)
-                            } else {
-                                String::new()
-                            };
-                        }
-                    }
-
-                    let end_str = match limits {
-                        ast::RangeLimits::Closed => {
-                            let end = sugg::Sugg::hir(cx, end, "<count>");
-                            format!("{}", end + sugg::ONE)
-                        },
-                        ast::RangeLimits::HalfOpen => format!("{}", snippet(cx, end.span, "..")),
-                    };
-
-                    print_sum(&Offset::positive(end_str), &offset)
-                } else {
-                    "..".into()
-                }
-            };
-
             // The only statements in the for loops can be indexed assignments from
             // indexed retrievals.
-            let manual_copies = get_indexed_assignments(cx, body, canonical_id);
+            let big_sugg = get_assignments(body)
+                .map(|o| {
+                    o.and_then(|(lhs, rhs)| {
+                        let rhs = fetch_cloned_expr(rhs);
+                        if_chain! {
+                            if let ExprKind::Index(seqexpr_left, idx_left) = lhs.kind;
+                            if let ExprKind::Index(seqexpr_right, idx_right) = rhs.kind;
+                            if is_slice_like(cx, cx.tables.expr_ty(seqexpr_left))
+                                && is_slice_like(cx, cx.tables.expr_ty(seqexpr_right));
+                            if let Some(offset_left) = get_offset(cx, &idx_left, canonical_id);
+                            if let Some(offset_right) = get_offset(cx, &idx_right, canonical_id);
 
-            let big_sugg = manual_copies
-                .into_iter()
-                .map(|(dst_var, src_var)| {
-                    let start_str = Offset::positive(snippet(cx, start.span, "").to_string());
-                    let dst_offset = print_sum(&start_str, &dst_var.offset);
-                    let dst_limit = print_limit(end, dst_var.offset, &dst_var.var_name);
-                    let src_offset = print_sum(&start_str, &src_var.offset);
-                    let src_limit = print_limit(end, src_var.offset, &src_var.var_name);
-                    let dst = if dst_offset == "" && dst_limit == "" {
-                        dst_var.var_name
-                    } else {
-                        format!("{}[{}..{}]", dst_var.var_name, dst_offset, dst_limit)
-                    };
-
-                    format!(
-                        "{}.clone_from_slice(&{}[{}..{}])",
-                        dst, src_var.var_name, src_offset, src_limit
-                    )
+                            // Source and destination must be different
+                            if var_def_id(cx, seqexpr_left) != var_def_id(cx, seqexpr_right);
+                            then {
+                                Some((FixedOffsetVar { var: seqexpr_left, offset: offset_left },
+                                    FixedOffsetVar { var: seqexpr_right, offset: offset_right }))
+                            } else {
+                                None
+                            }
+                        }
+                    })
                 })
-                .join("\n    ");
+                .map(|o| o.map(|(dst, src)| build_manual_memcpy_suggestion(cx, start, end, limits, dst, src)))
+                .collect::<Option<Vec<_>>>()
+                .filter(|v| !v.is_empty())
+                .map(|v| v.join("\n    "));
 
-            if !big_sugg.is_empty() {
+            if let Some(big_sugg) = big_sugg {
                 span_lint_and_sugg(
                     cx,
                     MANUAL_MEMCPY,
@@ -1179,7 +1148,7 @@ fn check_for_loop_range<'a, 'tcx>(
                         |diag| {
                             multispan_sugg(
                                 diag,
-                                "consider using an iterator".to_string(),
+                                "consider using an iterator",
                                 vec![
                                     (pat.span, format!("({}, <item>)", ident.name)),
                                     (
@@ -1208,7 +1177,7 @@ fn check_for_loop_range<'a, 'tcx>(
                         |diag| {
                             multispan_sugg(
                                 diag,
-                                "consider using an iterator".to_string(),
+                                "consider using an iterator",
                                 vec![(pat.span, "<item>".to_string()), (arg.span, repl)],
                             );
                         },
@@ -1255,78 +1224,6 @@ fn is_end_eq_array_len<'tcx>(
     }
 
     false
-}
-
-fn check_for_loop_reverse_range<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, arg: &'tcx Expr<'_>, expr: &'tcx Expr<'_>) {
-    // if this for loop is iterating over a two-sided range...
-    if let Some(higher::Range {
-        start: Some(start),
-        end: Some(end),
-        limits,
-    }) = higher::range(cx, arg)
-    {
-        // ...and both sides are compile-time constant integers...
-        if let Some((start_idx, _)) = constant(cx, cx.tables, start) {
-            if let Some((end_idx, _)) = constant(cx, cx.tables, end) {
-                // ...and the start index is greater than the end index,
-                // this loop will never run. This is often confusing for developers
-                // who think that this will iterate from the larger value to the
-                // smaller value.
-                let ty = cx.tables.expr_ty(start);
-                let (sup, eq) = match (start_idx, end_idx) {
-                    (Constant::Int(start_idx), Constant::Int(end_idx)) => (
-                        match ty.kind {
-                            ty::Int(ity) => sext(cx.tcx, start_idx, ity) > sext(cx.tcx, end_idx, ity),
-                            ty::Uint(_) => start_idx > end_idx,
-                            _ => false,
-                        },
-                        start_idx == end_idx,
-                    ),
-                    _ => (false, false),
-                };
-
-                if sup {
-                    let start_snippet = snippet(cx, start.span, "_");
-                    let end_snippet = snippet(cx, end.span, "_");
-                    let dots = if limits == ast::RangeLimits::Closed {
-                        "..="
-                    } else {
-                        ".."
-                    };
-
-                    span_lint_and_then(
-                        cx,
-                        REVERSE_RANGE_LOOP,
-                        expr.span,
-                        "this range is empty so this for loop will never run",
-                        |diag| {
-                            diag.span_suggestion(
-                                arg.span,
-                                "consider using the following if you are attempting to iterate over this \
-                                 range in reverse",
-                                format!(
-                                    "({end}{dots}{start}).rev()",
-                                    end = end_snippet,
-                                    dots = dots,
-                                    start = start_snippet
-                                ),
-                                Applicability::MaybeIncorrect,
-                            );
-                        },
-                    );
-                } else if eq && limits != ast::RangeLimits::Closed {
-                    // if they are equal, it's also problematic - this loop
-                    // will never run.
-                    span_lint(
-                        cx,
-                        REVERSE_RANGE_LOOP,
-                        expr.span,
-                        "this range is empty so this for loop will never run",
-                    );
-                }
-            }
-        }
-    }
 }
 
 fn lint_iter_method(cx: &LateContext<'_, '_>, args: &[Expr<'_>], arg: &Expr<'_>, method_name: &str) {
@@ -1390,7 +1287,7 @@ fn check_for_loop_arg(cx: &LateContext<'_, '_>, pat: &Pat<'_>, arg: &Expr<'_>, e
                     ITER_NEXT_LOOP,
                     expr.span,
                     "you are iterating over `Iterator::next()` which is an Option; this will compile but is \
-                     probably not what you want",
+                    probably not what you want",
                 );
                 next_loop_linted = true;
             }
@@ -1407,11 +1304,11 @@ fn check_arg_type(cx: &LateContext<'_, '_>, pat: &Pat<'_>, arg: &Expr<'_>) {
     if is_type_diagnostic_item(cx, ty, sym!(option_type)) {
         span_lint_and_help(
             cx,
-            FOR_LOOP_OVER_OPTION,
+            FOR_LOOPS_OVER_FALLIBLES,
             arg.span,
             &format!(
                 "for loop over `{0}`, which is an `Option`. This is more readably written as an \
-                 `if let` statement.",
+                `if let` statement.",
                 snippet(cx, arg.span, "_")
             ),
             None,
@@ -1424,11 +1321,11 @@ fn check_arg_type(cx: &LateContext<'_, '_>, pat: &Pat<'_>, arg: &Expr<'_>) {
     } else if is_type_diagnostic_item(cx, ty, sym!(result_type)) {
         span_lint_and_help(
             cx,
-            FOR_LOOP_OVER_RESULT,
+            FOR_LOOPS_OVER_FALLIBLES,
             arg.span,
             &format!(
                 "for loop over `{0}`, which is a `Result`. This is more readably written as an \
-                 `if let` statement.",
+                `if let` statement.",
                 snippet(cx, arg.span, "_")
             ),
             None,
@@ -1579,7 +1476,7 @@ fn check_for_loop_over_map_kv<'a, 'tcx>(
                         let map = sugg::Sugg::hir(cx, arg, "map");
                         multispan_sugg(
                             diag,
-                            "use the corresponding method".into(),
+                            "use the corresponding method",
                             vec![
                                 (pat_span, snippet(cx, new_pat_span, kind).into_owned()),
                                 (arg_span, format!("{}.{}s{}()", map.maybe_par(), kind, mutbl)),

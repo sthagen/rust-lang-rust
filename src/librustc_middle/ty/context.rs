@@ -29,8 +29,9 @@ use crate::ty::{self, DefIdTree, Ty, TypeAndMut};
 use crate::ty::{AdtDef, AdtKind, Const, Region};
 use crate::ty::{BindingMode, BoundVar};
 use crate::ty::{ConstVid, FloatVar, FloatVid, IntVar, IntVid, TyVar, TyVid};
-use crate::ty::{ExistentialPredicate, InferTy, ParamTy, PolyFnSig, Predicate, ProjectionTy};
+use crate::ty::{ExistentialPredicate, Predicate, PredicateKind};
 use crate::ty::{InferConst, ParamConst};
+use crate::ty::{InferTy, ParamTy, PolyFnSig, ProjectionTy};
 use crate::ty::{List, TyKind, TyS};
 use rustc_ast::ast;
 use rustc_ast::expand::allocator::AllocatorKind;
@@ -89,6 +90,7 @@ pub struct CtxtInterners<'tcx> {
     canonical_var_infos: InternedSet<'tcx, List<CanonicalVarInfo>>,
     region: InternedSet<'tcx, RegionKind>,
     existential_predicates: InternedSet<'tcx, List<ExistentialPredicate<'tcx>>>,
+    predicate_kind: InternedSet<'tcx, PredicateKind<'tcx>>,
     predicates: InternedSet<'tcx, List<Predicate<'tcx>>>,
     projs: InternedSet<'tcx, List<ProjectionKind>>,
     place_elems: InternedSet<'tcx, List<PlaceElem<'tcx>>>,
@@ -107,6 +109,7 @@ impl<'tcx> CtxtInterners<'tcx> {
             region: Default::default(),
             existential_predicates: Default::default(),
             canonical_var_infos: Default::default(),
+            predicate_kind: Default::default(),
             predicates: Default::default(),
             projs: Default::default(),
             place_elems: Default::default(),
@@ -1114,16 +1117,13 @@ impl<'tcx> TyCtxt<'tcx> {
 
         let mut trait_map: FxHashMap<_, FxHashMap<_, _>> = FxHashMap::default();
         for (k, v) in resolutions.trait_map {
-            // FIXME(#71104) Should really be using just `node_id_to_hir_id` but
-            // some `NodeId` do not seem to have a corresponding HirId.
-            if let Some(hir_id) = definitions.opt_node_id_to_hir_id(k) {
-                let map = trait_map.entry(hir_id.owner).or_default();
-                let v = v
-                    .into_iter()
-                    .map(|tc| tc.map_import_ids(|id| definitions.node_id_to_hir_id(id)))
-                    .collect();
-                map.insert(hir_id.local_id, StableVec::new(v));
-            }
+            let hir_id = definitions.node_id_to_hir_id(k);
+            let map = trait_map.entry(hir_id.owner).or_default();
+            let v = v
+                .into_iter()
+                .map(|tc| tc.map_import_ids(|id| definitions.node_id_to_hir_id(id)))
+                .collect();
+            map.insert(hir_id.local_id, StableVec::new(v));
         }
 
         GlobalCtxt {
@@ -1339,7 +1339,7 @@ impl<'tcx> TyCtxt<'tcx> {
 
     /// What mode(s) of borrowck should we run? AST? MIR? both?
     /// (Also considers the `#![feature(nll)]` setting.)
-    pub fn borrowck_mode(&self) -> BorrowckMode {
+    pub fn borrowck_mode(self) -> BorrowckMode {
         // Here are the main constraints we need to deal with:
         //
         // 1. An opts.borrowck_mode of `BorrowckMode::Migrate` is
@@ -1369,11 +1369,18 @@ impl<'tcx> TyCtxt<'tcx> {
         self.sess.opts.borrowck_mode
     }
 
+    /// If `true`, we should use lazy normalization for constants, otherwise
+    /// we still evaluate them eagerly.
+    #[inline]
+    pub fn lazy_normalization(self) -> bool {
+        self.features().const_generics
+    }
+
     #[inline]
     pub fn local_crate_exports_generics(self) -> bool {
         debug_assert!(self.sess.opts.share_generics());
 
-        self.sess.crate_types.borrow().iter().any(|crate_type| {
+        self.sess.crate_types().iter().any(|crate_type| {
             match crate_type {
                 CrateType::Executable
                 | CrateType::Staticlib
@@ -1570,6 +1577,7 @@ macro_rules! nop_list_lift {
 nop_lift! {type_; Ty<'a> => Ty<'tcx>}
 nop_lift! {region; Region<'a> => Region<'tcx>}
 nop_lift! {const_; &'a Const<'a> => &'tcx Const<'tcx>}
+nop_lift! {predicate_kind; &'a PredicateKind<'a> => &'tcx PredicateKind<'tcx>}
 
 nop_list_lift! {type_list; Ty<'a> => Ty<'tcx>}
 nop_list_lift! {existential_predicates; ExistentialPredicate<'a> => ExistentialPredicate<'tcx>}
@@ -1878,7 +1886,6 @@ impl<'tcx> TyCtxt<'tcx> {
             Bound,
             Param,
             Infer,
-            UnnormalizedProjection,
             Projection,
             Opaque,
             Foreign
@@ -2009,8 +2016,14 @@ impl<'tcx> Borrow<[traits::ChalkEnvironmentClause<'tcx>]>
     }
 }
 
+impl<'tcx> Borrow<PredicateKind<'tcx>> for Interned<'tcx, PredicateKind<'tcx>> {
+    fn borrow<'a>(&'a self) -> &'a PredicateKind<'tcx> {
+        &self.0
+    }
+}
+
 macro_rules! direct_interners {
-    ($($name:ident: $method:ident($ty:ty)),+) => {
+    ($($name:ident: $method:ident($ty:ty),)+) => {
         $(impl<'tcx> PartialEq for Interned<'tcx, $ty> {
             fn eq(&self, other: &Self) -> bool {
                 self.0 == other.0
@@ -2035,7 +2048,11 @@ macro_rules! direct_interners {
     }
 }
 
-direct_interners!(region: mk_region(RegionKind), const_: mk_const(Const<'tcx>));
+direct_interners!(
+    region: mk_region(RegionKind),
+    const_: mk_const(Const<'tcx>),
+    predicate_kind: intern_predicate_kind(PredicateKind<'tcx>),
+);
 
 macro_rules! slice_interners {
     ($($field:ident: $method:ident($ty:ty)),+) => (
@@ -2070,30 +2087,37 @@ impl<'tcx> TyCtxt<'tcx> {
         self.mk_fn_ptr(sig.map_bound(|sig| ty::FnSig { unsafety: hir::Unsafety::Unsafe, ..sig }))
     }
 
-    /// Given a closure signature `sig`, returns an equivalent `fn`
-    /// type with the same signature. Detuples and so forth -- so
-    /// e.g., if we have a sig with `Fn<(u32, i32)>` then you would get
-    /// a `fn(u32, i32)`.
-    /// `unsafety` determines the unsafety of the `fn` type. If you pass
+    /// Given a closure signature, returns an equivalent fn signature. Detuples
+    /// and so forth -- so e.g., if we have a sig with `Fn<(u32, i32)>` then
+    /// you would get a `fn(u32, i32)`.
+    /// `unsafety` determines the unsafety of the fn signature. If you pass
     /// `hir::Unsafety::Unsafe` in the previous example, then you would get
     /// an `unsafe fn (u32, i32)`.
     /// It cannot convert a closure that requires unsafe.
-    pub fn coerce_closure_fn_ty(self, sig: PolyFnSig<'tcx>, unsafety: hir::Unsafety) -> Ty<'tcx> {
-        let converted_sig = sig.map_bound(|s| {
+    pub fn signature_unclosure(
+        self,
+        sig: PolyFnSig<'tcx>,
+        unsafety: hir::Unsafety,
+    ) -> PolyFnSig<'tcx> {
+        sig.map_bound(|s| {
             let params_iter = match s.inputs()[0].kind {
                 ty::Tuple(params) => params.into_iter().map(|k| k.expect_ty()),
                 _ => bug!(),
             };
             self.mk_fn_sig(params_iter, s.output(), s.c_variadic, unsafety, abi::Abi::Rust)
-        });
-
-        self.mk_fn_ptr(converted_sig)
+        })
     }
 
     #[allow(rustc::usage_of_ty_tykind)]
     #[inline]
     pub fn mk_ty(&self, st: TyKind<'tcx>) -> Ty<'tcx> {
         self.interners.intern_ty(st)
+    }
+
+    #[inline]
+    pub fn mk_predicate(&self, kind: PredicateKind<'tcx>) -> Predicate<'tcx> {
+        let kind = self.intern_predicate_kind(kind);
+        Predicate { kind }
     }
 
     pub fn mk_mach_int(self, tm: ast::IntTy) -> Ty<'tcx> {

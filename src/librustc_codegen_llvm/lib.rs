@@ -208,7 +208,7 @@ impl CodegenBackend for LlvmCodegenBackend {
             }
             PrintRequest::CodeModels => {
                 println!("Available code models:");
-                for &(name, _) in back::write::CODE_GEN_MODEL_ARGS.iter() {
+                for name in &["tiny", "small", "kernel", "medium", "large"] {
                     println!("    {}", name);
                 }
                 println!();

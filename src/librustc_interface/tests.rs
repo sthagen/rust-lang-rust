@@ -2,7 +2,7 @@ use crate::interface::parse_cfgspecs;
 
 use rustc_data_structures::fx::FxHashSet;
 use rustc_errors::{emitter::HumanReadableErrorType, registry, ColorConfig};
-use rustc_middle::middle::cstore;
+use rustc_session::config::Strip;
 use rustc_session::config::{build_configuration, build_session_options, to_crate_config};
 use rustc_session::config::{rustc_optgroups, ErrorOutputType, ExternLocation, Options, Passes};
 use rustc_session::config::{CFGuard, ExternEntry, LinkerPluginLto, LtoCli, SwitchWithOptPath};
@@ -10,11 +10,12 @@ use rustc_session::config::{Externs, OutputType, OutputTypes, Sanitizer, SymbolM
 use rustc_session::getopts;
 use rustc_session::lint::Level;
 use rustc_session::search_paths::SearchPath;
+use rustc_session::utils::NativeLibKind;
 use rustc_session::{build_session, Session};
 use rustc_span::edition::{Edition, DEFAULT_EDITION};
 use rustc_span::symbol::sym;
 use rustc_span::SourceFileHashAlgorithm;
-use rustc_target::spec::{LinkerFlavor, MergeFunctions, PanicStrategy};
+use rustc_target::spec::{CodeModel, LinkerFlavor, MergeFunctions, PanicStrategy};
 use rustc_target::spec::{RelocModel, RelroLevel, TlsModel};
 use std::collections::{BTreeMap, BTreeSet};
 use std::iter::FromIterator;
@@ -299,30 +300,30 @@ fn test_native_libs_tracking_hash_different_values() {
 
     // Reference
     v1.libs = vec![
-        (String::from("a"), None, Some(cstore::NativeStatic)),
-        (String::from("b"), None, Some(cstore::NativeFramework)),
-        (String::from("c"), None, Some(cstore::NativeUnknown)),
+        (String::from("a"), None, NativeLibKind::StaticBundle),
+        (String::from("b"), None, NativeLibKind::Framework),
+        (String::from("c"), None, NativeLibKind::Unspecified),
     ];
 
     // Change label
     v2.libs = vec![
-        (String::from("a"), None, Some(cstore::NativeStatic)),
-        (String::from("X"), None, Some(cstore::NativeFramework)),
-        (String::from("c"), None, Some(cstore::NativeUnknown)),
+        (String::from("a"), None, NativeLibKind::StaticBundle),
+        (String::from("X"), None, NativeLibKind::Framework),
+        (String::from("c"), None, NativeLibKind::Unspecified),
     ];
 
     // Change kind
     v3.libs = vec![
-        (String::from("a"), None, Some(cstore::NativeStatic)),
-        (String::from("b"), None, Some(cstore::NativeStatic)),
-        (String::from("c"), None, Some(cstore::NativeUnknown)),
+        (String::from("a"), None, NativeLibKind::StaticBundle),
+        (String::from("b"), None, NativeLibKind::StaticBundle),
+        (String::from("c"), None, NativeLibKind::Unspecified),
     ];
 
     // Change new-name
     v4.libs = vec![
-        (String::from("a"), None, Some(cstore::NativeStatic)),
-        (String::from("b"), Some(String::from("X")), Some(cstore::NativeFramework)),
-        (String::from("c"), None, Some(cstore::NativeUnknown)),
+        (String::from("a"), None, NativeLibKind::StaticBundle),
+        (String::from("b"), Some(String::from("X")), NativeLibKind::Framework),
+        (String::from("c"), None, NativeLibKind::Unspecified),
     ];
 
     assert!(v1.dep_tracking_hash() != v2.dep_tracking_hash());
@@ -344,21 +345,21 @@ fn test_native_libs_tracking_hash_different_order() {
 
     // Reference
     v1.libs = vec![
-        (String::from("a"), None, Some(cstore::NativeStatic)),
-        (String::from("b"), None, Some(cstore::NativeFramework)),
-        (String::from("c"), None, Some(cstore::NativeUnknown)),
+        (String::from("a"), None, NativeLibKind::StaticBundle),
+        (String::from("b"), None, NativeLibKind::Framework),
+        (String::from("c"), None, NativeLibKind::Unspecified),
     ];
 
     v2.libs = vec![
-        (String::from("b"), None, Some(cstore::NativeFramework)),
-        (String::from("a"), None, Some(cstore::NativeStatic)),
-        (String::from("c"), None, Some(cstore::NativeUnknown)),
+        (String::from("b"), None, NativeLibKind::Framework),
+        (String::from("a"), None, NativeLibKind::StaticBundle),
+        (String::from("c"), None, NativeLibKind::Unspecified),
     ];
 
     v3.libs = vec![
-        (String::from("c"), None, Some(cstore::NativeUnknown)),
-        (String::from("a"), None, Some(cstore::NativeStatic)),
-        (String::from("b"), None, Some(cstore::NativeFramework)),
+        (String::from("c"), None, NativeLibKind::Unspecified),
+        (String::from("a"), None, NativeLibKind::StaticBundle),
+        (String::from("b"), None, NativeLibKind::Framework),
     ];
 
     assert!(v1.dep_tracking_hash() == v2.dep_tracking_hash());
@@ -410,7 +411,7 @@ fn test_codegen_options_tracking_hash() {
 
     // Make sure that changing a [TRACKED] option changes the hash.
     // This list is in alphabetical order.
-    tracked!(code_model, Some(String::from("code model")));
+    tracked!(code_model, Some(CodeModel::Large));
     tracked!(debug_assertions, Some(true));
     tracked!(debuginfo, 0xdeadbeef);
     tracked!(embed_bitcode, false);
@@ -500,6 +501,7 @@ fn test_debugging_options_tracking_hash() {
     untracked!(self_profile, SwitchWithOptPath::Enabled(None));
     untracked!(self_profile_events, Some(vec![String::new()]));
     untracked!(span_free_formats, true);
+    untracked!(strip, Strip::None);
     untracked!(terminal_width, Some(80));
     untracked!(threads, 99);
     untracked!(time, true);
@@ -564,7 +566,6 @@ fn test_debugging_options_tracking_hash() {
     tracked!(share_generics, Some(true));
     tracked!(show_span, Some(String::from("abc")));
     tracked!(src_hash_algorithm, Some(SourceFileHashAlgorithm::Sha1));
-    tracked!(strip_debuginfo_if_disabled, true);
     tracked!(symbol_mangling_version, SymbolManglingVersion::V0);
     tracked!(teach, true);
     tracked!(thinlto, Some(true));

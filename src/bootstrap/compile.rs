@@ -125,15 +125,16 @@ fn copy_third_party_objects(
         target_deps.push(target);
     };
 
-    // Copies the crt(1,i,n).o startup objects
+    // Copies the CRT objects.
     //
-    // Since musl supports fully static linking, we can cross link for it even
-    // with a glibc-targeting toolchain, given we have the appropriate startup
-    // files. As those shipped with glibc won't work, copy the ones provided by
-    // musl so we have them on linux-gnu hosts.
+    // rustc historically provides a more self-contained installation for musl targets
+    // not requiring the presence of a native musl toolchain. For example, it can fall back
+    // to using gcc from a glibc-targeting toolchain for linking.
+    // To do that we have to distribute musl startup objects as a part of Rust toolchain
+    // and link with them manually in the self-contained mode.
     if target.contains("musl") {
         let srcdir = builder.musl_root(target).unwrap().join("lib");
-        for &obj in &["crt1.o", "crti.o", "crtn.o"] {
+        for &obj in &["crt1.o", "Scrt1.o", "rcrt1.o", "crti.o", "crtn.o"] {
             copy_and_stamp(&srcdir, obj);
         }
     } else if target.ends_with("-wasi") {
@@ -772,7 +773,8 @@ impl Step for Assemble {
 
         // Ensure that `libLLVM.so` ends up in the newly build compiler directory,
         // so that it can be found when the newly built `rustc` is run.
-        dist::maybe_install_llvm_dylib(builder, target_compiler.host, &sysroot);
+        dist::maybe_install_llvm_runtime(builder, target_compiler.host, &sysroot);
+        dist::maybe_install_llvm_target(builder, target_compiler.host, &sysroot);
 
         // Link the compiler binary itself into place
         let out_dir = builder.cargo_out(build_compiler, Mode::Rustc, host);

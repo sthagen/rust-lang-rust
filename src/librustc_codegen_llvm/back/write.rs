@@ -6,7 +6,6 @@ use crate::back::profiling::{
 use crate::base;
 use crate::common;
 use crate::consts;
-use crate::context::all_outputs_are_pic_executables;
 use crate::llvm::{self, DiagnosticInfo, PassManager, SMDiagnostic};
 use crate::llvm_util;
 use crate::type_::Type;
@@ -24,7 +23,7 @@ use rustc_middle::bug;
 use rustc_middle::ty::TyCtxt;
 use rustc_session::config::{self, Lto, OutputType, Passes, Sanitizer, SwitchWithOptPath};
 use rustc_session::Session;
-use rustc_target::spec::RelocModel;
+use rustc_target::spec::{CodeModel, RelocModel};
 
 use libc::{c_char, c_int, c_uint, c_void, size_t};
 use std::ffi::CString;
@@ -34,13 +33,6 @@ use std::path::{Path, PathBuf};
 use std::slice;
 use std::str;
 use std::sync::Arc;
-
-pub const CODE_GEN_MODEL_ARGS: &[(&str, llvm::CodeModel)] = &[
-    ("small", llvm::CodeModel::Small),
-    ("kernel", llvm::CodeModel::Kernel),
-    ("medium", llvm::CodeModel::Medium),
-    ("large", llvm::CodeModel::Large),
-];
 
 pub fn llvm_err(handler: &rustc_errors::Handler, msg: &str) -> FatalError {
     match llvm::last_error() {
@@ -114,6 +106,17 @@ fn to_llvm_relocation_model(relocation_model: RelocModel) -> llvm::RelocModel {
     }
 }
 
+fn to_llvm_code_model(code_model: Option<CodeModel>) -> llvm::CodeModel {
+    match code_model {
+        Some(CodeModel::Tiny) => llvm::CodeModel::Tiny,
+        Some(CodeModel::Small) => llvm::CodeModel::Small,
+        Some(CodeModel::Kernel) => llvm::CodeModel::Kernel,
+        Some(CodeModel::Medium) => llvm::CodeModel::Medium,
+        Some(CodeModel::Large) => llvm::CodeModel::Large,
+        None => llvm::CodeModel::None,
+    }
+}
+
 pub fn target_machine_factory(
     sess: &Session,
     optlvl: config::OptLevel,
@@ -126,20 +129,7 @@ pub fn target_machine_factory(
     let ffunction_sections = sess.target.target.options.function_sections;
     let fdata_sections = ffunction_sections;
 
-    let code_model_arg =
-        sess.opts.cg.code_model.as_ref().or(sess.target.target.options.code_model.as_ref());
-
-    let code_model = match code_model_arg {
-        Some(s) => match CODE_GEN_MODEL_ARGS.iter().find(|arg| arg.0 == s) {
-            Some(x) => x.1,
-            _ => {
-                sess.err(&format!("{:?} is not a valid code model", code_model_arg));
-                sess.abort_if_errors();
-                bug!();
-            }
-        },
-        None => llvm::CodeModel::None,
-    };
+    let code_model = to_llvm_code_model(sess.code_model());
 
     let features = attributes::llvm_target_features(sess).collect::<Vec<_>>();
     let mut singlethread = sess.target.target.options.singlethread;
@@ -159,7 +149,6 @@ pub fn target_machine_factory(
     let features = features.join(",");
     let features = CString::new(features).unwrap();
     let abi = SmallCStr::new(&sess.target.target.options.llvm_abiname);
-    let pic_is_pie = all_outputs_are_pic_executables(sess);
     let trap_unreachable = sess.target.target.options.trap_unreachable;
     let emit_stack_size_section = sess.opts.debugging_opts.emit_stack_sizes;
 
@@ -183,7 +172,6 @@ pub fn target_machine_factory(
                 reloc_model,
                 opt_level,
                 use_softfp,
-                pic_is_pie,
                 ffunction_sections,
                 fdata_sections,
                 trap_unreachable,
@@ -394,6 +382,7 @@ pub(crate) unsafe fn optimize_with_new_llvm_pass_manager(
         config.vectorize_slp,
         config.vectorize_loop,
         config.no_builtins,
+        config.emit_lifetime_markers,
         sanitizer_options.as_ref(),
         pgo_gen_path.as_ref().map_or(std::ptr::null(), |s| s.as_ptr()),
         pgo_use_path.as_ref().map_or(std::ptr::null(), |s| s.as_ptr()),
@@ -934,10 +923,10 @@ pub unsafe fn with_llvm_pmb(
             llvm::LLVMPassManagerBuilderUseInlinerWithThreshold(builder, 25);
         }
         (llvm::CodeGenOptLevel::None, ..) => {
-            llvm::LLVMRustAddAlwaysInlinePass(builder, false);
+            llvm::LLVMRustAddAlwaysInlinePass(builder, config.emit_lifetime_markers);
         }
         (llvm::CodeGenOptLevel::Less, ..) => {
-            llvm::LLVMRustAddAlwaysInlinePass(builder, true);
+            llvm::LLVMRustAddAlwaysInlinePass(builder, config.emit_lifetime_markers);
         }
         (llvm::CodeGenOptLevel::Default, ..) => {
             llvm::LLVMPassManagerBuilderUseInlinerWithThreshold(builder, 225);

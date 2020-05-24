@@ -21,7 +21,7 @@ use rustc_errors::{DiagnosticId, FatalError, Handler, Level};
 use rustc_fs_util::link_or_copy;
 use rustc_hir::def_id::{CrateNum, LOCAL_CRATE};
 use rustc_incremental::{
-    copy_cgu_workproducts_to_incr_comp_cache_dir, in_incr_comp_dir, in_incr_comp_dir_sess,
+    copy_cgu_workproduct_to_incr_comp_cache_dir, in_incr_comp_dir, in_incr_comp_dir_sess,
 };
 use rustc_middle::dep_graph::{WorkProduct, WorkProductId};
 use rustc_middle::middle::cstore::EncodedMetadata;
@@ -110,6 +110,7 @@ pub struct ModuleConfig {
     pub merge_functions: bool,
     pub inline_threshold: Option<usize>,
     pub new_llvm_pass_manager: bool,
+    pub emit_lifetime_markers: bool,
 }
 
 impl ModuleConfig {
@@ -141,8 +142,22 @@ impl ModuleConfig {
         let emit_obj = if !should_emit_obj {
             EmitObj::None
         } else if sess.target.target.options.obj_is_bitcode
-            || sess.opts.cg.linker_plugin_lto.enabled()
+            || (sess.opts.cg.linker_plugin_lto.enabled() && !no_builtins)
         {
+            // This case is selected if the target uses objects as bitcode, or
+            // if linker plugin LTO is enabled. In the linker plugin LTO case
+            // the assumption is that the final link-step will read the bitcode
+            // and convert it to object code. This may be done by either the
+            // native linker or rustc itself.
+            //
+            // Note, however, that the linker-plugin-lto requested here is
+            // explicitly ignored for `#![no_builtins]` crates. These crates are
+            // specifically ignored by rustc's LTO passes and wouldn't work if
+            // loaded into the linker. These crates define symbols that LLVM
+            // lowers intrinsics to, and these symbol dependencies aren't known
+            // until after codegen. As a result any crate marked
+            // `#![no_builtins]` is assumed to not participate in LTO and
+            // instead goes on to generate object code.
             EmitObj::Bitcode
         } else if need_bitcode_in_object(sess) {
             EmitObj::ObjectCode(BitcodeSection::Full)
@@ -244,6 +259,7 @@ impl ModuleConfig {
 
             inline_threshold: sess.opts.cg.inline_threshold,
             new_llvm_pass_manager: sess.opts.debugging_opts.new_llvm_pass_manager,
+            emit_lifetime_markers: sess.emit_lifetime_markers(),
         }
     }
 
@@ -366,7 +382,7 @@ pub struct CompiledModules {
 
 fn need_bitcode_in_object(sess: &Session) -> bool {
     let requested_for_rlib = sess.opts.cg.embed_bitcode
-        && sess.crate_types.borrow().contains(&CrateType::Rlib)
+        && sess.crate_types().contains(&CrateType::Rlib)
         && sess.opts.output_types.contains_key(&OutputType::Exe);
     let forced_by_target = sess.target.target.options.forces_embed_bitcode;
     requested_for_rlib || forced_by_target
@@ -465,17 +481,13 @@ fn copy_all_cgu_workproducts_to_incr_comp_cache_dir(
         return work_products;
     }
 
-    let _timer = sess.timer("incr_comp_copy_cgu_workproducts");
+    let _timer = sess.timer("copy_all_cgu_workproducts_to_incr_comp_cache_dir");
 
     for module in compiled_modules.modules.iter().filter(|m| m.kind == ModuleKind::Regular) {
-        let mut files = vec![];
-
-        if let Some(ref path) = module.object {
-            files.push(path.clone());
-        }
+        let path = module.object.as_ref().map(|path| path.clone());
 
         if let Some((id, product)) =
-            copy_cgu_workproducts_to_incr_comp_cache_dir(sess, &module.name, &files)
+            copy_cgu_workproduct_to_incr_comp_cache_dir(sess, &module.name, &path)
         {
             work_products.insert(id, product);
         }
@@ -709,10 +721,51 @@ fn execute_work_item<B: ExtraBackendMethods>(
 }
 
 // Actual LTO type we end up choosing based on multiple factors.
-enum ComputedLtoType {
+pub enum ComputedLtoType {
     No,
     Thin,
     Fat,
+}
+
+pub fn compute_per_cgu_lto_type(
+    sess_lto: &Lto,
+    opts: &config::Options,
+    sess_crate_types: &[CrateType],
+    module_kind: ModuleKind,
+) -> ComputedLtoType {
+    // Metadata modules never participate in LTO regardless of the lto
+    // settings.
+    if module_kind == ModuleKind::Metadata {
+        return ComputedLtoType::No;
+    }
+
+    // If the linker does LTO, we don't have to do it. Note that we
+    // keep doing full LTO, if it is requested, as not to break the
+    // assumption that the output will be a single module.
+    let linker_does_lto = opts.cg.linker_plugin_lto.enabled();
+
+    // When we're automatically doing ThinLTO for multi-codegen-unit
+    // builds we don't actually want to LTO the allocator modules if
+    // it shows up. This is due to various linker shenanigans that
+    // we'll encounter later.
+    let is_allocator = module_kind == ModuleKind::Allocator;
+
+    // We ignore a request for full crate grath LTO if the cate type
+    // is only an rlib, as there is no full crate graph to process,
+    // that'll happen later.
+    //
+    // This use case currently comes up primarily for targets that
+    // require LTO so the request for LTO is always unconditionally
+    // passed down to the backend, but we don't actually want to do
+    // anything about it yet until we've got a final product.
+    let is_rlib = sess_crate_types.len() == 1 && sess_crate_types[0] == CrateType::Rlib;
+
+    match sess_lto {
+        Lto::ThinLocal if !linker_does_lto && !is_allocator => ComputedLtoType::Thin,
+        Lto::Thin if !linker_does_lto && !is_rlib => ComputedLtoType::Thin,
+        Lto::Fat if !is_rlib => ComputedLtoType::Fat,
+        _ => ComputedLtoType::No,
+    }
 }
 
 fn execute_optimize_work_item<B: ExtraBackendMethods>(
@@ -731,39 +784,7 @@ fn execute_optimize_work_item<B: ExtraBackendMethods>(
     // back to the coordinator thread for further LTO processing (which
     // has to wait for all the initial modules to be optimized).
 
-    // If the linker does LTO, we don't have to do it. Note that we
-    // keep doing full LTO, if it is requested, as not to break the
-    // assumption that the output will be a single module.
-    let linker_does_lto = cgcx.opts.cg.linker_plugin_lto.enabled();
-
-    // When we're automatically doing ThinLTO for multi-codegen-unit
-    // builds we don't actually want to LTO the allocator modules if
-    // it shows up. This is due to various linker shenanigans that
-    // we'll encounter later.
-    let is_allocator = module.kind == ModuleKind::Allocator;
-
-    // We ignore a request for full crate grath LTO if the cate type
-    // is only an rlib, as there is no full crate graph to process,
-    // that'll happen later.
-    //
-    // This use case currently comes up primarily for targets that
-    // require LTO so the request for LTO is always unconditionally
-    // passed down to the backend, but we don't actually want to do
-    // anything about it yet until we've got a final product.
-    let is_rlib = cgcx.crate_types.len() == 1 && cgcx.crate_types[0] == CrateType::Rlib;
-
-    // Metadata modules never participate in LTO regardless of the lto
-    // settings.
-    let lto_type = if module.kind == ModuleKind::Metadata {
-        ComputedLtoType::No
-    } else {
-        match cgcx.lto {
-            Lto::ThinLocal if !linker_does_lto && !is_allocator => ComputedLtoType::Thin,
-            Lto::Thin if !linker_does_lto && !is_rlib => ComputedLtoType::Thin,
-            Lto::Fat if !is_rlib => ComputedLtoType::Fat,
-            _ => ComputedLtoType::No,
-        }
-    };
+    let lto_type = compute_per_cgu_lto_type(&cgcx.lto, &cgcx.opts, &cgcx.crate_types, module.kind);
 
     // If we're doing some form of incremental LTO then we need to be sure to
     // save our module to disk first.
@@ -808,7 +829,7 @@ fn execute_copy_from_cache_work_item<B: ExtraBackendMethods>(
 ) -> Result<WorkItemResult<B>, FatalError> {
     let incr_comp_session_dir = cgcx.incr_comp_session_dir.as_ref().unwrap();
     let mut object = None;
-    for saved_file in &module.source.saved_files {
+    if let Some(saved_file) = module.source.saved_file {
         let obj_out = cgcx.output_filenames.temp_path(OutputType::Object, Some(&module.name));
         object = Some(obj_out.clone());
         let source_file = in_incr_comp_dir(&incr_comp_session_dir, &saved_file);
@@ -970,7 +991,7 @@ fn start_executing_work<B: ExtraBackendMethods>(
     };
     let cgcx = CodegenContext::<B> {
         backend: backend.clone(),
-        crate_types: sess.crate_types.borrow().clone(),
+        crate_types: sess.crate_types().to_vec(),
         each_linked_rlib_for_lto,
         lto: sess.lto(),
         no_landing_pads: sess.panic_strategy() == PanicStrategy::Abort,
@@ -1791,7 +1812,7 @@ fn msvc_imps_needed(tcx: TyCtxt<'_>) -> bool {
     );
 
     tcx.sess.target.target.options.is_like_msvc &&
-        tcx.sess.crate_types.borrow().iter().any(|ct| *ct == CrateType::Rlib) &&
+        tcx.sess.crate_types().iter().any(|ct| *ct == CrateType::Rlib) &&
     // ThinLTO can't handle this workaround in all cases, so we don't
     // emit the `__imp_` symbols. Instead we make them unnecessary by disallowing
     // dynamic linking when linker plugin LTO is enabled.

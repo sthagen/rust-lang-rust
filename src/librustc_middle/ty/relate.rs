@@ -431,6 +431,9 @@ pub fn super_relate_tys<R: TypeRelation<'tcx>>(
             let t = relation.relate(&a_t, &b_t)?;
             match relation.relate(&sz_a, &sz_b) {
                 Ok(sz) => Ok(tcx.mk_ty(ty::Array(t, sz))),
+                // FIXME(#72219) Implement improved diagnostics for mismatched array
+                // length?
+                Err(err) if relation.tcx().lazy_normalization() => Err(err),
                 Err(err) => {
                     // Check whether the lengths are both concrete/known values,
                     // but are unequal, for better diagnostics.
@@ -475,11 +478,6 @@ pub fn super_relate_tys<R: TypeRelation<'tcx>>(
         (&ty::FnPtr(a_fty), &ty::FnPtr(b_fty)) => {
             let fty = relation.relate(&a_fty, &b_fty)?;
             Ok(tcx.mk_fn_ptr(fty))
-        }
-
-        (ty::UnnormalizedProjection(a_data), ty::UnnormalizedProjection(b_data)) => {
-            let projection_ty = relation.relate(a_data, b_data)?;
-            Ok(tcx.mk_ty(ty::UnnormalizedProjection(projection_ty)))
         }
 
         // these two are already handled downstream in case of lazy normalization

@@ -66,7 +66,7 @@ fn eval_body_using_ecx<'mir, 'tcx>(
         intern_kind,
         ret,
         body.ignore_interior_mut_in_const_validation,
-    )?;
+    );
 
     debug!("eval_body_using_ecx done: {:?}", *ret);
     Ok(ret)
@@ -89,7 +89,7 @@ pub(super) fn mk_eval_cx<'mir, 'tcx>(
     InterpCx::new(
         tcx.at(span),
         param_env,
-        CompileTimeInterpreter::new(*tcx.sess.const_eval_limit.get()),
+        CompileTimeInterpreter::new(tcx.sess.const_eval_limit()),
         MemoryExtra { can_access_statics },
     )
 }
@@ -303,7 +303,7 @@ pub fn const_eval_raw_provider<'tcx>(
     let mut ecx = InterpCx::new(
         tcx.at(span),
         key.param_env,
-        CompileTimeInterpreter::new(*tcx.sess.const_eval_limit.get()),
+        CompileTimeInterpreter::new(tcx.sess.const_eval_limit()),
         MemoryExtra { can_access_statics: is_static },
     );
 

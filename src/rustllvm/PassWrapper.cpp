@@ -274,7 +274,7 @@ extern "C" bool LLVMRustHasFeature(LLVMTargetMachineRef TM,
 }
 
 enum class LLVMRustCodeModel {
-  Other,
+  Tiny,
   Small,
   Kernel,
   Medium,
@@ -282,8 +282,10 @@ enum class LLVMRustCodeModel {
   None,
 };
 
-static CodeModel::Model fromRust(LLVMRustCodeModel Model) {
+static Optional<CodeModel::Model> fromRust(LLVMRustCodeModel Model) {
   switch (Model) {
+  case LLVMRustCodeModel::Tiny:
+    return CodeModel::Tiny;
   case LLVMRustCodeModel::Small:
     return CodeModel::Small;
   case LLVMRustCodeModel::Kernel:
@@ -292,6 +294,8 @@ static CodeModel::Model fromRust(LLVMRustCodeModel Model) {
     return CodeModel::Medium;
   case LLVMRustCodeModel::Large:
     return CodeModel::Large;
+  case LLVMRustCodeModel::None:
+    return None;
   default:
     report_fatal_error("Bad CodeModel.");
   }
@@ -441,7 +445,7 @@ extern "C" LLVMTargetMachineRef LLVMRustCreateTargetMachine(
     const char *TripleStr, const char *CPU, const char *Feature,
     const char *ABIStr, LLVMRustCodeModel RustCM, LLVMRustRelocModel RustReloc,
     LLVMRustCodeGenOptLevel RustOptLevel, bool UseSoftFloat,
-    bool PositionIndependentExecutable, bool FunctionSections,
+    bool FunctionSections,
     bool DataSections,
     bool TrapUnreachable,
     bool Singlethread,
@@ -452,6 +456,7 @@ extern "C" LLVMTargetMachineRef LLVMRustCreateTargetMachine(
 
   auto OptLevel = fromRust(RustOptLevel);
   auto RM = fromRust(RustReloc);
+  auto CM = fromRust(RustCM);
 
   std::string Error;
   Triple Trip(Triple::normalize(TripleStr));
@@ -490,9 +495,6 @@ extern "C" LLVMTargetMachineRef LLVMRustCreateTargetMachine(
 
   Options.EmitStackSizeSection = EmitStackSizeSection;
 
-  Optional<CodeModel::Model> CM;
-  if (RustCM != LLVMRustCodeModel::None)
-    CM = fromRust(RustCM);
   TargetMachine *TM = TheTarget->createTargetMachine(
       Trip.getTriple(), CPU, Feature, Options, RM, CM, OptLevel);
   return wrap(TM);
@@ -717,7 +719,7 @@ LLVMRustOptimizeWithNewPassManager(
     LLVMRustOptStage OptStage,
     bool NoPrepopulatePasses, bool VerifyIR, bool UseThinLTOBuffers,
     bool MergeFunctions, bool UnrollLoops, bool SLPVectorize, bool LoopVectorize,
-    bool DisableSimplifyLibCalls,
+    bool DisableSimplifyLibCalls, bool EmitLifetimeMarkers,
     LLVMRustSanitizerOptions *SanitizerOptions,
     const char *PGOGenPath, const char *PGOUsePath,
     void* LlvmSelfProfiler,
@@ -853,7 +855,7 @@ LLVMRustOptimizeWithNewPassManager(
         MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
       }
 
-      MPM.addPass(AlwaysInlinerPass(/*InsertLifetimeIntrinsics=*/false));
+      MPM.addPass(AlwaysInlinerPass(EmitLifetimeMarkers));
 
 #if LLVM_VERSION_GE(10, 0)
       if (PGOOpt) {

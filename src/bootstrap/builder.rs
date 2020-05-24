@@ -439,7 +439,6 @@ impl<'a> Builder<'a> {
                 dist::Clippy,
                 dist::Miri,
                 dist::LlvmTools,
-                dist::Lldb,
                 dist::Extended,
                 dist::HashSign
             ),
@@ -504,7 +503,7 @@ impl<'a> Builder<'a> {
             Subcommand::Check { ref paths } => (Kind::Check, &paths[..]),
             Subcommand::Clippy { ref paths } => (Kind::Clippy, &paths[..]),
             Subcommand::Fix { ref paths } => (Kind::Fix, &paths[..]),
-            Subcommand::Doc { ref paths } => (Kind::Doc, &paths[..]),
+            Subcommand::Doc { ref paths, .. } => (Kind::Doc, &paths[..]),
             Subcommand::Test { ref paths, .. } => (Kind::Test, &paths[..]),
             Subcommand::Bench { ref paths, .. } => (Kind::Bench, &paths[..]),
             Subcommand::Dist { ref paths } => (Kind::Dist, &paths[..]),
@@ -916,7 +915,14 @@ impl<'a> Builder<'a> {
             .env("RUSTC", self.out.join("bootstrap/debug/rustc"))
             .env("RUSTC_REAL", self.rustc(compiler))
             .env("RUSTC_STAGE", stage.to_string())
-            .env("RUSTC_DEBUG_ASSERTIONS", self.config.rust_debug_assertions.to_string())
+            .env(
+                "RUSTC_DEBUG_ASSERTIONS",
+                if mode == Mode::Std {
+                    self.config.rust_debug_assertions_std.to_string()
+                } else {
+                    self.config.rust_debug_assertions.to_string()
+                },
+            )
             .env("RUSTC_SYSROOT", &sysroot)
             .env("RUSTC_LIBDIR", &libdir)
             .env("RUSTDOC", self.out.join("bootstrap/debug/rustdoc"))
