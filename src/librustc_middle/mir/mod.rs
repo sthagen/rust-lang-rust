@@ -408,7 +408,7 @@ impl<'tcx> Body<'tcx> {
     }
 }
 
-#[derive(Copy, Clone, Debug, RustcEncodable, RustcDecodable, HashStable)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, RustcEncodable, RustcDecodable, HashStable)]
 pub enum Safety {
     Safe,
     /// Unsafe because of a PushUnsafeBlock
@@ -2077,10 +2077,10 @@ impl Debug for Place<'_> {
                 ProjectionElem::ConstantIndex { offset, min_length, from_end: true } => {
                     write!(fmt, "[-{:?} of {:?}]", offset, min_length)?;
                 }
-                ProjectionElem::Subslice { from, to, from_end: true } if *to == 0 => {
+                ProjectionElem::Subslice { from, to, from_end: true } if to == 0 => {
                     write!(fmt, "[{:?}:]", from)?;
                 }
-                ProjectionElem::Subslice { from, to, from_end: true } if *from == 0 => {
+                ProjectionElem::Subslice { from, to, from_end: true } if from == 0 => {
                     write!(fmt, "[:-{:?}]", to)?;
                 }
                 ProjectionElem::Subslice { from, to, from_end: true } => {
@@ -2439,7 +2439,7 @@ impl<'tcx> Debug for Rvalue<'tcx> {
                             };
                             let mut struct_fmt = fmt.debug_struct(&name);
 
-                            if let Some(upvars) = tcx.upvars(def_id) {
+                            if let Some(upvars) = tcx.upvars_mentioned(def_id) {
                                 for (&var_id, place) in upvars.keys().zip(places) {
                                     let var_name = tcx.hir().name(var_id);
                                     struct_fmt.field(&var_name.as_str(), place);
@@ -2458,7 +2458,7 @@ impl<'tcx> Debug for Rvalue<'tcx> {
                             let name = format!("[generator@{:?}]", tcx.hir().span(hir_id));
                             let mut struct_fmt = fmt.debug_struct(&name);
 
-                            if let Some(upvars) = tcx.upvars(def_id) {
+                            if let Some(upvars) = tcx.upvars_mentioned(def_id) {
                                 for (&var_id, place) in upvars.keys().zip(places) {
                                     let var_name = tcx.hir().name(var_id);
                                     struct_fmt.field(&var_name.as_str(), place);

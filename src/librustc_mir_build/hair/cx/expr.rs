@@ -386,7 +386,7 @@ fn make_mirror_unadjusted<'a, 'tcx>(
             };
             let upvars = cx
                 .tcx
-                .upvars(def_id)
+                .upvars_mentioned(def_id)
                 .iter()
                 .flat_map(|upvars| upvars.iter())
                 .zip(substs.upvar_tys())
@@ -884,7 +884,7 @@ fn convert_var<'tcx>(
 ) -> ExprKind<'tcx> {
     let upvar_index = cx
         .tables()
-        .upvar_list
+        .closure_captures
         .get(&cx.body_owner)
         .and_then(|upvars| upvars.get_full(&var_hir_id).map(|(i, _, _)| i));
 

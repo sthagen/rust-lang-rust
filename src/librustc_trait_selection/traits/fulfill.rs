@@ -242,15 +242,9 @@ struct FulfillProcessor<'a, 'b, 'tcx> {
     register_region_obligations: bool,
 }
 
-fn mk_pending(
-    infcx: &InferCtxt<'_, 'tcx>,
-    os: Vec<PredicateObligation<'tcx>>,
-) -> Vec<PendingPredicateObligation<'tcx>> {
+fn mk_pending(os: Vec<PredicateObligation<'tcx>>) -> Vec<PendingPredicateObligation<'tcx>> {
     os.into_iter()
-        .map(|mut o| {
-            o.predicate = infcx.resolve_vars_if_possible(&o.predicate);
-            PendingPredicateObligation { obligation: o, stalled_on: vec![] }
-        })
+        .map(|o| PendingPredicateObligation { obligation: o, stalled_on: vec![] })
         .collect()
 }
 
@@ -344,7 +338,7 @@ impl<'a, 'b, 'tcx> ObligationProcessor for FulfillProcessor<'a, 'b, 'tcx> {
                             "selecting trait `{:?}` at depth {} yielded Ok(Some)",
                             data, obligation.recursion_depth
                         );
-                        ProcessResult::Changed(mk_pending(infcx, vtable.nested_obligations()))
+                        ProcessResult::Changed(mk_pending(vtable.nested_obligations()))
                     }
                     Ok(None) => {
                         debug!(
@@ -357,7 +351,7 @@ impl<'a, 'b, 'tcx> ObligationProcessor for FulfillProcessor<'a, 'b, 'tcx> {
                         // trait selection is because we don't have enough
                         // information about the types in the trait.
                         pending_obligation.stalled_on =
-                            trait_ref_type_vars(self.selcx, data.to_poly_trait_ref());
+                            trait_ref_infer_vars(self.selcx, data.to_poly_trait_ref());
 
                         debug!(
                             "process_predicate: pending obligation {:?} now stalled on {:?}",
@@ -378,7 +372,7 @@ impl<'a, 'b, 'tcx> ObligationProcessor for FulfillProcessor<'a, 'b, 'tcx> {
                 }
             }
 
-            ty::PredicateKind::RegionOutlives(ref binder) => {
+            &ty::PredicateKind::RegionOutlives(binder) => {
                 match infcx.region_outlives_predicate(&obligation.cause, binder) {
                     Ok(()) => ProcessResult::Changed(vec![]),
                     Err(_) => ProcessResult::Error(CodeSelectionError(Unimplemented)),
@@ -435,10 +429,10 @@ impl<'a, 'b, 'tcx> ObligationProcessor for FulfillProcessor<'a, 'b, 'tcx> {
                     Ok(None) => {
                         let tcx = self.selcx.tcx();
                         pending_obligation.stalled_on =
-                            trait_ref_type_vars(self.selcx, data.to_poly_trait_ref(tcx));
+                            trait_ref_infer_vars(self.selcx, data.to_poly_trait_ref(tcx));
                         ProcessResult::Unchanged
                     }
-                    Ok(Some(os)) => ProcessResult::Changed(mk_pending(infcx, os)),
+                    Ok(Some(os)) => ProcessResult::Changed(mk_pending(os)),
                     Err(e) => ProcessResult::Error(CodeProjectionError(e)),
                 }
             }
@@ -477,11 +471,11 @@ impl<'a, 'b, 'tcx> ObligationProcessor for FulfillProcessor<'a, 'b, 'tcx> {
                             vec![TyOrConstInferVar::maybe_from_ty(ty).unwrap()];
                         ProcessResult::Unchanged
                     }
-                    Some(os) => ProcessResult::Changed(mk_pending(infcx, os)),
+                    Some(os) => ProcessResult::Changed(mk_pending(os)),
                 }
             }
 
-            ty::PredicateKind::Subtype(subtype) => {
+            &ty::PredicateKind::Subtype(subtype) => {
                 match self.selcx.infcx().subtype_predicate(
                     &obligation.cause,
                     obligation.param_env,
@@ -495,7 +489,7 @@ impl<'a, 'b, 'tcx> ObligationProcessor for FulfillProcessor<'a, 'b, 'tcx> {
                         ];
                         ProcessResult::Unchanged
                     }
-                    Some(Ok(ok)) => ProcessResult::Changed(mk_pending(infcx, ok.obligations)),
+                    Some(Ok(ok)) => ProcessResult::Changed(mk_pending(ok.obligations)),
                     Some(Err(err)) => {
                         let expected_found = ExpectedFound::new(
                             subtype.skip_binder().a_is_expected,
@@ -603,8 +597,8 @@ impl<'a, 'b, 'tcx> ObligationProcessor for FulfillProcessor<'a, 'b, 'tcx> {
     }
 }
 
-/// Returns the set of type inference variables contained in a trait ref.
-fn trait_ref_type_vars<'a, 'tcx>(
+/// Returns the set of inference variables contained in a trait ref.
+fn trait_ref_infer_vars<'a, 'tcx>(
     selcx: &mut SelectionContext<'a, 'tcx>,
     trait_ref: ty::PolyTraitRef<'tcx>,
 ) -> Vec<TyOrConstInferVar<'tcx>> {

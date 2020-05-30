@@ -688,7 +688,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
     ) -> Span {
         span.fresh_expansion(ExpnData {
             allow_internal_unstable,
-            ..ExpnData::default(ExpnKind::Desugaring(reason), span, self.sess.edition())
+            ..ExpnData::default(ExpnKind::Desugaring(reason), span, self.sess.edition(), None)
         })
     }
 
@@ -1126,6 +1126,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                                 kind: ExprKind::Path(qself.clone(), path.clone()),
                                 span: ty.span,
                                 attrs: AttrVec::new(),
+                                tokens: None,
                             };
 
                             let ct = self.with_new_scopes(|this| hir::AnonConst {

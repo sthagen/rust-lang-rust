@@ -2759,7 +2759,7 @@ impl<'a, 'tcx> AstConv<'tcx> for FnCtxt<'a, 'tcx> {
         ty::GenericPredicates {
             parent: None,
             predicates: tcx.arena.alloc_from_iter(self.param_env.caller_bounds.iter().filter_map(
-                |&predicate| match predicate.kind() {
+                |predicate| match predicate.kind() {
                     ty::PredicateKind::Trait(ref data, _)
                         if data.skip_binder().self_ty().is_param(index) =>
                     {
@@ -5433,7 +5433,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 debug!("instantiate_value_path: def_id={:?} container={:?}", def_id, container);
                 match container {
                     ty::TraitContainer(trait_did) => {
-                        callee::check_legal_trait_for_method_call(tcx, span, trait_did)
+                        callee::check_legal_trait_for_method_call(tcx, span, None, trait_did)
                     }
                     ty::ImplContainer(impl_def_id) => {
                         if segments.len() == 1 {

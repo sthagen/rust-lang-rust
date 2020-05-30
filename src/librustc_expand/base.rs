@@ -13,6 +13,7 @@ use rustc_data_structures::sync::{self, Lrc};
 use rustc_errors::{DiagnosticBuilder, ErrorReported};
 use rustc_parse::{self, parser, MACRO_ARGUMENTS};
 use rustc_session::parse::ParseSess;
+use rustc_span::def_id::DefId;
 use rustc_span::edition::Edition;
 use rustc_span::hygiene::{AstPass, ExpnData, ExpnId, ExpnKind};
 use rustc_span::source_map::SourceMap;
@@ -593,6 +594,7 @@ impl DummyResult {
             kind: if is_error { ast::ExprKind::Err } else { ast::ExprKind::Tup(Vec::new()) },
             span: sp,
             attrs: ast::AttrVec::new(),
+            tokens: None,
         })
     }
 
@@ -857,7 +859,13 @@ impl SyntaxExtension {
         SyntaxExtension::default(SyntaxExtensionKind::NonMacroAttr { mark_used }, edition)
     }
 
-    pub fn expn_data(&self, parent: ExpnId, call_site: Span, descr: Symbol) -> ExpnData {
+    pub fn expn_data(
+        &self,
+        parent: ExpnId,
+        call_site: Span,
+        descr: Symbol,
+        macro_def_id: Option<DefId>,
+    ) -> ExpnData {
         ExpnData {
             kind: ExpnKind::Macro(self.macro_kind(), descr),
             parent,
@@ -867,6 +875,7 @@ impl SyntaxExtension {
             allow_internal_unsafe: self.allow_internal_unsafe,
             local_inner_macros: self.local_inner_macros,
             edition: self.edition,
+            macro_def_id,
         }
     }
 }

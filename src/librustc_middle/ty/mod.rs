@@ -17,11 +17,11 @@ use crate::ty;
 use crate::ty::subst::{InternalSubsts, Subst, SubstsRef};
 use crate::ty::util::{Discr, IntTypeExt};
 use rustc_ast::ast;
-use rustc_ast::node_id::{NodeId, NodeMap, NodeSet};
 use rustc_attr as attr;
 use rustc_data_structures::captures::Captures;
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::fx::FxHashMap;
+use rustc_data_structures::fx::FxHashSet;
 use rustc_data_structures::fx::FxIndexMap;
 use rustc_data_structures::sorted_map::SortedIndexMultiMap;
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
@@ -31,7 +31,7 @@ use rustc_hir as hir;
 use rustc_hir::def::{CtorKind, CtorOf, DefKind, Namespace, Res};
 use rustc_hir::def_id::{CrateNum, DefId, DefIdMap, LocalDefId, CRATE_DEF_INDEX};
 use rustc_hir::lang_items::{FnMutTraitLangItem, FnOnceTraitLangItem, FnTraitLangItem};
-use rustc_hir::{Constness, GlobMap, Node, TraitMap};
+use rustc_hir::{Constness, Node};
 use rustc_index::vec::{Idx, IndexVec};
 use rustc_macros::HashStable;
 use rustc_serialize::{self, Encodable, Encoder};
@@ -120,12 +120,12 @@ mod sty;
 pub struct ResolverOutputs {
     pub definitions: rustc_hir::definitions::Definitions,
     pub cstore: Box<CrateStoreDyn>,
-    pub extern_crate_map: NodeMap<CrateNum>,
-    pub trait_map: TraitMap<NodeId>,
-    pub maybe_unused_trait_imports: NodeSet,
-    pub maybe_unused_extern_crates: Vec<(NodeId, Span)>,
-    pub export_map: ExportMap<NodeId>,
-    pub glob_map: GlobMap,
+    pub extern_crate_map: FxHashMap<LocalDefId, CrateNum>,
+    pub trait_map: FxHashMap<hir::HirId, Vec<hir::TraitCandidate<hir::HirId>>>,
+    pub maybe_unused_trait_imports: FxHashSet<LocalDefId>,
+    pub maybe_unused_extern_crates: Vec<(LocalDefId, Span)>,
+    pub export_map: ExportMap<hir::HirId>,
+    pub glob_map: FxHashMap<LocalDefId, FxHashSet<Symbol>>,
     /// Extern prelude entries. The value is `true` if the entry was introduced
     /// via `extern crate` item and not `--extern` option or compiler built-in.
     pub extern_prelude: FxHashMap<Symbol, bool>,
@@ -1032,6 +1032,7 @@ impl<'tcx> PartialEq for Predicate<'tcx> {
 impl<'tcx> Eq for Predicate<'tcx> {}
 
 impl<'tcx> Predicate<'tcx> {
+    #[inline(always)]
     pub fn kind(self) -> &'tcx PredicateKind<'tcx> {
         self.kind
     }
@@ -1092,12 +1093,6 @@ pub struct CratePredicatesMap<'tcx> {
     /// predicate of its outlive bounds. If an item has no outlives
     /// bounds, it will have no entry.
     pub predicates: FxHashMap<DefId, &'tcx [(ty::Predicate<'tcx>, Span)]>,
-}
-
-impl<'tcx> AsRef<Predicate<'tcx>> for Predicate<'tcx> {
-    fn as_ref(&self) -> &Predicate<'tcx> {
-        self
-    }
 }
 
 impl<'tcx> Predicate<'tcx> {
@@ -1172,7 +1167,8 @@ impl<'tcx> Predicate<'tcx> {
         // this trick achieves that).
 
         let substs = &trait_ref.skip_binder().substs;
-        let predicate = match self.kind() {
+        let kind = self.kind();
+        let new = match kind {
             &PredicateKind::Trait(ref binder, constness) => {
                 PredicateKind::Trait(binder.map_bound(|data| data.subst(tcx, substs)), constness)
             }
@@ -1201,7 +1197,7 @@ impl<'tcx> Predicate<'tcx> {
             }
         };
 
-        predicate.to_predicate(tcx)
+        if new != *kind { new.to_predicate(tcx) } else { self }
     }
 }
 
@@ -1214,17 +1210,17 @@ pub struct TraitPredicate<'tcx> {
 pub type PolyTraitPredicate<'tcx> = ty::Binder<TraitPredicate<'tcx>>;
 
 impl<'tcx> TraitPredicate<'tcx> {
-    pub fn def_id(&self) -> DefId {
+    pub fn def_id(self) -> DefId {
         self.trait_ref.def_id
     }
 
-    pub fn self_ty(&self) -> Ty<'tcx> {
+    pub fn self_ty(self) -> Ty<'tcx> {
         self.trait_ref.self_ty()
     }
 }
 
 impl<'tcx> PolyTraitPredicate<'tcx> {
-    pub fn def_id(&self) -> DefId {
+    pub fn def_id(self) -> DefId {
         // Ok to skip binder since trait `DefId` does not care about regions.
         self.skip_binder().def_id()
     }
@@ -1320,6 +1316,7 @@ pub trait ToPredicate<'tcx> {
 }
 
 impl ToPredicate<'tcx> for PredicateKind<'tcx> {
+    #[inline(always)]
     fn to_predicate(&self, tcx: TyCtxt<'tcx>) -> Predicate<'tcx> {
         tcx.mk_predicate(*self)
     }

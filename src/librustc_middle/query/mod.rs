@@ -1,5 +1,4 @@
 use crate::dep_graph::SerializedDepNodeIndex;
-use crate::mir;
 use crate::mir::interpret::{GlobalId, LitToConstInput};
 use crate::traits;
 use crate::traits::query::{
@@ -553,13 +552,6 @@ rustc_queries! {
             }
         }
 
-        /// Extracts a field of a (variant of a) const.
-        query const_field(
-            key: ty::ParamEnvAnd<'tcx, (&'tcx ty::Const<'tcx>, mir::Field)>
-        ) -> ConstValue<'tcx> {
-            desc { "extract field of const" }
-        }
-
         /// Destructure a constant ADT or array into its variant index and its
         /// field values.
         query destructure_const(
@@ -981,7 +973,9 @@ rustc_queries! {
             desc { "fetching what a crate is named" }
         }
         query item_children(_: DefId) -> &'tcx [Export<hir::HirId>] {}
-        query extern_mod_stmt_cnum(_: DefId) -> Option<CrateNum> {}
+        query extern_mod_stmt_cnum(_: LocalDefId) -> Option<CrateNum> {
+            desc { "fetching extern module statement" }
+        }
 
         query get_lib_features(_: CrateNum) -> LibFeatures {
             storage(ArenaCacheSelector<'tcx>)
@@ -1040,7 +1034,7 @@ rustc_queries! {
             desc { "generating a postorder list of CrateNums" }
         }
 
-        query upvars(_: DefId) -> Option<&'tcx FxIndexMap<hir::HirId, hir::Upvar>> {
+        query upvars_mentioned(_: DefId) -> Option<&'tcx FxIndexMap<hir::HirId, hir::Upvar>> {
             eval_always
         }
         query maybe_unused_trait_import(def_id: LocalDefId) -> bool {
@@ -1048,7 +1042,7 @@ rustc_queries! {
             desc { |tcx| "maybe_unused_trait_import for `{}`", tcx.def_path_str(def_id.to_def_id()) }
         }
         query maybe_unused_extern_crates(_: CrateNum)
-            -> &'tcx [(DefId, Span)] {
+            -> &'tcx [(LocalDefId, Span)] {
             eval_always
             desc { "looking up all possibly unused extern crates" }
         }

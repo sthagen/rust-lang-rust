@@ -347,7 +347,7 @@ struct DiagnosticMetadata<'ast> {
     currently_processing_generics: bool,
 
     /// The current enclosing function (used for better errors).
-    current_function: Option<Span>,
+    current_function: Option<(FnKind<'ast>, Span)>,
 
     /// A list of labels as of yet unused. Labels will be removed from this map when
     /// they are used (in a `break` or `continue` statement)
@@ -466,7 +466,8 @@ impl<'a, 'ast> Visitor<'ast> for LateResolutionVisitor<'a, '_, 'ast> {
             FnKind::Fn(FnCtxt::Free | FnCtxt::Foreign, ..) => FnItemRibKind,
             FnKind::Fn(FnCtxt::Assoc(_), ..) | FnKind::Closure(..) => NormalRibKind,
         };
-        let previous_value = replace(&mut self.diagnostic_metadata.current_function, Some(sp));
+        let previous_value =
+            replace(&mut self.diagnostic_metadata.current_function, Some((fn_kind, sp)));
         debug!("(resolving function) entering function");
         let declaration = fn_kind.decl();
 
@@ -2208,7 +2209,8 @@ impl<'a, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
     ) -> SmallVec<[NodeId; 1]> {
         let mut import_ids = smallvec![];
         while let NameBindingKind::Import { import, binding, .. } = kind {
-            self.r.maybe_unused_trait_imports.insert(import.id);
+            let id = self.r.definitions.local_def_id(import.id);
+            self.r.maybe_unused_trait_imports.insert(id);
             self.r.add_to_glob_map(&import, trait_name);
             import_ids.push(import.id);
             kind = &binding.kind;
