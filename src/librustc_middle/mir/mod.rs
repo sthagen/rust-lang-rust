@@ -1072,7 +1072,8 @@ pub enum TerminatorKind<'tcx> {
     Abort,
 
     /// Indicates a normal return. The return place should have
-    /// been filled in by now. This should occur at most once.
+    /// been filled in before this executes. This can occur multiple times
+    /// in different basic blocks.
     Return,
 
     /// Indicates a terminator that can never be reached.
@@ -1192,6 +1193,10 @@ pub enum TerminatorKind<'tcx> {
 
         /// Miscellaneous options for the inline assembly.
         options: InlineAsmOptions,
+
+        /// Source spans for each line of the inline assembly code. These are
+        /// used to map assembler errors back to the line in the source code.
+        line_spans: &'tcx [Span],
 
         /// Destination block after the inline assembly returns, unless it is
         /// diverging (InlineAsmOptions::NORETURN).
@@ -1595,7 +1600,7 @@ impl<'tcx> TerminatorKind<'tcx> {
             }
             FalseEdges { .. } => write!(fmt, "falseEdges"),
             FalseUnwind { .. } => write!(fmt, "falseUnwind"),
-            InlineAsm { template, ref operands, options, destination: _ } => {
+            InlineAsm { template, ref operands, options, .. } => {
                 write!(fmt, "asm!(\"{}\"", InlineAsmTemplatePiece::to_string(template))?;
                 for op in operands {
                     write!(fmt, ", ")?;
