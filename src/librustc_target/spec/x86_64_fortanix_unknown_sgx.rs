@@ -48,8 +48,10 @@ pub fn target() -> Result<Target, String> {
         "ENCLAVE_SIZE",
         "CFGDATA_BASE",
         "DEBUG",
-        "EH_FRM_HDR_BASE",
-        "EH_FRM_HDR_SIZE",
+        "EH_FRM_HDR_OFFSET",
+        "EH_FRM_HDR_LEN",
+        "EH_FRM_OFFSET",
+        "EH_FRM_LEN",
         "TEXT_BASE",
         "TEXT_SIZE",
     ];
@@ -61,7 +63,8 @@ pub fn target() -> Result<Target, String> {
         max_atomic_width: Some(64),
         panic_strategy: PanicStrategy::Unwind,
         cpu: "x86-64".into(),
-        features: "+rdrnd,+rdseed".into(),
+        features: "+rdrnd,+rdseed,+lvi-cfi,+lvi-load-hardening".into(),
+        llvm_args: vec!["--x86-experimental-lvi-inline-asm-hardening".into()],
         position_independent_executables: true,
         pre_link_args: iter::once((
             LinkerFlavor::Lld(LldFlavor::Ld),

@@ -88,6 +88,17 @@ impl<'a, 'tcx> Visitor<'tcx> for FindHirNodeVisitor<'a, 'tcx> {
         if let (None, Some(ty)) =
             (self.found_local_pattern, self.node_ty_contains_target(local.hir_id))
         {
+            // FIXME: There's a trade-off here - we can either check that our target span
+            // is contained in `local.span` or not. If we choose to check containment
+            // we can avoid some spurious suggestions (see #72690), but we lose
+            // the ability to report on things like:
+            //
+            // ```
+            // let x = vec![];
+            // ```
+            //
+            // because the target span will be in the macro expansion of `vec![]`.
+            // At present we choose not to check containment.
             self.found_local_pattern = Some(&*local.pat);
             self.found_node_ty = Some(ty);
         }
@@ -99,15 +110,17 @@ impl<'a, 'tcx> Visitor<'tcx> for FindHirNodeVisitor<'a, 'tcx> {
             if let (None, Some(ty)) =
                 (self.found_arg_pattern, self.node_ty_contains_target(param.hir_id))
             {
-                self.found_arg_pattern = Some(&*param.pat);
-                self.found_node_ty = Some(ty);
+                if self.target_span.contains(param.pat.span) {
+                    self.found_arg_pattern = Some(&*param.pat);
+                    self.found_node_ty = Some(ty);
+                }
             }
         }
         intravisit::walk_body(self, body);
     }
 
     fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
-        if let ExprKind::MethodCall(_, call_span, exprs) = expr.kind {
+        if let ExprKind::MethodCall(_, call_span, exprs, _) = expr.kind {
             if call_span == self.target_span
                 && Some(self.target)
                     == self.infcx.in_progress_tables.and_then(|tables| {
@@ -294,7 +307,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             // 3 |     let _ = x.sum() as f64;
             //   |               ^^^ cannot infer type for `S`
             span
-        } else if let Some(ExprKind::MethodCall(_, call_span, _)) =
+        } else if let Some(ExprKind::MethodCall(_, call_span, _, _)) =
             local_visitor.found_method_call.map(|e| &e.kind)
         {
             // Point at the call instead of the whole expression:
@@ -455,7 +468,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             let msg = if let Some(simple_ident) = pattern.simple_ident() {
                 match pattern.span.desugaring_kind() {
                     None => format!("consider giving `{}` {}", simple_ident, suffix),
-                    Some(DesugaringKind::ForLoop) => {
+                    Some(DesugaringKind::ForLoop(_)) => {
                         "the element type for this iterator is not specified".to_string()
                     }
                     _ => format!("this needs {}", suffix),
@@ -550,7 +563,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         let error_code = error_code.into();
         let mut err = self.tcx.sess.struct_span_err_with_code(
             local_visitor.target_span,
-            &format!("type annotations needed"),
+            "type annotations needed",
             error_code,
         );
 

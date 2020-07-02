@@ -341,7 +341,7 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
         let mut module = ModuleData {
             mod_path: vec![Ident::from_str(&self.cx.ecfg.crate_name)],
             directory: match self.cx.source_map().span_to_unmapped_path(krate.span) {
-                FileName::Real(path) => path,
+                FileName::Real(name) => name.into_local_path(),
                 other => PathBuf::from(other.to_string()),
             },
         };
@@ -705,7 +705,7 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
                 SyntaxExtensionKind::Attr(expander) => {
                     self.gate_proc_macro_input(&item);
                     self.gate_proc_macro_attr_item(span, &item);
-                    let tokens = item.into_tokens();
+                    let tokens = item.into_tokens(self.cx.parse_sess);
                     let attr_item = attr.unwrap_normal_item();
                     if let MacArgs::Eq(..) = attr_item.args {
                         self.cx.span_err(span, "key-value macro attributes are not supported");
@@ -1789,6 +1789,7 @@ pub struct ExpansionConfig<'feat> {
     pub trace_mac: bool,
     pub should_test: bool, // If false, strip `#[test]` nodes
     pub keep_macs: bool,
+    pub span_debug: bool, // If true, use verbose debugging for `proc_macro::Span`
 }
 
 impl<'feat> ExpansionConfig<'feat> {
@@ -1800,6 +1801,7 @@ impl<'feat> ExpansionConfig<'feat> {
             trace_mac: false,
             should_test: false,
             keep_macs: false,
+            span_debug: false,
         }
     }
 

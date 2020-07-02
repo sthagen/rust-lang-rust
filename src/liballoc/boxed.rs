@@ -92,11 +92,13 @@
 //! pub struct Foo;
 //!
 //! #[no_mangle]
+//! #[allow(improper_ctypes_definitions)]
 //! pub extern "C" fn foo_new() -> Box<Foo> {
 //!     Box::new(Foo)
 //! }
 //!
 //! #[no_mangle]
+//! #[allow(improper_ctypes_definitions)]
 //! pub extern "C" fn foo_delete(_: Option<Box<Foo>>) {}
 //! ```
 //!
@@ -248,7 +250,7 @@ impl<T> Box<T> {
     #[unstable(feature = "box_into_boxed_slice", issue = "71582")]
     pub fn into_boxed_slice(boxed: Box<T>) -> Box<[T]> {
         // *mut T and *mut [T; 1] have the same size and alignment
-        unsafe { Box::from_raw(Box::into_raw(boxed) as *mut [T; 1] as *mut [T]) }
+        unsafe { Box::from_raw(Box::into_raw(boxed) as *mut [T; 1]) }
     }
 }
 
@@ -311,7 +313,7 @@ impl<T> Box<mem::MaybeUninit<T>> {
     #[unstable(feature = "new_uninit", issue = "63291")]
     #[inline]
     pub unsafe fn assume_init(self) -> Box<T> {
-        Box::from_raw(Box::into_raw(self) as *mut T)
+        unsafe { Box::from_raw(Box::into_raw(self) as *mut T) }
     }
 }
 
@@ -349,7 +351,7 @@ impl<T> Box<[mem::MaybeUninit<T>]> {
     #[unstable(feature = "new_uninit", issue = "63291")]
     #[inline]
     pub unsafe fn assume_init(self) -> Box<[T]> {
-        Box::from_raw(Box::into_raw(self) as *mut [T])
+        unsafe { Box::from_raw(Box::into_raw(self) as *mut [T]) }
     }
 }
 
@@ -382,7 +384,10 @@ impl<T: ?Sized> Box<T> {
     ///
     /// unsafe {
     ///     let ptr = alloc(Layout::new::<i32>()) as *mut i32;
-    ///     *ptr = 5;
+    ///     // In general .write is required to avoid attempting to destruct
+    ///     // the (uninitialized) previous contents of `ptr`, though for this
+    ///     // simple example `*ptr = 5` would have worked as well.
+    ///     ptr.write(5);
     ///     let x = Box::from_raw(ptr);
     /// }
     /// ```
@@ -393,7 +398,7 @@ impl<T: ?Sized> Box<T> {
     #[stable(feature = "box_raw", since = "1.4.0")]
     #[inline]
     pub unsafe fn from_raw(raw: *mut T) -> Self {
-        Box(Unique::new_unchecked(raw))
+        Box(unsafe { Unique::new_unchecked(raw) })
     }
 
     /// Consumes the `Box`, returning a wrapped raw pointer.

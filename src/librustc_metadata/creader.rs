@@ -10,7 +10,7 @@ use rustc_data_structures::svh::Svh;
 use rustc_data_structures::sync::Lrc;
 use rustc_errors::struct_span_err;
 use rustc_expand::base::SyntaxExtension;
-use rustc_hir::def_id::{CrateNum, LOCAL_CRATE};
+use rustc_hir::def_id::{CrateNum, LocalDefId, LOCAL_CRATE};
 use rustc_hir::definitions::Definitions;
 use rustc_index::vec::IndexVec;
 use rustc_middle::middle::cstore::DepKind;
@@ -18,7 +18,7 @@ use rustc_middle::middle::cstore::{
     CrateSource, ExternCrate, ExternCrateSource, MetadataLoaderDyn,
 };
 use rustc_middle::ty::TyCtxt;
-use rustc_session::config::{self, CrateType};
+use rustc_session::config::{self, CrateType, ExternLocation};
 use rustc_session::lint;
 use rustc_session::output::validate_crate_name;
 use rustc_session::search_paths::PathKind;
@@ -452,6 +452,14 @@ impl<'a> CrateLoader<'a> {
         if dep.is_none() {
             self.used_extern_options.insert(name);
         }
+        if !name.as_str().is_ascii() {
+            self.sess
+                .struct_span_err(
+                    span,
+                    &format!("cannot load a crate with a non-ascii name `{}`", name,),
+                )
+                .emit();
+        }
         self.maybe_resolve_crate(name, span, dep_kind, dep).unwrap_or_else(|err| err.report())
     }
 
@@ -698,7 +706,9 @@ impl<'a> CrateLoader<'a> {
     }
 
     fn inject_profiler_runtime(&mut self) {
-        if (self.sess.opts.debugging_opts.profile || self.sess.opts.cg.profile_generate.enabled())
+        if (self.sess.opts.debugging_opts.instrument_coverage
+            || self.sess.opts.debugging_opts.profile
+            || self.sess.opts.cg.profile_generate.enabled())
             && !self.sess.opts.debugging_opts.no_profiler_runtime
         {
             info!("loading profiler");
@@ -850,7 +860,11 @@ impl<'a> CrateLoader<'a> {
         // Make a point span rather than covering the whole file
         let span = krate.span.shrink_to_lo();
         // Complain about anything left over
-        for (name, _) in self.sess.opts.externs.iter() {
+        for (name, entry) in self.sess.opts.externs.iter() {
+            if let ExternLocation::FoundInLibrarySearchDirectories = entry.location {
+                // Don't worry about pathless `--extern foo` sysroot references
+                continue;
+            }
             if !self.used_extern_options.contains(&Symbol::intern(name)) {
                 self.sess.parse_sess.buffer_lint(
                     lint::builtin::UNUSED_CRATE_DEPENDENCIES,
@@ -882,6 +896,7 @@ impl<'a> CrateLoader<'a> {
         &mut self,
         item: &ast::Item,
         definitions: &Definitions,
+        def_id: LocalDefId,
     ) -> CrateNum {
         match item.kind {
             ast::ItemKind::ExternCrate(orig_name) => {
@@ -904,7 +919,6 @@ impl<'a> CrateLoader<'a> {
 
                 let cnum = self.resolve_crate(name, item.span, dep_kind, None);
 
-                let def_id = definitions.opt_local_def_id(item.id).unwrap();
                 let path_len = definitions.def_path(def_id).data.len();
                 self.update_extern_crate(
                     cnum,
@@ -930,7 +944,7 @@ impl<'a> CrateLoader<'a> {
                 src: ExternCrateSource::Path,
                 span,
                 // to have the least priority in `update_extern_crate`
-                path_len: usize::max_value(),
+                path_len: usize::MAX,
                 dependency_of: LOCAL_CRATE,
             },
         );

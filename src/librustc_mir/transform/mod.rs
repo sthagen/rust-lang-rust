@@ -28,6 +28,7 @@ pub mod elaborate_drops;
 pub mod generator;
 pub mod inline;
 pub mod instcombine;
+pub mod instrument_coverage;
 pub mod no_landing_pads;
 pub mod nrvo;
 pub mod promote_consts;
@@ -49,11 +50,13 @@ pub(crate) fn provide(providers: &mut Providers<'_>) {
         mir_const,
         mir_const_qualif,
         mir_validated,
+        mir_drops_elaborated_and_const_checked,
         optimized_mir,
         is_mir_available,
         promoted_mir,
         ..*providers
     };
+    instrument_coverage::provide(providers);
 }
 
 fn is_mir_available(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
@@ -287,6 +290,10 @@ fn mir_validated(
             // What we need to run borrowck etc.
             &promote_pass,
             &simplify::SimplifyCfg::new("qualify-consts"),
+            // If the `instrument-coverage` option is enabled, analyze the CFG, identify each
+            // conditional branch, construct a coverage map to be passed to LLVM, and inject counters
+            // where needed.
+            &instrument_coverage::InstrumentCoverage,
         ]],
     );
 
@@ -294,12 +301,31 @@ fn mir_validated(
     (tcx.alloc_steal_mir(body), tcx.alloc_steal_promoted(promoted))
 }
 
-fn run_optimization_passes<'tcx>(
+fn mir_drops_elaborated_and_const_checked<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    def_id: LocalDefId,
+) -> Steal<Body<'tcx>> {
+    // (Mir-)Borrowck uses `mir_validated`, so we have to force it to
+    // execute before we can steal.
+    tcx.ensure().mir_borrowck(def_id);
+
+    let (body, _) = tcx.mir_validated(def_id);
+    let mut body = body.steal();
+
+    run_post_borrowck_cleanup_passes(tcx, &mut body, def_id, None);
+    check_consts::post_drop_elaboration::check_live_drops(tcx, def_id, &body);
+    tcx.alloc_steal_mir(body)
+}
+
+/// After this series of passes, no lifetime analysis based on borrowing can be done.
+fn run_post_borrowck_cleanup_passes<'tcx>(
     tcx: TyCtxt<'tcx>,
     body: &mut Body<'tcx>,
     def_id: LocalDefId,
     promoted: Option<Promoted>,
 ) {
+    debug!("post_borrowck_cleanup({:?})", def_id);
+
     let post_borrowck_cleanup: &[&dyn MirPass<'tcx>] = &[
         // Remove all things only needed by analysis
         &no_landing_pads::NoLandingPads::new(tcx),
@@ -318,9 +344,24 @@ fn run_optimization_passes<'tcx>(
         // but before optimizations begin.
         &add_retag::AddRetag,
         &simplify::SimplifyCfg::new("elaborate-drops"),
-        // No lifetime analysis based on borrowing can be done from here on out.
     ];
 
+    run_passes(
+        tcx,
+        body,
+        InstanceDef::Item(def_id.to_def_id()),
+        promoted,
+        MirPhase::DropElab,
+        &[post_borrowck_cleanup],
+    );
+}
+
+fn run_optimization_passes<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    body: &mut Body<'tcx>,
+    def_id: LocalDefId,
+    promoted: Option<Promoted>,
+) {
     let optimizations: &[&dyn MirPass<'tcx>] = &[
         &unreachable_prop::UnreachablePropagation,
         &uninhabited_enum_branching::UninhabitedEnumBranching,
@@ -368,6 +409,7 @@ fn run_optimization_passes<'tcx>(
 
     let mir_opt_level = tcx.sess.opts.debugging_opts.mir_opt_level;
 
+    #[rustfmt::skip]
     run_passes(
         tcx,
         body,
@@ -375,7 +417,6 @@ fn run_optimization_passes<'tcx>(
         promoted,
         MirPhase::Optimized,
         &[
-            post_borrowck_cleanup,
             if mir_opt_level > 0 { optimizations } else { no_optimizations },
             pre_codegen_cleanup,
         ],
@@ -393,12 +434,7 @@ fn optimized_mir(tcx: TyCtxt<'_>, def_id: DefId) -> Body<'_> {
 
     let def_id = def_id.expect_local();
 
-    // (Mir-)Borrowck uses `mir_validated`, so we have to force it to
-    // execute before we can steal.
-    tcx.ensure().mir_borrowck(def_id);
-
-    let (body, _) = tcx.mir_validated(def_id);
-    let mut body = body.steal();
+    let mut body = tcx.mir_drops_elaborated_and_const_checked(def_id).steal();
     run_optimization_passes(tcx, &mut body, def_id, None);
 
     debug_assert!(!body.has_free_regions(), "Free regions in optimized MIR");
@@ -418,6 +454,7 @@ fn promoted_mir(tcx: TyCtxt<'_>, def_id: DefId) -> IndexVec<Promoted, Body<'_>> 
     let mut promoted = promoted.steal();
 
     for (p, mut body) in promoted.iter_enumerated_mut() {
+        run_post_borrowck_cleanup_passes(tcx, &mut body, def_id, Some(p));
         run_optimization_passes(tcx, &mut body, def_id, Some(p));
     }
 

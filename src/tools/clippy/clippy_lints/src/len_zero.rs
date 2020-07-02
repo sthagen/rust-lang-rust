@@ -1,4 +1,4 @@
-use crate::utils::{get_item_name, snippet_with_applicability, span_lint, span_lint_and_sugg, walk_ptrs_ty};
+use crate::utils::{get_item_name, higher, snippet_with_applicability, span_lint, span_lint_and_sugg, walk_ptrs_ty};
 use rustc_ast::ast::LitKind;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_errors::Applicability;
@@ -211,7 +211,8 @@ fn check_impl_items(cx: &LateContext<'_, '_>, item: &Item<'_>, impl_items: &[Imp
 }
 
 fn check_cmp(cx: &LateContext<'_, '_>, span: Span, method: &Expr<'_>, lit: &Expr<'_>, op: &str, compare_to: u32) {
-    if let (&ExprKind::MethodCall(ref method_path, _, ref args), &ExprKind::Lit(ref lit)) = (&method.kind, &lit.kind) {
+    if let (&ExprKind::MethodCall(ref method_path, _, ref args, _), &ExprKind::Lit(ref lit)) = (&method.kind, &lit.kind)
+    {
         // check if we are in an is_empty() method
         if let Some(name) = get_item_name(cx, method) {
             if name.as_str() == "is_empty" {
@@ -259,6 +260,17 @@ fn check_len(
 
 /// Checks if this type has an `is_empty` method.
 fn has_is_empty(cx: &LateContext<'_, '_>, expr: &Expr<'_>) -> bool {
+    /// Special case ranges until `range_is_empty` is stabilized. See issue 3807.
+    fn should_skip_range(cx: &LateContext<'_, '_>, expr: &Expr<'_>) -> bool {
+        higher::range(cx, expr).map_or(false, |_| {
+            !cx.tcx
+                .features()
+                .declared_lib_features
+                .iter()
+                .any(|(name, _)| name.as_str() == "range_is_empty")
+        })
+    }
+
     /// Gets an `AssocItem` and return true if it matches `is_empty(self)`.
     fn is_is_empty(cx: &LateContext<'_, '_>, item: &ty::AssocItem) -> bool {
         if let ty::AssocKind::Fn = item.kind {
@@ -284,7 +296,11 @@ fn has_is_empty(cx: &LateContext<'_, '_>, expr: &Expr<'_>) -> bool {
         })
     }
 
-    let ty = &walk_ptrs_ty(cx.tables.expr_ty(expr));
+    if should_skip_range(cx, expr) {
+        return false;
+    }
+
+    let ty = &walk_ptrs_ty(cx.tables().expr_ty(expr));
     match ty.kind {
         ty::Dynamic(ref tt, ..) => {
             if let Some(principal) = tt.principal() {

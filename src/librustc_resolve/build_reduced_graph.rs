@@ -19,6 +19,7 @@ use rustc_ast::ast::{self, Block, ForeignItem, ForeignItemKind, Item, ItemKind, 
 use rustc_ast::ast::{AssocItem, AssocItemKind, MetaItemKind, StmtKind};
 use rustc_ast::token::{self, Token};
 use rustc_ast::visit::{self, AssocCtxt, Visitor};
+use rustc_ast_lowering::ResolverAstLowering;
 use rustc_attr as attr;
 use rustc_data_structures::sync::Lrc;
 use rustc_errors::{struct_span_err, Applicability};
@@ -95,24 +96,30 @@ impl<'a> Resolver<'a> {
     }
 
     crate fn get_module(&mut self, def_id: DefId) -> Module<'a> {
+        // If this is a local module, it will be in `module_map`, no need to recalculate it.
         if let Some(def_id) = def_id.as_local() {
             return self.module_map[&def_id];
         }
 
+        // Cache module resolution
         if let Some(&module) = self.extern_module_map.get(&def_id) {
             return module;
         }
 
         let (name, parent) = if def_id.index == CRATE_DEF_INDEX {
+            // This is the crate root
             (self.cstore().crate_name_untracked(def_id.krate), None)
         } else {
             let def_key = self.cstore().def_key(def_id);
             (
+                // This unwrap is safe: crates must always have a name
                 def_key.disambiguated_data.data.get_opt_name().unwrap(),
+                // This unwrap is safe since we know this isn't the root
                 Some(self.get_module(DefId { index: def_key.parent.unwrap(), ..def_id })),
             )
         };
 
+        // Allocate and return a new module with the information we found
         let kind = ModuleKind::Def(DefKind::Mod, def_id, name);
         let module = self.arenas.alloc_module(ModuleData::new(
             parent,
@@ -165,7 +172,7 @@ impl<'a> Resolver<'a> {
         fragment: &AstFragment,
         parent_scope: ParentScope<'a>,
     ) -> MacroRulesScope<'a> {
-        collect_definitions(&mut self.definitions, fragment, parent_scope.expansion);
+        collect_definitions(self, fragment, parent_scope.expansion);
         let mut visitor = BuildReducedGraphVisitor { r: self, parent_scope };
         fragment.visit_with(&mut visitor);
         visitor.parent_scope.macro_rules
@@ -479,6 +486,7 @@ impl<'a, 'b> BuildReducedGraphVisitor<'a, 'b> {
                             module_path.push(Segment {
                                 ident: Ident { name: kw::PathRoot, span: source.ident.span },
                                 id: Some(self.r.next_node_id()),
+                                has_generic_args: false,
                             });
                             source.ident.name = crate_name;
                         }
@@ -640,9 +648,9 @@ impl<'a, 'b> BuildReducedGraphVisitor<'a, 'b> {
                 } else if orig_name == Some(kw::SelfLower) {
                     self.r.graph_root
                 } else {
-                    let def_id = self.r.definitions.local_def_id(item.id);
+                    let def_id = self.r.local_def_id(item.id);
                     let crate_id =
-                        self.r.crate_loader.process_extern_crate(item, &self.r.definitions);
+                        self.r.crate_loader.process_extern_crate(item, &self.r.definitions, def_id);
                     self.r.extern_crate_map.insert(def_id, crate_id);
                     self.r.get_module(DefId { krate: crate_id, index: CRATE_DEF_INDEX })
                 };
@@ -697,7 +705,7 @@ impl<'a, 'b> BuildReducedGraphVisitor<'a, 'b> {
             ItemKind::Mod(..) if ident.name == kw::Invalid => {} // Crate root
 
             ItemKind::Mod(..) => {
-                let def_id = self.r.definitions.local_def_id(item.id);
+                let def_id = self.r.local_def_id(item.id);
                 let module_kind = ModuleKind::Def(DefKind::Mod, def_id.to_def_id(), ident.name);
                 let module = self.r.arenas.alloc_module(ModuleData {
                     no_implicit_prelude: parent.no_implicit_prelude || {
@@ -720,18 +728,15 @@ impl<'a, 'b> BuildReducedGraphVisitor<'a, 'b> {
 
             // These items live in the value namespace.
             ItemKind::Static(..) => {
-                let res =
-                    Res::Def(DefKind::Static, self.r.definitions.local_def_id(item.id).to_def_id());
+                let res = Res::Def(DefKind::Static, self.r.local_def_id(item.id).to_def_id());
                 self.r.define(parent, ident, ValueNS, (res, vis, sp, expansion));
             }
             ItemKind::Const(..) => {
-                let res =
-                    Res::Def(DefKind::Const, self.r.definitions.local_def_id(item.id).to_def_id());
+                let res = Res::Def(DefKind::Const, self.r.local_def_id(item.id).to_def_id());
                 self.r.define(parent, ident, ValueNS, (res, vis, sp, expansion));
             }
             ItemKind::Fn(..) => {
-                let res =
-                    Res::Def(DefKind::Fn, self.r.definitions.local_def_id(item.id).to_def_id());
+                let res = Res::Def(DefKind::Fn, self.r.local_def_id(item.id).to_def_id());
                 self.r.define(parent, ident, ValueNS, (res, vis, sp, expansion));
 
                 // Functions introducing procedural macros reserve a slot
@@ -740,17 +745,13 @@ impl<'a, 'b> BuildReducedGraphVisitor<'a, 'b> {
             }
 
             // These items live in the type namespace.
-            ItemKind::TyAlias(_, _, _, ref ty) => {
-                let def_kind = match ty.as_deref().and_then(|ty| ty.kind.opaque_top_hack()) {
-                    None => DefKind::TyAlias,
-                    Some(_) => DefKind::OpaqueTy,
-                };
-                let res = Res::Def(def_kind, self.r.definitions.local_def_id(item.id).to_def_id());
+            ItemKind::TyAlias(..) => {
+                let res = Res::Def(DefKind::TyAlias, self.r.local_def_id(item.id).to_def_id());
                 self.r.define(parent, ident, TypeNS, (res, vis, sp, expansion));
             }
 
             ItemKind::Enum(_, _) => {
-                let def_id = self.r.definitions.local_def_id(item.id).to_def_id();
+                let def_id = self.r.local_def_id(item.id).to_def_id();
                 self.r.variant_vis.insert(def_id, vis);
                 let module_kind = ModuleKind::Def(DefKind::Enum, def_id, ident.name);
                 let module = self.r.new_module(
@@ -765,17 +766,14 @@ impl<'a, 'b> BuildReducedGraphVisitor<'a, 'b> {
             }
 
             ItemKind::TraitAlias(..) => {
-                let res = Res::Def(
-                    DefKind::TraitAlias,
-                    self.r.definitions.local_def_id(item.id).to_def_id(),
-                );
+                let res = Res::Def(DefKind::TraitAlias, self.r.local_def_id(item.id).to_def_id());
                 self.r.define(parent, ident, TypeNS, (res, vis, sp, expansion));
             }
 
             // These items live in both the type and value namespaces.
             ItemKind::Struct(ref vdata, _) => {
                 // Define a name in the type namespace.
-                let def_id = self.r.definitions.local_def_id(item.id).to_def_id();
+                let def_id = self.r.local_def_id(item.id).to_def_id();
                 let res = Res::Def(DefKind::Struct, def_id);
                 self.r.define(parent, ident, TypeNS, (res, vis, sp, expansion));
 
@@ -808,7 +806,7 @@ impl<'a, 'b> BuildReducedGraphVisitor<'a, 'b> {
                     }
                     let ctor_res = Res::Def(
                         DefKind::Ctor(CtorOf::Struct, CtorKind::from_ast(vdata)),
-                        self.r.definitions.local_def_id(ctor_node_id).to_def_id(),
+                        self.r.local_def_id(ctor_node_id).to_def_id(),
                     );
                     self.r.define(parent, ident, ValueNS, (ctor_res, ctor_vis, sp, expansion));
                     self.r.struct_constructors.insert(def_id, (ctor_res, ctor_vis));
@@ -816,7 +814,7 @@ impl<'a, 'b> BuildReducedGraphVisitor<'a, 'b> {
             }
 
             ItemKind::Union(ref vdata, _) => {
-                let def_id = self.r.definitions.local_def_id(item.id).to_def_id();
+                let def_id = self.r.local_def_id(item.id).to_def_id();
                 let res = Res::Def(DefKind::Union, def_id);
                 self.r.define(parent, ident, TypeNS, (res, vis, sp, expansion));
 
@@ -825,7 +823,7 @@ impl<'a, 'b> BuildReducedGraphVisitor<'a, 'b> {
             }
 
             ItemKind::Trait(..) => {
-                let def_id = self.r.definitions.local_def_id(item.id).to_def_id();
+                let def_id = self.r.local_def_id(item.id).to_def_id();
 
                 // Add all the items within to a new module.
                 let module_kind = ModuleKind::Def(DefKind::Trait, def_id, ident.name);
@@ -850,18 +848,15 @@ impl<'a, 'b> BuildReducedGraphVisitor<'a, 'b> {
     /// Constructs the reduced graph for one foreign item.
     fn build_reduced_graph_for_foreign_item(&mut self, item: &ForeignItem) {
         let (res, ns) = match item.kind {
-            ForeignItemKind::Fn(..) => (
-                Res::Def(DefKind::Fn, self.r.definitions.local_def_id(item.id).to_def_id()),
-                ValueNS,
-            ),
-            ForeignItemKind::Static(..) => (
-                Res::Def(DefKind::Static, self.r.definitions.local_def_id(item.id).to_def_id()),
-                ValueNS,
-            ),
-            ForeignItemKind::TyAlias(..) => (
-                Res::Def(DefKind::ForeignTy, self.r.definitions.local_def_id(item.id).to_def_id()),
-                TypeNS,
-            ),
+            ForeignItemKind::Fn(..) => {
+                (Res::Def(DefKind::Fn, self.r.local_def_id(item.id).to_def_id()), ValueNS)
+            }
+            ForeignItemKind::Static(..) => {
+                (Res::Def(DefKind::Static, self.r.local_def_id(item.id).to_def_id()), ValueNS)
+            }
+            ForeignItemKind::TyAlias(..) => {
+                (Res::Def(DefKind::ForeignTy, self.r.local_def_id(item.id).to_def_id()), TypeNS)
+            }
             ForeignItemKind::MacCall(_) => unreachable!(),
         };
         let parent = self.parent_scope.module;
@@ -911,8 +906,7 @@ impl<'a, 'b> BuildReducedGraphVisitor<'a, 'b> {
                 | DefKind::ForeignTy
                 | DefKind::OpaqueTy
                 | DefKind::TraitAlias
-                | DefKind::AssocTy
-                | DefKind::AssocOpaqueTy,
+                | DefKind::AssocTy,
                 _,
             )
             | Res::PrimTy(..)
@@ -1165,7 +1159,7 @@ impl<'a, 'b> BuildReducedGraphVisitor<'a, 'b> {
     fn define_macro(&mut self, item: &ast::Item) -> MacroRulesScope<'a> {
         let parent_scope = self.parent_scope;
         let expansion = parent_scope.expansion;
-        let def_id = self.r.definitions.local_def_id(item.id);
+        let def_id = self.r.local_def_id(item.id);
         let (ext, ident, span, macro_rules) = match &item.kind {
             ItemKind::MacroDef(def) => {
                 let ext = Lrc::new(self.r.compile_macro(item, self.r.session.edition()));
@@ -1310,7 +1304,7 @@ impl<'a, 'b> Visitor<'b> for BuildReducedGraphVisitor<'a, 'b> {
         }
 
         // Add the item to the trait info.
-        let item_def_id = self.r.definitions.local_def_id(item.id).to_def_id();
+        let item_def_id = self.r.local_def_id(item.id).to_def_id();
         let (res, ns) = match item.kind {
             AssocItemKind::Const(..) => (Res::Def(DefKind::AssocConst, item_def_id), ValueNS),
             AssocItemKind::Fn(_, ref sig, _, _) => {
@@ -1412,7 +1406,7 @@ impl<'a, 'b> Visitor<'b> for BuildReducedGraphVisitor<'a, 'b> {
         let ident = variant.ident;
 
         // Define a name in the type namespace.
-        let def_id = self.r.definitions.local_def_id(variant.id).to_def_id();
+        let def_id = self.r.local_def_id(variant.id).to_def_id();
         let res = Res::Def(DefKind::Variant, def_id);
         self.r.define(parent, ident, TypeNS, (res, vis, variant.span, expn_id));
 
@@ -1430,7 +1424,7 @@ impl<'a, 'b> Visitor<'b> for BuildReducedGraphVisitor<'a, 'b> {
         // It's ok to use the variant's id as a ctor id since an
         // error will be reported on any use of such resolution anyway.
         let ctor_node_id = variant.data.ctor_id().unwrap_or(variant.id);
-        let ctor_def_id = self.r.definitions.local_def_id(ctor_node_id).to_def_id();
+        let ctor_def_id = self.r.local_def_id(ctor_node_id).to_def_id();
         let ctor_kind = CtorKind::from_ast(&variant.data);
         let ctor_res = Res::Def(DefKind::Ctor(CtorOf::Variant, ctor_kind), ctor_def_id);
         self.r.define(parent, ident, ValueNS, (ctor_res, ctor_vis, variant.span, expn_id));

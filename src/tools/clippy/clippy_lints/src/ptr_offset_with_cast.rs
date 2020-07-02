@@ -90,7 +90,7 @@ fn expr_as_ptr_offset_call<'a, 'tcx>(
     cx: &LateContext<'a, 'tcx>,
     expr: &'tcx Expr<'_>,
 ) -> Option<(&'tcx Expr<'tcx>, &'tcx Expr<'tcx>, Method)> {
-    if let ExprKind::MethodCall(ref path_segment, _, ref args) = expr.kind {
+    if let ExprKind::MethodCall(ref path_segment, _, ref args, _) = expr.kind {
         if is_expr_ty_raw_ptr(cx, &args[0]) {
             if path_segment.ident.name == sym!(offset) {
                 return Some((&args[0], &args[1], Method::Offset));
@@ -105,12 +105,12 @@ fn expr_as_ptr_offset_call<'a, 'tcx>(
 
 // Is the type of the expression a usize?
 fn is_expr_ty_usize<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, expr: &Expr<'_>) -> bool {
-    cx.tables.expr_ty(expr) == cx.tcx.types.usize
+    cx.tables().expr_ty(expr) == cx.tcx.types.usize
 }
 
 // Is the type of the expression a raw pointer?
 fn is_expr_ty_raw_ptr<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, expr: &Expr<'_>) -> bool {
-    cx.tables.expr_ty(expr).is_unsafe_ptr()
+    cx.tables().expr_ty(expr).is_unsafe_ptr()
 }
 
 fn build_suggestion<'a, 'tcx>(

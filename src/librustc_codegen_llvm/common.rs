@@ -206,7 +206,7 @@ impl ConstMethods<'tcx> for CodegenCx<'ll, 'tcx> {
         let len = s.as_str().len();
         let cs = consts::ptrcast(
             self.const_cstr(s, false),
-            self.type_ptr_to(self.layout_of(self.tcx.mk_str()).llvm_type(self)),
+            self.type_ptr_to(self.layout_of(self.tcx.types.str_).llvm_type(self)),
         );
         (cs, self.const_usize(len as u64))
     }
@@ -259,6 +259,7 @@ impl ConstMethods<'tcx> for CodegenCx<'ll, 'tcx> {
                     GlobalAlloc::Function(fn_instance) => self.get_fn_addr(fn_instance),
                     GlobalAlloc::Static(def_id) => {
                         assert!(self.tcx.is_static(def_id));
+                        assert!(!self.tcx.is_thread_local_static(def_id));
                         self.get_static(def_id)
                     }
                 };

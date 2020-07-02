@@ -347,7 +347,7 @@ impl Clean<GenericBound> for (ty::PolyTraitRef<'_>, &[TypeBinding]) {
 
         GenericBound::TraitBound(
             PolyTrait {
-                trait_: (*poly_trait_ref.skip_binder(), bounds).clean(cx),
+                trait_: (poly_trait_ref.skip_binder(), bounds).clean(cx),
                 generic_params: late_bound_regions,
             },
             hir::TraitBoundModifier::None,
@@ -500,7 +500,7 @@ impl<'a> Clean<WherePredicate> for ty::PolyTraitPredicate<'a> {
     fn clean(&self, cx: &DocContext<'_>) -> WherePredicate {
         let poly_trait_ref = self.map_bound(|pred| pred.trait_ref);
         WherePredicate::BoundPredicate {
-            ty: poly_trait_ref.self_ty().clean(cx),
+            ty: poly_trait_ref.skip_binder().self_ty().clean(cx),
             bounds: vec![poly_trait_ref.clean(cx)],
         }
     }
@@ -549,7 +549,7 @@ impl<'tcx> Clean<Option<WherePredicate>> for ty::PolyOutlivesPredicate<Ty<'tcx>,
 
 impl<'tcx> Clean<WherePredicate> for ty::PolyProjectionPredicate<'tcx> {
     fn clean(&self, cx: &DocContext<'_>) -> WherePredicate {
-        let ty::ProjectionPredicate { projection_ty, ty } = *self.skip_binder();
+        let ty::ProjectionPredicate { projection_ty, ty } = self.skip_binder();
         WherePredicate::EqPredicate { lhs: projection_ty.clean(cx), rhs: ty.clean(cx) }
     }
 }
@@ -755,7 +755,7 @@ impl<'a, 'tcx> Clean<Generics> for (&'a ty::Generics, ty::GenericPredicates<'tcx
                 let mut projection = None;
                 let param_idx = (|| {
                     if let Some(trait_ref) = p.to_opt_poly_trait_ref() {
-                        if let ty::Param(param) = trait_ref.self_ty().kind {
+                        if let ty::Param(param) = trait_ref.skip_binder().self_ty().kind {
                             return Some(param.index);
                         }
                     } else if let Some(outlives) = p.to_opt_type_outlives() {
@@ -1138,10 +1138,6 @@ impl Clean<Item> for hir::ImplItem<'_> {
                 let item_type = type_.def_id().and_then(|did| inline::build_ty(cx, did));
                 TypedefItem(Typedef { type_, generics: Generics::default(), item_type }, true)
             }
-            hir::ImplItemKind::OpaqueTy(ref bounds) => OpaqueTyItem(
-                OpaqueTy { bounds: bounds.clean(cx), generics: Generics::default() },
-                true,
-            ),
         };
         let local_did = cx.tcx.hir().local_def_id(self.hir_id);
         Item {
@@ -1181,7 +1177,7 @@ impl Clean<Item> for ty::AssocItem {
                         ty::ImplContainer(def_id) => cx.tcx.type_of(def_id),
                         ty::TraitContainer(_) => cx.tcx.types.self_param,
                     };
-                    let self_arg_ty = *sig.input(0).skip_binder();
+                    let self_arg_ty = sig.input(0).skip_binder();
                     if self_arg_ty == self_ty {
                         decl.inputs.values[0].type_ = Generic(String::from("Self"));
                     } else if let ty::Ref(_, ty, _) = self_arg_ty.kind {
@@ -1308,7 +1304,6 @@ impl Clean<Item> for ty::AssocItem {
                     )
                 }
             }
-            ty::AssocKind::OpaqueTy => unimplemented!(),
         };
 
         let visibility = match self.container {
@@ -1356,7 +1351,7 @@ impl Clean<Type> for hir::Ty<'_> {
                 Array(box ty.clean(cx), length)
             }
             TyKind::Tup(ref tys) => Tuple(tys.clean(cx)),
-            TyKind::Def(item_id, _) => {
+            TyKind::OpaqueDef(item_id, _) => {
                 let item = cx.tcx.hir().expect_item(item_id.id);
                 if let hir::ItemKind::OpaqueTy(ref ty) = item.kind {
                     ImplTrait(ty.bounds.clean(cx))
@@ -1684,7 +1679,7 @@ impl<'tcx> Clean<Type> for Ty<'tcx> {
                                 if let ty::PredicateKind::Projection(proj) = pred.kind() {
                                     let proj = proj.skip_binder();
                                     if proj.projection_ty.trait_ref(cx.tcx)
-                                        == *trait_ref.skip_binder()
+                                        == trait_ref.skip_binder()
                                     {
                                         Some(TypeBinding {
                                             name: cx
@@ -1722,7 +1717,7 @@ impl<'tcx> Clean<Type> for Ty<'tcx> {
             ty::Placeholder(..) => panic!("Placeholder"),
             ty::GeneratorWitness(..) => panic!("GeneratorWitness"),
             ty::Infer(..) => panic!("Infer"),
-            ty::Error => panic!("Error"),
+            ty::Error(_) => panic!("Error"),
         }
     }
 }

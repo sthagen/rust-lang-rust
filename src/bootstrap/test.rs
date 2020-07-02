@@ -154,6 +154,7 @@ impl Step for Cargotest {
     fn run(self, builder: &Builder<'_>) {
         let compiler = builder.compiler(self.stage, self.host);
         builder.ensure(compile::Rustc { compiler, target: compiler.host });
+        let cargo = builder.ensure(tool::Cargo { compiler, target: compiler.host });
 
         // Note that this is a short, cryptic, and not scoped directory name. This
         // is currently to minimize the length of path on Windows where we otherwise
@@ -165,7 +166,7 @@ impl Step for Cargotest {
         let mut cmd = builder.tool_cmd(Tool::CargoTest);
         try_run(
             builder,
-            cmd.arg(&builder.initial_cargo)
+            cmd.arg(&cargo)
                 .arg(&out_dir)
                 .env("RUSTC", builder.rustc(compiler))
                 .env("RUSTDOC", builder.rustdoc(compiler)),
@@ -360,8 +361,14 @@ impl Step for Miri {
 
         let miri =
             builder.ensure(tool::Miri { compiler, target: self.host, extra_features: Vec::new() });
-        if let Some(miri) = miri {
-            let mut cargo = builder.cargo(compiler, Mode::ToolRustc, host, "install");
+        let cargo_miri = builder.ensure(tool::CargoMiri {
+            compiler,
+            target: self.host,
+            extra_features: Vec::new(),
+        });
+        if let (Some(miri), Some(_cargo_miri)) = (miri, cargo_miri) {
+            let mut cargo =
+                builder.cargo(compiler, Mode::ToolRustc, SourceType::Submodule, host, "install");
             cargo.arg("xargo");
             // Configure `cargo install` path. cargo adds a `bin/`.
             cargo.env("CARGO_INSTALL_ROOT", &builder.out);
@@ -378,14 +385,16 @@ impl Step for Miri {
                 Mode::ToolRustc,
                 host,
                 "run",
-                "src/tools/miri",
+                "src/tools/miri/cargo-miri",
                 SourceType::Submodule,
                 &[],
             );
-            cargo.arg("--bin").arg("cargo-miri").arg("--").arg("miri").arg("setup");
+            cargo.arg("--").arg("miri").arg("setup");
 
             // Tell `cargo miri setup` where to find the sources.
             cargo.env("XARGO_RUST_SRC", builder.src.join("src"));
+            // Tell it where to find Miri.
+            cargo.env("MIRI", &miri);
             // Debug things.
             cargo.env("RUST_BACKTRACE", "1");
             // Overwrite bootstrap's `rustc` wrapper overwriting our flags.
@@ -437,7 +446,7 @@ impl Step for Miri {
             // miri tests need to know about the stage sysroot
             cargo.env("MIRI_SYSROOT", miri_sysroot);
             cargo.env("RUSTC_LIB_PATH", builder.rustc_libdir(compiler));
-            cargo.env("MIRI_PATH", miri);
+            cargo.env("MIRI", miri);
 
             cargo.arg("--").args(builder.config.cmd.test_args());
 
@@ -546,7 +555,7 @@ impl Step for Clippy {
 
         builder.add_rustc_lib_path(compiler, &mut cargo);
 
-        try_run(builder, &mut cargo.into());
+        builder.run(&mut cargo.into());
     }
 }
 
@@ -922,13 +931,6 @@ host_test!(UiFullDeps { path: "src/test/ui-fulldeps", mode: "ui", suite: "ui-ful
 host_test!(Rustdoc { path: "src/test/rustdoc", mode: "rustdoc", suite: "rustdoc" });
 
 host_test!(Pretty { path: "src/test/pretty", mode: "pretty", suite: "pretty" });
-test!(RunPassValgrindPretty {
-    path: "src/test/run-pass-valgrind/pretty",
-    mode: "pretty",
-    suite: "run-pass-valgrind",
-    default: false,
-    host: true
-});
 
 default_test!(RunMake { path: "src/test/run-make", mode: "run-make", suite: "run-make" });
 
@@ -1644,14 +1646,8 @@ impl Step for Crate {
     type Output = ();
     const DEFAULT: bool = true;
 
-    fn should_run(mut run: ShouldRun<'_>) -> ShouldRun<'_> {
-        let builder = run.builder;
-        for krate in run.builder.in_tree_crates("test") {
-            if !(krate.name.starts_with("rustc_") && krate.name.ends_with("san")) {
-                run = run.path(krate.local_path(&builder).to_str().unwrap());
-            }
-        }
-        run
+    fn should_run(run: ShouldRun<'_>) -> ShouldRun<'_> {
+        run.krate("test")
     }
 
     fn make_run(run: RunConfig<'_>) {
@@ -1701,7 +1697,8 @@ impl Step for Crate {
         // we're working with automatically.
         let compiler = builder.compiler_for(compiler.stage, compiler.host, target);
 
-        let mut cargo = builder.cargo(compiler, mode, target, test_kind.subcommand());
+        let mut cargo =
+            builder.cargo(compiler, mode, SourceType::InTree, target, test_kind.subcommand());
         match mode {
             Mode::Std => {
                 compile::std_cargo(builder, target, compiler.stage, &mut cargo);
@@ -1762,7 +1759,7 @@ impl Step for Crate {
         } else if builder.remote_tested(target) {
             cargo.env(
                 format!("CARGO_TARGET_{}_RUNNER", envify(&target)),
-                format!("{} run", builder.tool_exe(Tool::RemoteTestClient).display()),
+                format!("{} run 0", builder.tool_exe(Tool::RemoteTestClient).display()),
             );
         }
 

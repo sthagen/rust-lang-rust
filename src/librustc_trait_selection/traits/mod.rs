@@ -38,9 +38,9 @@ use rustc_span::Span;
 use std::fmt::Debug;
 
 pub use self::FulfillmentErrorCode::*;
+pub use self::ImplSource::*;
 pub use self::ObligationCauseCode::*;
 pub use self::SelectionError::*;
-pub use self::Vtable::*;
 
 pub use self::coherence::{add_placeholder_note, orphan_check, overlapping_impls};
 pub use self::coherence::{OrphanCheckErr, OverlapResult};
@@ -60,7 +60,6 @@ pub use self::specialize::specialization_graph::FutureCompatOverlapError;
 pub use self::specialize::specialization_graph::FutureCompatOverlapErrorKind;
 pub use self::specialize::{specialization_graph, translate_substs, OverlapError};
 pub use self::structural_match::search_for_structural_match_violation;
-pub use self::structural_match::type_marked_structural;
 pub use self::structural_match::NonStructuralMatchTy;
 pub use self::util::{elaborate_predicates, elaborate_trait_ref, elaborate_trait_refs};
 pub use self::util::{expand_trait_aliases, TraitAliasExpander};
@@ -540,13 +539,6 @@ fn type_implements_trait<'tcx>(
         trait_def_id, ty, params, param_env
     );
 
-    // Do not check on infer_types to avoid panic in evaluate_obligation.
-    if ty.has_infer_types() {
-        return false;
-    }
-
-    let ty = tcx.erase_regions(&ty);
-
     let trait_ref = ty::TraitRef { def_id: trait_def_id, substs: tcx.mk_substs_trait(ty, params) };
 
     let obligation = Obligation {
@@ -560,6 +552,7 @@ fn type_implements_trait<'tcx>(
 
 pub fn provide(providers: &mut ty::query::Providers<'_>) {
     object_safety::provide(providers);
+    structural_match::provide(providers);
     *providers = ty::query::Providers {
         specialization_graph_of: specialize::specialization_graph_provider,
         specializes: specialize::specializes,

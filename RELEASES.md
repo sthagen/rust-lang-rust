@@ -25,7 +25,7 @@ Compiler
 --------
 - [Rustc now respects the `-C codegen-units` flag in incremental mode.][70156]
   Additionally when in incremental mode rustc defaults to 256 codegen units.
-- [Refactored `catch_unwind`, to have zero-cost unless unwinding is enabled and
+- [Refactored `catch_unwind` to have zero-cost, unless unwinding is enabled and
   a panic is thrown.][67502]
 - [Added tier 3\* support for the `aarch64-unknown-none` and
   `aarch64-unknown-none-softfloat` targets.][68334]
@@ -43,7 +43,7 @@ Libraries
 - [Unicode 13 is now supported.][69929]
 - [`String` now implements `From<&mut str>`.][69661]
 - [`IoSlice` now implements `Copy`.][69403]
-- [`Vec<T>` now implements `From<[T; N]>`.][68692] Where `N` is less than 32.
+- [`Vec<T>` now implements `From<[T; N]>`.][68692] Where `N` is at most 32.
 - [`proc_macro::LexError` now implements `fmt::Display` and `Error`.][68899]
 - [`from_le_bytes`, `to_le_bytes`, `from_be_bytes`, `to_be_bytes`,
   `from_ne_bytes`, and `to_ne_bytes` methods are now `const` for all
@@ -85,6 +85,8 @@ Cargo
   │   │       │           └── version_check v0.1.5
   ...
   ```
+  You can also display dependencies on multiple versions of the same crate with
+  `cargo tree -d` (short for `cargo tree --duplicates`).
 
 Misc
 ----
@@ -98,15 +100,15 @@ Compatibility Notes
 - [Removed the `-C no_integrated_as` flag from rustc.][70345]
 - [The `file_name` property in JSON output of macro errors now points the actual
   source file rather than the previous format of `<NAME macros>`.][70969]
-  **Note:** this may not point a file that actually exists on the user's system.
+  **Note:** this may not point to a file that actually exists on the user's system.
 - [The minimum required external LLVM version has been bumped to LLVM 8.][71147]
-- [`mem::{zeroed, uninitialised, MaybeUninit}` will now panic when used with types
-  that do not allow zero initialization such as `NonZeroU8`.][66059] This was
+- [`mem::{zeroed, uninitialised}` will now panic when used with types that do
+  not allow zero initialization such as `NonZeroU8`.][66059] This was
   previously a warning.
 - [In 1.45.0 (the next release) converting a `f64` to `u32` using the `as`
   operator has been defined as a saturating operation.][71269] This was previously
-  undefined behaviour, you can use the `{f64, f32}::to_int_unchecked` methods to
-  continue using the current behaviour which may desirable in rare performance
+  undefined behaviour, but you can use the `{f64, f32}::to_int_unchecked` methods to
+  continue using the current behaviour, which may be desirable in rare performance
   sensitive situations.
 
 Internal Only
@@ -910,7 +912,7 @@ Compatibility Notes
 [`Duration::mul_f32`]: https://doc.rust-lang.org/std/time/struct.Duration.html#method.mul_f32
 [`Duration::mul_f64`]: https://doc.rust-lang.org/std/time/struct.Duration.html#method.mul_f64
 [`any::type_name`]: https://doc.rust-lang.org/std/any/fn.type_name.html
-[forge-platform-support]: https://forge.rust-lang.org/platform-support.html
+[forge-platform-support]: https://forge.rust-lang.org/release/platform-support.html
 [pipeline-internals]: https://internals.rust-lang.org/t/evaluating-pipelined-rustc-compilation/10199
 
 Version 1.37.0 (2019-08-15)

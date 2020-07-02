@@ -129,20 +129,20 @@ declare_lint_pass!(Ranges => [
 
 impl<'a, 'tcx> LateLintPass<'a, 'tcx> for Ranges {
     fn check_expr(&mut self, cx: &LateContext<'a, 'tcx>, expr: &'tcx Expr<'_>) {
-        if let ExprKind::MethodCall(ref path, _, ref args) = expr.kind {
+        if let ExprKind::MethodCall(ref path, _, ref args, _) = expr.kind {
             let name = path.ident.as_str();
             if name == "zip" && args.len() == 2 {
                 let iter = &args[0].kind;
                 let zip_arg = &args[1];
                 if_chain! {
                     // `.iter()` call
-                    if let ExprKind::MethodCall(ref iter_path, _, ref iter_args ) = *iter;
+                    if let ExprKind::MethodCall(ref iter_path, _, ref iter_args , _) = *iter;
                     if iter_path.ident.name == sym!(iter);
                     // range expression in `.zip()` call: `0..x.len()`
                     if let Some(higher::Range { start: Some(start), end: Some(end), .. }) = higher::range(cx, zip_arg);
                     if is_integer_const(cx, start, 0);
                     // `.len()` call
-                    if let ExprKind::MethodCall(ref len_path, _, ref len_args) = end.kind;
+                    if let ExprKind::MethodCall(ref len_path, _, ref len_args, _) = end.kind;
                     if len_path.ident.name == sym!(len) && len_args.len() == 1;
                     // `.iter()` and `.len()` called on same `Path`
                     if let ExprKind::Path(QPath::Resolved(_, ref iter_path)) = iter_args[0].kind;
@@ -241,14 +241,26 @@ fn check_inclusive_range_minus_one(cx: &LateContext<'_, '_>, expr: &Expr<'_>) {
 }
 
 fn check_reversed_empty_range(cx: &LateContext<'_, '_>, expr: &Expr<'_>) {
-    fn inside_indexing_expr<'a>(cx: &'a LateContext<'_, '_>, expr: &Expr<'_>) -> Option<&'a Expr<'a>> {
-        match get_parent_expr(cx, expr) {
-            parent_expr @ Some(Expr {
+    fn inside_indexing_expr(cx: &LateContext<'_, '_>, expr: &Expr<'_>) -> bool {
+        matches!(
+            get_parent_expr(cx, expr),
+            Some(Expr {
                 kind: ExprKind::Index(..),
                 ..
-            }) => parent_expr,
-            _ => None,
+            })
+        )
+    }
+
+    fn is_for_loop_arg(cx: &LateContext<'_, '_>, expr: &Expr<'_>) -> bool {
+        let mut cur_expr = expr;
+        while let Some(parent_expr) = get_parent_expr(cx, cur_expr) {
+            match higher::for_loop(parent_expr) {
+                Some((_, args, _)) if args.hir_id == expr.hir_id => return true,
+                _ => cur_expr = parent_expr,
+            }
         }
+
+        false
     }
 
     fn is_empty_range(limits: RangeLimits, ordering: Ordering) -> bool {
@@ -260,41 +272,25 @@ fn check_reversed_empty_range(cx: &LateContext<'_, '_>, expr: &Expr<'_>) {
 
     if_chain! {
         if let Some(higher::Range { start: Some(start), end: Some(end), limits }) = higher::range(cx, expr);
-        let ty = cx.tables.expr_ty(start);
+        let ty = cx.tables().expr_ty(start);
         if let ty::Int(_) | ty::Uint(_) = ty.kind;
-        if let Some((start_idx, _)) = constant(cx, cx.tables, start);
-        if let Some((end_idx, _)) = constant(cx, cx.tables, end);
+        if let Some((start_idx, _)) = constant(cx, cx.tables(), start);
+        if let Some((end_idx, _)) = constant(cx, cx.tables(), end);
         if let Some(ordering) = Constant::partial_cmp(cx.tcx, ty, &start_idx, &end_idx);
         if is_empty_range(limits, ordering);
         then {
-            if let Some(parent_expr) = inside_indexing_expr(cx, expr) {
-                let (reason, outcome) = if ordering == Ordering::Equal {
-                    ("empty", "always yield an empty slice")
-                } else {
-                    ("reversed", "panic at run-time")
-                };
-
-                span_lint_and_then(
-                    cx,
-                    REVERSED_EMPTY_RANGES,
-                    expr.span,
-                    &format!("this range is {} and using it to index a slice will {}", reason, outcome),
-                    |diag| {
-                        if_chain! {
-                            if ordering == Ordering::Equal;
-                            if let ty::Slice(slice_ty) = cx.tables.expr_ty(parent_expr).kind;
-                            then {
-                                diag.span_suggestion(
-                                    parent_expr.span,
-                                    "if you want an empty slice, use",
-                                    format!("[] as &[{}]", slice_ty),
-                                    Applicability::MaybeIncorrect
-                                );
-                            }
-                        }
-                    }
-                );
-            } else {
+            if inside_indexing_expr(cx, expr) {
+                // Avoid linting `N..N` as it has proven to be useful, see #5689 and #5628 ...
+                if ordering != Ordering::Equal {
+                    span_lint(
+                        cx,
+                        REVERSED_EMPTY_RANGES,
+                        expr.span,
+                        "this range is reversed and using it to index a slice will panic at run-time",
+                    );
+                }
+            // ... except in for loop arguments for backwards compatibility with `reverse_range_loop`
+            } else if ordering != Ordering::Equal || is_for_loop_arg(cx, expr) {
                 span_lint_and_then(
                     cx,
                     REVERSED_EMPTY_RANGES,

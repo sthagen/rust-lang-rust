@@ -91,6 +91,7 @@ function defocusSearchBar() {
 
     var disableShortcuts = getCurrentValue("rustdoc-disable-shortcuts") === "true";
     var search_input = getSearchInput();
+    var searchTimeout = null;
 
     // On the search screen, so you remain on the last tab you opened.
     //
@@ -99,7 +100,16 @@ function defocusSearchBar() {
     // 2 for "In Return Types"
     var currentTab = 0;
 
+    var mouseMovedAfterSearch = true;
+
     var titleBeforeSearch = document.title;
+
+    function clearInputTimeout() {
+        if (searchTimeout !== null) {
+            clearTimeout(searchTimeout);
+            searchTimeout = null;
+        }
+    }
 
     function getPageId() {
         var id = document.location.href.split("#")[1];
@@ -154,6 +164,7 @@ function defocusSearchBar() {
         }
         addClass(main, "hidden");
         removeClass(search, "hidden");
+        mouseMovedAfterSearch = false;
     }
 
     function hideSearchResults(search) {
@@ -355,6 +366,7 @@ function defocusSearchBar() {
         if (hasClass(help, "hidden") === false) {
             displayHelp(false, ev, help);
         } else if (hasClass(search, "hidden") === false) {
+            clearInputTimeout();
             ev.preventDefault();
             hideSearchResults(search);
             document.title = titleBeforeSearch;
@@ -414,6 +426,12 @@ function defocusSearchBar() {
 
     document.addEventListener("keypress", handleShortcut);
     document.addEventListener("keydown", handleShortcut);
+
+    function resetMouseMoved(ev) {
+        mouseMovedAfterSearch = true;
+    }
+
+    document.addEventListener("mousemove", resetMouseMoved);
 
     var handleSourceHighlight = (function() {
         var prev_line_id = 0;
@@ -997,12 +1015,13 @@ function defocusSearchBar() {
                 var aliases = [];
                 var crateAliases = [];
                 var i;
-                if (filterCrates !== undefined &&
-                        ALIASES[filterCrates] &&
-                        ALIASES[filterCrates][query.search]) {
-                    for (i = 0; i < ALIASES[crate][query.search].length; ++i) {
-                        aliases.push(
-                            createAliasFromItem(searchIndex[ALIASES[filterCrates][query.search]]));
+                if (filterCrates !== undefined) {
+                    if (ALIASES[filterCrates] && ALIASES[filterCrates][query.search]) {
+                        for (i = 0; i < ALIASES[filterCrates][query.search].length; ++i) {
+                            aliases.push(
+                                createAliasFromItem(
+                                    searchIndex[ALIASES[filterCrates][query.search][i]]));
+                        }
                     }
                 } else {
                     Object.keys(ALIASES).forEach(function(crate) {
@@ -1344,20 +1363,22 @@ function defocusSearchBar() {
                 }
             };
             var mouseover_func = function(e) {
-                var el = e.target;
-                // to retrieve the real "owner" of the event.
-                while (el.tagName !== "TR") {
-                    el = el.parentNode;
-                }
-                clearTimeout(hoverTimeout);
-                hoverTimeout = setTimeout(function() {
-                    onEachLazy(document.getElementsByClassName("search-results"), function(e) {
-                        onEachLazy(e.getElementsByClassName("result"), function(i_e) {
-                            removeClass(i_e, "highlighted");
+                if (mouseMovedAfterSearch) {
+                    var el = e.target;
+                    // to retrieve the real "owner" of the event.
+                    while (el.tagName !== "TR") {
+                        el = el.parentNode;
+                    }
+                    clearTimeout(hoverTimeout);
+                    hoverTimeout = setTimeout(function() {
+                        onEachLazy(document.getElementsByClassName("search-results"), function(e) {
+                            onEachLazy(e.getElementsByClassName("result"), function(i_e) {
+                                removeClass(i_e, "highlighted");
+                            });
                         });
-                    });
-                    addClass(el, "highlighted");
-                }, 20);
+                        addClass(el, "highlighted");
+                    }, 20);
+                }
             };
             onEachLazy(document.getElementsByClassName("search-results"), function(e) {
                 onEachLazy(e.getElementsByClassName("result"), function(i_e) {
@@ -1387,6 +1408,7 @@ function defocusSearchBar() {
 
                     addClass(actives[currentTab][0].previousElementSibling, "highlighted");
                     removeClass(actives[currentTab][0], "highlighted");
+                    e.preventDefault();
                 } else if (e.which === 40) { // down
                     if (!actives[currentTab].length) {
                         var results = document.getElementById("results").childNodes;
@@ -1400,6 +1422,7 @@ function defocusSearchBar() {
                         addClass(actives[currentTab][0].nextElementSibling, "highlighted");
                         removeClass(actives[currentTab][0], "highlighted");
                     }
+                    e.preventDefault();
                 } else if (e.which === 13) { // return
                     if (actives[currentTab].length) {
                         document.location.href =
@@ -1810,9 +1833,8 @@ function defocusSearchBar() {
         }
 
         function startSearch() {
-            var searchTimeout;
             var callback = function() {
-                clearTimeout(searchTimeout);
+                clearInputTimeout();
                 if (search_input.value.length === 0) {
                     if (browserSupportsHistoryApi()) {
                         history.replaceState("", window.currentCrate + " - Rust", "?search=");
@@ -1826,7 +1848,7 @@ function defocusSearchBar() {
             search_input.oninput = callback;
             document.getElementsByClassName("search-form")[0].onsubmit = function(e) {
                 e.preventDefault();
-                clearTimeout(searchTimeout);
+                clearInputTimeout();
                 search();
             };
             search_input.onchange = function(e) {
@@ -1835,7 +1857,7 @@ function defocusSearchBar() {
                     return;
                 }
                 // Do NOT e.preventDefault() here. It will prevent pasting.
-                clearTimeout(searchTimeout);
+                clearInputTimeout();
                 // zero-timeout necessary here because at the time of event handler execution the
                 // pasted content is not in the input field yet. Shouldn’t make any difference for
                 // change, though.
@@ -2366,7 +2388,9 @@ function defocusSearchBar() {
             if (!next) {
                 return;
             }
-            if (next.getElementsByClassName("method").length > 0 && hasClass(e, "impl")) {
+            if (hasClass(e, "impl") &&
+                (next.getElementsByClassName("method").length > 0 ||
+                 next.getElementsByClassName("associatedconstant").length > 0)) {
                 insertAfter(toggle.cloneNode(true), e.childNodes[e.childNodes.length - 1]);
             }
         };

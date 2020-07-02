@@ -85,9 +85,7 @@ pub struct Item {
 
 impl fmt::Debug for Item {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let fake = MAX_DEF_ID.with(|m| {
-            m.borrow().get(&self.def_id.krate).map(|id| self.def_id >= *id).unwrap_or(false)
-        });
+        let fake = self.is_fake();
         let def_id: &dyn fmt::Debug = if fake { &"**FAKE**" } else { &self.def_id };
 
         fmt.debug_struct("Item")
@@ -237,6 +235,13 @@ impl Item {
             }
             _ => false,
         }
+    }
+
+    /// See comments on next_def_id
+    pub fn is_fake(&self) -> bool {
+        MAX_DEF_ID.with(|m| {
+            m.borrow().get(&self.def_id.krate).map(|id| self.def_id >= *id).unwrap_or(false)
+        })
     }
 }
 
@@ -481,6 +486,33 @@ impl Attributes {
         })
     }
 
+    /// Enforce the format of attributes inside `#[doc(...)]`.
+    pub fn check_doc_attributes(
+        diagnostic: &::rustc_errors::Handler,
+        mi: &ast::MetaItem,
+    ) -> Option<(String, String)> {
+        mi.meta_item_list().and_then(|list| {
+            for meta in list {
+                if meta.check_name(sym::alias) {
+                    if !meta.is_value_str()
+                        || meta
+                            .value_str()
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(String::new)
+                            .is_empty()
+                    {
+                        diagnostic.span_err(
+                            meta.span(),
+                            "doc alias attribute expects a string: #[doc(alias = \"0\")]",
+                        );
+                    }
+                }
+            }
+
+            None
+        })
+    }
+
     pub fn has_doc_flag(&self, flag: Symbol) -> bool {
         for attr in &self.other_attrs {
             if !attr.check_name(sym::doc) {
@@ -524,6 +556,7 @@ impl Attributes {
                 } else {
                     if attr.check_name(sym::doc) {
                         if let Some(mi) = attr.meta() {
+                            Attributes::check_doc_attributes(&diagnostic, &mi);
                             if let Some(cfg_mi) = Attributes::extract_cfg(&mi) {
                                 // Extracted #[doc(cfg(...))]
                                 match Cfg::parse(cfg_mi) {

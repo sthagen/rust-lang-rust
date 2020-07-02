@@ -142,11 +142,6 @@ use crate::{
     ops::{self, Deref, DerefMut},
 };
 
-// Note that this is not a lang item per se, but it has a hidden dependency on
-// `Iterator`, which is one. The compiler assumes that the `next` method of
-// `Iterator` is an enumeration with one type parameter and two variants,
-// which basically means it must be `Option`.
-
 /// The `Option` type. See [the module level documentation](index.html) for more.
 #[derive(Copy, PartialEq, PartialOrd, Eq, Ord, Debug, Hash)]
 #[rustc_diagnostic_item = "option_type"]
@@ -926,7 +921,6 @@ impl<T> Option<T> {
     /// # Examples
     ///
     /// ```
-    /// #![feature(option_zip)]
     /// let x = Some(1);
     /// let y = Some("hi");
     /// let z = None::<u8>;
@@ -934,9 +928,12 @@ impl<T> Option<T> {
     /// assert_eq!(x.zip(y), Some((1, "hi")));
     /// assert_eq!(x.zip(z), None);
     /// ```
-    #[unstable(feature = "option_zip", issue = "70086")]
+    #[stable(feature = "option_zip_option", since = "1.46.0")]
     pub fn zip<U>(self, other: Option<U>) -> Option<(T, U)> {
-        self.zip_with(other, |a, b| (a, b))
+        match (self, other) {
+            (Some(a), Some(b)) => Some((a, b)),
+            _ => None,
+        }
     }
 
     /// Zips `self` and another `Option` with function `f`.

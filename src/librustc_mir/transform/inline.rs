@@ -9,7 +9,6 @@ use rustc_middle::mir::visit::*;
 use rustc_middle::mir::*;
 use rustc_middle::ty::subst::{Subst, SubstsRef};
 use rustc_middle::ty::{self, ConstKind, Instance, InstanceDef, ParamEnv, Ty, TyCtxt};
-use rustc_session::config::Sanitizer;
 use rustc_target::spec::abi::Abi;
 
 use super::simplify::{remove_dead_blocks, CfgSimplifier};
@@ -232,24 +231,8 @@ impl Inliner<'tcx> {
 
         // Avoid inlining functions marked as no_sanitize if sanitizer is enabled,
         // since instrumentation might be enabled and performed on the caller.
-        match self.tcx.sess.opts.debugging_opts.sanitizer {
-            Some(Sanitizer::Address) => {
-                if codegen_fn_attrs.flags.contains(CodegenFnAttrFlags::NO_SANITIZE_ADDRESS) {
-                    return false;
-                }
-            }
-            Some(Sanitizer::Memory) => {
-                if codegen_fn_attrs.flags.contains(CodegenFnAttrFlags::NO_SANITIZE_MEMORY) {
-                    return false;
-                }
-            }
-            Some(Sanitizer::Thread) => {
-                if codegen_fn_attrs.flags.contains(CodegenFnAttrFlags::NO_SANITIZE_THREAD) {
-                    return false;
-                }
-            }
-            Some(Sanitizer::Leak) => {}
-            None => {}
+        if self.tcx.sess.opts.debugging_opts.sanitizer.intersects(codegen_fn_attrs.no_sanitize) {
+            return false;
         }
 
         let hinted = match codegen_fn_attrs.inline {
@@ -319,13 +302,13 @@ impl Inliner<'tcx> {
             let term = blk.terminator();
             let mut is_drop = false;
             match term.kind {
-                TerminatorKind::Drop { ref location, target, unwind }
-                | TerminatorKind::DropAndReplace { ref location, target, unwind, .. } => {
+                TerminatorKind::Drop { ref place, target, unwind }
+                | TerminatorKind::DropAndReplace { ref place, target, unwind, .. } => {
                     is_drop = true;
                     work_list.push(target);
-                    // If the location doesn't actually need dropping, treat it like
+                    // If the place doesn't actually need dropping, treat it like
                     // a regular goto.
-                    let ty = location.ty(callee_body, tcx).subst(tcx, callsite.substs).ty;
+                    let ty = place.ty(callee_body, tcx).subst(tcx, callsite.substs).ty;
                     if ty.needs_drop(tcx, param_env) {
                         cost += CALL_PENALTY;
                         if let Some(unwind) = unwind {
@@ -731,14 +714,14 @@ impl<'a, 'tcx> MutVisitor<'tcx> for Integrator<'a, 'tcx> {
         }
     }
 
-    fn visit_terminator_kind(&mut self, kind: &mut TerminatorKind<'tcx>, loc: Location) {
+    fn visit_terminator(&mut self, terminator: &mut Terminator<'tcx>, loc: Location) {
         // Don't try to modify the implicit `_0` access on return (`return` terminators are
         // replaced down below anyways).
-        if !matches!(kind, TerminatorKind::Return) {
-            self.super_terminator_kind(kind, loc);
+        if !matches!(terminator.kind, TerminatorKind::Return) {
+            self.super_terminator(terminator, loc);
         }
 
-        match *kind {
+        match terminator.kind {
             TerminatorKind::GeneratorDrop | TerminatorKind::Yield { .. } => bug!(),
             TerminatorKind::Goto { ref mut target } => {
                 *target = self.update_target(*target);
@@ -782,16 +765,16 @@ impl<'a, 'tcx> MutVisitor<'tcx> for Integrator<'a, 'tcx> {
                 }
             }
             TerminatorKind::Return => {
-                *kind = TerminatorKind::Goto { target: self.return_block };
+                terminator.kind = TerminatorKind::Goto { target: self.return_block };
             }
             TerminatorKind::Resume => {
                 if let Some(tgt) = self.cleanup_block {
-                    *kind = TerminatorKind::Goto { target: tgt }
+                    terminator.kind = TerminatorKind::Goto { target: tgt }
                 }
             }
             TerminatorKind::Abort => {}
             TerminatorKind::Unreachable => {}
-            TerminatorKind::FalseEdges { ref mut real_target, ref mut imaginary_target } => {
+            TerminatorKind::FalseEdge { ref mut real_target, ref mut imaginary_target } => {
                 *real_target = self.update_target(*real_target);
                 *imaginary_target = self.update_target(*imaginary_target);
             }

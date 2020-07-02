@@ -8,7 +8,7 @@
 use crate::collect::PlaceholderHirTyCollector;
 use crate::middle::resolve_lifetime as rl;
 use crate::require_c_abi_if_c_variadic;
-use rustc_ast::util::lev_distance::find_best_match_for_name;
+use rustc_ast::{ast::ParamKindOrd, util::lev_distance::find_best_match_for_name};
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_errors::ErrorReported;
 use rustc_errors::{pluralize, struct_span_err, Applicability, DiagnosticId, FatalError};
@@ -26,7 +26,7 @@ use rustc_middle::ty::{GenericParamDef, GenericParamDefKind};
 use rustc_session::lint::builtin::{AMBIGUOUS_ASSOCIATED_ITEMS, LATE_BOUND_LIFETIME_ARGUMENTS};
 use rustc_session::parse::feature_err;
 use rustc_session::Session;
-use rustc_span::symbol::{sym, Ident, Symbol};
+use rustc_span::symbol::{kw, sym, Ident, Symbol};
 use rustc_span::{MultiSpan, Span, DUMMY_SP};
 use rustc_target::spec::abi;
 use rustc_trait_selection::traits;
@@ -474,7 +474,12 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
 
     /// Report an error that a generic argument did not match the generic parameter that was
     /// expected.
-    fn generic_arg_mismatch_err(sess: &Session, arg: &GenericArg<'_>, kind: &'static str) {
+    fn generic_arg_mismatch_err(
+        sess: &Session,
+        arg: &GenericArg<'_>,
+        kind: &'static str,
+        help: Option<&str>,
+    ) {
         let mut err = struct_span_err!(
             sess,
             arg.span(),
@@ -483,8 +488,29 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
             arg.descr(),
             kind,
         );
+
+        let kind_ord = match kind {
+            "lifetime" => ParamKindOrd::Lifetime,
+            "type" => ParamKindOrd::Type,
+            "constant" => ParamKindOrd::Const,
+            // It's more concise to match on the string representation, though it means
+            // the match is non-exhaustive.
+            _ => bug!("invalid generic parameter kind {}", kind),
+        };
+        let arg_ord = match arg {
+            GenericArg::Lifetime(_) => ParamKindOrd::Lifetime,
+            GenericArg::Type(_) => ParamKindOrd::Type,
+            GenericArg::Const(_) => ParamKindOrd::Const,
+        };
+
         // This note will be true as long as generic parameters are strictly ordered by their kind.
-        err.note(&format!("{} arguments must be provided before {} arguments", kind, arg.descr()));
+        let (first, last) =
+            if kind_ord < arg_ord { (kind, arg.descr()) } else { (arg.descr(), kind) };
+        err.note(&format!("{} arguments must be provided before {} arguments", first, last));
+
+        if let Some(help) = help {
+            err.help(help);
+        }
         err.emit();
     }
 
@@ -630,7 +656,60 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                                 if arg_count.correct.is_ok()
                                     && arg_count.explicit_late_bound == ExplicitLateBound::No
                                 {
-                                    Self::generic_arg_mismatch_err(tcx.sess, arg, kind.descr());
+                                    // We're going to iterate over the parameters to sort them out, and
+                                    // show that order to the user as a possible order for the parameters
+                                    let mut param_types_present = defs
+                                        .params
+                                        .clone()
+                                        .into_iter()
+                                        .map(|param| {
+                                            (
+                                                match param.kind {
+                                                    GenericParamDefKind::Lifetime => {
+                                                        ParamKindOrd::Lifetime
+                                                    }
+                                                    GenericParamDefKind::Type { .. } => {
+                                                        ParamKindOrd::Type
+                                                    }
+                                                    GenericParamDefKind::Const => {
+                                                        ParamKindOrd::Const
+                                                    }
+                                                },
+                                                param,
+                                            )
+                                        })
+                                        .collect::<Vec<(ParamKindOrd, GenericParamDef)>>();
+                                    param_types_present.sort_by_key(|(ord, _)| *ord);
+                                    let (mut param_types_present, ordered_params): (
+                                        Vec<ParamKindOrd>,
+                                        Vec<GenericParamDef>,
+                                    ) = param_types_present.into_iter().unzip();
+                                    param_types_present.dedup();
+
+                                    Self::generic_arg_mismatch_err(
+                                        tcx.sess,
+                                        arg,
+                                        kind.descr(),
+                                        Some(&format!(
+                                            "reorder the arguments: {}: `<{}>`",
+                                            param_types_present
+                                                .into_iter()
+                                                .map(|ord| format!("{}s", ord.to_string()))
+                                                .collect::<Vec<String>>()
+                                                .join(", then "),
+                                            ordered_params
+                                                .into_iter()
+                                                .filter_map(|param| {
+                                                    if param.name == kw::SelfUpper {
+                                                        None
+                                                    } else {
+                                                        Some(param.name.to_string())
+                                                    }
+                                                })
+                                                .collect::<Vec<String>>()
+                                                .join(", ")
+                                        )),
+                                    );
                                 }
 
                                 // We've reported the error, but we want to make sure that this
@@ -662,7 +741,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                             assert_eq!(kind, "lifetime");
                             let provided =
                                 force_infer_lt.expect("lifetimes ought to have been inferred");
-                            Self::generic_arg_mismatch_err(tcx.sess, provided, kind);
+                            Self::generic_arg_mismatch_err(tcx.sess, provided, kind, None);
                         }
 
                         break;
@@ -801,7 +880,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                 (GenericParamDefKind::Type { .. }, GenericArg::Type(ty)) => {
                     if let (hir::TyKind::Infer, false) = (&ty.kind, self.allow_ty_infer()) {
                         inferred_params.push(ty.span);
-                        tcx.types.err.into()
+                        tcx.ty_error().into()
                     } else {
                         self.ast_ty_to_ty(&ty).into()
                     }
@@ -827,7 +906,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                             // careful!
                             if default_needs_object_self(param) {
                                 missing_type_params.push(param.name.to_string());
-                                tcx.types.err.into()
+                                tcx.ty_error().into()
                             } else {
                                 // This is a default type parameter.
                                 self.normalize_ty(
@@ -847,7 +926,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                             self.ty_infer(param, span).into()
                         } else {
                             // We've already errored above about the mismatch.
-                            tcx.types.err.into()
+                            tcx.ty_error().into()
                         }
                     }
                     GenericParamDefKind::Const => {
@@ -858,7 +937,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                             self.ct_infer(ty, Some(param), span).into()
                         } else {
                             // We've already errored above about the mismatch.
-                            tcx.mk_const(ty::Const { val: ty::ConstKind::Error, ty }).into()
+                            tcx.const_error(ty).into()
                         }
                     }
                 }
@@ -1376,13 +1455,13 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
             // That is, consider this case:
             //
             // ```
-            // trait SubTrait: SuperTrait<int> { }
+            // trait SubTrait: SuperTrait<i32> { }
             // trait SuperTrait<A> { type T; }
             //
             // ... B: SubTrait<T = foo> ...
             // ```
             //
-            // We want to produce `<B as SuperTrait<int>>::T == foo`.
+            // We want to produce `<B as SuperTrait<i32>>::T == foo`.
 
             // Find any late-bound regions declared in `ty` that are not
             // declared in the trait-ref. These are not well-formed.
@@ -1589,7 +1668,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                 "at least one trait is required for an object type"
             )
             .emit();
-            return tcx.types.err;
+            return tcx.ty_error();
         }
 
         // Check that there are no gross object safety violations;
@@ -1606,7 +1685,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                     &object_safety_violations[..],
                 )
                 .emit();
-                return tcx.types.err;
+                return tcx.ty_error();
             }
         }
 
@@ -1723,7 +1802,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
 
         // Calling `skip_binder` is okay because the predicates are re-bound.
         let regular_trait_predicates = existential_trait_refs
-            .map(|trait_ref| ty::ExistentialPredicate::Trait(*trait_ref.skip_binder()));
+            .map(|trait_ref| ty::ExistentialPredicate::Trait(trait_ref.skip_binder()));
         let auto_trait_predicates = auto_traits
             .into_iter()
             .map(|trait_ref| ty::ExistentialPredicate::AutoTrait(trait_ref.trait_ref().def_id()));
@@ -1731,7 +1810,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
             .chain(auto_trait_predicates)
             .chain(
                 existential_projections
-                    .map(|x| ty::ExistentialPredicate::Projection(*x.skip_binder())),
+                    .map(|x| ty::ExistentialPredicate::Projection(x.skip_binder())),
             )
             .collect::<SmallVec<[_; 8]>>();
         v.sort_by(|a, b| a.stable_cmp(tcx, b));
@@ -2416,7 +2495,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                 &path_str,
                 item_segment.ident.name,
             );
-            return tcx.types.err;
+            return tcx.ty_error();
         };
 
         debug!("qpath_to_ty: self_type={:?}", self_ty);
@@ -2769,12 +2848,12 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                     hir::PrimTy::Int(it) => tcx.mk_mach_int(it),
                     hir::PrimTy::Uint(uit) => tcx.mk_mach_uint(uit),
                     hir::PrimTy::Float(ft) => tcx.mk_mach_float(ft),
-                    hir::PrimTy::Str => tcx.mk_str(),
+                    hir::PrimTy::Str => tcx.types.str_,
                 }
             }
             Res::Err => {
                 self.set_tainted_by_errors();
-                self.tcx().types.err
+                self.tcx().ty_error()
             }
             _ => span_bug!(span, "unexpected resolution: {:?}", path.res),
         }
@@ -2820,9 +2899,16 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                 let opt_self_ty = maybe_qself.as_ref().map(|qself| self.ast_ty_to_ty(qself));
                 self.res_to_ty(opt_self_ty, path, false)
             }
-            hir::TyKind::Def(item_id, ref lifetimes) => {
-                let did = tcx.hir().local_def_id(item_id.id);
-                self.impl_trait_ty_to_ty(did.to_def_id(), lifetimes)
+            hir::TyKind::OpaqueDef(item_id, ref lifetimes) => {
+                let opaque_ty = tcx.hir().expect_item(item_id.id);
+                let def_id = tcx.hir().local_def_id(item_id.id).to_def_id();
+
+                match opaque_ty.kind {
+                    hir::ItemKind::OpaqueTy(hir::OpaqueTy { impl_trait_fn, .. }) => {
+                        self.impl_trait_ty_to_ty(def_id, lifetimes, impl_trait_fn.is_some())
+                    }
+                    ref i => bug!("`impl Trait` pointed to non-opaque type?? {:#?}", i),
+                }
             }
             hir::TyKind::Path(hir::QPath::TypeRelative(ref qself, ref segment)) => {
                 debug!("ast_ty_to_ty: qself={:?} segment={:?}", qself, segment);
@@ -2835,7 +2921,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                 };
                 self.associated_path_to_ty(ast_ty.hir_id, ast_ty.span, ty, res, segment, false)
                     .map(|(ty, _, _)| ty)
-                    .unwrap_or(tcx.types.err)
+                    .unwrap_or_else(|_| tcx.ty_error())
             }
             hir::TyKind::Array(ref ty, ref length) => {
                 let length_def_id = tcx.hir().local_def_id(length.hir_id);
@@ -2853,7 +2939,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                 .span_label(ast_ty.span, "reserved keyword")
                 .emit();
 
-                tcx.types.err
+                tcx.ty_error()
             }
             hir::TyKind::Infer => {
                 // Infer also appears as the type of arguments or return
@@ -2862,7 +2948,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                 // handled specially and will not descend into this routine.
                 self.ty_infer(None, ast_ty.span)
             }
-            hir::TyKind::Err => tcx.types.err,
+            hir::TyKind::Err => tcx.ty_error(),
         };
 
         debug!("ast_ty_to_ty: result_ty={:?}", result_ty);
@@ -2875,6 +2961,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         &self,
         def_id: DefId,
         lifetimes: &[hir::GenericArg<'_>],
+        replace_parent_lifetimes: bool,
     ) -> Ty<'tcx> {
         debug!("impl_trait_ty_to_ty(def_id={:?}, lifetimes={:?})", def_id, lifetimes);
         let tcx = self.tcx();
@@ -2896,9 +2983,18 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                     _ => bug!(),
                 }
             } else {
-                // Replace all parent lifetimes with `'static`.
                 match param.kind {
-                    GenericParamDefKind::Lifetime => tcx.lifetimes.re_static.into(),
+                    // For RPIT (return position impl trait), only lifetimes
+                    // mentioned in the impl Trait predicate are captured by
+                    // the opaque type, so the lifetime parameters from the
+                    // parent item need to be replaced with `'static`.
+                    //
+                    // For `impl Trait` in the types of statics, constants,
+                    // locals and type aliases. These capture all parent
+                    // lifetimes, so they can use their identity subst.
+                    GenericParamDefKind::Lifetime if replace_parent_lifetimes => {
+                        tcx.lifetimes.re_static.into()
+                    }
                     _ => tcx.mk_param_from_def(param),
                 }
             }

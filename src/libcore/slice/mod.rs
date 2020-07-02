@@ -409,7 +409,7 @@ impl<T> [T] {
     /// The returned range is half-open, which means that the end pointer
     /// points *one past* the last element of the slice. This way, an empty
     /// slice is represented by two equal pointers, and the difference between
-    /// the two pointers represents the size of the size.
+    /// the two pointers represents the size of the slice.
     ///
     /// See [`as_ptr`] for warnings on using these pointers. The end pointer
     /// requires extra caution, as it does not point to a valid element in the
@@ -464,7 +464,7 @@ impl<T> [T] {
     /// The returned range is half-open, which means that the end pointer
     /// points *one past* the last element of the slice. This way, an empty
     /// slice is represented by two equal pointers, and the difference between
-    /// the two pointers represents the size of the size.
+    /// the two pointers represents the size of the slice.
     ///
     /// See [`as_mut_ptr`] for warnings on using these pointers. The end
     /// pointer requires extra caution, as it does not point to a valid element
@@ -2173,7 +2173,7 @@ impl<T> [T] {
     ///
     /// The length of `src` must be the same as `self`.
     ///
-    /// If `src` implements `Copy`, it can be more performant to use
+    /// If `T` implements `Copy`, it can be more performant to use
     /// [`copy_from_slice`].
     ///
     /// # Panics
@@ -2244,7 +2244,7 @@ impl<T> [T] {
     ///
     /// The length of `src` must be the same as `self`.
     ///
-    /// If `src` does not implement `Copy`, use [`clone_from_slice`].
+    /// If `T` does not implement `Copy`, use [`clone_from_slice`].
     ///
     /// # Panics
     ///
@@ -2663,6 +2663,60 @@ impl<T> [T] {
     {
         self.iter().is_sorted_by_key(f)
     }
+
+    /// Returns the index of the partition point according to the given predicate
+    /// (the index of the first element of the second partition).
+    ///
+    /// The slice is assumed to be partitioned according to the given predicate.
+    /// This means that all elements for which the predicate returns true are at the start of the slice
+    /// and all elements for which the predicate returns false are at the end.
+    /// For example, [7, 15, 3, 5, 4, 12, 6] is a partitioned under the predicate x % 2 != 0
+    /// (all odd numbers are at the start, all even at the end).
+    ///
+    /// If this slice is not partitioned, the returned result is unspecified and meaningless,
+    /// as this method performs a kind of binary search.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #![feature(partition_point)]
+    ///
+    /// let v = [1, 2, 3, 3, 5, 6, 7];
+    /// let i = v.partition_point(|&x| x < 5);
+    ///
+    /// assert_eq!(i, 4);
+    /// assert!(v[..i].iter().all(|&x| x < 5));
+    /// assert!(v[i..].iter().all(|&x| !(x < 5)));
+    /// ```
+    #[unstable(feature = "partition_point", reason = "new API", issue = "73831")]
+    pub fn partition_point<P>(&self, mut pred: P) -> usize
+    where
+        P: FnMut(&T) -> bool,
+    {
+        let mut left = 0;
+        let mut right = self.len();
+
+        while left != right {
+            let mid = left + (right - left) / 2;
+            // SAFETY:
+            // When left < right, left <= mid < right.
+            // Therefore left always increases and right always decreases,
+            // and eigher of them is selected.
+            // In both cases left <= right is satisfied.
+            // Therefore if left < right in a step,
+            // left <= right is satisfied in the next step.
+            // Therefore as long as left != right, 0 <= left < right <= len is satisfied
+            // and if this case 0 <= mid < len is satisfied too.
+            let value = unsafe { self.get_unchecked(mid) };
+            if pred(value) {
+                left = mid + 1;
+            } else {
+                right = mid;
+            }
+        }
+
+        left
+    }
 }
 
 #[lang = "slice_u8"]
@@ -2817,6 +2871,7 @@ pub trait SliceIndex<T: ?Sized>: private_slice_index::Sealed {
     /// performing any bounds checking.
     /// Calling this method with an out-of-bounds index is *[undefined behavior]*
     /// even if the resulting reference is not used.
+    ///
     /// [undefined behavior]: ../../reference/behavior-considered-undefined.html
     #[unstable(feature = "slice_index_methods", issue = "none")]
     unsafe fn get_unchecked(self, slice: &T) -> &Self::Output;
@@ -2825,6 +2880,7 @@ pub trait SliceIndex<T: ?Sized>: private_slice_index::Sealed {
     /// performing any bounds checking.
     /// Calling this method with an out-of-bounds index is *[undefined behavior]*
     /// even if the resulting reference is not used.
+    ///
     /// [undefined behavior]: ../../reference/behavior-considered-undefined.html
     #[unstable(feature = "slice_index_methods", issue = "none")]
     unsafe fn get_unchecked_mut(self, slice: &mut T) -> &mut Self::Output;
@@ -3043,16 +3099,12 @@ impl<T> SliceIndex<[T]> for ops::RangeInclusive<usize> {
 
     #[inline]
     fn get(self, slice: &[T]) -> Option<&[T]> {
-        if *self.end() == usize::max_value() {
-            None
-        } else {
-            (*self.start()..self.end() + 1).get(slice)
-        }
+        if *self.end() == usize::MAX { None } else { (*self.start()..self.end() + 1).get(slice) }
     }
 
     #[inline]
     fn get_mut(self, slice: &mut [T]) -> Option<&mut [T]> {
-        if *self.end() == usize::max_value() {
+        if *self.end() == usize::MAX {
             None
         } else {
             (*self.start()..self.end() + 1).get_mut(slice)
@@ -3071,7 +3123,7 @@ impl<T> SliceIndex<[T]> for ops::RangeInclusive<usize> {
 
     #[inline]
     fn index(self, slice: &[T]) -> &[T] {
-        if *self.end() == usize::max_value() {
+        if *self.end() == usize::MAX {
             slice_index_overflow_fail();
         }
         (*self.start()..self.end() + 1).index(slice)
@@ -3079,7 +3131,7 @@ impl<T> SliceIndex<[T]> for ops::RangeInclusive<usize> {
 
     #[inline]
     fn index_mut(self, slice: &mut [T]) -> &mut [T] {
-        if *self.end() == usize::max_value() {
+        if *self.end() == usize::MAX {
             slice_index_overflow_fail();
         }
         (*self.start()..self.end() + 1).index_mut(slice)
@@ -5960,7 +6012,15 @@ where
             return false;
         }
 
+        #[cfg(bootstrap)]
         if self.as_ptr() == other.as_ptr() {
+            return true;
+        }
+
+        // While performance would suffer if `guaranteed_eq` just returned `false`
+        // for all arguments, correctness and return value of this function are not affected.
+        #[cfg(not(bootstrap))]
+        if self.as_ptr().guaranteed_eq(other.as_ptr()) {
             return true;
         }
 
@@ -5977,7 +6037,16 @@ where
         if self.len() != other.len() {
             return false;
         }
+
+        #[cfg(bootstrap)]
         if self.as_ptr() == other.as_ptr() {
+            return true;
+        }
+
+        // While performance would suffer if `guaranteed_eq` just returned `false`
+        // for all arguments, correctness and return value of this function are not affected.
+        #[cfg(not(bootstrap))]
+        if self.as_ptr().guaranteed_eq(other.as_ptr()) {
             return true;
         }
         unsafe {

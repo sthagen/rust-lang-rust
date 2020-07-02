@@ -90,9 +90,6 @@ jobs:
       - name: install WIX
         run: src/ci/scripts/install-wix.sh
         if: success() && !env.SKIP_JOB
-      - name: install InnoSetup
-        run: src/ci/scripts/install-innosetup.sh
-        if: success() && !env.SKIP_JOB
       - name: ensure the build happens on a partition with enough space
         run: src/ci/scripts/symlink-build-dir.sh
         if: success() && !env.SKIP_JOB
@@ -101,9 +98,6 @@ jobs:
         if: success() && !env.SKIP_JOB
       - name: install MSYS2
         run: src/ci/scripts/install-msys2.sh
-        if: success() && !env.SKIP_JOB
-      - name: install MSYS2 packages
-        run: src/ci/scripts/install-msys2-packages.sh
         if: success() && !env.SKIP_JOB
       - name: install MinGW
         run: src/ci/scripts/install-mingw.sh
@@ -155,10 +149,6 @@ jobs:
           - name: dist-x86_64-linux
             os: ubuntu-latest-xl
             env: {}
-          - name: dist-x86_64-linux-alt
-            env:
-              IMAGE: dist-x86_64-linux
-            os: ubuntu-latest-xl
     timeout-minutes: 600
     runs-on: "${{ matrix.os }}"
     steps:
@@ -200,9 +190,6 @@ jobs:
       - name: install WIX
         run: src/ci/scripts/install-wix.sh
         if: success() && !env.SKIP_JOB
-      - name: install InnoSetup
-        run: src/ci/scripts/install-innosetup.sh
-        if: success() && !env.SKIP_JOB
       - name: ensure the build happens on a partition with enough space
         run: src/ci/scripts/symlink-build-dir.sh
         if: success() && !env.SKIP_JOB
@@ -211,9 +198,6 @@ jobs:
         if: success() && !env.SKIP_JOB
       - name: install MSYS2
         run: src/ci/scripts/install-msys2.sh
-        if: success() && !env.SKIP_JOB
-      - name: install MSYS2 packages
-        run: src/ci/scripts/install-msys2-packages.sh
         if: success() && !env.SKIP_JOB
       - name: install MinGW
         run: src/ci/scripts/install-mingw.sh
@@ -434,15 +418,10 @@ jobs:
               NO_DEBUG_ASSERTIONS: 1
               NO_LLVM_ASSERTIONS: 1
             os: windows-latest-xl
-          - name: x86_64-msvc-aux
-            env:
-              RUST_CHECK_TARGET: check-aux EXCLUDE_CARGO=1
-              RUST_CONFIGURE_ARGS: "--build=x86_64-pc-windows-msvc"
-            os: windows-latest-xl
           - name: x86_64-msvc-cargo
             env:
               SCRIPT: python x.py test src/tools/cargotest src/tools/cargo
-              RUST_CONFIGURE_ARGS: "--build=x86_64-pc-windows-msvc"
+              RUST_CONFIGURE_ARGS: "--build=x86_64-pc-windows-msvc --enable-lld"
               VCVARS_BAT: vcvars64.bat
               NO_DEBUG_ASSERTIONS: 1
               NO_LLVM_ASSERTIONS: 1
@@ -552,9 +531,6 @@ jobs:
       - name: install WIX
         run: src/ci/scripts/install-wix.sh
         if: success() && !env.SKIP_JOB
-      - name: install InnoSetup
-        run: src/ci/scripts/install-innosetup.sh
-        if: success() && !env.SKIP_JOB
       - name: ensure the build happens on a partition with enough space
         run: src/ci/scripts/symlink-build-dir.sh
         if: success() && !env.SKIP_JOB
@@ -563,9 +539,6 @@ jobs:
         if: success() && !env.SKIP_JOB
       - name: install MSYS2
         run: src/ci/scripts/install-msys2.sh
-        if: success() && !env.SKIP_JOB
-      - name: install MSYS2 packages
-        run: src/ci/scripts/install-msys2-packages.sh
         if: success() && !env.SKIP_JOB
       - name: install MinGW
         run: src/ci/scripts/install-mingw.sh

@@ -224,9 +224,7 @@ fn trait_item_scope_tag(item: &hir::TraitItem<'_>) -> &'static str {
 fn impl_item_scope_tag(item: &hir::ImplItem<'_>) -> &'static str {
     match item.kind {
         hir::ImplItemKind::Fn(..) => "method body",
-        hir::ImplItemKind::Const(..)
-        | hir::ImplItemKind::OpaqueTy(..)
-        | hir::ImplItemKind::TyAlias(..) => "associated item",
+        hir::ImplItemKind::Const(..) | hir::ImplItemKind::TyAlias(..) => "associated item",
     }
 }
 
@@ -1258,7 +1256,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             (ty::FnDef(did1, substs1), ty::FnPtr(sig2)) => {
                 let sig1 = self.tcx.fn_sig(*did1).subst(self.tcx, substs1);
                 let mut values = self.cmp_fn_sig(&sig1, sig2);
-                values.0.push_normal(format!(
+                values.0.push_highlighted(format!(
                     " {{{}}}",
                     self.tcx.def_path_str_with_substs(*did1, substs1)
                 ));
@@ -2037,8 +2035,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             self.tcx.sess,
             var_origin.span(),
             E0495,
-            "cannot infer an appropriate lifetime{} \
-             due to conflicting requirements",
+            "cannot infer an appropriate lifetime{} due to conflicting requirements",
             var_description
         )
     }

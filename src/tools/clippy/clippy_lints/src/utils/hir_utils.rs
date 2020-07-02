@@ -32,7 +32,7 @@ impl<'a, 'tcx> SpanlessEq<'a, 'tcx> {
     pub fn new(cx: &'a LateContext<'a, 'tcx>) -> Self {
         Self {
             cx,
-            tables: cx.tables,
+            tables: cx.tables(),
             ignore_fn: false,
         }
     }
@@ -40,7 +40,7 @@ impl<'a, 'tcx> SpanlessEq<'a, 'tcx> {
     pub fn ignore_fn(self) -> Self {
         Self {
             cx: self.cx,
-            tables: self.cx.tables,
+            tables: self.cx.tables(),
             ignore_fn: true,
         }
     }
@@ -132,7 +132,7 @@ impl<'a, 'tcx> SpanlessEq<'a, 'tcx> {
                             && self.eq_pat(&l.pat, &r.pat)
                     })
             },
-            (&ExprKind::MethodCall(l_path, _, l_args), &ExprKind::MethodCall(r_path, _, r_args)) => {
+            (&ExprKind::MethodCall(l_path, _, l_args, _), &ExprKind::MethodCall(r_path, _, r_args, _)) => {
                 !self.ignore_fn && self.eq_path_segment(l_path, r_path) && self.eq_exprs(l_args, r_args)
             },
             (&ExprKind::Repeat(ref le, ref ll_id), &ExprKind::Repeat(ref re, ref rl_id)) => {
@@ -309,18 +309,15 @@ fn swap_binop<'a>(
     rhs: &'a Expr<'a>,
 ) -> Option<(BinOpKind, &'a Expr<'a>, &'a Expr<'a>)> {
     match binop {
-        BinOpKind::Add
-        | BinOpKind::Mul
-        | BinOpKind::Eq
-        | BinOpKind::Ne
-        | BinOpKind::BitAnd
-        | BinOpKind::BitXor
-        | BinOpKind::BitOr => Some((binop, rhs, lhs)),
+        BinOpKind::Add | BinOpKind::Eq | BinOpKind::Ne | BinOpKind::BitAnd | BinOpKind::BitXor | BinOpKind::BitOr => {
+            Some((binop, rhs, lhs))
+        },
         BinOpKind::Lt => Some((BinOpKind::Gt, rhs, lhs)),
         BinOpKind::Le => Some((BinOpKind::Ge, rhs, lhs)),
         BinOpKind::Ge => Some((BinOpKind::Le, rhs, lhs)),
         BinOpKind::Gt => Some((BinOpKind::Lt, rhs, lhs)),
-        BinOpKind::Shl
+        BinOpKind::Mul // Not always commutative, e.g. with matrices. See issue #5698
+        | BinOpKind::Shl
         | BinOpKind::Shr
         | BinOpKind::Rem
         | BinOpKind::Sub
@@ -332,19 +329,13 @@ fn swap_binop<'a>(
 
 /// Checks if the two `Option`s are both `None` or some equal values as per
 /// `eq_fn`.
-fn both<X, F>(l: &Option<X>, r: &Option<X>, mut eq_fn: F) -> bool
-where
-    F: FnMut(&X, &X) -> bool,
-{
+pub fn both<X>(l: &Option<X>, r: &Option<X>, mut eq_fn: impl FnMut(&X, &X) -> bool) -> bool {
     l.as_ref()
         .map_or_else(|| r.is_none(), |x| r.as_ref().map_or(false, |y| eq_fn(x, y)))
 }
 
 /// Checks if two slices are equal as per `eq_fn`.
-fn over<X, F>(left: &[X], right: &[X], mut eq_fn: F) -> bool
-where
-    F: FnMut(&X, &X) -> bool,
-{
+pub fn over<X>(left: &[X], right: &[X], mut eq_fn: impl FnMut(&X, &X) -> bool) -> bool {
     left.len() == right.len() && left.iter().zip(right).all(|(x, y)| eq_fn(x, y))
 }
 
@@ -548,7 +539,7 @@ impl<'a, 'tcx> SpanlessHash<'a, 'tcx> {
 
                 s.hash(&mut self.s);
             },
-            ExprKind::MethodCall(ref path, ref _tys, args) => {
+            ExprKind::MethodCall(ref path, ref _tys, args, ref _fn_span) => {
                 self.hash_name(path.ident.name);
                 self.hash_exprs(args);
             },
@@ -716,7 +707,7 @@ impl<'a, 'tcx> SpanlessHash<'a, 'tcx> {
                     segment.ident.name.hash(&mut self.s);
                 },
             },
-            TyKind::Def(_, arg_list) => {
+            TyKind::OpaqueDef(_, arg_list) => {
                 for arg in *arg_list {
                     match arg {
                         GenericArg::Lifetime(ref l) => self.hash_lifetime(l),

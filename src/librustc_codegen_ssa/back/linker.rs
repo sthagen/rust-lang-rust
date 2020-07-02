@@ -1,6 +1,7 @@
 use super::archive;
 use super::command::Command;
 use super::symbol_export;
+use rustc_span::symbol::sym;
 
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
@@ -280,7 +281,7 @@ impl<'a> Linker for GccLinker<'a> {
     fn set_output_kind(&mut self, output_kind: LinkOutputKind, out_filename: &Path) {
         match output_kind {
             LinkOutputKind::DynamicNoPicExe => {
-                if !self.is_ld {
+                if !self.is_ld && self.sess.target.target.options.linker_is_gnu {
                     self.cmd.arg("-no-pie");
                 }
             }
@@ -291,7 +292,7 @@ impl<'a> Linker for GccLinker<'a> {
             LinkOutputKind::StaticNoPicExe => {
                 // `-static` works for both gcc wrapper and ld.
                 self.cmd.arg("-static");
-                if !self.is_ld {
+                if !self.is_ld && self.sess.target.target.options.linker_is_gnu {
                     self.cmd.arg("-no-pie");
                 }
             }
@@ -314,6 +315,21 @@ impl<'a> Linker for GccLinker<'a> {
                 self.cmd.arg("-static");
                 self.build_dylib(out_filename);
             }
+        }
+        // VxWorks compiler driver introduced `--static-crt` flag specifically for rustc,
+        // it switches linking for libc and similar system libraries to static without using
+        // any `#[link]` attributes in the `libc` crate, see #72782 for details.
+        // FIXME: Switch to using `#[link]` attributes in the `libc` crate
+        // similarly to other targets.
+        if self.sess.target.target.target_os == "vxworks"
+            && matches!(
+                output_kind,
+                LinkOutputKind::StaticNoPicExe
+                    | LinkOutputKind::StaticPicExe
+                    | LinkOutputKind::StaticDylib
+            )
+        {
+            self.cmd.arg("--static-crt");
         }
     }
 
@@ -466,10 +482,12 @@ impl<'a> Linker for GccLinker<'a> {
         match strip {
             Strip::None => {}
             Strip::Debuginfo => {
-                self.linker_arg("--strip-debug");
+                // MacOS linker does not support longhand argument --strip-debug
+                self.linker_arg("-S");
             }
             Strip::Symbols => {
-                self.linker_arg("--strip-all");
+                // MacOS linker does not support longhand argument --strip-all
+                self.linker_arg("-s");
             }
         }
     }
@@ -704,12 +722,14 @@ impl<'a> Linker for MsvcLinker<'a> {
     }
 
     fn link_whole_staticlib(&mut self, lib: Symbol, _search_path: &[PathBuf]) {
-        // not supported?
         self.link_staticlib(lib);
+        self.cmd.arg(format!("/WHOLEARCHIVE:{}.lib", lib));
     }
     fn link_whole_rlib(&mut self, path: &Path) {
-        // not supported?
         self.link_rlib(path);
+        let mut arg = OsString::from("/WHOLEARCHIVE:");
+        arg.push(path);
+        self.cmd.arg(arg);
     }
     fn optimize(&mut self) {
         // Needs more investigation of `/OPT` arguments
@@ -1010,9 +1030,6 @@ impl<'a> WasmLd<'a> {
         //   sharing memory and instantiating the module multiple times. As a
         //   result if it were exported then we'd just have no sharing.
         //
-        // * `--passive-segments` - all memory segments should be passive to
-        //   prevent each module instantiation from reinitializing memory.
-        //
         // * `--export=__wasm_init_memory` - when using `--passive-segments` the
         //   linker will synthesize this function, and so we need to make sure
         //   that our usage of `--export` below won't accidentally cause this
@@ -1020,13 +1037,10 @@ impl<'a> WasmLd<'a> {
         //
         // * `--export=*tls*` - when `#[thread_local]` symbols are used these
         //   symbols are how the TLS segments are initialized and configured.
-        let atomics = sess.opts.cg.target_feature.contains("+atomics")
-            || sess.target.target.options.features.contains("+atomics");
-        if atomics {
+        if sess.target_features.contains(&sym::atomics) {
             cmd.arg("--shared-memory");
             cmd.arg("--max-memory=1073741824");
             cmd.arg("--import-memory");
-            cmd.arg("--passive-segments");
             cmd.arg("--export=__wasm_init_memory");
             cmd.arg("--export=__wasm_init_tls");
             cmd.arg("--export=__tls_size");

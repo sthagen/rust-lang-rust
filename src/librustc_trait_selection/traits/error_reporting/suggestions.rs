@@ -3,6 +3,7 @@ use super::{
     SelectionContext,
 };
 
+use crate::autoderef::Autoderef;
 use crate::infer::InferCtxt;
 use crate::traits::normalize_projection_type;
 
@@ -13,11 +14,11 @@ use rustc_hir::def_id::DefId;
 use rustc_hir::intravisit::Visitor;
 use rustc_hir::lang_items;
 use rustc_hir::{AsyncGeneratorKind, GeneratorKind, Node};
-use rustc_middle::ty::TypeckTables;
 use rustc_middle::ty::{
     self, suggest_constraining_type_param, AdtKind, DefIdTree, Infer, InferTy, ToPredicate, Ty,
     TyCtxt, TypeFoldable, WithConstness,
 };
+use rustc_middle::ty::{TypeAndMut, TypeckTables};
 use rustc_span::symbol::{kw, sym, Ident, Symbol};
 use rustc_span::{MultiSpan, Span, DUMMY_SP};
 use std::fmt;
@@ -46,6 +47,14 @@ pub trait InferCtxtExt<'tcx> {
         &self,
         code: &ObligationCauseCode<'tcx>,
         err: &mut DiagnosticBuilder<'_>,
+    );
+
+    fn suggest_dereferences(
+        &self,
+        obligation: &PredicateObligation<'tcx>,
+        err: &mut DiagnosticBuilder<'tcx>,
+        trait_ref: &ty::PolyTraitRef<'tcx>,
+        points_at_arg: bool,
     );
 
     fn get_closure_name(
@@ -170,7 +179,7 @@ pub trait InferCtxtExt<'tcx> {
 
 fn predicate_constraint(generics: &hir::Generics<'_>, pred: String) -> (Span, String) {
     (
-        generics.where_clause.span_for_predicates_or_empty_place().shrink_to_hi(),
+        generics.where_clause.tail_span_for_suggestion(),
         format!(
             "{} {}",
             if !generics.where_clause.predicates.is_empty() { "," } else { " where" },
@@ -318,7 +327,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
         trait_ref: ty::PolyTraitRef<'tcx>,
         body_id: hir::HirId,
     ) {
-        let self_ty = trait_ref.self_ty();
+        let self_ty = trait_ref.skip_binder().self_ty();
         let (param_ty, projection) = match &self_ty.kind {
             ty::Param(_) => (true, None),
             ty::Projection(projection) => (false, Some(projection)),
@@ -450,6 +459,62 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
         }
     }
 
+    /// When after several dereferencing, the reference satisfies the trait
+    /// binding. This function provides dereference suggestion for this
+    /// specific situation.
+    fn suggest_dereferences(
+        &self,
+        obligation: &PredicateObligation<'tcx>,
+        err: &mut DiagnosticBuilder<'tcx>,
+        trait_ref: &ty::PolyTraitRef<'tcx>,
+        points_at_arg: bool,
+    ) {
+        // It only make sense when suggesting dereferences for arguments
+        if !points_at_arg {
+            return;
+        }
+        let param_env = obligation.param_env;
+        let body_id = obligation.cause.body_id;
+        let span = obligation.cause.span;
+        let real_trait_ref = match &obligation.cause.code {
+            ObligationCauseCode::ImplDerivedObligation(cause)
+            | ObligationCauseCode::DerivedObligation(cause)
+            | ObligationCauseCode::BuiltinDerivedObligation(cause) => &cause.parent_trait_ref,
+            _ => trait_ref,
+        };
+        let real_ty = match real_trait_ref.self_ty().no_bound_vars() {
+            Some(ty) => ty,
+            None => return,
+        };
+
+        if let ty::Ref(region, base_ty, mutbl) = real_ty.kind {
+            let mut autoderef = Autoderef::new(self, param_env, body_id, span, base_ty);
+            if let Some(steps) = autoderef.find_map(|(ty, steps)| {
+                // Re-add the `&`
+                let ty = self.tcx.mk_ref(region, TypeAndMut { ty, mutbl });
+                let obligation =
+                    self.mk_trait_obligation_with_new_self_ty(param_env, real_trait_ref, ty);
+                Some(steps).filter(|_| self.predicate_may_hold(&obligation))
+            }) {
+                if steps > 0 {
+                    if let Ok(src) = self.tcx.sess.source_map().span_to_snippet(span) {
+                        // Don't care about `&mut` because `DerefMut` is used less
+                        // often and user will not expect autoderef happens.
+                        if src.starts_with("&") && !src.starts_with("&mut ") {
+                            let derefs = "*".repeat(steps);
+                            err.span_suggestion(
+                                span,
+                                "consider adding dereference here",
+                                format!("&{}{}", derefs, &src[1..]),
+                                Applicability::MachineApplicable,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// When encountering an assignment of an unsized trait, like `let x = ""[..];`, provide a
     /// suggestion to borrow the initializer in order to use have a slice instead.
     fn suggest_borrow_on_unsized_slice(
@@ -524,7 +589,11 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
         trait_ref: &ty::Binder<ty::TraitRef<'tcx>>,
         points_at_arg: bool,
     ) {
-        let self_ty = trait_ref.self_ty();
+        let self_ty = match trait_ref.self_ty().no_bound_vars() {
+            None => return,
+            Some(ty) => ty,
+        };
+
         let (def_id, output_ty, callable) = match self_ty.kind {
             ty::Closure(def_id, substs) => (def_id, substs.as_closure().sig().output(), "closure"),
             ty::FnDef(def_id, _) => (def_id, self_ty.fn_sig(self.tcx).output(), "function"),
@@ -707,7 +776,10 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                 return;
             }
 
-            let mut suggested_ty = trait_ref.self_ty();
+            let mut suggested_ty = match trait_ref.self_ty().no_bound_vars() {
+                Some(ty) => ty,
+                None => return,
+            };
 
             for refs_remaining in 0..refs_number {
                 if let ty::Ref(_, inner_ty, _) = suggested_ty.kind {
@@ -829,6 +901,9 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
         span: Span,
         trait_ref: &ty::Binder<ty::TraitRef<'tcx>>,
     ) {
+        let is_empty_tuple =
+            |ty: ty::Binder<Ty<'_>>| ty.skip_binder().kind == ty::Tuple(ty::List::empty());
+
         let hir = self.tcx.hir();
         let parent_node = hir.get_parent_node(obligation.cause.body_id);
         let node = hir.find(parent_node);
@@ -840,7 +915,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
             if let hir::ExprKind::Block(blk, _) = &body.value.kind {
                 if sig.decl.output.span().overlaps(span)
                     && blk.expr.is_none()
-                    && "()" == &trait_ref.self_ty().to_string()
+                    && is_empty_tuple(trait_ref.self_ty())
                 {
                     // FIXME(estebank): When encountering a method with a trait
                     // bound not satisfied in the return type with a body that has
@@ -938,7 +1013,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
              ty| {
                 let ty = self.resolve_vars_if_possible(&ty);
                 same &=
-                    ty.kind != ty::Error
+                    !matches!(ty.kind, ty::Error(_))
                         && last_ty.map_or(true, |last_ty| {
                             // FIXME: ideally we would use `can_coerce` here instead, but `typeck` comes
                             // *after* in the dependency graph.
@@ -1104,7 +1179,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
     ) -> DiagnosticBuilder<'tcx> {
         crate fn build_fn_sig_string<'tcx>(
             tcx: TyCtxt<'tcx>,
-            trait_ref: &ty::TraitRef<'tcx>,
+            trait_ref: ty::TraitRef<'tcx>,
         ) -> String {
             let inputs = trait_ref.substs.type_at(1);
             let sig = if let ty::Tuple(inputs) = inputs.kind {
@@ -1271,7 +1346,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                 ObligationCauseCode::DerivedObligation(derived_obligation)
                 | ObligationCauseCode::BuiltinDerivedObligation(derived_obligation)
                 | ObligationCauseCode::ImplDerivedObligation(derived_obligation) => {
-                    let ty = derived_obligation.parent_trait_ref.self_ty();
+                    let ty = derived_obligation.parent_trait_ref.skip_binder().self_ty();
                     debug!(
                         "maybe_note_obligation_cause_for_async_await: \
                             parent_trait_ref={:?} self_ty.kind={:?}",
@@ -1285,7 +1360,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                         }
                         ty::GeneratorWitness(..) => {}
                         _ if generator.is_none() => {
-                            trait_ref = Some(*derived_obligation.parent_trait_ref.skip_binder());
+                            trait_ref = Some(derived_obligation.parent_trait_ref.skip_binder());
                             target_ty = Some(ty);
                         }
                         _ => {}
@@ -1909,9 +1984,15 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
 
                 let self_ty = self.resolve_vars_if_possible(&trait_ref.self_ty());
 
+                // Do not check on infer_types to avoid panic in evaluate_obligation.
+                if self_ty.has_infer_types() {
+                    return;
+                }
+                let self_ty = self.tcx.erase_regions(&self_ty);
+
                 let impls_future = self.tcx.type_implements_trait((
                     future_trait,
-                    self_ty,
+                    self_ty.skip_binder(),
                     ty::List::empty(),
                     obligation.param_env,
                 ));
@@ -1927,7 +2008,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                 let projection_ty = ty::ProjectionTy {
                     // `T`
                     substs: self.tcx.mk_substs_trait(
-                        trait_ref.self_ty(),
+                        trait_ref.self_ty().skip_binder(),
                         self.fresh_substs_for_item(span, item_def_id),
                     ),
                     // `Future::Output`
@@ -1976,8 +2057,8 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
 /// Collect all the returned expressions within the input expression.
 /// Used to point at the return spans when we want to suggest some change to them.
 #[derive(Default)]
-struct ReturnsVisitor<'v> {
-    returns: Vec<&'v hir::Expr<'v>>,
+pub struct ReturnsVisitor<'v> {
+    pub returns: Vec<&'v hir::Expr<'v>>,
     in_block_tail: bool,
 }
 

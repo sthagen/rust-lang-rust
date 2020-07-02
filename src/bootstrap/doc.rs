@@ -435,7 +435,8 @@ impl Step for Std {
         t!(fs::copy(builder.src.join("src/doc/rust.css"), out.join("rust.css")));
 
         let run_cargo_rustdoc_for = |package: &str| {
-            let mut cargo = builder.cargo(compiler, Mode::Std, target, "rustdoc");
+            let mut cargo =
+                builder.cargo(compiler, Mode::Std, SourceType::InTree, target, "rustdoc");
             compile::std_cargo(builder, target, compiler.stage, &mut cargo);
 
             // Keep a whitelist so we do not build internal stdlib crates, these will be
@@ -534,7 +535,7 @@ impl Step for Rustc {
         t!(symlink_dir_force(&builder.config, &out, &out_dir));
 
         // Build cargo command.
-        let mut cargo = builder.cargo(compiler, Mode::Rustc, target, "doc");
+        let mut cargo = builder.cargo(compiler, Mode::Rustc, SourceType::InTree, target, "doc");
         cargo.env(
             "RUSTDOCFLAGS",
             "--document-private-items \
@@ -548,8 +549,8 @@ impl Step for Rustc {
         // Find dependencies for top level crates.
         let mut compiler_crates = HashSet::new();
         for root_crate in &["rustc_driver", "rustc_codegen_llvm", "rustc_codegen_ssa"] {
-            let interned_root_crate = INTERNER.intern_str(root_crate);
-            find_compiler_crates(builder, &interned_root_crate, &mut compiler_crates);
+            compiler_crates
+                .extend(builder.in_tree_crates(root_crate).into_iter().map(|krate| krate.name));
         }
 
         for krate in &compiler_crates {
@@ -561,22 +562,6 @@ impl Step for Rustc {
         }
 
         builder.run(&mut cargo.into());
-    }
-}
-
-fn find_compiler_crates(
-    builder: &Builder<'_>,
-    name: &Interned<String>,
-    crates: &mut HashSet<Interned<String>>,
-) {
-    // Add current crate.
-    crates.insert(*name);
-
-    // Look for dependencies.
-    for dep in builder.crates.get(name).unwrap().deps.iter() {
-        if builder.crates.get(dep).unwrap().is_local(builder) {
-            find_compiler_crates(builder, dep, crates);
-        }
     }
 }
 

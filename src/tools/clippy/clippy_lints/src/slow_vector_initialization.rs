@@ -22,11 +22,17 @@ declare_clippy_lint! {
     /// ```rust
     /// # use core::iter::repeat;
     /// # let len = 4;
+    ///
+    /// // Bad
     /// let mut vec1 = Vec::with_capacity(len);
     /// vec1.resize(len, 0);
     ///
     /// let mut vec2 = Vec::with_capacity(len);
-    /// vec2.extend(repeat(0).take(len))
+    /// vec2.extend(repeat(0).take(len));
+    ///
+    /// // Good
+    /// let mut vec1 = vec![0; len];
+    /// let mut vec2 = vec![0; len];
     /// ```
     pub SLOW_VECTOR_INITIALIZATION,
     perf,
@@ -201,7 +207,7 @@ impl<'a, 'tcx> VectorInitializationVisitor<'a, 'tcx> {
     fn search_slow_extend_filling(&mut self, expr: &'tcx Expr<'_>) {
         if_chain! {
             if self.initialization_found;
-            if let ExprKind::MethodCall(ref path, _, ref args) = expr.kind;
+            if let ExprKind::MethodCall(ref path, _, ref args, _) = expr.kind;
             if let ExprKind::Path(ref qpath_subj) = args[0].kind;
             if match_qpath(&qpath_subj, &[&*self.vec_alloc.variable_name.as_str()]);
             if path.ident.name == sym!(extend);
@@ -218,7 +224,7 @@ impl<'a, 'tcx> VectorInitializationVisitor<'a, 'tcx> {
     fn search_slow_resize_filling(&mut self, expr: &'tcx Expr<'_>) {
         if_chain! {
             if self.initialization_found;
-            if let ExprKind::MethodCall(ref path, _, ref args) = expr.kind;
+            if let ExprKind::MethodCall(ref path, _, ref args, _) = expr.kind;
             if let ExprKind::Path(ref qpath_subj) = args[0].kind;
             if match_qpath(&qpath_subj, &[&*self.vec_alloc.variable_name.as_str()]);
             if path.ident.name == sym!(resize);
@@ -240,7 +246,7 @@ impl<'a, 'tcx> VectorInitializationVisitor<'a, 'tcx> {
     /// Returns `true` if give expression is `repeat(0).take(...)`
     fn is_repeat_take(&self, expr: &Expr<'_>) -> bool {
         if_chain! {
-            if let ExprKind::MethodCall(ref take_path, _, ref take_args) = expr.kind;
+            if let ExprKind::MethodCall(ref take_path, _, ref take_args, _) = expr.kind;
             if take_path.ident.name == sym!(take);
 
             // Check that take is applied to `repeat(0)`

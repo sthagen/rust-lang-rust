@@ -14,7 +14,7 @@ use crate::mir::Body;
 use crate::mir::GeneratorLayout;
 use crate::traits::{self, Reveal};
 use crate::ty;
-use crate::ty::subst::{InternalSubsts, Subst, SubstsRef};
+use crate::ty::subst::{GenericArg, InternalSubsts, Subst, SubstsRef};
 use crate::ty::util::{Discr, IntTypeExt};
 use rustc_ast::ast;
 use rustc_attr as attr;
@@ -84,6 +84,8 @@ pub use self::trait_def::TraitDef;
 
 pub use self::query::queries;
 
+pub use self::consts::ConstInt;
+
 pub mod adjustment;
 pub mod binding;
 pub mod cast;
@@ -108,6 +110,7 @@ pub mod trait_def;
 pub mod util;
 pub mod walk;
 
+mod consts;
 mod context;
 mod diagnostics;
 mod instance;
@@ -121,10 +124,9 @@ pub struct ResolverOutputs {
     pub definitions: rustc_hir::definitions::Definitions,
     pub cstore: Box<CrateStoreDyn>,
     pub extern_crate_map: FxHashMap<LocalDefId, CrateNum>,
-    pub trait_map: FxHashMap<hir::HirId, Vec<hir::TraitCandidate<hir::HirId>>>,
     pub maybe_unused_trait_imports: FxHashSet<LocalDefId>,
     pub maybe_unused_extern_crates: Vec<(LocalDefId, Span)>,
-    pub export_map: ExportMap<hir::HirId>,
+    pub export_map: ExportMap<LocalDefId>,
     pub glob_map: FxHashMap<LocalDefId, FxHashSet<Symbol>>,
     /// Extern prelude entries. The value is `true` if the entry was introduced
     /// via `extern crate` item and not `--extern` option or compiler built-in.
@@ -198,14 +200,13 @@ pub struct AssocItem {
 pub enum AssocKind {
     Const,
     Fn,
-    OpaqueTy,
     Type,
 }
 
 impl AssocKind {
     pub fn namespace(&self) -> Namespace {
         match *self {
-            ty::AssocKind::OpaqueTy | ty::AssocKind::Type => Namespace::TypeNS,
+            ty::AssocKind::Type => Namespace::TypeNS,
             ty::AssocKind::Const | ty::AssocKind::Fn => Namespace::ValueNS,
         }
     }
@@ -215,22 +216,11 @@ impl AssocKind {
             AssocKind::Const => DefKind::AssocConst,
             AssocKind::Fn => DefKind::AssocFn,
             AssocKind::Type => DefKind::AssocTy,
-            AssocKind::OpaqueTy => DefKind::AssocOpaqueTy,
         }
     }
 }
 
 impl AssocItem {
-    /// Tests whether the associated item admits a non-trivial implementation
-    /// for !
-    pub fn relevant_for_never(&self) -> bool {
-        match self.kind {
-            AssocKind::OpaqueTy | AssocKind::Const | AssocKind::Type => true,
-            // FIXME(canndrew): Be more thorough here, check if any argument is uninhabited.
-            AssocKind::Fn => !self.fn_has_self_parameter,
-        }
-    }
-
     pub fn signature(&self, tcx: TyCtxt<'_>) -> String {
         match self.kind {
             ty::AssocKind::Fn => {
@@ -241,8 +231,6 @@ impl AssocItem {
                 tcx.fn_sig(self.def_id).skip_binder().to_string()
             }
             ty::AssocKind::Type => format!("type {};", self.ident),
-            // FIXME(type_alias_impl_trait): we should print bounds here too.
-            ty::AssocKind::OpaqueTy => format!("type {};", self.ident),
             ty::AssocKind::Const => {
                 format!("const {}: {:?};", self.ident, tcx.type_of(self.def_id))
             }
@@ -642,7 +630,7 @@ impl<'tcx> Hash for TyS<'tcx> {
     }
 }
 
-impl<'a, 'tcx> HashStable<StableHashingContext<'a>> for ty::TyS<'tcx> {
+impl<'a, 'tcx> HashStable<StableHashingContext<'a>> for TyS<'tcx> {
     fn hash_stable(&self, hcx: &mut StableHashingContext<'a>, hasher: &mut StableHasher) {
         let ty::TyS {
             ref kind,
@@ -1016,16 +1004,35 @@ impl<'tcx> GenericPredicates<'tcx> {
     }
 }
 
-#[derive(Clone, Copy, Hash, RustcEncodable, RustcDecodable, Lift)]
-#[derive(HashStable)]
-pub struct Predicate<'tcx> {
-    kind: &'tcx PredicateKind<'tcx>,
+#[derive(Debug)]
+crate struct PredicateInner<'tcx> {
+    kind: PredicateKind<'tcx>,
+    flags: TypeFlags,
+    /// See the comment for the corresponding field of [TyS].
+    outer_exclusive_binder: ty::DebruijnIndex,
 }
+
+#[cfg(target_arch = "x86_64")]
+static_assert_size!(PredicateInner<'_>, 40);
+
+#[derive(Clone, Copy, Lift)]
+pub struct Predicate<'tcx> {
+    inner: &'tcx PredicateInner<'tcx>,
+}
+
+impl rustc_serialize::UseSpecializedEncodable for Predicate<'_> {}
+impl rustc_serialize::UseSpecializedDecodable for Predicate<'_> {}
 
 impl<'tcx> PartialEq for Predicate<'tcx> {
     fn eq(&self, other: &Self) -> bool {
         // `self.kind` is always interned.
-        ptr::eq(self.kind, other.kind)
+        ptr::eq(self.inner, other.inner)
+    }
+}
+
+impl Hash for Predicate<'_> {
+    fn hash<H: Hasher>(&self, s: &mut H) {
+        (self.inner as *const PredicateInner<'_>).hash(s)
     }
 }
 
@@ -1034,7 +1041,22 @@ impl<'tcx> Eq for Predicate<'tcx> {}
 impl<'tcx> Predicate<'tcx> {
     #[inline(always)]
     pub fn kind(self) -> &'tcx PredicateKind<'tcx> {
-        self.kind
+        &self.inner.kind
+    }
+}
+
+impl<'a, 'tcx> HashStable<StableHashingContext<'a>> for Predicate<'tcx> {
+    fn hash_stable(&self, hcx: &mut StableHashingContext<'a>, hasher: &mut StableHasher) {
+        let PredicateInner {
+            ref kind,
+
+            // The other fields just provide fast access to information that is
+            // also contained in `kind`, so no need to hash them.
+            flags: _,
+            outer_exclusive_binder: _,
+        } = self.inner;
+
+        kind.hash_stable(hcx, hasher);
     }
 }
 
@@ -1061,7 +1083,7 @@ pub enum PredicateKind<'tcx> {
     Projection(PolyProjectionPredicate<'tcx>),
 
     /// No syntax: `T` well-formed.
-    WellFormed(Ty<'tcx>),
+    WellFormed(GenericArg<'tcx>),
 
     /// Trait must be object-safe.
     ObjectSafe(DefId),
@@ -1821,6 +1843,19 @@ impl<'tcx> VariantDef {
     pub fn is_field_list_non_exhaustive(&self) -> bool {
         self.flags.intersects(VariantFlags::IS_FIELD_LIST_NON_EXHAUSTIVE)
     }
+
+    /// `repr(transparent)` structs can have a single non-ZST field, this function returns that
+    /// field.
+    pub fn transparent_newtype_field(&self, tcx: TyCtxt<'tcx>) -> Option<&FieldDef> {
+        for field in &self.fields {
+            let field_ty = field.ty(tcx, InternalSubsts::identity_for_item(tcx, self.def_id));
+            if !field_ty.is_zst(tcx, self.def_id) {
+                return Some(field);
+            }
+        }
+
+        None
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, RustcEncodable, RustcDecodable, HashStable)]
@@ -1846,7 +1881,7 @@ pub struct FieldDef {
 
 /// The definition of a user-defined type, e.g., a `struct`, `enum`, or `union`.
 ///
-/// These are all interned (by `intern_adt_def`) into the `adt_defs` table.
+/// These are all interned (by `alloc_adt_def`) into the global arena.
 ///
 /// The initialism *ADT* stands for an [*algebraic data type (ADT)*][adt].
 /// This is slightly wrong because `union`s are not ADTs.
@@ -2353,6 +2388,7 @@ impl<'tcx> AdtDef {
     /// Alternatively, if there is no explicit discriminant, returns the
     /// inferred discriminant directly.
     pub fn discriminant_def_for_variant(&self, variant_index: VariantIdx) -> (Option<DefId>, u32) {
+        assert!(!self.variants.is_empty());
         let mut explicit_index = variant_index.as_u32();
         let expr_did;
         loop {
@@ -2556,10 +2592,6 @@ impl<'tcx> TyCtxt<'tcx> {
         self.associated_items(id)
             .in_definition_order()
             .filter(|item| item.kind == AssocKind::Fn && item.defaultness.has_value())
-    }
-
-    pub fn trait_relevant_for_never(self, did: DefId) -> bool {
-        self.associated_items(did).in_definition_order().any(|item| item.relevant_for_never())
     }
 
     pub fn opt_item_name(self, def_id: DefId) -> Option<Ident> {

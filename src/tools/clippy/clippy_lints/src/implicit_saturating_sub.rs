@@ -25,13 +25,6 @@ declare_clippy_lint! {
     /// if i != 0 {
     ///     i -= 1;
     /// }
-    /// ```
-    /// Use instead:
-    /// ```rust
-    /// let end: u32 = 10;
-    /// let start: u32 = 5;
-    ///
-    /// let mut i: u32 = end - start;
     ///
     /// // Good
     /// i = i.saturating_sub(1);
@@ -88,7 +81,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for ImplicitSaturatingSub {
                 };
 
                 // Check if the variable in the condition statement is an integer
-                if !cx.tables.expr_ty(cond_var).is_integral() {
+                if !cx.tables().expr_ty(cond_var).is_integral() {
                     return;
                 }
 
@@ -100,7 +93,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for ImplicitSaturatingSub {
                     ExprKind::Lit(ref cond_lit) => {
                         // Check if the constant is zero
                         if let LitKind::Int(0, _) = cond_lit.node {
-                            if cx.tables.expr_ty(cond_left).is_signed() {
+                            if cx.tables().expr_ty(cond_left).is_signed() {
                             } else {
                                 print_lint_and_sugg(cx, &var_name, expr);
                             };

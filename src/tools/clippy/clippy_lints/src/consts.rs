@@ -254,11 +254,11 @@ impl<'c, 'cc> ConstEvalLateContext<'c, 'cc> {
                     if let ["core", "num", int_impl, "max_value"] = *def_path;
                     then {
                        let value = match int_impl {
-                           "<impl i8>" => i8::max_value() as u128,
-                           "<impl i16>" => i16::max_value() as u128,
-                           "<impl i32>" => i32::max_value() as u128,
-                           "<impl i64>" => i64::max_value() as u128,
-                           "<impl i128>" => i128::max_value() as u128,
+                           "<impl i8>" => i8::MAX as u128,
+                           "<impl i16>" => i16::MAX as u128,
+                           "<impl i32>" => i32::MAX as u128,
+                           "<impl i64>" => i64::MAX as u128,
+                           "<impl i128>" => i128::MAX as u128,
                            _ => return None,
                        };
                        Some(Constant::Int(value))
@@ -396,7 +396,7 @@ impl<'c, 'cc> ConstEvalLateContext<'c, 'cc> {
         let l = self.expr(left)?;
         let r = self.expr(right);
         match (l, r) {
-            (Constant::Int(l), Some(Constant::Int(r))) => match self.tables.expr_ty(left).kind {
+            (Constant::Int(l), Some(Constant::Int(r))) => match self.tables.expr_ty_opt(left)?.kind {
                 ty::Int(ity) => {
                     let l = sext(self.lcx.tcx, l, ity);
                     let r = sext(self.lcx.tcx, r, ity);

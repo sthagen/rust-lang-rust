@@ -50,7 +50,7 @@ impl QuestionMark {
     fn check_is_none_and_early_return_none(cx: &LateContext<'_, '_>, expr: &Expr<'_>) {
         if_chain! {
             if let Some((if_expr, body, else_)) = higher::if_block(&expr);
-            if let ExprKind::MethodCall(segment, _, args) = &if_expr.kind;
+            if let ExprKind::MethodCall(segment, _, args, _) = &if_expr.kind;
             if segment.ident.name == sym!(is_none);
             if Self::expression_returns_none(cx, body);
             if let Some(subject) = args.get(0);
@@ -88,7 +88,7 @@ impl QuestionMark {
                         replacement_str,
                         applicability,
                     )
-               }
+                }
             }
         }
     }
@@ -135,13 +135,13 @@ impl QuestionMark {
     }
 
     fn moves_by_default(cx: &LateContext<'_, '_>, expression: &Expr<'_>) -> bool {
-        let expr_ty = cx.tables.expr_ty(expression);
+        let expr_ty = cx.tables().expr_ty(expression);
 
-        !expr_ty.is_copy_modulo_regions(cx.tcx, cx.param_env, expression.span)
+        !expr_ty.is_copy_modulo_regions(cx.tcx.at(expression.span), cx.param_env)
     }
 
     fn is_option(cx: &LateContext<'_, '_>, expression: &Expr<'_>) -> bool {
-        let expr_ty = cx.tables.expr_ty(expression);
+        let expr_ty = cx.tables().expr_ty(expression);
 
         is_type_diagnostic_item(cx, expr_ty, sym!(option_type))
     }
@@ -158,7 +158,7 @@ impl QuestionMark {
             ExprKind::Ret(Some(ref expr)) => Self::expression_returns_none(cx, expr),
             ExprKind::Path(ref qp) => {
                 if let Res::Def(DefKind::Ctor(def::CtorOf::Variant, def::CtorKind::Const), def_id) =
-                    cx.tables.qpath_res(qp, expression.hir_id)
+                    cx.tables().qpath_res(qp, expression.hir_id)
                 {
                     return match_def_path(cx, def_id, &paths::OPTION_NONE);
                 }

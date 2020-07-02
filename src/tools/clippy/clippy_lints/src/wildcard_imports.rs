@@ -19,8 +19,14 @@ declare_clippy_lint! {
     /// still around.
     ///
     /// **Example:**
-    /// ```rust
+    /// ```rust,ignore
+    /// // Bad
     /// use std::cmp::Ordering::*;
+    /// foo(Less);
+    ///
+    /// // Good
+    /// use std::cmp::Ordering;
+    /// foo(Ordering::Less)
     /// ```
     pub ENUM_GLOB_USE,
     pedantic,
@@ -30,7 +36,7 @@ declare_clippy_lint! {
 declare_clippy_lint! {
     /// **What it does:** Checks for wildcard imports `use _::*`.
     ///
-    /// **Why is this bad?** wildcard imports can polute the namespace. This is especially bad if
+    /// **Why is this bad?** wildcard imports can pollute the namespace. This is especially bad if
     /// you try to import something through a wildcard, that already has been imported by name from
     /// a different source:
     ///
@@ -60,15 +66,15 @@ declare_clippy_lint! {
     ///
     /// **Example:**
     ///
-    /// Bad:
     /// ```rust,ignore
+    /// // Bad
     /// use crate1::*;
     ///
     /// foo();
     /// ```
     ///
-    /// Good:
     /// ```rust,ignore
+    /// // Good
     /// use crate1::foo;
     ///
     /// foo();

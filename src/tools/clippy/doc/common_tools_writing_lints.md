@@ -4,7 +4,9 @@ You may need following tooltips to catch up with common operations.
 
 - [Common tools for writing lints](#common-tools-for-writing-lints)
   - [Retrieving the type of an expression](#retrieving-the-type-of-an-expression)
+  - [Checking if an expression is calling a specific method](#checking-if-an-expr-is-calling-a-specific-method)
   - [Checking if a type implements a specific trait](#checking-if-a-type-implements-a-specific-trait)
+  - [Checking if a type defines a method](#checking-if-a-type-defines-a-method)
   - [Dealing with macros](#dealing-with-macros)
 
 Useful Rustc dev guide links:
@@ -17,11 +19,11 @@ Useful Rustc dev guide links:
 Sometimes you may want to retrieve the type `Ty` of an expression `Expr`, for example to answer following questions:
 
 - which type does this expression correspond to (using its [`TyKind`][TyKind])?
-- is it a sized type? 
+- is it a sized type?
 - is it a primitive type?
 - does it implement a trait?
 
-This operation is performed using the [`expr_ty()`][expr_ty] method from the [`TypeckTables`][TypeckTables] struct, 
+This operation is performed using the [`expr_ty()`][expr_ty] method from the [`TypeckTables`][TypeckTables] struct,
 that gives you access to the underlying structure [`TyS`][TyS].
 
 Example of use:
@@ -29,7 +31,7 @@ Example of use:
 impl LateLintPass<'_, '_> for MyStructLint {
     fn check_expr(&mut self, cx: &LateContext<'_, '_>, expr: &Expr<'_>) {
         // Get type of `expr`
-        let ty = cx.tables.expr_ty(expr);
+        let ty = cx.tables().expr_ty(expr);
         // Match its kind to enter its type
         match ty.kind {
             ty::Adt(adt_def, _) if adt_def.is_struct() => println!("Our `expr` is a struct!"),
@@ -39,15 +41,35 @@ impl LateLintPass<'_, '_> for MyStructLint {
 }
 ```
 
-Similarly in [`TypeckTables`][TypeckTables] methods, you have the [`pat_ty()`][pat_ty] method 
+Similarly in [`TypeckTables`][TypeckTables] methods, you have the [`pat_ty()`][pat_ty] method
 to retrieve a type from a pattern.
 
 Two noticeable items here:
-- `cx` is the lint context [`LateContext`][LateContext]. 
-  The two most useful data structures in this context are `tcx` and `tables`, 
+- `cx` is the lint context [`LateContext`][LateContext].
+  The two most useful data structures in this context are `tcx` and `tables`,
   allowing us to jump to type definitions and other compilation stages such as HIR.
-- `tables` is [`TypeckTables`][TypeckTables] and is created by type checking step, 
+- `tables` is [`TypeckTables`][TypeckTables] and is created by type checking step,
   it includes useful information such as types of expressions, ways to resolve methods and so on.
+
+# Checking if an expr is calling a specific method
+
+Starting with an `expr`, you can check whether it is calling a specific method `some_method`:
+
+```rust
+impl LateLintPass<'_, '_> for MyStructLint {
+    fn check_expr(&mut self, cx: &LateContext<'a, 'tcx>, expr: &'tcx hir::Expr<'_>) {
+        if_chain! {
+            // Check our expr is calling a method
+            if let hir::ExprKind::MethodCall(path, _, _args) = &expr.kind;
+            // Check the name of this method is `some_method`
+            if path.ident.name == sym!(some_method);
+            then {
+                // ...
+            }
+        }
+    }
+}
+```
 
 # Checking if a type implements a specific trait
 
@@ -65,7 +87,7 @@ impl LateLintPass<'_, '_> for MyStructLint {
         }
 
         // 2. Using type context `TyCtxt`
-        let ty = cx.tables.expr_ty(expr);
+        let ty = cx.tables().expr_ty(expr);
         if cx.tcx.lang_items()
             // we are looking for the `DefId` of `Drop` trait in lang items
             .drop_trait()
@@ -82,6 +104,32 @@ impl LateLintPass<'_, '_> for MyStructLint {
 A list of defined paths for Clippy can be found in [paths.rs][paths]
 
 We access lang items through the type context `tcx`. `tcx` is of type [`TyCtxt`][TyCtxt] and is defined in the `rustc_middle` crate.
+
+# Checking if a type defines a specific method
+
+To check if our type defines a method called `some_method`:
+
+```rust
+use crate::utils::{is_type_diagnostic_item, return_ty};
+
+impl<'a, 'tcx> LateLintPass<'a, 'tcx> for MyTypeImpl {
+    fn check_impl_item(&mut self, cx: &LateContext<'a, 'tcx>, impl_item: &'tcx ImplItem<'_>) {
+        if_chain! {
+            // Check if item is a method/function
+            if let ImplItemKind::Fn(ref signature, _) = impl_item.kind;
+            // Check the method is named `some_method`
+            if impl_item.ident.name == sym!(some_method);
+            // We can also check it has a parameter `self`
+            if signature.decl.implicit_self.has_implicit_self();
+            // We can go further and even check if its return type is `String`
+            if is_type_diagnostic_item(cx, return_ty(cx, impl_item.hir_id), sym!(string_type));
+            then {
+                // ...
+            }
+        }
+    }
+}
+```
 
 # Dealing with macros
 

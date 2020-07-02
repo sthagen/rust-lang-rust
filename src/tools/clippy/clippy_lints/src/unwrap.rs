@@ -101,7 +101,7 @@ fn collect_unwrap_info<'a, 'tcx>(
 
     if let ExprKind::Binary(op, left, right) = &expr.kind {
         match (invert, op.node) {
-            (false, BinOpKind::And) | (false, BinOpKind::BitAnd) | (true, BinOpKind::Or) | (true, BinOpKind::BitOr) => {
+            (false, BinOpKind::And | BinOpKind::BitAnd) | (true, BinOpKind::Or | BinOpKind::BitOr) => {
                 let mut unwrap_info = collect_unwrap_info(cx, left, branch, invert);
                 unwrap_info.append(&mut collect_unwrap_info(cx, right, branch, invert));
                 return unwrap_info;
@@ -112,9 +112,9 @@ fn collect_unwrap_info<'a, 'tcx>(
         return collect_unwrap_info(cx, expr, branch, !invert);
     } else {
         if_chain! {
-            if let ExprKind::MethodCall(method_name, _, args) = &expr.kind;
+            if let ExprKind::MethodCall(method_name, _, args, _) = &expr.kind;
             if let ExprKind::Path(QPath::Resolved(None, path)) = &args[0].kind;
-            let ty = cx.tables.expr_ty(&args[0]);
+            let ty = cx.tables().expr_ty(&args[0]);
             let name = method_name.ident.as_str();
             if is_relevant_option_call(cx, ty, &name) || is_relevant_result_call(cx, ty, &name);
             then {
@@ -166,7 +166,7 @@ impl<'a, 'tcx> Visitor<'tcx> for UnwrappableVariablesVisitor<'a, 'tcx> {
         } else {
             // find `unwrap[_err]()` calls:
             if_chain! {
-                if let ExprKind::MethodCall(ref method_name, _, ref args) = expr.kind;
+                if let ExprKind::MethodCall(ref method_name, _, ref args, _) = expr.kind;
                 if let ExprKind::Path(QPath::Resolved(None, ref path)) = args[0].kind;
                 if [sym!(unwrap), sym!(unwrap_err)].contains(&method_name.ident.name);
                 let call_to_unwrap = method_name.ident.name == sym!(unwrap);

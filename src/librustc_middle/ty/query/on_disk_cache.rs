@@ -1,6 +1,6 @@
 use crate::dep_graph::{DepNodeIndex, SerializedDepNodeIndex};
+use crate::mir::interpret;
 use crate::mir::interpret::{AllocDecodingSession, AllocDecodingState};
-use crate::mir::{self, interpret};
 use crate::ty::codec::{self as ty_codec, TyDecoder, TyEncoder};
 use crate::ty::context::TyCtxt;
 use crate::ty::{self, Ty};
@@ -25,9 +25,6 @@ use rustc_span::{BytePos, SourceFile, Span, DUMMY_SP};
 use std::mem;
 
 const TAG_FILE_FOOTER: u128 = 0xC0FFEE_C0FFEE_C0FFEE_C0FFEE_C0FFEE;
-
-const TAG_CLEAR_CROSS_CRATE_CLEAR: u8 = 0;
-const TAG_CLEAR_CROSS_CRATE_SET: u8 = 1;
 
 const TAG_NO_EXPN_DATA: u8 = 0;
 const TAG_EXPN_DATA_SHORTHAND: u8 = 1;
@@ -527,14 +524,37 @@ impl<'a, 'tcx> TyDecoder<'tcx> for CacheDecoder<'a, 'tcx> {
         let cache_key =
             ty::CReaderCacheKey { cnum: CrateNum::ReservedForIncrCompCache, pos: shorthand };
 
-        if let Some(&ty) = tcx.rcache.borrow().get(&cache_key) {
+        if let Some(&ty) = tcx.ty_rcache.borrow().get(&cache_key) {
             return Ok(ty);
         }
 
         let ty = or_insert_with(self)?;
         // This may overwrite the entry, but it should overwrite with the same value.
-        tcx.rcache.borrow_mut().insert_same(cache_key, ty);
+        tcx.ty_rcache.borrow_mut().insert_same(cache_key, ty);
         Ok(ty)
+    }
+
+    fn cached_predicate_for_shorthand<F>(
+        &mut self,
+        shorthand: usize,
+        or_insert_with: F,
+    ) -> Result<ty::Predicate<'tcx>, Self::Error>
+    where
+        F: FnOnce(&mut Self) -> Result<ty::Predicate<'tcx>, Self::Error>,
+    {
+        let tcx = self.tcx();
+
+        let cache_key =
+            ty::CReaderCacheKey { cnum: CrateNum::ReservedForIncrCompCache, pos: shorthand };
+
+        if let Some(&pred) = tcx.pred_rcache.borrow().get(&cache_key) {
+            return Ok(pred);
+        }
+
+        let pred = or_insert_with(self)?;
+        // This may overwrite the entry, but it should overwrite with the same value.
+        tcx.pred_rcache.borrow_mut().insert_same(cache_key, pred);
+        Ok(pred)
     }
 
     fn with_position<F, R>(&mut self, pos: usize, f: F) -> R
@@ -664,24 +684,6 @@ impl<'a, 'tcx> SpecializedDecoder<LocalDefId> for CacheDecoder<'a, 'tcx> {
 impl<'a, 'tcx> SpecializedDecoder<Fingerprint> for CacheDecoder<'a, 'tcx> {
     fn specialized_decode(&mut self) -> Result<Fingerprint, Self::Error> {
         Fingerprint::decode_opaque(&mut self.opaque)
-    }
-}
-
-impl<'a, 'tcx, T: Decodable> SpecializedDecoder<mir::ClearCrossCrate<T>>
-    for CacheDecoder<'a, 'tcx>
-{
-    #[inline]
-    fn specialized_decode(&mut self) -> Result<mir::ClearCrossCrate<T>, Self::Error> {
-        let discr = u8::decode(self)?;
-
-        match discr {
-            TAG_CLEAR_CROSS_CRATE_CLEAR => Ok(mir::ClearCrossCrate::Clear),
-            TAG_CLEAR_CROSS_CRATE_SET => {
-                let val = T::decode(self)?;
-                Ok(mir::ClearCrossCrate::Set(val))
-            }
-            _ => unreachable!(),
-        }
     }
 }
 
@@ -828,27 +830,29 @@ where
     }
 }
 
-impl<'a, 'tcx, E> SpecializedEncoder<Ty<'tcx>> for CacheEncoder<'a, 'tcx, E>
+impl<'a, 'b, 'c, 'tcx, E> SpecializedEncoder<&'b ty::TyS<'c>> for CacheEncoder<'a, 'tcx, E>
 where
     E: 'a + TyEncoder,
+    &'b ty::TyS<'c>: UseSpecializedEncodable,
 {
     #[inline]
-    fn specialized_encode(&mut self, ty: &Ty<'tcx>) -> Result<(), Self::Error> {
+    fn specialized_encode(&mut self, ty: &&'b ty::TyS<'c>) -> Result<(), Self::Error> {
+        debug_assert!(self.tcx.lift(ty).is_some());
+        let ty = unsafe { std::mem::transmute::<&&'b ty::TyS<'c>, &&'tcx ty::TyS<'tcx>>(ty) };
         ty_codec::encode_with_shorthand(self, ty, |encoder| &mut encoder.type_shorthands)
     }
 }
 
-impl<'a, 'tcx, E> SpecializedEncoder<&'tcx [(ty::Predicate<'tcx>, Span)]>
-    for CacheEncoder<'a, 'tcx, E>
+impl<'a, 'b, 'tcx, E> SpecializedEncoder<ty::Predicate<'b>> for CacheEncoder<'a, 'tcx, E>
 where
     E: 'a + TyEncoder,
 {
     #[inline]
-    fn specialized_encode(
-        &mut self,
-        predicates: &&'tcx [(ty::Predicate<'tcx>, Span)],
-    ) -> Result<(), Self::Error> {
-        ty_codec::encode_spanned_predicates(self, predicates, |encoder| {
+    fn specialized_encode(&mut self, predicate: &ty::Predicate<'b>) -> Result<(), Self::Error> {
+        debug_assert!(self.tcx.lift(predicate).is_some());
+        let predicate =
+            unsafe { std::mem::transmute::<&ty::Predicate<'b>, &ty::Predicate<'tcx>>(predicate) };
+        ty_codec::encode_with_shorthand(self, predicate, |encoder| {
             &mut encoder.predicate_shorthands
         })
     }
@@ -887,23 +891,6 @@ where
 impl<'a, 'tcx> SpecializedEncoder<Fingerprint> for CacheEncoder<'a, 'tcx, opaque::Encoder> {
     fn specialized_encode(&mut self, f: &Fingerprint) -> Result<(), Self::Error> {
         f.encode_opaque(&mut self.encoder)
-    }
-}
-
-impl<'a, 'tcx, E, T> SpecializedEncoder<mir::ClearCrossCrate<T>> for CacheEncoder<'a, 'tcx, E>
-where
-    E: 'a + TyEncoder,
-    T: Encodable,
-{
-    #[inline]
-    fn specialized_encode(&mut self, val: &mir::ClearCrossCrate<T>) -> Result<(), Self::Error> {
-        match *val {
-            mir::ClearCrossCrate::Clear => TAG_CLEAR_CROSS_CRATE_CLEAR.encode(self),
-            mir::ClearCrossCrate::Set(ref val) => {
-                TAG_CLEAR_CROSS_CRATE_SET.encode(self)?;
-                val.encode(self)
-            }
-        }
     }
 }
 
@@ -995,7 +982,7 @@ fn encode_query_results<'a, 'tcx, Q, E>(
     query_result_index: &mut EncodedQueryResultIndex,
 ) -> Result<(), E::Error>
 where
-    Q: super::QueryDescription<TyCtxt<'tcx>>,
+    Q: super::QueryDescription<TyCtxt<'tcx>> + super::QueryAccessors<TyCtxt<'tcx>>,
     Q::Value: Encodable,
     E: 'a + TyEncoder,
 {

@@ -156,6 +156,9 @@ fn check_rvalue(
     span: Span,
 ) -> McfResult {
     match rvalue {
+        Rvalue::ThreadLocalRef(_) => {
+            Err((span, "cannot access thread local storage in const fn".into()))
+        }
         Rvalue::Repeat(operand, _) | Rvalue::Use(operand) => {
             check_operand(tcx, operand, span, def_id, body)
         }
@@ -234,12 +237,6 @@ fn check_statement(
         StatementKind::Assign(box (place, rval)) => {
             check_place(tcx, *place, span, def_id, body)?;
             check_rvalue(tcx, body, def_id, rval, span)
-        }
-
-        StatementKind::FakeRead(FakeReadCause::ForMatchedPlace, _)
-            if !feature_allowed(tcx, def_id, sym::const_if_match) =>
-        {
-            Err((span, "loops and conditional expressions are not stable in const fn".into()))
         }
 
         StatementKind::FakeRead(_, place) => check_place(tcx, **place, span, def_id, body),
@@ -331,6 +328,26 @@ fn feature_allowed(tcx: TyCtxt<'tcx>, def_id: DefId, feature_gate: Symbol) -> bo
         .map_or(false, |mut features| features.any(|name| name == feature_gate))
 }
 
+/// Returns `true` if the given library feature gate is allowed within the function with the given `DefId`.
+pub fn lib_feature_allowed(tcx: TyCtxt<'tcx>, def_id: DefId, feature_gate: Symbol) -> bool {
+    // All features require that the corresponding gate be enabled,
+    // even if the function has `#[allow_internal_unstable(the_gate)]`.
+    if !tcx.features().declared_lib_features.iter().any(|&(sym, _)| sym == feature_gate) {
+        return false;
+    }
+
+    // If this crate is not using stability attributes, or this function is not claiming to be a
+    // stable `const fn`, that is all that is required.
+    if !tcx.features().staged_api || tcx.has_attr(def_id, sym::rustc_const_unstable) {
+        return true;
+    }
+
+    // However, we cannot allow stable `const fn`s to use unstable features without an explicit
+    // opt-in via `allow_internal_unstable`.
+    attr::allow_internal_unstable(&tcx.get_attrs(def_id), &tcx.sess.diagnostic())
+        .map_or(false, |mut features| features.any(|name| name == feature_gate))
+}
+
 fn check_terminator(
     tcx: TyCtxt<'tcx>,
     body: &'a Body<'tcx>,
@@ -339,21 +356,17 @@ fn check_terminator(
 ) -> McfResult {
     let span = terminator.source_info.span;
     match &terminator.kind {
-        TerminatorKind::FalseEdges { .. }
+        TerminatorKind::FalseEdge { .. }
         | TerminatorKind::FalseUnwind { .. }
         | TerminatorKind::Goto { .. }
         | TerminatorKind::Return
         | TerminatorKind::Resume
         | TerminatorKind::Unreachable => Ok(()),
 
-        TerminatorKind::Drop { location, .. } => check_place(tcx, *location, span, def_id, body),
-        TerminatorKind::DropAndReplace { location, value, .. } => {
-            check_place(tcx, *location, span, def_id, body)?;
+        TerminatorKind::Drop { place, .. } => check_place(tcx, *place, span, def_id, body),
+        TerminatorKind::DropAndReplace { place, value, .. } => {
+            check_place(tcx, *place, span, def_id, body)?;
             check_operand(tcx, value, span, def_id, body)
-        }
-
-        TerminatorKind::SwitchInt { .. } if !feature_allowed(tcx, def_id, sym::const_if_match) => {
-            Err((span, "loops and conditional expressions are not stable in const fn".into()))
         }
 
         TerminatorKind::SwitchInt { discr, switch_ty: _, values: _, targets: _ } => {
@@ -365,10 +378,26 @@ fn check_terminator(
             Err((span, "const fn generators are unstable".into()))
         }
 
-        TerminatorKind::Call { func, args, from_hir_call: _, destination: _, cleanup: _ } => {
+        TerminatorKind::Call {
+            func,
+            args,
+            from_hir_call: _,
+            destination: _,
+            cleanup: _,
+            fn_span: _,
+        } => {
             let fn_ty = func.ty(body, tcx);
-            if let ty::FnDef(def_id, _) = fn_ty.kind {
-                if !crate::const_eval::is_min_const_fn(tcx, def_id) {
+            if let ty::FnDef(fn_def_id, _) = fn_ty.kind {
+                // Allow unstable const if we opt in by using #[allow_internal_unstable]
+                // on function or macro declaration.
+                if !crate::const_eval::is_min_const_fn(tcx, fn_def_id)
+                    && !crate::const_eval::is_unstable_const_fn(tcx, fn_def_id)
+                        .map(|feature| {
+                            span.allows_unstable(feature)
+                                || lib_feature_allowed(tcx, def_id, feature)
+                        })
+                        .unwrap_or(false)
+                {
                     return Err((
                         span,
                         format!(
@@ -380,10 +409,10 @@ fn check_terminator(
                     ));
                 }
 
-                check_operand(tcx, func, span, def_id, body)?;
+                check_operand(tcx, func, span, fn_def_id, body)?;
 
                 for arg in args {
-                    check_operand(tcx, arg, span, def_id, body)?;
+                    check_operand(tcx, arg, span, fn_def_id, body)?;
                 }
                 Ok(())
             } else {

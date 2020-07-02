@@ -49,7 +49,9 @@ fn third_party_crates() -> String {
         if let Some(name) = path.file_name().and_then(OsStr::to_str) {
             for dep in CRATES {
                 if name.starts_with(&format!("lib{}-", dep)) && name.ends_with(".rlib") {
-                    crates.entry(dep).or_insert(path);
+                    if let Some(old) = crates.insert(dep, path.clone()) {
+                        panic!("Found multiple rlibs for crate `{}`: `{:?}` and `{:?}", dep, old, path);
+                    }
                     break;
                 }
             }
@@ -184,8 +186,15 @@ fn run_ui_cargo(config: &mut compiletest::Config) {
                 }
 
                 let src_path = case.path().join("src");
-                env::set_current_dir(&src_path)?;
 
+                // When switching between branches, if the previous branch had a test
+                // that the current branch does not have, the directory is not removed
+                // because an ignored Cargo.lock file exists.
+                if !src_path.exists() {
+                    continue;
+                }
+
+                env::set_current_dir(&src_path)?;
                 for file in fs::read_dir(&src_path)? {
                     let file = file?;
                     if file.file_type()?.is_dir() {

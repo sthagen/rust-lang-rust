@@ -110,7 +110,7 @@ impl Source {
 }
 
 fn verify_ty_bound<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, ty: Ty<'tcx>, source: Source) {
-    if ty.is_freeze(cx.tcx, cx.param_env, DUMMY_SP) || is_copy(cx, ty) {
+    if ty.is_freeze(cx.tcx.at(DUMMY_SP), cx.param_env) || is_copy(cx, ty) {
         // An `UnsafeCell` is `!Copy`, and an `UnsafeCell` is also the only type which
         // is `!Freeze`, thus if our type is `Copy` we can be sure it must be `Freeze`
         // as well.
@@ -237,13 +237,13 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for NonCopyConst {
             }
 
             let ty = if needs_check_adjustment {
-                let adjustments = cx.tables.expr_adjustments(dereferenced_expr);
+                let adjustments = cx.tables().expr_adjustments(dereferenced_expr);
                 if let Some(i) = adjustments.iter().position(|adj| match adj.kind {
                     Adjust::Borrow(_) | Adjust::Deref(_) => true,
                     _ => false,
                 }) {
                     if i == 0 {
-                        cx.tables.expr_ty(dereferenced_expr)
+                        cx.tables().expr_ty(dereferenced_expr)
                     } else {
                         adjustments[i - 1].target
                     }
@@ -252,7 +252,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for NonCopyConst {
                     return;
                 }
             } else {
-                cx.tables.expr_ty(dereferenced_expr)
+                cx.tables().expr_ty(dereferenced_expr)
             };
 
             verify_ty_bound(cx, ty, Source::Expr { expr: expr.span });

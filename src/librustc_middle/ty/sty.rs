@@ -203,8 +203,14 @@ pub enum TyKind<'tcx> {
 
     /// A placeholder for a type which could not be computed; this is
     /// propagated to avoid useless error messages.
-    Error,
+    Error(DelaySpanBugEmitted),
 }
+
+/// A type that is not publicly constructable. This prevents people from making `TyKind::Error`
+/// except through `tcx.err*()`.
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
+#[derive(RustcEncodable, RustcDecodable, HashStable)]
+pub struct DelaySpanBugEmitted(pub(super) ());
 
 // `TyKind` is used a lot. Make sure it doesn't unintentionally get bigger.
 #[cfg(target_arch = "x86_64")]
@@ -516,8 +522,7 @@ impl<'tcx> GeneratorSubsts<'tcx> {
 
     /// Calls `f` with a reference to the name of the enumerator for the given
     /// variant `v`.
-    #[inline]
-    pub fn variant_name(self, v: VariantIdx) -> Cow<'static, str> {
+    pub fn variant_name(v: VariantIdx) -> Cow<'static, str> {
         match v.as_usize() {
             Self::UNRESUMED => Cow::from(Self::UNRESUMED_NAME),
             Self::RETURNED => Cow::from(Self::RETURNED_NAME),
@@ -610,7 +615,7 @@ impl<'tcx> ExistentialPredicate<'tcx> {
 impl<'tcx> Binder<ExistentialPredicate<'tcx>> {
     pub fn with_self_ty(&self, tcx: TyCtxt<'tcx>, self_ty: Ty<'tcx>) -> ty::Predicate<'tcx> {
         use crate::ty::ToPredicate;
-        match *self.skip_binder() {
+        match self.skip_binder() {
             ExistentialPredicate::Trait(tr) => {
                 Binder(tr).with_self_ty(tcx, self_ty).without_const().to_predicate(tcx)
             }
@@ -724,10 +729,6 @@ impl<'tcx> Binder<&'tcx List<ExistentialPredicate<'tcx>>> {
 ///
 /// Trait references also appear in object types like `Foo<U>`, but in
 /// that case the `Self` parameter is absent from the substitutions.
-///
-/// Note that a `TraitRef` introduces a level of region binding, to
-/// account for higher-ranked trait bounds like `T: for<'a> Foo<&'a U>`
-/// or higher-ranked object types.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, RustcEncodable, RustcDecodable)]
 #[derive(HashStable, TypeFoldable)]
 pub struct TraitRef<'tcx> {
@@ -765,8 +766,8 @@ impl<'tcx> TraitRef<'tcx> {
 pub type PolyTraitRef<'tcx> = Binder<TraitRef<'tcx>>;
 
 impl<'tcx> PolyTraitRef<'tcx> {
-    pub fn self_ty(&self) -> Ty<'tcx> {
-        self.skip_binder().self_ty()
+    pub fn self_ty(&self) -> Binder<Ty<'tcx>> {
+        self.map_bound_ref(|tr| tr.self_ty())
     }
 
     pub fn def_id(&self) -> DefId {
@@ -775,7 +776,7 @@ impl<'tcx> PolyTraitRef<'tcx> {
 
     pub fn to_poly_trait_predicate(&self) -> ty::PolyTraitPredicate<'tcx> {
         // Note that we preserve binding levels
-        Binder(ty::TraitPredicate { trait_ref: *self.skip_binder() })
+        Binder(ty::TraitPredicate { trait_ref: self.skip_binder() })
     }
 }
 
@@ -879,8 +880,8 @@ impl<T> Binder<T> {
     /// - extracting the `DefId` from a PolyTraitRef;
     /// - comparing the self type of a PolyTraitRef to see if it is equal to
     ///   a type parameter `X`, since the type `X` does not reference any regions
-    pub fn skip_binder(&self) -> &T {
-        &self.0
+    pub fn skip_binder(self) -> T {
+        self.0
     }
 
     pub fn as_ref(&self) -> Binder<&T> {
@@ -915,11 +916,7 @@ impl<T> Binder<T> {
     where
         T: TypeFoldable<'tcx>,
     {
-        if self.skip_binder().has_escaping_bound_vars() {
-            None
-        } else {
-            Some(self.skip_binder().clone())
-        }
+        if self.0.has_escaping_bound_vars() { None } else { Some(self.skip_binder()) }
     }
 
     /// Given two things that have the same binder level,
@@ -996,7 +993,7 @@ impl<'tcx> ProjectionTy<'tcx> {
     }
 }
 
-#[derive(Clone, Debug, TypeFoldable)]
+#[derive(Copy, Clone, Debug, TypeFoldable)]
 pub struct GenSig<'tcx> {
     pub resume_ty: Ty<'tcx>,
     pub yield_ty: Ty<'tcx>,
@@ -1587,19 +1584,16 @@ impl RegionKind {
                 flags = flags | TypeFlags::HAS_FREE_REGIONS;
                 flags = flags | TypeFlags::HAS_FREE_LOCAL_REGIONS;
                 flags = flags | TypeFlags::HAS_RE_INFER;
-                flags = flags | TypeFlags::STILL_FURTHER_SPECIALIZABLE;
             }
             ty::RePlaceholder(..) => {
                 flags = flags | TypeFlags::HAS_FREE_REGIONS;
                 flags = flags | TypeFlags::HAS_FREE_LOCAL_REGIONS;
                 flags = flags | TypeFlags::HAS_RE_PLACEHOLDER;
-                flags = flags | TypeFlags::STILL_FURTHER_SPECIALIZABLE;
             }
             ty::ReEarlyBound(..) => {
                 flags = flags | TypeFlags::HAS_FREE_REGIONS;
                 flags = flags | TypeFlags::HAS_FREE_LOCAL_REGIONS;
                 flags = flags | TypeFlags::HAS_RE_PARAM;
-                flags = flags | TypeFlags::STILL_FURTHER_SPECIALIZABLE;
             }
             ty::ReFree { .. } => {
                 flags = flags | TypeFlags::HAS_FREE_REGIONS;
@@ -1988,7 +1982,7 @@ impl<'tcx> TyS<'tcx> {
     #[inline]
     pub fn has_concrete_skeleton(&self) -> bool {
         match self.kind {
-            Param(_) | Infer(_) | Error => false,
+            Param(_) | Infer(_) | Error(_) => false,
             _ => true,
         }
     }
@@ -2020,7 +2014,7 @@ impl<'tcx> TyS<'tcx> {
         match self.kind {
             FnDef(def_id, substs) => tcx.fn_sig(def_id).subst(tcx, substs),
             FnPtr(f) => f,
-            Error => {
+            Error(_) => {
                 // ignore errors (#54954)
                 ty::Binder::dummy(FnSig::fake())
             }
@@ -2097,6 +2091,9 @@ impl<'tcx> TyS<'tcx> {
         variant_index: VariantIdx,
     ) -> Option<Discr<'tcx>> {
         match self.kind {
+            TyKind::Adt(adt, _) if adt.variants.is_empty() => {
+                bug!("discriminant_for_variant called on zero variant enum");
+            }
             TyKind::Adt(adt, _) if adt.is_enum() => {
                 Some(adt.discriminant_for_variant(tcx, variant_index))
             }
@@ -2144,7 +2141,7 @@ impl<'tcx> TyS<'tcx> {
             // closure type is not yet known
             Bound(..) | Infer(_) => None,
 
-            Error => Some(ty::ClosureKind::Fn),
+            Error(_) => Some(ty::ClosureKind::Fn),
 
             _ => bug!("cannot convert type `{:?}` to a closure kind", self),
         }
@@ -2171,7 +2168,7 @@ impl<'tcx> TyS<'tcx> {
             | ty::Array(..)
             | ty::Closure(..)
             | ty::Never
-            | ty::Error => true,
+            | ty::Error(_) => true,
 
             ty::Str | ty::Slice(_) | ty::Dynamic(..) | ty::Foreign(..) => false,
 
@@ -2189,6 +2186,11 @@ impl<'tcx> TyS<'tcx> {
                 bug!("`is_trivially_sized` applied to unexpected type: {:?}", self)
             }
         }
+    }
+
+    /// Is this a zero-sized type?
+    pub fn is_zst(&'tcx self, tcx: TyCtxt<'tcx>, did: DefId) -> bool {
+        tcx.layout_of(tcx.param_env(did).and(self)).map(|layout| layout.is_zst()).unwrap_or(false)
     }
 }
 
@@ -2371,9 +2373,7 @@ impl<'tcx> Const<'tcx> {
                 // can leak through `val` into the const we return.
                 Ok(val) => Const::from_value(tcx, val, self.ty),
                 Err(ErrorHandled::TooGeneric | ErrorHandled::Linted) => self,
-                Err(ErrorHandled::Reported(ErrorReported)) => {
-                    tcx.mk_const(ty::Const { val: ty::ConstKind::Error, ty: self.ty })
-                }
+                Err(ErrorHandled::Reported(ErrorReported)) => tcx.const_error(self.ty),
             }
         } else {
             self
@@ -2408,8 +2408,6 @@ impl<'tcx> Const<'tcx> {
     }
 }
 
-impl<'tcx> rustc_serialize::UseSpecializedDecodable for &'tcx Const<'tcx> {}
-
 /// Represents a constant in Rust.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord, RustcEncodable, RustcDecodable, Hash)]
 #[derive(HashStable)]
@@ -2435,7 +2433,7 @@ pub enum ConstKind<'tcx> {
 
     /// A placeholder for a const which could not be computed; this is
     /// propagated to avoid useless error messages.
-    Error,
+    Error(DelaySpanBugEmitted),
 }
 
 #[cfg(target_arch = "x86_64")]

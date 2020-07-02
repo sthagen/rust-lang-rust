@@ -395,10 +395,11 @@ pub fn debug_hygiene_data(verbose: bool) -> String {
             data.expn_data.iter().enumerate().for_each(|(id, expn_info)| {
                 let expn_info = expn_info.as_ref().expect("no expansion data for an expansion ID");
                 s.push_str(&format!(
-                    "\n{}: parent: {:?}, call_site_ctxt: {:?}, kind: {:?}",
+                    "\n{}: parent: {:?}, call_site_ctxt: {:?}, def_site_ctxt: {:?}, kind: {:?}",
                     id,
                     expn_info.parent,
                     expn_info.call_site.ctxt(),
+                    expn_info.def_site.ctxt(),
                     expn_info.kind,
                 ));
             });
@@ -822,7 +823,14 @@ pub enum DesugaringKind {
     OpaqueTy,
     Async,
     Await,
-    ForLoop,
+    ForLoop(ForLoopLoc),
+}
+
+/// A location in the desugaring of a `for` loop
+#[derive(Clone, Copy, PartialEq, Debug, RustcEncodable, RustcDecodable, HashStable_Generic)]
+pub enum ForLoopLoc {
+    Head,
+    IntoIter,
 }
 
 impl DesugaringKind {
@@ -835,7 +843,7 @@ impl DesugaringKind {
             DesugaringKind::QuestionMark => "operator `?`",
             DesugaringKind::TryBlock => "`try` block",
             DesugaringKind::OpaqueTy => "`impl Trait`",
-            DesugaringKind::ForLoop => "`for` loop",
+            DesugaringKind::ForLoop(_) => "`for` loop",
         }
     }
 }

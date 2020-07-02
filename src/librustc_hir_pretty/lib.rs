@@ -203,6 +203,52 @@ pub fn visibility_qualified<S: Into<Cow<'static, str>>>(vis: &hir::Visibility<'_
     })
 }
 
+pub fn generic_params_to_string(generic_params: &[GenericParam<'_>]) -> String {
+    to_string(NO_ANN, |s| s.print_generic_params(generic_params))
+}
+
+pub fn bounds_to_string<'b>(bounds: impl IntoIterator<Item = &'b hir::GenericBound<'b>>) -> String {
+    to_string(NO_ANN, |s| s.print_bounds("", bounds))
+}
+
+pub fn param_to_string(arg: &hir::Param<'_>) -> String {
+    to_string(NO_ANN, |s| s.print_param(arg))
+}
+
+pub fn ty_to_string(ty: &hir::Ty<'_>) -> String {
+    to_string(NO_ANN, |s| s.print_type(ty))
+}
+
+pub fn path_segment_to_string(segment: &hir::PathSegment<'_>) -> String {
+    to_string(NO_ANN, |s| s.print_path_segment(segment))
+}
+
+pub fn path_to_string(segment: &hir::Path<'_>) -> String {
+    to_string(NO_ANN, |s| s.print_path(segment, false))
+}
+
+pub fn fn_to_string(
+    decl: &hir::FnDecl<'_>,
+    header: hir::FnHeader,
+    name: Option<Symbol>,
+    generics: &hir::Generics<'_>,
+    vis: &hir::Visibility<'_>,
+    arg_names: &[Ident],
+    body_id: Option<hir::BodyId>,
+) -> String {
+    to_string(NO_ANN, |s| s.print_fn(decl, header, name, generics, vis, arg_names, body_id))
+}
+
+pub fn enum_def_to_string(
+    enum_definition: &hir::EnumDef<'_>,
+    generics: &hir::Generics<'_>,
+    name: Symbol,
+    span: rustc_span::Span,
+    visibility: &hir::Visibility<'_>,
+) -> String {
+    to_string(NO_ANN, |s| s.print_enum_def(enum_definition, generics, name, span, visibility))
+}
+
 impl<'a> State<'a> {
     pub fn cbox(&mut self, u: usize) {
         self.s.cbox(u);
@@ -361,7 +407,7 @@ impl<'a> State<'a> {
                     &f.param_names[..],
                 );
             }
-            hir::TyKind::Def(..) => {}
+            hir::TyKind::OpaqueDef(..) => self.s.word("/*impl Trait*/"),
             hir::TyKind::Path(ref qpath) => self.print_qpath(qpath, false),
             hir::TyKind::TraitObject(bounds, ref lifetime) => {
                 let mut first = true;
@@ -957,12 +1003,6 @@ impl<'a> State<'a> {
             hir::ImplItemKind::TyAlias(ref ty) => {
                 self.print_associated_type(ii.ident, &ii.generics, None, Some(ty));
             }
-            hir::ImplItemKind::OpaqueTy(bounds) => {
-                self.word_space("type");
-                self.print_ident(ii.ident);
-                self.print_bounds("= impl", bounds);
-                self.s.word(";");
-            }
         }
         self.ann.post(self, AnnNode::SubItem(ii.hir_id))
     }
@@ -1262,7 +1302,7 @@ impl<'a> State<'a> {
             hir::ExprKind::Call(ref func, ref args) => {
                 self.print_expr_call(&func, args);
             }
-            hir::ExprKind::MethodCall(ref segment, _, ref args) => {
+            hir::ExprKind::MethodCall(ref segment, _, ref args, _) => {
                 self.print_expr_method_call(segment, args);
             }
             hir::ExprKind::Binary(op, ref lhs, ref rhs) => {
@@ -2445,7 +2485,7 @@ fn contains_exterior_struct_lit(value: &hir::Expr<'_>) -> bool {
             contains_exterior_struct_lit(&x)
         }
 
-        hir::ExprKind::MethodCall(.., ref exprs) => {
+        hir::ExprKind::MethodCall(.., ref exprs, _) => {
             // `X { y: 1 }.bar(...)`
             contains_exterior_struct_lit(&exprs[0])
         }

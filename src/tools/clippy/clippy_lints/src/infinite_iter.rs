@@ -142,7 +142,7 @@ const HEURISTICS: [(&str, usize, Heuristic, Finiteness); 19] = [
 
 fn is_infinite(cx: &LateContext<'_, '_>, expr: &Expr<'_>) -> Finiteness {
     match expr.kind {
-        ExprKind::MethodCall(ref method, _, ref args) => {
+        ExprKind::MethodCall(ref method, _, ref args, _) => {
             for &(name, len, heuristic, cap) in &HEURISTICS {
                 if method.ident.name.as_str() == name && args.len() == len {
                     return (match heuristic {
@@ -218,7 +218,7 @@ const INFINITE_COLLECTORS: [&[&str]; 8] = [
 
 fn complete_infinite_iter(cx: &LateContext<'_, '_>, expr: &Expr<'_>) -> Finiteness {
     match expr.kind {
-        ExprKind::MethodCall(ref method, _, ref args) => {
+        ExprKind::MethodCall(ref method, _, ref args, _) => {
             for &(name, len) in &COMPLETING_METHODS {
                 if method.ident.name.as_str() == name && args.len() == len {
                     return is_infinite(cx, &args[0]);
@@ -230,13 +230,14 @@ fn complete_infinite_iter(cx: &LateContext<'_, '_>, expr: &Expr<'_>) -> Finitene
                 }
             }
             if method.ident.name == sym!(last) && args.len() == 1 {
-                let not_double_ended = get_trait_def_id(cx, &paths::DOUBLE_ENDED_ITERATOR)
-                    .map_or(false, |id| !implements_trait(cx, cx.tables.expr_ty(&args[0]), id, &[]));
+                let not_double_ended = get_trait_def_id(cx, &paths::DOUBLE_ENDED_ITERATOR).map_or(false, |id| {
+                    !implements_trait(cx, cx.tables().expr_ty(&args[0]), id, &[])
+                });
                 if not_double_ended {
                     return is_infinite(cx, &args[0]);
                 }
             } else if method.ident.name == sym!(collect) {
-                let ty = cx.tables.expr_ty(expr);
+                let ty = cx.tables().expr_ty(expr);
                 if INFINITE_COLLECTORS.iter().any(|path| match_type(cx, ty, path)) {
                     return is_infinite(cx, &args[0]);
                 }

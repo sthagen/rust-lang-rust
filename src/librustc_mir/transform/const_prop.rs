@@ -4,6 +4,7 @@
 use std::cell::Cell;
 
 use rustc_ast::ast::Mutability;
+use rustc_data_structures::fx::FxHashSet;
 use rustc_hir::def::DefKind;
 use rustc_hir::HirId;
 use rustc_index::bit_set::BitSet;
@@ -19,7 +20,7 @@ use rustc_middle::mir::{
 };
 use rustc_middle::ty::layout::{HasTyCtxt, LayoutError, TyAndLayout};
 use rustc_middle::ty::subst::{InternalSubsts, Subst};
-use rustc_middle::ty::{self, ConstKind, Instance, ParamEnv, Ty, TyCtxt, TypeFoldable};
+use rustc_middle::ty::{self, ConstInt, ConstKind, Instance, ParamEnv, Ty, TyCtxt, TypeFoldable};
 use rustc_session::lint;
 use rustc_span::{def_id::DefId, Span};
 use rustc_target::abi::{HasDataLayout, LayoutOf, Size, TargetDataLayout};
@@ -27,9 +28,9 @@ use rustc_trait_selection::traits;
 
 use crate::const_eval::error_to_const_error;
 use crate::interpret::{
-    self, compile_time_machine, intern_const_alloc_recursive, AllocId, Allocation, Frame, ImmTy,
-    Immediate, InternKind, InterpCx, LocalState, LocalValue, Memory, MemoryKind, OpTy,
-    Operand as InterpOperand, PlaceTy, Pointer, ScalarMaybeUninit, StackPopCleanup,
+    self, compile_time_machine, AllocId, Allocation, Frame, ImmTy, Immediate, InterpCx, LocalState,
+    LocalValue, MemPlace, Memory, MemoryKind, OpTy, Operand as InterpOperand, PlaceTy, Pointer,
+    ScalarMaybeUninit, StackPopCleanup,
 };
 use crate::transform::{MirPass, MirSource};
 
@@ -133,7 +134,6 @@ impl<'tcx> MirPass<'tcx> for ConstProp {
             body.arg_count,
             Default::default(),
             tcx.def_span(source.def_id()),
-            Default::default(),
             body.generator_kind,
         );
 
@@ -151,11 +151,19 @@ impl<'tcx> MirPass<'tcx> for ConstProp {
 struct ConstPropMachine<'mir, 'tcx> {
     /// The virtual call stack.
     stack: Vec<Frame<'mir, 'tcx, (), ()>>,
+    /// `OnlyInsideOwnBlock` locals that were written in the current block get erased at the end.
+    written_only_inside_own_block_locals: FxHashSet<Local>,
+    /// Locals that need to be cleared after every block terminates.
+    only_propagate_inside_block_locals: BitSet<Local>,
 }
 
 impl<'mir, 'tcx> ConstPropMachine<'mir, 'tcx> {
-    fn new() -> Self {
-        Self { stack: Vec::new() }
+    fn new(only_propagate_inside_block_locals: BitSet<Local>) -> Self {
+        Self {
+            stack: Vec::new(),
+            written_only_inside_own_block_locals: Default::default(),
+            only_propagate_inside_block_locals,
+        }
     }
 }
 
@@ -227,6 +235,18 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for ConstPropMachine<'mir, 'tcx>
         l.access()
     }
 
+    fn access_local_mut<'a>(
+        ecx: &'a mut InterpCx<'mir, 'tcx, Self>,
+        frame: usize,
+        local: Local,
+    ) -> InterpResult<'tcx, Result<&'a mut LocalValue<Self::PointerTag>, MemPlace<Self::PointerTag>>>
+    {
+        if frame == 0 && ecx.machine.only_propagate_inside_block_locals.contains(local) {
+            ecx.machine.written_only_inside_own_block_locals.insert(local);
+        }
+        ecx.machine.stack[frame].locals[local].access_mut()
+    }
+
     fn before_access_global(
         _memory_extra: &(),
         _alloc_id: AllocId,
@@ -274,8 +294,6 @@ struct ConstPropagator<'mir, 'tcx> {
     // Because we have `MutVisitor` we can't obtain the `SourceInfo` from a `Location`. So we store
     // the last known `SourceInfo` here and just keep revisiting it.
     source_info: Option<SourceInfo>,
-    // Locals we need to forget at the end of the current block
-    locals_of_current_block: BitSet<Local>,
 }
 
 impl<'mir, 'tcx> LayoutOf for ConstPropagator<'mir, 'tcx> {
@@ -313,8 +331,20 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
         let param_env = tcx.param_env(def_id).with_reveal_all();
 
         let span = tcx.def_span(def_id);
-        let mut ecx = InterpCx::new(tcx.at(span), param_env, ConstPropMachine::new(), ());
         let can_const_prop = CanConstProp::check(body);
+        let mut only_propagate_inside_block_locals = BitSet::new_empty(can_const_prop.len());
+        for (l, mode) in can_const_prop.iter_enumerated() {
+            if *mode == ConstPropMode::OnlyInsideOwnBlock {
+                only_propagate_inside_block_locals.insert(l);
+            }
+        }
+        let mut ecx = InterpCx::new(
+            tcx,
+            span,
+            param_env,
+            ConstPropMachine::new(only_propagate_inside_block_locals),
+            (),
+        );
 
         let ret = ecx
             .layout_of(body.return_ty().subst(tcx, substs))
@@ -345,19 +375,24 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
             //FIXME(wesleywiser) we can't steal this because `Visitor::super_visit_body()` needs it
             local_decls: body.local_decls.clone(),
             source_info: None,
-            locals_of_current_block: BitSet::new_empty(body.local_decls.len()),
         }
     }
 
     fn get_const(&self, place: Place<'tcx>) -> Option<OpTy<'tcx>> {
-        let op = self.ecx.eval_place_to_op(place, None).ok();
+        let op = match self.ecx.eval_place_to_op(place, None) {
+            Ok(op) => op,
+            Err(e) => {
+                trace!("get_const failed: {}", e);
+                return None;
+            }
+        };
 
         // Try to read the local as an immediate so that if it is representable as a scalar, we can
         // handle it as such, but otherwise, just return the value as is.
-        match op.map(|ret| self.ecx.try_read_immediate(ret)) {
-            Some(Ok(Ok(imm))) => Some(imm.into()),
+        Some(match self.ecx.try_read_immediate(op) {
+            Ok(Ok(imm)) => imm.into(),
             _ => op,
-        }
+        })
     }
 
     /// Remove `local` from the pool of `Locals`. Allows writing to them,
@@ -404,9 +439,8 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
         match self.ecx.eval_const_to_op(c.literal, None) {
             Ok(op) => Some(op),
             Err(error) => {
-                // Make sure errors point at the constant.
-                self.ecx.set_span(c.span);
-                let err = error_to_const_error(&self.ecx, error);
+                let tcx = self.ecx.tcx.at(c.span);
+                let err = error_to_const_error(&self.ecx, error, Some(c.span));
                 if let Some(lint_root) = self.lint_root(source_info) {
                     let lint_only = match c.literal.val {
                         // Promoteds must lint and not error as the user didn't ask for them
@@ -418,17 +452,12 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
                     if lint_only {
                         // Out of backwards compatibility we cannot report hard errors in unused
                         // generic functions using associated constants of the generic parameters.
-                        err.report_as_lint(
-                            self.ecx.tcx,
-                            "erroneous constant used",
-                            lint_root,
-                            Some(c.span),
-                        );
+                        err.report_as_lint(tcx, "erroneous constant used", lint_root, Some(c.span));
                     } else {
-                        err.report_as_error(self.ecx.tcx, "erroneous constant used");
+                        err.report_as_error(tcx, "erroneous constant used");
                     }
                 } else {
-                    err.report_as_error(self.ecx.tcx, "erroneous constant used");
+                    err.report_as_error(tcx, "erroneous constant used");
                 }
                 None
             }
@@ -455,7 +484,7 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
         lint: &'static lint::Lint,
         source_info: SourceInfo,
         message: &'static str,
-        panic: AssertKind<u64>,
+        panic: AssertKind<ConstInt>,
     ) -> Option<()> {
         let lint_root = self.lint_root(source_info)?;
         self.tcx.struct_span_lint_hir(lint, lint_root, source_info.span, |lint| {
@@ -472,10 +501,10 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
         arg: &Operand<'tcx>,
         source_info: SourceInfo,
     ) -> Option<()> {
-        if self.use_ecx(|this| {
+        if let (val, true) = self.use_ecx(|this| {
             let val = this.ecx.read_immediate(this.ecx.eval_operand(arg, None)?)?;
             let (_res, overflow, _ty) = this.ecx.overflowing_unary_op(op, val)?;
-            Ok(overflow)
+            Ok((val, overflow))
         })? {
             // `AssertKind` only has an `OverflowNeg` variant, so make sure that is
             // appropriate to use.
@@ -484,7 +513,7 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
                 lint::builtin::ARITHMETIC_OVERFLOW,
                 source_info,
                 "this arithmetic operation will overflow",
-                AssertKind::OverflowNeg,
+                AssertKind::OverflowNeg(val.to_const_int()),
             )?;
         }
 
@@ -500,29 +529,45 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
     ) -> Option<()> {
         let r =
             self.use_ecx(|this| this.ecx.read_immediate(this.ecx.eval_operand(right, None)?))?;
+        let l = self.use_ecx(|this| this.ecx.read_immediate(this.ecx.eval_operand(left, None)?));
         // Check for exceeding shifts *even if* we cannot evaluate the LHS.
         if op == BinOp::Shr || op == BinOp::Shl {
             // We need the type of the LHS. We cannot use `place_layout` as that is the type
             // of the result, which for checked binops is not the same!
             let left_ty = left.ty(&self.local_decls, self.tcx);
-            let left_size_bits = self.ecx.layout_of(left_ty).ok()?.size.bits();
+            let left_size = self.ecx.layout_of(left_ty).ok()?.size;
             let right_size = r.layout.size;
             let r_bits = r.to_scalar().ok();
             // This is basically `force_bits`.
             let r_bits = r_bits.and_then(|r| r.to_bits_or_ptr(right_size, &self.tcx).ok());
-            if r_bits.map_or(false, |b| b >= left_size_bits as u128) {
+            if r_bits.map_or(false, |b| b >= left_size.bits() as u128) {
+                debug!("check_binary_op: reporting assert for {:?}", source_info);
                 self.report_assert_as_lint(
                     lint::builtin::ARITHMETIC_OVERFLOW,
                     source_info,
                     "this arithmetic operation will overflow",
-                    AssertKind::Overflow(op),
+                    AssertKind::Overflow(
+                        op,
+                        match l {
+                            Some(l) => l.to_const_int(),
+                            // Invent a dummy value, the diagnostic ignores it anyway
+                            None => ConstInt::new(
+                                1,
+                                left_size,
+                                left_ty.is_signed(),
+                                left_ty.is_ptr_sized_integral(),
+                            ),
+                        },
+                        r.to_const_int(),
+                    ),
                 )?;
             }
         }
 
+        let l = l?;
+
         // The remaining operators are handled through `overflowing_binary_op`.
         if self.use_ecx(|this| {
-            let l = this.ecx.read_immediate(this.ecx.eval_operand(left, None)?)?;
             let (_res, overflow, _ty) = this.ecx.overflowing_binary_op(op, l, r)?;
             Ok(overflow)
         })? {
@@ -530,7 +575,7 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
                 lint::builtin::ARITHMETIC_OVERFLOW,
                 source_info,
                 "this arithmetic operation will overflow",
-                AssertKind::Overflow(op),
+                AssertKind::Overflow(op, l.to_const_int(), r.to_const_int()),
             )?;
         }
 
@@ -580,8 +625,16 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
             }
 
             // Do not try creating references (#67862)
-            Rvalue::Ref(_, _, place_ref) => {
-                trace!("skipping Ref({:?})", place_ref);
+            Rvalue::AddressOf(_, place) | Rvalue::Ref(_, _, place) => {
+                trace!("skipping AddressOf | Ref for {:?}", place);
+
+                // This may be creating mutable references or immutable references to cells.
+                // If that happens, the pointed to value could be mutated via that reference.
+                // Since we aren't tracking references, the const propagator loses track of what
+                // value the local has right now.
+                // Thus, all locals that have their reference taken
+                // must not take part in propagation.
+                Self::remove_const(&mut self.ecx, place.local);
 
                 return None;
             }
@@ -707,11 +760,6 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
                 ScalarMaybeUninit::Scalar(l),
                 ScalarMaybeUninit::Scalar(r),
             )) => l.is_bits() && r.is_bits(),
-            interpret::Operand::Indirect(_) if mir_opt_level >= 2 => {
-                let mplace = op.assert_mem_place(&self.ecx);
-                intern_const_alloc_recursive(&mut self.ecx, InternKind::ConstProp, mplace, false);
-                true
-            }
             _ => false,
         }
     }
@@ -726,7 +774,8 @@ enum ConstPropMode {
     OnlyInsideOwnBlock,
     /// The `Local` can be propagated into but reads cannot be propagated.
     OnlyPropagateInto,
-    /// No propagation is allowed at all.
+    /// The `Local` cannot be part of propagation at all. Any statement
+    /// referencing it either for reading or writing will not get propagated.
     NoPropagation,
 }
 
@@ -793,12 +842,14 @@ impl<'tcx> Visitor<'tcx> for CanConstProp {
                         // end of the block anyway, and inside the block we overwrite previous
                         // states as applicable.
                         ConstPropMode::OnlyInsideOwnBlock => {}
-                        other => {
+                        ConstPropMode::NoPropagation => {}
+                        ConstPropMode::OnlyPropagateInto => {}
+                        other @ ConstPropMode::FullConstProp => {
                             trace!(
                                 "local {:?} can't be propagated because of multiple assignments",
                                 local,
                             );
-                            *other = ConstPropMode::NoPropagation;
+                            *other = ConstPropMode::OnlyPropagateInto;
                         }
                     }
                 }
@@ -851,42 +902,41 @@ impl<'mir, 'tcx> MutVisitor<'tcx> for ConstPropagator<'mir, 'tcx> {
     fn visit_statement(&mut self, statement: &mut Statement<'tcx>, location: Location) {
         trace!("visit_statement: {:?}", statement);
         let source_info = statement.source_info;
-        self.ecx.set_span(source_info.span);
         self.source_info = Some(source_info);
         if let StatementKind::Assign(box (place, ref mut rval)) = statement.kind {
             let place_ty: Ty<'tcx> = place.ty(&self.local_decls, self.tcx).ty;
             if let Ok(place_layout) = self.tcx.layout_of(self.param_env.and(place_ty)) {
                 let can_const_prop = self.can_const_prop[place.local];
                 if let Some(()) = self.const_prop(rval, place_layout, source_info, place) {
-                    if can_const_prop != ConstPropMode::NoPropagation {
-                        // This will return None for variables that are from other blocks,
-                        // so it should be okay to propagate from here on down.
-                        if let Some(value) = self.get_const(place) {
-                            if self.should_const_prop(value) {
-                                trace!("replacing {:?} with {:?}", rval, value);
-                                self.replace_with_const(rval, value, statement.source_info);
-                                if can_const_prop == ConstPropMode::FullConstProp
-                                    || can_const_prop == ConstPropMode::OnlyInsideOwnBlock
-                                {
-                                    trace!("propagated into {:?}", place);
-                                }
-                            }
-                            if can_const_prop == ConstPropMode::OnlyInsideOwnBlock {
-                                trace!(
-                                    "found local restricted to its block. Will remove it from const-prop after block is finished. Local: {:?}",
-                                    place.local
-                                );
-                                self.locals_of_current_block.insert(place.local);
+                    // This will return None if the above `const_prop` invocation only "wrote" a
+                    // type whose creation requires no write. E.g. a generator whose initial state
+                    // consists solely of uninitialized memory (so it doesn't capture any locals).
+                    if let Some(value) = self.get_const(place) {
+                        if self.should_const_prop(value) {
+                            trace!("replacing {:?} with {:?}", rval, value);
+                            self.replace_with_const(rval, value, source_info);
+                            if can_const_prop == ConstPropMode::FullConstProp
+                                || can_const_prop == ConstPropMode::OnlyInsideOwnBlock
+                            {
+                                trace!("propagated into {:?}", place);
                             }
                         }
                     }
-                    if can_const_prop == ConstPropMode::OnlyPropagateInto
-                        || can_const_prop == ConstPropMode::NoPropagation
-                    {
-                        trace!("can't propagate into {:?}", place);
-                        if place.local != RETURN_PLACE {
-                            Self::remove_const(&mut self.ecx, place.local);
+                    match can_const_prop {
+                        ConstPropMode::OnlyInsideOwnBlock => {
+                            trace!(
+                                "found local restricted to its block. \
+                                Will remove it from const-prop after block is finished. Local: {:?}",
+                                place.local
+                            );
                         }
+                        ConstPropMode::OnlyPropagateInto | ConstPropMode::NoPropagation => {
+                            trace!("can't propagate into {:?}", place);
+                            if place.local != RETURN_PLACE {
+                                Self::remove_const(&mut self.ecx, place.local);
+                            }
+                        }
+                        ConstPropMode::FullConstProp => {}
                     }
                 } else {
                     // Const prop failed, so erase the destination, ensuring that whatever happens
@@ -906,6 +956,12 @@ impl<'mir, 'tcx> MutVisitor<'tcx> for ConstPropagator<'mir, 'tcx> {
                     );
                     Self::remove_const(&mut self.ecx, place.local);
                 }
+            } else {
+                trace!(
+                    "cannot propagate into {:?}, because the type of the local is generic.",
+                    place,
+                );
+                Self::remove_const(&mut self.ecx, place.local);
             }
         } else {
             match statement.kind {
@@ -927,7 +983,6 @@ impl<'mir, 'tcx> MutVisitor<'tcx> for ConstPropagator<'mir, 'tcx> {
 
     fn visit_terminator(&mut self, terminator: &mut Terminator<'tcx>, location: Location) {
         let source_info = terminator.source_info;
-        self.ecx.set_span(source_info.span);
         self.source_info = Some(source_info);
         self.super_terminator(terminator, location);
         match &mut terminator.kind {
@@ -945,31 +1000,26 @@ impl<'mir, 'tcx> MutVisitor<'tcx> for ConstPropagator<'mir, 'tcx> {
                             }
                             Operand::Constant(_) => {}
                         }
+                        let mut eval_to_int = |op| {
+                            let op = self
+                                .eval_operand(op, source_info)
+                                .expect("if we got here, it must be const");
+                            self.ecx.read_immediate(op).unwrap().to_const_int()
+                        };
                         let msg = match msg {
-                            AssertKind::DivisionByZero => AssertKind::DivisionByZero,
-                            AssertKind::RemainderByZero => AssertKind::RemainderByZero,
+                            AssertKind::DivisionByZero(op) => {
+                                AssertKind::DivisionByZero(eval_to_int(op))
+                            }
+                            AssertKind::RemainderByZero(op) => {
+                                AssertKind::RemainderByZero(eval_to_int(op))
+                            }
                             AssertKind::BoundsCheck { ref len, ref index } => {
-                                let len =
-                                    self.eval_operand(len, source_info).expect("len must be const");
-                                let len = self
-                                    .ecx
-                                    .read_scalar(len)
-                                    .unwrap()
-                                    .to_machine_usize(&self.tcx)
-                                    .unwrap();
-                                let index = self
-                                    .eval_operand(index, source_info)
-                                    .expect("index must be const");
-                                let index = self
-                                    .ecx
-                                    .read_scalar(index)
-                                    .unwrap()
-                                    .to_machine_usize(&self.tcx)
-                                    .unwrap();
+                                let len = eval_to_int(len);
+                                let index = eval_to_int(index);
                                 AssertKind::BoundsCheck { len, index }
                             }
                             // Overflow is are already covered by checks on the binary operators.
-                            AssertKind::Overflow(_) | AssertKind::OverflowNeg => return,
+                            AssertKind::Overflow(..) | AssertKind::OverflowNeg(_) => return,
                             // Need proper const propagator for these.
                             _ => return,
                         };
@@ -1013,7 +1063,7 @@ impl<'mir, 'tcx> MutVisitor<'tcx> for ConstPropagator<'mir, 'tcx> {
             | TerminatorKind::DropAndReplace { .. }
             | TerminatorKind::Yield { .. }
             | TerminatorKind::GeneratorDrop
-            | TerminatorKind::FalseEdges { .. }
+            | TerminatorKind::FalseEdge { .. }
             | TerminatorKind::FalseUnwind { .. }
             | TerminatorKind::InlineAsm { .. } => {}
             // Every argument in our function calls can be const propagated.
@@ -1067,10 +1117,27 @@ impl<'mir, 'tcx> MutVisitor<'tcx> for ConstPropagator<'mir, 'tcx> {
                 }
             }
         }
-        // We remove all Locals which are restricted in propagation to their containing blocks.
-        for local in self.locals_of_current_block.iter() {
+
+        // We remove all Locals which are restricted in propagation to their containing blocks and
+        // which were modified in the current block.
+        // Take it out of the ecx so we can get a mutable reference to the ecx for `remove_const`
+        let mut locals = std::mem::take(&mut self.ecx.machine.written_only_inside_own_block_locals);
+        for &local in locals.iter() {
             Self::remove_const(&mut self.ecx, local);
         }
-        self.locals_of_current_block.clear();
+        locals.clear();
+        // Put it back so we reuse the heap of the storage
+        self.ecx.machine.written_only_inside_own_block_locals = locals;
+        if cfg!(debug_assertions) {
+            // Ensure we are correctly erasing locals with the non-debug-assert logic.
+            for local in self.ecx.machine.only_propagate_inside_block_locals.iter() {
+                assert!(
+                    self.get_const(local.into()).is_none()
+                        || self
+                            .layout_of(self.local_decls[local].ty)
+                            .map_or(true, |layout| layout.is_zst())
+                )
+            }
+        }
     }
 }

@@ -488,7 +488,9 @@ struct MergeIter<K, V, I: Iterator<Item = (K, V)>> {
 }
 
 impl<K: Ord, V> BTreeMap<K, V> {
-    /// Makes a new empty BTreeMap with a reasonable choice for B.
+    /// Makes a new empty BTreeMap.
+    ///
+    /// Does not allocate anything on its own.
     ///
     /// # Examples
     ///
@@ -1394,6 +1396,14 @@ impl<'a, K: 'a, V: 'a> Iterator for Iter<'a, K, V> {
     fn last(mut self) -> Option<(&'a K, &'a V)> {
         self.next_back()
     }
+
+    fn min(mut self) -> Option<(&'a K, &'a V)> {
+        self.next()
+    }
+
+    fn max(mut self) -> Option<(&'a K, &'a V)> {
+        self.next_back()
+    }
 }
 
 #[stable(feature = "fused", since = "1.26.0")]
@@ -1454,6 +1464,14 @@ impl<'a, K: 'a, V: 'a> Iterator for IterMut<'a, K, V> {
     }
 
     fn last(mut self) -> Option<(&'a K, &'a mut V)> {
+        self.next_back()
+    }
+
+    fn min(mut self) -> Option<(&'a K, &'a mut V)> {
+        self.next()
+    }
+
+    fn max(mut self) -> Option<(&'a K, &'a mut V)> {
         self.next_back()
     }
 }
@@ -1593,6 +1611,14 @@ impl<'a, K, V> Iterator for Keys<'a, K, V> {
     fn last(mut self) -> Option<&'a K> {
         self.next_back()
     }
+
+    fn min(mut self) -> Option<&'a K> {
+        self.next()
+    }
+
+    fn max(mut self) -> Option<&'a K> {
+        self.next_back()
+    }
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
@@ -1725,7 +1751,7 @@ impl<'a, K: 'a, V: 'a> DrainFilterInner<'a, K, V> {
         &mut self,
     ) -> Option<Handle<NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>, marker::KV>> {
         let edge = self.cur_leaf_edge.as_ref()?;
-        ptr::read(edge).next_kv().ok()
+        unsafe { ptr::read(edge).next_kv().ok() }
     }
 
     /// Implementation of a typical `DrainFilter::next` method, given the predicate.
@@ -1764,6 +1790,14 @@ impl<'a, K, V> Iterator for Range<'a, K, V> {
     }
 
     fn last(mut self) -> Option<(&'a K, &'a V)> {
+        self.next_back()
+    }
+
+    fn min(mut self) -> Option<(&'a K, &'a V)> {
+        self.next()
+    }
+
+    fn max(mut self) -> Option<(&'a K, &'a V)> {
         self.next_back()
     }
 }
@@ -1808,7 +1842,7 @@ impl<'a, K, V> Range<'a, K, V> {
     }
 
     unsafe fn next_unchecked(&mut self) -> (&'a K, &'a V) {
-        unwrap_unchecked(self.front.as_mut()).next_unchecked()
+        unsafe { unwrap_unchecked(self.front.as_mut()).next_unchecked() }
     }
 }
 
@@ -1821,7 +1855,7 @@ impl<'a, K, V> DoubleEndedIterator for Range<'a, K, V> {
 
 impl<'a, K, V> Range<'a, K, V> {
     unsafe fn next_back_unchecked(&mut self) -> (&'a K, &'a V) {
-        unwrap_unchecked(self.back.as_mut()).next_back_unchecked()
+        unsafe { unwrap_unchecked(self.back.as_mut()).next_back_unchecked() }
     }
 }
 
@@ -1851,6 +1885,14 @@ impl<'a, K, V> Iterator for RangeMut<'a, K, V> {
     fn last(mut self) -> Option<(&'a K, &'a mut V)> {
         self.next_back()
     }
+
+    fn min(mut self) -> Option<(&'a K, &'a mut V)> {
+        self.next()
+    }
+
+    fn max(mut self) -> Option<(&'a K, &'a mut V)> {
+        self.next_back()
+    }
 }
 
 impl<'a, K, V> RangeMut<'a, K, V> {
@@ -1859,7 +1901,7 @@ impl<'a, K, V> RangeMut<'a, K, V> {
     }
 
     unsafe fn next_unchecked(&mut self) -> (&'a mut K, &'a mut V) {
-        unwrap_unchecked(self.front.as_mut()).next_unchecked()
+        unsafe { unwrap_unchecked(self.front.as_mut()).next_unchecked() }
     }
 }
 
@@ -1880,7 +1922,7 @@ impl<K, V> FusedIterator for RangeMut<'_, K, V> {}
 
 impl<'a, K, V> RangeMut<'a, K, V> {
     unsafe fn next_back_unchecked(&mut self) -> (&'a mut K, &'a mut V) {
-        unwrap_unchecked(self.back.as_mut()).next_back_unchecked()
+        unsafe { unwrap_unchecked(self.back.as_mut()).next_back_unchecked() }
     }
 }
 

@@ -208,8 +208,8 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
     fn aggregate_field_path_elem(&mut self, layout: TyAndLayout<'tcx>, field: usize) -> PathElem {
         // First, check if we are projecting to a variant.
         match layout.variants {
-            Variants::Multiple { discr_index, .. } => {
-                if discr_index == field {
+            Variants::Multiple { tag_field, .. } => {
+                if tag_field == field {
                     return match layout.ty.kind {
                         ty::Adt(def, ..) if def.is_enum() => PathElem::EnumTag,
                         ty::Generator(..) => PathElem::GeneratorTag,
@@ -418,6 +418,7 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
                 // Skip validation entirely for some external statics
                 let alloc_kind = self.ecx.tcx.get_global_alloc(ptr.alloc_id);
                 if let Some(GlobalAlloc::Static(did)) = alloc_kind {
+                    assert!(!self.ecx.tcx.is_thread_local_static(did));
                     // See const_eval::machine::MemoryExtra::can_access_statics for why
                     // this check is so important.
                     // This check is reachable when the const just referenced the static,
@@ -560,7 +561,7 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
             | ty::Generator(..) => Ok(false),
             // Some types only occur during typechecking, they have no layout.
             // We should not see them here and we could not check them anyway.
-            ty::Error
+            ty::Error(_)
             | ty::Infer(..)
             | ty::Placeholder(..)
             | ty::Bound(..)
@@ -696,8 +697,8 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValueVisitor<'mir, 'tcx, M>
         try_validation!(
             self.walk_value(op),
             self.path,
-            err_ub!(InvalidDiscriminant(val)) =>
-                { "{}", val } expected { "a valid enum discriminant" },
+            err_ub!(InvalidTag(val)) =>
+                { "{}", val } expected { "a valid enum tag" },
             err_unsup!(ReadPointerAsBytes) =>
                 { "a pointer" } expected { "plain (non-pointer) bytes" },
         );

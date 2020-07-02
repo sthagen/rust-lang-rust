@@ -130,7 +130,7 @@ pub(super) fn specializes(tcx: TyCtxt<'_>, (impl1_def_id, impl2_def_id): (DefId,
 
     // We determine whether there's a subset relationship by:
     //
-    // - skolemizing impl1,
+    // - replacing bound vars with placeholders in impl1,
     // - assuming the where clauses for impl1,
     // - instantiating impl2 with fresh inference variables,
     // - unifying,
@@ -496,7 +496,7 @@ fn to_pretty_impl_header(tcx: TyCtxt<'_>, impl_def_id: DefId) -> Option<String> 
     for (p, _) in predicates {
         if let Some(poly_trait_ref) = p.to_opt_poly_trait_ref() {
             if Some(poly_trait_ref.def_id()) == sized_trait {
-                types_without_default_bounds.remove(poly_trait_ref.self_ty());
+                types_without_default_bounds.remove(poly_trait_ref.self_ty().skip_binder());
                 continue;
             }
         }

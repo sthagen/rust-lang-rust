@@ -22,7 +22,7 @@ use crate::channel;
 use crate::compile;
 use crate::tool::{self, Tool};
 use crate::util::{exe, is_dylib, timeit};
-use crate::{Compiler, Mode, LLVM_TOOLS};
+use crate::{Compiler, DependencyType, Mode, LLVM_TOOLS};
 use time::{self, Timespec};
 
 pub fn pkgname(builder: &Builder<'_>, component: &str) -> String {
@@ -306,7 +306,12 @@ fn make_win_dist(
     }
 
     //Copy platform tools to platform-specific bin directory
-    let target_bin_dir = plat_root.join("lib").join("rustlib").join(target_triple).join("bin");
+    let target_bin_dir = plat_root
+        .join("lib")
+        .join("rustlib")
+        .join(target_triple)
+        .join("bin")
+        .join("self-contained");
     fs::create_dir_all(&target_bin_dir).expect("creating target_bin_dir failed");
     for src in target_tools {
         builder.copy_to_folder(&src, &target_bin_dir);
@@ -321,7 +326,12 @@ fn make_win_dist(
     );
 
     //Copy platform libs to platform-specific lib directory
-    let target_lib_dir = plat_root.join("lib").join("rustlib").join(target_triple).join("lib");
+    let target_lib_dir = plat_root
+        .join("lib")
+        .join("rustlib")
+        .join(target_triple)
+        .join("lib")
+        .join("self-contained");
     fs::create_dir_all(&target_lib_dir).expect("creating target_lib_dir failed");
     for src in target_libs {
         builder.copy_to_folder(&src, &target_lib_dir);
@@ -619,19 +629,21 @@ impl Step for DebuggerScripts {
             cp_debugger_script("natvis/libcore.natvis");
             cp_debugger_script("natvis/libstd.natvis");
         } else {
-            cp_debugger_script("debugger_pretty_printers_common.py");
+            cp_debugger_script("rust_types.py");
 
             // gdb debugger scripts
             builder.install(&builder.src.join("src/etc/rust-gdb"), &sysroot.join("bin"), 0o755);
             builder.install(&builder.src.join("src/etc/rust-gdbgui"), &sysroot.join("bin"), 0o755);
 
             cp_debugger_script("gdb_load_rust_pretty_printers.py");
-            cp_debugger_script("gdb_rust_pretty_printing.py");
+            cp_debugger_script("gdb_lookup.py");
+            cp_debugger_script("gdb_providers.py");
 
             // lldb debugger scripts
             builder.install(&builder.src.join("src/etc/rust-lldb"), &sysroot.join("bin"), 0o755);
 
-            cp_debugger_script("lldb_rust_formatters.py");
+            cp_debugger_script("lldb_lookup.py");
+            cp_debugger_script("lldb_providers.py");
         }
     }
 }
@@ -650,9 +662,13 @@ fn skip_host_target_lib(builder: &Builder<'_>, compiler: Compiler) -> bool {
 /// Copy stamped files into an image's `target/lib` directory.
 fn copy_target_libs(builder: &Builder<'_>, target: &str, image: &Path, stamp: &Path) {
     let dst = image.join("lib/rustlib").join(target).join("lib");
+    let self_contained_dst = dst.join("self-contained");
     t!(fs::create_dir_all(&dst));
-    for (path, host) in builder.read_stamp_file(stamp) {
-        if !host || builder.config.build == target {
+    t!(fs::create_dir_all(&self_contained_dst));
+    for (path, dependency_type) in builder.read_stamp_file(stamp) {
+        if dependency_type == DependencyType::TargetSelfContained {
+            builder.copy(&path, &self_contained_dst.join(path.file_name().unwrap()));
+        } else if dependency_type == DependencyType::Target || builder.config.build == target {
             builder.copy(&path, &dst.join(path.file_name().unwrap()));
         }
     }
@@ -1859,28 +1875,7 @@ impl Step for Extended {
                 prepare("rust-mingw");
             }
 
-            builder.install(&xform(&etc.join("exe/rust.iss")), &exe, 0o644);
-            builder.install(&etc.join("exe/modpath.iss"), &exe, 0o644);
-            builder.install(&etc.join("exe/upgrade.iss"), &exe, 0o644);
             builder.install(&etc.join("gfx/rust-logo.ico"), &exe, 0o644);
-            builder.create(&exe.join("LICENSE.txt"), &license);
-
-            // Generate exe installer
-            builder.info("building `exe` installer with `iscc`");
-            let mut cmd = Command::new("iscc");
-            cmd.arg("rust.iss").arg("/Q").current_dir(&exe);
-            if target.contains("windows-gnu") {
-                cmd.arg("/dMINGW");
-            }
-            add_env(builder, &mut cmd, target);
-            let time = timeit(builder);
-            builder.run(&mut cmd);
-            drop(time);
-            builder.install(
-                &exe.join(format!("{}-{}.exe", pkgname(builder, "rust"), target)),
-                &distdir(builder),
-                0o755,
-            );
 
             // Generate msi installer
             let wix = PathBuf::from(env::var_os("WIX").unwrap());

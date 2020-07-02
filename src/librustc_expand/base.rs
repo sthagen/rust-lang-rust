@@ -5,13 +5,13 @@ use rustc_ast::ast::{self, Attribute, NodeId, PatKind};
 use rustc_ast::mut_visit::{self, MutVisitor};
 use rustc_ast::ptr::P;
 use rustc_ast::token;
-use rustc_ast::tokenstream::{self, TokenStream, TokenTree};
+use rustc_ast::tokenstream::{self, TokenStream};
 use rustc_ast::visit::{AssocCtxt, Visitor};
 use rustc_attr::{self as attr, Deprecation, HasAttrs, Stability};
 use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::sync::{self, Lrc};
 use rustc_errors::{DiagnosticBuilder, ErrorReported};
-use rustc_parse::{self, parser, MACRO_ARGUMENTS};
+use rustc_parse::{self, nt_to_tokenstream, parser, MACRO_ARGUMENTS};
 use rustc_session::{parse::ParseSess, Limit};
 use rustc_span::def_id::DefId;
 use rustc_span::edition::Edition;
@@ -120,10 +120,7 @@ impl Annotatable {
         }
     }
 
-    crate fn into_tokens(self) -> TokenStream {
-        // `Annotatable` can be converted into tokens directly, but we
-        // are packing it into a nonterminal as a piece of AST to make
-        // the produced token stream look nicer in pretty-printed form.
+    crate fn into_tokens(self, sess: &ParseSess) -> TokenStream {
         let nt = match self {
             Annotatable::Item(item) => token::NtItem(item),
             Annotatable::TraitItem(item) | Annotatable::ImplItem(item) => {
@@ -142,7 +139,7 @@ impl Annotatable {
             | Annotatable::StructField(..)
             | Annotatable::Variant(..) => panic!("unexpected annotatable"),
         };
-        TokenTree::token(token::Interpolated(Lrc::new(nt)), DUMMY_SP).into()
+        nt_to_tokenstream(&nt, sess, DUMMY_SP)
     }
 
     pub fn expect_item(self) -> P<ast::Item> {
@@ -889,7 +886,7 @@ pub enum InvocationRes {
 /// Error type that denotes indeterminacy.
 pub struct Indeterminate;
 
-pub trait Resolver {
+pub trait ResolverExpand {
     fn next_node_id(&mut self) -> NodeId;
 
     fn resolve_dollar_crates(&mut self);
@@ -914,6 +911,9 @@ pub trait Resolver {
     ) -> Result<InvocationRes, Indeterminate>;
 
     fn check_unused_macros(&mut self);
+
+    /// Some parent node that is close enough to the given macro call.
+    fn lint_node_id(&mut self, expn_id: ExpnId) -> NodeId;
 
     fn has_derive_copy(&self, expn_id: ExpnId) -> bool;
     fn add_derive_copy(&mut self, expn_id: ExpnId);
@@ -943,7 +943,7 @@ pub struct ExtCtxt<'a> {
     pub ecfg: expand::ExpansionConfig<'a>,
     pub reduced_recursion_limit: Option<Limit>,
     pub root_path: PathBuf,
-    pub resolver: &'a mut dyn Resolver,
+    pub resolver: &'a mut dyn ResolverExpand,
     pub current_expansion: ExpansionData,
     pub expansions: FxHashMap<Span, Vec<String>>,
     /// Called directly after having parsed an external `mod foo;` in expansion.
@@ -954,7 +954,7 @@ impl<'a> ExtCtxt<'a> {
     pub fn new(
         parse_sess: &'a ParseSess,
         ecfg: expand::ExpansionConfig<'a>,
-        resolver: &'a mut dyn Resolver,
+        resolver: &'a mut dyn ResolverExpand,
         extern_mod_loaded: Option<&'a dyn Fn(&ast::Crate)>,
     ) -> ExtCtxt<'a> {
         ExtCtxt {
@@ -1095,7 +1095,7 @@ impl<'a> ExtCtxt<'a> {
         if !path.is_absolute() {
             let callsite = span.source_callsite();
             let mut result = match self.source_map().span_to_unmapped_path(callsite) {
-                FileName::Real(path) => path,
+                FileName::Real(name) => name.into_local_path(),
                 FileName::DocTest(path, _) => path,
                 other => {
                     return Err(self.struct_span_err(

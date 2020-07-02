@@ -570,7 +570,7 @@ impl<'tcx> fmt::Display for FixupError<'tcx> {
 /// Necessary because we can't write the following bound:
 /// `F: for<'b, 'tcx> where 'tcx FnOnce(InferCtxt<'b, 'tcx>)`.
 pub struct InferCtxtBuilder<'tcx> {
-    global_tcx: TyCtxt<'tcx>,
+    tcx: TyCtxt<'tcx>,
     fresh_tables: Option<RefCell<ty::TypeckTables<'tcx>>>,
 }
 
@@ -580,7 +580,7 @@ pub trait TyCtxtInferExt<'tcx> {
 
 impl TyCtxtInferExt<'tcx> for TyCtxt<'tcx> {
     fn infer_ctxt(self) -> InferCtxtBuilder<'tcx> {
-        InferCtxtBuilder { global_tcx: self, fresh_tables: None }
+        InferCtxtBuilder { tcx: self, fresh_tables: None }
     }
 }
 
@@ -616,24 +616,22 @@ impl<'tcx> InferCtxtBuilder<'tcx> {
     }
 
     pub fn enter<R>(&mut self, f: impl for<'a> FnOnce(InferCtxt<'a, 'tcx>) -> R) -> R {
-        let InferCtxtBuilder { global_tcx, ref fresh_tables } = *self;
+        let InferCtxtBuilder { tcx, ref fresh_tables } = *self;
         let in_progress_tables = fresh_tables.as_ref();
-        global_tcx.enter_local(|tcx| {
-            f(InferCtxt {
-                tcx,
-                in_progress_tables,
-                inner: RefCell::new(InferCtxtInner::new()),
-                lexical_region_resolutions: RefCell::new(None),
-                selection_cache: Default::default(),
-                evaluation_cache: Default::default(),
-                reported_trait_errors: Default::default(),
-                reported_closure_mismatch: Default::default(),
-                tainted_by_errors_flag: Cell::new(false),
-                err_count_on_creation: tcx.sess.err_count(),
-                in_snapshot: Cell::new(false),
-                skip_leak_check: Cell::new(false),
-                universe: Cell::new(ty::UniverseIndex::ROOT),
-            })
+        f(InferCtxt {
+            tcx,
+            in_progress_tables,
+            inner: RefCell::new(InferCtxtInner::new()),
+            lexical_region_resolutions: RefCell::new(None),
+            selection_cache: Default::default(),
+            evaluation_cache: Default::default(),
+            reported_trait_errors: Default::default(),
+            reported_closure_mismatch: Default::default(),
+            tainted_by_errors_flag: Cell::new(false),
+            err_count_on_creation: tcx.sess.err_count(),
+            in_snapshot: Cell::new(false),
+            skip_leak_check: Cell::new(false),
+            universe: Cell::new(ty::UniverseIndex::ROOT),
         })
     }
 }
@@ -991,13 +989,11 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             return None;
         }
 
-        Some(self.commit_if_ok(|snapshot| {
-            let (ty::SubtypePredicate { a_is_expected, a, b }, placeholder_map) =
+        Some(self.commit_if_ok(|_snapshot| {
+            let (ty::SubtypePredicate { a_is_expected, a, b }, _) =
                 self.replace_bound_vars_with_placeholders(&predicate);
 
             let ok = self.at(cause, param_env).sub_exp(a_is_expected, a, b)?;
-
-            self.leak_check(false, &placeholder_map, snapshot)?;
 
             Ok(ok.unit())
         }))
@@ -1008,14 +1004,13 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         cause: &traits::ObligationCause<'tcx>,
         predicate: ty::PolyRegionOutlivesPredicate<'tcx>,
     ) -> UnitResult<'tcx> {
-        self.commit_if_ok(|snapshot| {
-            let (ty::OutlivesPredicate(r_a, r_b), placeholder_map) =
+        self.commit_if_ok(|_snapshot| {
+            let (ty::OutlivesPredicate(r_a, r_b), _) =
                 self.replace_bound_vars_with_placeholders(&predicate);
             let origin = SubregionOrigin::from_obligation_cause(cause, || {
                 RelateRegionParamBound(cause.span)
             });
             self.sub_regions(origin, r_b, r_a); // `b : a` ==> `a <= b`
-            self.leak_check(false, &placeholder_map, snapshot)?;
             Ok(())
         })
     }
@@ -1751,9 +1746,10 @@ impl<'tcx> TypeTrace<'tcx> {
     }
 
     pub fn dummy(tcx: TyCtxt<'tcx>) -> TypeTrace<'tcx> {
+        let err = tcx.ty_error();
         TypeTrace {
             cause: ObligationCause::dummy(),
-            values: Types(ExpectedFound { expected: tcx.types.err, found: tcx.types.err }),
+            values: Types(ExpectedFound { expected: err, found: err }),
         }
     }
 }

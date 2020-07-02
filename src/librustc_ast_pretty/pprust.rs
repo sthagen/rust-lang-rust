@@ -148,9 +148,14 @@ pub fn to_string(f: impl FnOnce(&mut State<'_>)) -> String {
     printer.s.eof()
 }
 
-// This makes comma-separated lists look slightly nicer,
-// and also addresses a specific regression described in issue #63896.
+// This makes printed token streams look slightly nicer,
+// and also addresses some specific regressions described in #63896 and #73345.
 fn tt_prepend_space(tt: &TokenTree, prev: &TokenTree) -> bool {
+    if let TokenTree::Token(token) = prev {
+        if let token::DocComment(s) = token.kind {
+            return !s.as_str().starts_with("//");
+        }
+    }
     match tt {
         TokenTree::Token(token) => match token.kind {
             token::Comma => false,
@@ -163,7 +168,14 @@ fn tt_prepend_space(tt: &TokenTree, prev: &TokenTree) -> bool {
             },
             _ => true,
         },
-        _ => true,
+        TokenTree::Delimited(_, DelimToken::Bracket, _) => match prev {
+            TokenTree::Token(token) => match token.kind {
+                token::Pound => false,
+                _ => true,
+            },
+            _ => true,
+        },
+        TokenTree::Delimited(..) => true,
     }
 }
 
@@ -245,7 +257,7 @@ fn token_kind_to_string_ext(tok: &TokenKind, convert_dollar_crate: Option<Span>)
         token::CloseDelim(token::Bracket) => "]".to_string(),
         token::OpenDelim(token::Brace) => "{".to_string(),
         token::CloseDelim(token::Brace) => "}".to_string(),
-        token::OpenDelim(token::NoDelim) | token::CloseDelim(token::NoDelim) => " ".to_string(),
+        token::OpenDelim(token::NoDelim) | token::CloseDelim(token::NoDelim) => "".to_string(),
         token::Pound => "#".to_string(),
         token::Dollar => "$".to_string(),
         token::Question => "?".to_string(),
@@ -1818,7 +1830,7 @@ impl<'a> State<'a> {
             ast::ExprKind::Call(ref func, ref args) => {
                 self.print_expr_call(func, &args[..]);
             }
-            ast::ExprKind::MethodCall(ref segment, ref args) => {
+            ast::ExprKind::MethodCall(ref segment, ref args, _) => {
                 self.print_expr_method_call(segment, &args[..]);
             }
             ast::ExprKind::Binary(op, ref lhs, ref rhs) => {
@@ -2578,7 +2590,7 @@ impl<'a> State<'a> {
                         s.print_type(default)
                     }
                 }
-                ast::GenericParamKind::Const { ref ty } => {
+                ast::GenericParamKind::Const { ref ty, kw_span: _ } => {
                     s.word_space("const");
                     s.print_ident(param.ident);
                     s.s.space();
@@ -2593,7 +2605,7 @@ impl<'a> State<'a> {
     }
 
     crate fn print_where_clause(&mut self, where_clause: &ast::WhereClause) {
-        if where_clause.predicates.is_empty() {
+        if where_clause.predicates.is_empty() && !where_clause.has_where_token {
             return;
         }
 
@@ -2739,7 +2751,11 @@ impl<'a> State<'a> {
         }
         let generics = ast::Generics {
             params: Vec::new(),
-            where_clause: ast::WhereClause { predicates: Vec::new(), span: rustc_span::DUMMY_SP },
+            where_clause: ast::WhereClause {
+                has_where_token: false,
+                predicates: Vec::new(),
+                span: rustc_span::DUMMY_SP,
+            },
             span: rustc_span::DUMMY_SP,
         };
         let header = ast::FnHeader { unsafety, ext, ..ast::FnHeader::default() };

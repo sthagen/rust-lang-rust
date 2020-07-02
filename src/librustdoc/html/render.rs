@@ -469,11 +469,12 @@ pub fn run(
         static_root_path,
         generate_search_filter,
         generate_redirect_pages,
+        document_private,
         ..
     } = options;
 
     let src_root = match krate.src {
-        FileName::Real(ref p) => match p.parent() {
+        FileName::Real(ref p) => match p.local_path().parent() {
             Some(p) => p.to_path_buf(),
             None => PathBuf::new(),
         },
@@ -546,7 +547,7 @@ pub fn run(
     scx.ensure_dir(&dst)?;
     krate = sources::render(&dst, &mut scx, krate)?;
     let (new_crate, index, cache) =
-        Cache::from_krate(renderinfo, &extern_html_root_urls, &dst, krate);
+        Cache::from_krate(renderinfo, document_private, &extern_html_root_urls, &dst, krate);
     krate = new_crate;
     let cache = Arc::new(cache);
     let mut cx = Context {
@@ -1621,9 +1622,10 @@ impl Context {
 
         // We can safely ignore synthetic `SourceFile`s.
         let file = match item.source.filename {
-            FileName::Real(ref path) => path,
+            FileName::Real(ref path) => path.local_path().to_path_buf(),
             _ => return None,
         };
+        let file = &file;
 
         let (krate, path) = if item.source.cnum == LOCAL_CRATE {
             if let Some(path) = self.shared.local_sources.get(file) {
@@ -4337,6 +4339,8 @@ fn sidebar_trait(buf: &mut Buffer, it: &clean::Item, t: &clean::Trait) {
         }
     }
 
+    sidebar.push_str(&sidebar_assoc_items(it));
+
     sidebar.push_str("<a class=\"sidebar-title\" href=\"#implementors\">Implementors</a>");
     if t.auto {
         sidebar.push_str(
@@ -4344,8 +4348,6 @@ fn sidebar_trait(buf: &mut Buffer, it: &clean::Item, t: &clean::Trait) {
                 href=\"#synthetic-implementors\">Auto Implementors</a>",
         );
     }
-
-    sidebar.push_str(&sidebar_assoc_items(it));
 
     write!(buf, "<div class=\"block items\">{}</div>", sidebar)
 }

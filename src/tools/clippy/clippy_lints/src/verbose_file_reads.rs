@@ -9,6 +9,7 @@ declare_clippy_lint! {
     ///
     /// **Why is this bad?** `fs::{read, read_to_string}` provide the same functionality when `buf` is empty with fewer imports and no intermediate values.
     /// See also: [fs::read docs](https://doc.rust-lang.org/std/fs/fn.read.html), [fs::read_to_string docs](https://doc.rust-lang.org/std/fs/fn.read_to_string.html)
+    ///
     /// **Known problems:** None.
     ///
     /// **Example:**
@@ -58,10 +59,10 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for VerboseFileReads {
 
 fn is_file_read_to_end<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, expr: &'tcx Expr<'tcx>) -> bool {
     if_chain! {
-        if let ExprKind::MethodCall(method_name, _, exprs) = expr.kind;
+        if let ExprKind::MethodCall(method_name, _, exprs, _) = expr.kind;
         if method_name.ident.as_str() == "read_to_end";
         if let ExprKind::Path(QPath::Resolved(None, _)) = &exprs[0].kind;
-        let ty = cx.tables.expr_ty(&exprs[0]);
+        let ty = cx.tables().expr_ty(&exprs[0]);
         if match_type(cx, ty, &paths::FILE);
         then {
             return true
@@ -72,10 +73,10 @@ fn is_file_read_to_end<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, expr: &'tcx Expr<'t
 
 fn is_file_read_to_string<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, expr: &'tcx Expr<'tcx>) -> bool {
     if_chain! {
-        if let ExprKind::MethodCall(method_name, _, exprs) = expr.kind;
+        if let ExprKind::MethodCall(method_name, _, exprs, _) = expr.kind;
         if method_name.ident.as_str() == "read_to_string";
         if let ExprKind::Path(QPath::Resolved(None, _)) = &exprs[0].kind;
-        let ty = cx.tables.expr_ty(&exprs[0]);
+        let ty = cx.tables().expr_ty(&exprs[0]);
         if match_type(cx, ty, &paths::FILE);
         then {
             return true

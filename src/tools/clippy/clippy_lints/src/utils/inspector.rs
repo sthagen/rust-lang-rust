@@ -63,7 +63,6 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for DeepCodeInspector {
             },
             hir::ImplItemKind::Fn(..) => println!("method"),
             hir::ImplItemKind::TyAlias(_) => println!("associated type"),
-            hir::ImplItemKind::OpaqueTy(_) => println!("existential type"),
         }
     }
     // fn check_trait_item(&mut self, cx: &LateContext<'a, 'tcx>, item: &'tcx
@@ -115,7 +114,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for DeepCodeInspector {
         }
         match stmt.kind {
             hir::StmtKind::Local(ref local) => {
-                println!("local variable of type {}", cx.tables.node_type(local.hir_id));
+                println!("local variable of type {}", cx.tables().node_type(local.hir_id));
                 println!("pattern:");
                 print_pat(cx, &local.pat, 0);
                 if let Some(ref e) = local.init {
@@ -145,8 +144,8 @@ fn has_attr(sess: &Session, attrs: &[Attribute]) -> bool {
 fn print_expr(cx: &LateContext<'_, '_>, expr: &hir::Expr<'_>, indent: usize) {
     let ind = "  ".repeat(indent);
     println!("{}+", ind);
-    println!("{}ty: {}", ind, cx.tables.expr_ty(expr));
-    println!("{}adjustments: {:?}", ind, cx.tables.adjustments().get(expr.hir_id));
+    println!("{}ty: {}", ind, cx.tables().expr_ty(expr));
+    println!("{}adjustments: {:?}", ind, cx.tables().adjustments().get(expr.hir_id));
     match expr.kind {
         hir::ExprKind::Box(ref e) => {
             println!("{}Box", ind);
@@ -167,7 +166,7 @@ fn print_expr(cx: &LateContext<'_, '_>, expr: &hir::Expr<'_>, indent: usize) {
                 print_expr(cx, arg, indent + 1);
             }
         },
-        hir::ExprKind::MethodCall(ref path, _, args) => {
+        hir::ExprKind::MethodCall(ref path, _, args, _) => {
             println!("{}MethodCall", ind);
             println!("{}method name: {}", ind, path.ident.name);
             for arg in args {

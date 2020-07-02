@@ -55,6 +55,7 @@ use crate::borrow_check::{
     location::LocationTable,
     member_constraints::MemberConstraintSet,
     nll::ToRegionVid,
+    path_utils,
     region_infer::values::{
         LivenessValues, PlaceholderIndex, PlaceholderIndices, RegionValueElements,
     },
@@ -62,6 +63,7 @@ use crate::borrow_check::{
     renumber,
     type_check::free_region_relations::{CreateResult, UniversalRegionRelations},
     universal_regions::{DefiningTy, UniversalRegions},
+    Upvar,
 };
 
 macro_rules! span_mirbug {
@@ -132,6 +134,7 @@ pub(crate) fn type_check<'mir, 'tcx>(
     flow_inits: &mut ResultsCursor<'mir, 'tcx, MaybeInitializedPlaces<'mir, 'tcx>>,
     move_data: &MoveData<'tcx>,
     elements: &Rc<RegionValueElements>,
+    upvars: &[Upvar],
 ) -> MirTypeckResults<'tcx> {
     let implicit_region_bound = infcx.tcx.mk_region(ty::ReVar(universal_regions.fr_fn_body));
     let mut constraints = MirTypeckRegionConstraints {
@@ -162,6 +165,7 @@ pub(crate) fn type_check<'mir, 'tcx>(
         borrow_set,
         all_facts,
         constraints: &mut constraints,
+        upvars,
     };
 
     let opaque_type_values = type_check_internal(
@@ -494,7 +498,7 @@ impl<'a, 'b, 'tcx> TypeVerifier<'a, 'b, 'tcx> {
             if place_ty.variant_index.is_none() {
                 if place_ty.ty.references_error() {
                     assert!(self.errors_reported);
-                    return PlaceTy::from_ty(self.tcx().types.err);
+                    return PlaceTy::from_ty(self.tcx().ty_error());
                 }
             }
             place_ty = self.sanitize_projection(place_ty, elem, place, location)
@@ -577,7 +581,7 @@ impl<'a, 'b, 'tcx> TypeVerifier<'a, 'b, 'tcx> {
         for constraint in constraints.outlives().iter() {
             let mut constraint = *constraint;
             constraint.locations = locations;
-            if let ConstraintCategory::Return
+            if let ConstraintCategory::Return(_)
             | ConstraintCategory::UseAsConst
             | ConstraintCategory::UseAsStatic = constraint.category
             {
@@ -721,7 +725,7 @@ impl<'a, 'b, 'tcx> TypeVerifier<'a, 'b, 'tcx> {
 
     fn error(&mut self) -> Ty<'tcx> {
         self.errors_reported = true;
-        self.tcx().types.err
+        self.tcx().ty_error()
     }
 
     fn field_ty(
@@ -827,6 +831,7 @@ struct BorrowCheckContext<'a, 'tcx> {
     all_facts: &'a mut Option<AllFacts>,
     borrow_set: &'a BorrowSet<'tcx>,
     constraints: &'a mut MirTypeckRegionConstraints<'tcx>,
+    upvars: &'a [Upvar],
 }
 
 crate struct MirTypeckResults<'tcx> {
@@ -1016,7 +1021,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                     }
 
                     self.prove_predicate(
-                        ty::PredicateKind::WellFormed(inferred_ty).to_predicate(self.tcx()),
+                        ty::PredicateKind::WellFormed(inferred_ty.into()).to_predicate(self.tcx()),
                         Locations::All(span),
                         ConstraintCategory::TypeAnnotation,
                     );
@@ -1245,7 +1250,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                 |infcx| {
                     let mut obligations = ObligationAccumulator::default();
 
-                    let dummy_body_id = ObligationCause::dummy().body_id;
+                    let dummy_body_id = hir::CRATE_HIR_ID;
                     let (output_ty, opaque_type_map) =
                         obligations.add(infcx.instantiate_opaque_types(
                             anon_owner_def_id,
@@ -1268,7 +1273,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                     obligations.obligations.push(traits::Obligation::new(
                         ObligationCause::dummy(),
                         param_env,
-                        ty::PredicateKind::WellFormed(revealed_ty).to_predicate(infcx.tcx),
+                        ty::PredicateKind::WellFormed(revealed_ty.into()).to_predicate(infcx.tcx),
                     ));
                     obligations.add(
                         infcx
@@ -1420,7 +1425,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                                 ConstraintCategory::UseAsConst
                             }
                         } else {
-                            ConstraintCategory::Return
+                            ConstraintCategory::Return(ReturnConstraint::Normal)
                         }
                     }
                     Some(l) if !body.local_decls[l].is_user_variable() => {
@@ -1547,14 +1552,14 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
             | TerminatorKind::GeneratorDrop
             | TerminatorKind::Unreachable
             | TerminatorKind::Drop { .. }
-            | TerminatorKind::FalseEdges { .. }
+            | TerminatorKind::FalseEdge { .. }
             | TerminatorKind::FalseUnwind { .. }
             | TerminatorKind::InlineAsm { .. } => {
                 // no checks needed for these
             }
 
-            TerminatorKind::DropAndReplace { ref location, ref value, target: _, unwind: _ } => {
-                let place_ty = location.ty(body, tcx).ty;
+            TerminatorKind::DropAndReplace { ref place, ref value, target: _, unwind: _ } => {
+                let place_ty = place.ty(body, tcx).ty;
                 let rv_ty = value.ty(body, tcx);
 
                 let locations = term_location.to_locations();
@@ -1612,7 +1617,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                 self.check_call_dest(body, term, &sig, destination, term_location);
 
                 self.prove_predicates(
-                    sig.inputs_and_output.iter().map(|ty| ty::PredicateKind::WellFormed(ty)),
+                    sig.inputs_and_output.iter().map(|ty| ty::PredicateKind::WellFormed(ty.into())),
                     term_location.to_locations(),
                     ConstraintCategory::Boring,
                 );
@@ -1703,7 +1708,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                                 ConstraintCategory::UseAsConst
                             }
                         } else {
-                            ConstraintCategory::Return
+                            ConstraintCategory::Return(ReturnConstraint::Normal)
                         }
                     }
                     Some(l) if !body.local_decls[l].is_user_variable() => {
@@ -1843,7 +1848,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                     self.assert_iscleanup(body, block_data, cleanup, true);
                 }
             }
-            TerminatorKind::FalseEdges { real_target, imaginary_target } => {
+            TerminatorKind::FalseEdge { real_target, imaginary_target } => {
                 self.assert_iscleanup(body, block_data, real_target, is_cleanup);
                 self.assert_iscleanup(body, block_data, imaginary_target, is_cleanup);
             }
@@ -2353,6 +2358,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
             }
 
             Rvalue::AddressOf(..)
+            | Rvalue::ThreadLocalRef(..)
             | Rvalue::Use(..)
             | Rvalue::Len(..)
             | Rvalue::BinaryOp(..)
@@ -2368,6 +2374,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
     fn rvalue_user_ty(&self, rvalue: &Rvalue<'tcx>) -> Option<UserTypeAnnotationIndex> {
         match rvalue {
             Rvalue::Use(_)
+            | Rvalue::ThreadLocalRef(_)
             | Rvalue::Repeat(..)
             | Rvalue::Ref(..)
             | Rvalue::AddressOf(..)
@@ -2487,6 +2494,19 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
         );
 
         let mut cursor = borrowed_place.projection.as_ref();
+        let tcx = self.infcx.tcx;
+        let field = path_utils::is_upvar_field_projection(
+            tcx,
+            &self.borrowck_context.upvars,
+            borrowed_place.as_ref(),
+            body,
+        );
+        let category = if let Some(field) = field {
+            ConstraintCategory::ClosureUpvar(self.borrowck_context.upvars[field.index()].var_hir_id)
+        } else {
+            ConstraintCategory::Boring
+        };
+
         while let [proj_base @ .., elem] = cursor {
             cursor = proj_base;
 
@@ -2494,7 +2514,6 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
 
             match elem {
                 ProjectionElem::Deref => {
-                    let tcx = self.infcx.tcx;
                     let base_ty = Place::ty_from(borrowed_place.local, proj_base, body, tcx).ty;
 
                     debug!("add_reborrow_constraint - base_ty = {:?}", base_ty);
@@ -2504,7 +2523,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                                 sup: ref_region.to_region_vid(),
                                 sub: borrow_region.to_region_vid(),
                                 locations: location.to_locations(),
-                                category: ConstraintCategory::Boring,
+                                category,
                             });
 
                             match mutbl {

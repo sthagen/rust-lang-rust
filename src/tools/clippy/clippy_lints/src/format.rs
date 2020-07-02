@@ -25,9 +25,13 @@ declare_clippy_lint! {
     ///
     /// **Examples:**
     /// ```rust
+    ///
+    /// // Bad
     /// # let foo = "foo";
-    /// format!("foo");
     /// format!("{}", foo);
+    ///
+    /// // Good
+    /// format!("foo");
     /// ```
     pub USELESS_FORMAT,
     complexity,
@@ -84,13 +88,13 @@ fn on_argumentv1_new<'a, 'tcx>(
         // matches `core::fmt::Display::fmt`
         if args.len() == 2;
         if let ExprKind::Path(ref qpath) = args[1].kind;
-        if let Some(did) = cx.tables.qpath_res(qpath, args[1].hir_id).opt_def_id();
+        if let Some(did) = cx.tables().qpath_res(qpath, args[1].hir_id).opt_def_id();
         if match_def_path(cx, did, &paths::DISPLAY_FMT_METHOD);
         // check `(arg0,)` in match block
         if let PatKind::Tuple(ref pats, None) = arms[0].pat.kind;
         if pats.len() == 1;
         then {
-            let ty = walk_ptrs_ty(cx.tables.pat_ty(&pats[0]));
+            let ty = walk_ptrs_ty(cx.tables().pat_ty(&pats[0]));
             if ty.kind != rustc_middle::ty::Str && !is_type_diagnostic_item(cx, ty, sym!(string_type)) {
                 return None;
             }
@@ -100,7 +104,7 @@ fn on_argumentv1_new<'a, 'tcx>(
                 }
             } else {
                 let snip = snippet(cx, format_args.span, "<arg>");
-                if let ExprKind::MethodCall(ref path, _, _) = format_args.kind {
+                if let ExprKind::MethodCall(ref path, _, _, _) = format_args.kind {
                     if path.ident.name == sym!(to_string) {
                         return Some(format!("{}", snip));
                     }

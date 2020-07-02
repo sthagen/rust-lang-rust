@@ -27,7 +27,7 @@ use crate::traits::query::{
     OutlivesBound,
 };
 use crate::traits::specialization_graph;
-use crate::traits::{self, Vtable};
+use crate::traits::{self, ImplSource};
 use crate::ty::steal::Steal;
 use crate::ty::subst::{GenericArg, SubstsRef};
 use crate::ty::util::AlwaysRequiresDrop;
@@ -57,6 +57,7 @@ use rustc_span::{Span, DUMMY_SP};
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::ops::Deref;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 #[macro_use]

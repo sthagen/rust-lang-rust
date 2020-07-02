@@ -1,12 +1,12 @@
 use crate::utils::{
-    is_type_diagnostic_item, match_def_path, match_trait_method, paths, same_tys, snippet, snippet_with_macro_callsite,
+    is_type_diagnostic_item, match_def_path, match_trait_method, paths, snippet, snippet_with_macro_callsite,
     span_lint_and_help, span_lint_and_sugg,
 };
 use if_chain::if_chain;
 use rustc_errors::Applicability;
 use rustc_hir::{Expr, ExprKind, HirId, MatchSource};
 use rustc_lint::{LateContext, LateLintPass};
-use rustc_middle::ty;
+use rustc_middle::ty::{self, TyS};
 use rustc_session::{declare_tool_lint, impl_lint_pass};
 
 declare_clippy_lint! {
@@ -61,11 +61,11 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for UselessConversion {
                 }
             },
 
-            ExprKind::MethodCall(ref name, .., ref args) => {
+            ExprKind::MethodCall(ref name, .., ref args, _) => {
                 if match_trait_method(cx, e, &paths::INTO) && &*name.ident.as_str() == "into" {
-                    let a = cx.tables.expr_ty(e);
-                    let b = cx.tables.expr_ty(&args[0]);
-                    if same_tys(cx, a, b) {
+                    let a = cx.tables().expr_ty(e);
+                    let b = cx.tables().expr_ty(&args[0]);
+                    if TyS::same_type(a, b) {
                         let sugg = snippet_with_macro_callsite(cx, args[0].span, "<expr>").to_string();
                         span_lint_and_sugg(
                             cx,
@@ -79,9 +79,9 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for UselessConversion {
                     }
                 }
                 if match_trait_method(cx, e, &paths::INTO_ITERATOR) && &*name.ident.as_str() == "into_iter" {
-                    let a = cx.tables.expr_ty(e);
-                    let b = cx.tables.expr_ty(&args[0]);
-                    if same_tys(cx, a, b) {
+                    let a = cx.tables().expr_ty(e);
+                    let b = cx.tables().expr_ty(&args[0]);
+                    if TyS::same_type(a, b) {
                         let sugg = snippet(cx, args[0].span, "<expr>").into_owned();
                         span_lint_and_sugg(
                             cx,
@@ -96,12 +96,12 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for UselessConversion {
                 }
                 if match_trait_method(cx, e, &paths::TRY_INTO_TRAIT) && &*name.ident.as_str() == "try_into" {
                     if_chain! {
-                        let a = cx.tables.expr_ty(e);
-                        let b = cx.tables.expr_ty(&args[0]);
+                        let a = cx.tables().expr_ty(e);
+                        let b = cx.tables().expr_ty(&args[0]);
                         if is_type_diagnostic_item(cx, a, sym!(result_type));
                         if let ty::Adt(_, substs) = a.kind;
                         if let Some(a_type) = substs.types().next();
-                        if same_tys(cx, a_type, b);
+                        if TyS::same_type(a_type, b);
 
                         then {
                             span_lint_and_help(
@@ -121,9 +121,9 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for UselessConversion {
                 if_chain! {
                     if args.len() == 1;
                     if let ExprKind::Path(ref qpath) = path.kind;
-                    if let Some(def_id) = cx.tables.qpath_res(qpath, path.hir_id).opt_def_id();
-                    let a = cx.tables.expr_ty(e);
-                    let b = cx.tables.expr_ty(&args[0]);
+                    if let Some(def_id) = cx.tables().qpath_res(qpath, path.hir_id).opt_def_id();
+                    let a = cx.tables().expr_ty(e);
+                    let b = cx.tables().expr_ty(&args[0]);
 
                     then {
                         if_chain! {
@@ -131,7 +131,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for UselessConversion {
                             if is_type_diagnostic_item(cx, a, sym!(result_type));
                             if let ty::Adt(_, substs) = a.kind;
                             if let Some(a_type) = substs.types().next();
-                            if same_tys(cx, a_type, b);
+                            if TyS::same_type(a_type, b);
 
                             then {
                                 let hint = format!("consider removing `{}()`", snippet(cx, path.span, "TryFrom::try_from"));
@@ -148,7 +148,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for UselessConversion {
 
                         if_chain! {
                             if match_def_path(cx, def_id, &paths::FROM_FROM);
-                            if same_tys(cx, a, b);
+                            if TyS::same_type(a, b);
 
                             then {
                                 let sugg = snippet(cx, args[0].span.source_callsite(), "<expr>").into_owned();

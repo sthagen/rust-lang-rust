@@ -1,10 +1,8 @@
 use crate::middle::cstore::{ExternCrate, ExternCrateSource};
-use crate::mir::interpret::{
-    sign_extend, truncate, AllocId, ConstValue, GlobalAlloc, Pointer, Scalar,
-};
+use crate::mir::interpret::{AllocId, ConstValue, GlobalAlloc, Pointer, Scalar};
 use crate::ty::layout::IntegerExt;
 use crate::ty::subst::{GenericArg, GenericArgKind, Subst};
-use crate::ty::{self, DefIdTree, ParamConst, Ty, TyCtxt, TypeFoldable};
+use crate::ty::{self, ConstInt, DefIdTree, ParamConst, Ty, TyCtxt, TypeFoldable};
 use rustc_apfloat::ieee::{Double, Single};
 use rustc_apfloat::Float;
 use rustc_ast::ast;
@@ -191,7 +189,7 @@ pub trait PrettyPrinter<'tcx>:
     where
         T: Print<'tcx, Self, Output = Self, Error = Self::Error> + TypeFoldable<'tcx>,
     {
-        value.skip_binder().print(self)
+        value.as_ref().skip_binder().print(self)
     }
 
     /// Prints comma-separated elements.
@@ -518,7 +516,7 @@ pub trait PrettyPrinter<'tcx>:
                     p!(write("{}", infer_ty))
                 }
             }
-            ty::Error => p!(write("[type error]")),
+            ty::Error(_) => p!(write("[type error]")),
             ty::Param(ref param_ty) => p!(write("{}", param_ty)),
             ty::Bound(debruijn, bound_ty) => match bound_ty.kind {
                 ty::BoundTyKind::Anon => self.pretty_print_bound_var(debruijn, bound_ty.var)?,
@@ -605,7 +603,8 @@ pub trait PrettyPrinter<'tcx>:
                 // FIXME(eddyb) should use `def_span`.
                 if let Some(did) = did.as_local() {
                     let hir_id = self.tcx().hir().as_local_hir_id(did);
-                    p!(write("@{:?}", self.tcx().hir().span(hir_id)));
+                    let span = self.tcx().hir().span(hir_id);
+                    p!(write("@{}", self.tcx().sess.source_map().span_to_string(span)));
 
                     if substs.as_generator().is_valid() {
                         let upvar_tys = substs.as_generator().upvar_tys();
@@ -653,7 +652,8 @@ pub trait PrettyPrinter<'tcx>:
                     if self.tcx().sess.opts.debugging_opts.span_free_formats {
                         p!(write("@"), print_def_path(did.to_def_id(), substs));
                     } else {
-                        p!(write("@{:?}", self.tcx().hir().span(hir_id)));
+                        let span = self.tcx().hir().span(hir_id);
+                        p!(write("@{}", self.tcx().sess.source_map().span_to_string(span)));
                     }
 
                     if substs.as_closure().is_valid() {
@@ -917,7 +917,7 @@ pub trait PrettyPrinter<'tcx>:
                 self.pretty_print_bound_var(debruijn, bound_var)?
             }
             ty::ConstKind::Placeholder(placeholder) => p!(write("Placeholder({:?})", placeholder)),
-            ty::ConstKind::Error => p!(write("[const error]")),
+            ty::ConstKind::Error(_) => p!(write("[const error]")),
         };
         Ok(self)
     }
@@ -979,35 +979,14 @@ pub trait PrettyPrinter<'tcx>:
             }
             // Int
             (Scalar::Raw { data, .. }, ty::Uint(ui)) => {
-                let bit_size = Integer::from_attr(&self.tcx(), UnsignedInt(*ui)).size();
-                let max = truncate(u128::MAX, bit_size);
-
-                let ui_str = ui.name_str();
-                if data == max {
-                    p!(write("std::{}::MAX", ui_str))
-                } else {
-                    if print_ty { p!(write("{}{}", data, ui_str)) } else { p!(write("{}", data)) }
-                };
+                let size = Integer::from_attr(&self.tcx(), UnsignedInt(*ui)).size();
+                let int = ConstInt::new(data, size, false, ty.is_ptr_sized_integral());
+                if print_ty { p!(write("{:#?}", int)) } else { p!(write("{:?}", int)) }
             }
             (Scalar::Raw { data, .. }, ty::Int(i)) => {
                 let size = Integer::from_attr(&self.tcx(), SignedInt(*i)).size();
-                let bit_size = size.bits() as u128;
-                let min = 1u128 << (bit_size - 1);
-                let max = min - 1;
-
-                let i_str = i.name_str();
-                match data {
-                    d if d == min => p!(write("std::{}::MIN", i_str)),
-                    d if d == max => p!(write("std::{}::MAX", i_str)),
-                    _ => {
-                        let data = sign_extend(data, size) as i128;
-                        if print_ty {
-                            p!(write("{}{}", data, i_str))
-                        } else {
-                            p!(write("{}", data))
-                        }
-                    }
-                }
+                let int = ConstInt::new(data, size, true, ty.is_ptr_sized_integral());
+                if print_ty { p!(write("{:#?}", int)) } else { p!(write("{:?}", int)) }
             }
             // Char
             (Scalar::Raw { data, .. }, ty::Char) if char::from_u32(data as u32).is_some() => {
@@ -1175,8 +1154,13 @@ pub trait PrettyPrinter<'tcx>:
                         }
                         p!(write(")"));
                     }
+                    ty::Adt(def, substs) if def.variants.is_empty() => {
+                        p!(print_value_path(def.did, substs));
+                    }
                     ty::Adt(def, substs) => {
-                        let variant_def = &def.variants[contents.variant];
+                        let variant_id =
+                            contents.variant.expect("destructed const of adt without variant id");
+                        let variant_def = &def.variants[variant_id];
                         p!(print_value_path(variant_def.def_id, substs));
 
                         match variant_def.ctor_kind {
@@ -1362,7 +1346,7 @@ impl<F: fmt::Write> Printer<'tcx> for FmtPrinter<'_, 'tcx, F> {
                 if !self.empty_path {
                     write!(self, "::")?;
                 }
-                write!(self, "<impl at {:?}>", span)?;
+                write!(self, "<impl at {}>", self.tcx.sess.source_map().span_to_string(span))?;
                 self.empty_path = false;
 
                 return Ok(self);
@@ -2031,7 +2015,7 @@ define_print_and_forward_display! {
             ty::PredicateKind::RegionOutlives(predicate) => p!(print(predicate)),
             ty::PredicateKind::TypeOutlives(predicate) => p!(print(predicate)),
             ty::PredicateKind::Projection(predicate) => p!(print(predicate)),
-            ty::PredicateKind::WellFormed(ty) => p!(print(ty), write(" well-formed")),
+            ty::PredicateKind::WellFormed(arg) => p!(print(arg), write(" well-formed")),
             &ty::PredicateKind::ObjectSafe(trait_def_id) => {
                 p!(write("the trait `"),
                    print_def_path(trait_def_id, &[]),

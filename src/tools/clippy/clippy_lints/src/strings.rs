@@ -24,6 +24,10 @@ declare_clippy_lint! {
     /// ```rust
     /// let mut x = "Hello".to_owned();
     /// x = x + ", World";
+    ///
+    /// // More readable
+    /// x += ", World";
+    /// x.push_str(", World");
     /// ```
     pub STRING_ADD_ASSIGN,
     pedantic,
@@ -69,7 +73,11 @@ declare_clippy_lint! {
     ///
     /// **Example:**
     /// ```rust
+    /// // Bad
     /// let bs = "a byte string".as_bytes();
+    ///
+    /// // Good
+    /// let bs = b"a byte string";
     /// ```
     pub STRING_LIT_AS_BYTES,
     style,
@@ -126,7 +134,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for StringAdd {
 }
 
 fn is_string(cx: &LateContext<'_, '_>, e: &Expr<'_>) -> bool {
-    is_type_diagnostic_item(cx, walk_ptrs_ty(cx.tables.expr_ty(e)), sym!(string_type))
+    is_type_diagnostic_item(cx, walk_ptrs_ty(cx.tables().expr_ty(e)), sym!(string_type))
 }
 
 fn is_add(cx: &LateContext<'_, '_>, src: &Expr<'_>, target: &Expr<'_>) -> bool {
@@ -156,7 +164,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for StringLitAsBytes {
         use rustc_ast::ast::LitKind;
 
         if_chain! {
-            if let ExprKind::MethodCall(path, _, args) = &e.kind;
+            if let ExprKind::MethodCall(path, _, args, _) = &e.kind;
             if path.ident.name == sym!(as_bytes);
             if let ExprKind::Lit(lit) = &args[0].kind;
             if let LitKind::Str(lit_content, _) = &lit.node;

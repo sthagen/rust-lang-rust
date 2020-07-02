@@ -16,7 +16,11 @@ declare_clippy_lint! {
     ///
     /// **Example:**
     /// ```ignore
+    /// // Bad
     /// my_vec.push(&mut value)
+    ///
+    /// // Good
+    /// my_vec.push(&value)
     /// ```
     pub UNNECESSARY_MUT_PASSED,
     style,
@@ -33,14 +37,14 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for UnnecessaryMutPassed {
                     check_arguments(
                         cx,
                         arguments,
-                        cx.tables.expr_ty(fn_expr),
+                        cx.tables().expr_ty(fn_expr),
                         &rustc_hir_pretty::to_string(rustc_hir_pretty::NO_ANN, |s| s.print_qpath(path, false)),
                     );
                 }
             },
-            ExprKind::MethodCall(ref path, _, ref arguments) => {
-                let def_id = cx.tables.type_dependent_def_id(e.hir_id).unwrap();
-                let substs = cx.tables.node_substs(e.hir_id);
+            ExprKind::MethodCall(ref path, _, ref arguments, _) => {
+                let def_id = cx.tables().type_dependent_def_id(e.hir_id).unwrap();
+                let substs = cx.tables().node_substs(e.hir_id);
                 let method_type = cx.tcx.type_of(def_id).subst(cx.tcx, substs);
                 check_arguments(cx, arguments, method_type, &path.ident.as_str())
             },

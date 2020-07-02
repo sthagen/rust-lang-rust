@@ -25,7 +25,12 @@ declare_clippy_lint! {
     /// **Example:**
     /// ```rust
     /// # let x = 1;
+    ///
+    /// // Bad
     /// let x = &x;
+    ///
+    /// // Good
+    /// let y = &x; // use different variable name
     /// ```
     pub SHADOW_SAME,
     restriction,
@@ -77,7 +82,12 @@ declare_clippy_lint! {
     /// # let y = 1;
     /// # let z = 2;
     /// let x = y;
+    ///
+    /// // Bad
     /// let x = z; // shadows the earlier binding
+    ///
+    /// // Good
+    /// let w = z; // use different variable name
     /// ```
     pub SHADOW_UNRELATED,
     pedantic,
@@ -154,7 +164,7 @@ fn check_local<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, local: &'tcx Local<'_>, bin
 }
 
 fn is_binding(cx: &LateContext<'_, '_>, pat_id: HirId) -> bool {
-    let var_ty = cx.tables.node_type_opt(pat_id);
+    let var_ty = cx.tables().node_type_opt(pat_id);
     if let Some(var_ty) = var_ty {
         match var_ty.kind {
             ty::Adt(..) => false,

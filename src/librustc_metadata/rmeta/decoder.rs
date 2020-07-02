@@ -30,7 +30,7 @@ use rustc_middle::mir::{self, interpret, Body, Promoted};
 use rustc_middle::ty::codec::TyDecoder;
 use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_middle::util::common::record_time;
-use rustc_serialize::{opaque, Decodable, Decoder, SpecializedDecoder};
+use rustc_serialize::{opaque, Decodable, Decoder, SpecializedDecoder, UseSpecializedDecodable};
 use rustc_session::Session;
 use rustc_span::source_map::{respan, Spanned};
 use rustc_span::symbol::{sym, Ident, Symbol};
@@ -218,7 +218,7 @@ impl<'a, 'tcx> Metadata<'a, 'tcx> for (&'a CrateMetadataRef<'a>, TyCtxt<'tcx>) {
     }
 }
 
-impl<'a, 'tcx, T: Decodable> Lazy<T> {
+impl<'a, 'tcx, T: Decodable> Lazy<T, ()> {
     fn decode<M: Metadata<'a, 'tcx>>(self, metadata: M) -> T {
         let mut dcx = metadata.decoder(self.position.get());
         dcx.lazy_state = LazyState::NodeStart(self.position);
@@ -226,7 +226,7 @@ impl<'a, 'tcx, T: Decodable> Lazy<T> {
     }
 }
 
-impl<'a: 'x, 'tcx: 'x, 'x, T: Decodable> Lazy<[T]> {
+impl<'a: 'x, 'tcx: 'x, 'x, T: Decodable> Lazy<[T], usize> {
     fn decode<M: Metadata<'a, 'tcx>>(
         self,
         metadata: M,
@@ -294,13 +294,34 @@ impl<'a, 'tcx> TyDecoder<'tcx> for DecodeContext<'a, 'tcx> {
 
         let key = ty::CReaderCacheKey { cnum: self.cdata().cnum, pos: shorthand };
 
-        if let Some(&ty) = tcx.rcache.borrow().get(&key) {
+        if let Some(&ty) = tcx.ty_rcache.borrow().get(&key) {
             return Ok(ty);
         }
 
         let ty = or_insert_with(self)?;
-        tcx.rcache.borrow_mut().insert(key, ty);
+        tcx.ty_rcache.borrow_mut().insert(key, ty);
         Ok(ty)
+    }
+
+    fn cached_predicate_for_shorthand<F>(
+        &mut self,
+        shorthand: usize,
+        or_insert_with: F,
+    ) -> Result<ty::Predicate<'tcx>, Self::Error>
+    where
+        F: FnOnce(&mut Self) -> Result<ty::Predicate<'tcx>, Self::Error>,
+    {
+        let tcx = self.tcx();
+
+        let key = ty::CReaderCacheKey { cnum: self.cdata().cnum, pos: shorthand };
+
+        if let Some(&pred) = tcx.pred_rcache.borrow().get(&key) {
+            return Ok(pred);
+        }
+
+        let pred = or_insert_with(self)?;
+        tcx.pred_rcache.borrow_mut().insert(key, pred);
+        Ok(pred)
     }
 
     fn with_position<F, R>(&mut self, pos: usize, f: F) -> R
@@ -321,20 +342,20 @@ impl<'a, 'tcx> TyDecoder<'tcx> for DecodeContext<'a, 'tcx> {
     }
 }
 
-impl<'a, 'tcx, T> SpecializedDecoder<Lazy<T>> for DecodeContext<'a, 'tcx> {
+impl<'a, 'tcx, T> SpecializedDecoder<Lazy<T, ()>> for DecodeContext<'a, 'tcx> {
     fn specialized_decode(&mut self) -> Result<Lazy<T>, Self::Error> {
         self.read_lazy_with_meta(())
     }
 }
 
-impl<'a, 'tcx, T> SpecializedDecoder<Lazy<[T]>> for DecodeContext<'a, 'tcx> {
+impl<'a, 'tcx, T> SpecializedDecoder<Lazy<[T], usize>> for DecodeContext<'a, 'tcx> {
     fn specialized_decode(&mut self) -> Result<Lazy<[T]>, Self::Error> {
         let len = self.read_usize()?;
         if len == 0 { Ok(Lazy::empty()) } else { self.read_lazy_with_meta(len) }
     }
 }
 
-impl<'a, 'tcx, I: Idx, T> SpecializedDecoder<Lazy<Table<I, T>>> for DecodeContext<'a, 'tcx>
+impl<'a, 'tcx, I: Idx, T> SpecializedDecoder<Lazy<Table<I, T>, usize>> for DecodeContext<'a, 'tcx>
 where
     Option<T>: FixedSizeEncoding,
 {
@@ -429,19 +450,17 @@ impl<'a, 'tcx> SpecializedDecoder<Span> for DecodeContext<'a, 'tcx> {
         let imported_source_files = if tag == TAG_VALID_SPAN_LOCAL {
             self.cdata().imported_source_files(sess)
         } else {
-            // FIXME: We don't decode dependencies of proc-macros.
-            // Remove this once #69976 is merged
+            // When we encode a proc-macro crate, all `Span`s should be encoded
+            // with `TAG_VALID_SPAN_LOCAL`
             if self.cdata().root.is_proc_macro_crate() {
-                debug!(
-                    "SpecializedDecoder<Span>::specialized_decode: skipping span for proc-macro crate {:?}",
-                    self.cdata().cnum
-                );
                 // Decode `CrateNum` as u32 - using `CrateNum::decode` will ICE
                 // since we don't have `cnum_map` populated.
-                // This advances the decoder position so that we can continue
-                // to read metadata.
-                let _ = u32::decode(self)?;
-                return Ok(DUMMY_SP);
+                let cnum = u32::decode(self)?;
+                panic!(
+                    "Decoding of crate {:?} tried to access proc-macro dep {:?}",
+                    self.cdata().root.name,
+                    cnum
+                );
             }
             // tag is TAG_VALID_SPAN_FOREIGN, checked by `debug_assert` above
             let cnum = CrateNum::decode(self)?;
@@ -515,8 +534,9 @@ impl<'a, 'tcx> SpecializedDecoder<Fingerprint> for DecodeContext<'a, 'tcx> {
     }
 }
 
-impl<'a, 'tcx, T: Decodable> SpecializedDecoder<mir::ClearCrossCrate<T>>
-    for DecodeContext<'a, 'tcx>
+impl<'a, 'tcx, T> SpecializedDecoder<mir::ClearCrossCrate<T>> for DecodeContext<'a, 'tcx>
+where
+    mir::ClearCrossCrate<T>: UseSpecializedDecodable,
 {
     #[inline]
     fn specialized_decode(&mut self) -> Result<mir::ClearCrossCrate<T>, Self::Error> {
@@ -564,6 +584,7 @@ impl MetadataBlob {
 impl EntryKind {
     fn def_kind(&self) -> DefKind {
         match *self {
+            EntryKind::AnonConst(..) => DefKind::AnonConst,
             EntryKind::Const(..) => DefKind::Const,
             EntryKind::AssocConst(..) => DefKind::AssocConst,
             EntryKind::ImmStatic
@@ -579,7 +600,6 @@ impl EntryKind {
             EntryKind::ConstParam => DefKind::ConstParam,
             EntryKind::OpaqueTy => DefKind::OpaqueTy,
             EntryKind::AssocType(_) => DefKind::AssocTy,
-            EntryKind::AssocOpaqueTy(_) => DefKind::AssocOpaqueTy,
             EntryKind::Mod(_) => DefKind::Mod,
             EntryKind::Variant(_) => DefKind::Variant,
             EntryKind::Trait(_) => DefKind::Trait,
@@ -968,8 +988,13 @@ impl<'a, 'tcx> CrateMetadataRef<'a> {
                         DefKind::Macro(macro_kind(raw_macro)),
                         self.local_def_id(def_index),
                     );
-                    let ident = Ident::from_str(raw_macro.name());
-                    callback(Export { ident, res, vis: ty::Visibility::Public, span: DUMMY_SP });
+                    let ident = self.item_ident(def_index, sess);
+                    callback(Export {
+                        ident,
+                        res,
+                        vis: ty::Visibility::Public,
+                        span: self.get_span(def_index, sess),
+                    });
                 }
             }
             return;
@@ -1121,7 +1146,8 @@ impl<'a, 'tcx> CrateMetadataRef<'a> {
 
     fn mir_const_qualif(&self, id: DefIndex) -> mir::ConstQualifs {
         match self.kind(id) {
-            EntryKind::Const(qualif, _)
+            EntryKind::AnonConst(qualif, _)
+            | EntryKind::Const(qualif, _)
             | EntryKind::AssocConst(
                 AssocContainer::ImplDefault
                 | AssocContainer::ImplFinal
@@ -1145,7 +1171,6 @@ impl<'a, 'tcx> CrateMetadataRef<'a> {
                 (ty::AssocKind::Fn, data.container, data.has_self)
             }
             EntryKind::AssocType(container) => (ty::AssocKind::Type, container, false),
-            EntryKind::AssocOpaqueTy(container) => (ty::AssocKind::OpaqueTy, container, false),
             _ => bug!("cannot get associated-item of `{:?}`", def_key),
         };
 
@@ -1317,13 +1342,13 @@ impl<'a, 'tcx> CrateMetadataRef<'a> {
         }
     }
 
-    fn get_fn_param_names(&self, tcx: TyCtxt<'tcx>, id: DefIndex) -> &'tcx [Symbol] {
+    fn get_fn_param_names(&self, tcx: TyCtxt<'tcx>, id: DefIndex) -> &'tcx [Ident] {
         let param_names = match self.kind(id) {
             EntryKind::Fn(data) | EntryKind::ForeignFn(data) => data.decode(self).param_names,
             EntryKind::AssocFn(data) => data.decode(self).fn_data.param_names,
             _ => Lazy::empty(),
         };
-        tcx.arena.alloc_from_iter(param_names.decode(self))
+        tcx.arena.alloc_from_iter(param_names.decode((self, tcx)))
     }
 
     fn exported_symbols(
@@ -1341,7 +1366,9 @@ impl<'a, 'tcx> CrateMetadataRef<'a> {
 
     fn get_rendered_const(&self, id: DefIndex) -> String {
         match self.kind(id) {
-            EntryKind::Const(_, data) | EntryKind::AssocConst(_, _, data) => data.decode(self).0,
+            EntryKind::AnonConst(_, data)
+            | EntryKind::Const(_, data)
+            | EntryKind::AssocConst(_, _, data) => data.decode(self).0,
             _ => bug!(),
         }
     }
@@ -1471,15 +1498,22 @@ impl<'a, 'tcx> CrateMetadataRef<'a> {
 
             if let Some(virtual_dir) = virtual_rust_source_base_dir {
                 if let Some(real_dir) = &sess.real_rust_source_base_dir {
-                    if let rustc_span::FileName::Real(path) = name {
-                        if let Ok(rest) = path.strip_prefix(virtual_dir) {
-                            let new_path = real_dir.join(rest);
-                            debug!(
-                                "try_to_translate_virtual_to_real: `{}` -> `{}`",
-                                path.display(),
-                                new_path.display(),
-                            );
-                            *path = new_path;
+                    if let rustc_span::FileName::Real(old_name) = name {
+                        if let rustc_span::RealFileName::Named(one_path) = old_name {
+                            if let Ok(rest) = one_path.strip_prefix(virtual_dir) {
+                                let virtual_name = one_path.clone();
+                                let new_path = real_dir.join(rest);
+                                debug!(
+                                    "try_to_translate_virtual_to_real: `{}` -> `{}`",
+                                    virtual_name.display(),
+                                    new_path.display(),
+                                );
+                                let new_name = rustc_span::RealFileName::Devirtualized {
+                                    local_path: new_path,
+                                    virtual_name,
+                                };
+                                *old_name = new_name;
+                            }
                         }
                     }
                 }

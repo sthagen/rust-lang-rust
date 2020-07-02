@@ -3,7 +3,7 @@ use super::_match::WitnessPreference::*;
 use super::_match::{expand_pattern, is_useful, MatchCheckCtxt, Matrix, PatStack};
 use super::{PatCtxt, PatKind, PatternError};
 
-use arena::TypedArena;
+use rustc_arena::TypedArena;
 use rustc_ast::ast::Mutability;
 use rustc_errors::{error_code, struct_span_err, Applicability, DiagnosticBuilder};
 use rustc_hir as hir;
@@ -579,7 +579,7 @@ fn maybe_point_at_variant(ty: Ty<'_>, patterns: &[super::Pat<'_>]) -> Vec<Span> 
 
 /// Check if a by-value binding is by-value. That is, check if the binding's type is not `Copy`.
 fn is_binding_by_move(cx: &MatchVisitor<'_, '_>, hir_id: HirId, span: Span) -> bool {
-    !cx.tables.node_type(hir_id).is_copy_modulo_regions(cx.tcx, cx.param_env, span)
+    !cx.tables.node_type(hir_id).is_copy_modulo_regions(cx.tcx.at(span), cx.param_env)
 }
 
 /// Check the legality of legality of by-move bindings.

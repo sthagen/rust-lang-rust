@@ -19,7 +19,7 @@ use rustc_serialize::opaque::Encoder;
 use rustc_session::config::SymbolManglingVersion;
 use rustc_session::CrateDisambiguator;
 use rustc_span::edition::Edition;
-use rustc_span::symbol::Symbol;
+use rustc_span::symbol::{Ident, Symbol};
 use rustc_span::{self, Span};
 use rustc_target::spec::{PanicStrategy, TargetTriple};
 
@@ -192,7 +192,6 @@ crate struct CrateRoot<'tcx> {
     diagnostic_items: Lazy<[(Symbol, DefIndex)]>,
     native_libraries: Lazy<[NativeLib]>,
     foreign_modules: Lazy<[ForeignModule]>,
-    source_map: Lazy<[rustc_span::SourceFile]>,
     def_path_table: Lazy<rustc_hir::definitions::DefPathTable>,
     impls: Lazy<[TraitImpls]>,
     interpret_alloc_index: Lazy<[u32]>,
@@ -203,6 +202,7 @@ crate struct CrateRoot<'tcx> {
     proc_macro_data: Option<Lazy<[DefIndex]>>,
 
     exported_symbols: Lazy!([(ExportedSymbol<'tcx>, SymbolExportLevel)]),
+    source_map: Lazy<[rustc_span::SourceFile]>,
 
     compiler_builtins: bool,
     needs_allocator: bool,
@@ -281,6 +281,7 @@ define_tables! {
 
 #[derive(Copy, Clone, RustcEncodable, RustcDecodable)]
 enum EntryKind {
+    AnonConst(mir::ConstQualifs, Lazy<RenderedConst>),
     Const(mir::ConstQualifs, Lazy<RenderedConst>),
     ImmStatic,
     MutStatic,
@@ -308,7 +309,6 @@ enum EntryKind {
     Impl(Lazy<ImplData>),
     AssocFn(Lazy<AssocFnData>),
     AssocType(AssocContainer),
-    AssocOpaqueTy(AssocContainer),
     AssocConst(AssocContainer, mir::ConstQualifs, Lazy<RenderedConst>),
     TraitAlias,
 }
@@ -327,7 +327,7 @@ struct ModData {
 struct FnData {
     asyncness: hir::IsAsync,
     constness: hir::Constness,
-    param_names: Lazy<[Symbol]>,
+    param_names: Lazy<[Ident]>,
 }
 
 #[derive(RustcEncodable, RustcDecodable)]

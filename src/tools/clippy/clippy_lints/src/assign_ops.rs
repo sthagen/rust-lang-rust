@@ -24,7 +24,11 @@ declare_clippy_lint! {
     /// let mut a = 5;
     /// let b = 0;
     /// // ...
+    /// // Bad
     /// a = a + b;
+    ///
+    /// // Good
+    /// a += b;
     /// ```
     pub ASSIGN_OP_PATTERN,
     style,
@@ -78,8 +82,8 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for AssignOps {
             hir::ExprKind::Assign(assignee, e, _) => {
                 if let hir::ExprKind::Binary(op, l, r) = &e.kind {
                     let lint = |assignee: &hir::Expr<'_>, rhs: &hir::Expr<'_>| {
-                        let ty = cx.tables.expr_ty(assignee);
-                        let rty = cx.tables.expr_ty(rhs);
+                        let ty = cx.tables().expr_ty(assignee);
+                        let rty = cx.tables().expr_ty(rhs);
                         macro_rules! ops {
                             ($op:expr,
                              $cx:expr,
@@ -163,7 +167,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for AssignOps {
                         // a = b commutative_op a
                         // Limited to primitive type as these ops are know to be commutative
                         if SpanlessEq::new(cx).ignore_fn().eq_expr(assignee, r)
-                            && cx.tables.expr_ty(assignee).is_primitive_ty()
+                            && cx.tables().expr_ty(assignee).is_primitive_ty()
                         {
                             match op.node {
                                 hir::BinOpKind::Add

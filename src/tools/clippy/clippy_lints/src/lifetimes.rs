@@ -343,7 +343,7 @@ impl<'v, 't> RefVisitor<'v, 't> {
                 })
             {
                 let hir_id = ty.hir_id;
-                match self.cx.tables.qpath_res(qpath, hir_id) {
+                match self.cx.tables().qpath_res(qpath, hir_id) {
                     Res::Def(DefKind::TyAlias | DefKind::Struct, def_id) => {
                         let generics = self.cx.tcx.generics_of(def_id);
                         for _ in generics.params.as_slice() {
@@ -379,7 +379,7 @@ impl<'a, 'tcx> Visitor<'tcx> for RefVisitor<'a, 'tcx> {
             TyKind::Path(ref path) => {
                 self.collect_anonymous_lifetimes(path, ty);
             },
-            TyKind::Def(item, _) => {
+            TyKind::OpaqueDef(item, _) => {
                 let map = self.cx.tcx.hir();
                 if let ItemKind::OpaqueTy(ref exist_ty) = map.expect_item(item.id).kind {
                     for bound in exist_ty.bounds {

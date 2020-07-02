@@ -4,10 +4,8 @@
 
 use crate::check::FnCtxt;
 
-use rustc_data_structures::sync::Lrc;
 use rustc_errors::ErrorReported;
 use rustc_hir as hir;
-use rustc_hir::def_id::DefIdSet;
 use rustc_hir::intravisit::{self, NestedVisitorMap, Visitor};
 use rustc_infer::infer::error_reporting::TypeAnnotationNeeded::E0282;
 use rustc_infer::infer::InferCtxt;
@@ -67,10 +65,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         wbcx.visit_user_provided_sigs();
         wbcx.visit_generator_interior_types();
 
-        let used_trait_imports = mem::replace(
-            &mut self.tables.borrow_mut().used_trait_imports,
-            Lrc::new(DefIdSet::default()),
-        );
+        let used_trait_imports = mem::take(&mut self.tables.borrow_mut().used_trait_imports);
         debug!("used_trait_imports({:?}) = {:?}", item_def_id, used_trait_imports);
         wbcx.tables.used_trait_imports = used_trait_imports;
 
@@ -208,11 +203,10 @@ impl<'cx, 'tcx> WritebackCx<'cx, 'tcx> {
                     // to access an unexistend index. We assume that more relevant errors will
                     // already have been emitted, so we only gate on this with an ICE if no
                     // error has been emitted. (#64638)
-                    self.tcx().sess.delay_span_bug(
+                    self.fcx.tcx.ty_error_with_message(
                         e.span,
                         &format!("bad index {:?} for base: `{:?}`", index, base),
-                    );
-                    self.fcx.tcx.types.err
+                    )
                 });
                 let index_ty = self.fcx.resolve_vars_if_possible(&index_ty);
 
@@ -460,7 +454,7 @@ impl<'cx, 'tcx> WritebackCx<'cx, 'tcx> {
             let mut skip_add = false;
 
             if let ty::Opaque(defin_ty_def_id, _substs) = definition_ty.kind {
-                if let hir::OpaqueTyOrigin::TypeAlias = opaque_defn.origin {
+                if let hir::OpaqueTyOrigin::Misc = opaque_defn.origin {
                     if def_id == defin_ty_def_id {
                         debug!(
                             "skipping adding concrete definition for opaque type {:?} {:?}",
@@ -681,7 +675,7 @@ impl<'cx, 'tcx> TypeFolder<'tcx> for Resolver<'cx, 'tcx> {
                 debug!("Resolver::fold_ty: input type `{:?}` not fully resolvable", t);
                 self.report_type_error(t);
                 self.replaced_with_error = true;
-                self.tcx().types.err
+                self.tcx().ty_error()
             }
         }
     }
@@ -698,7 +692,7 @@ impl<'cx, 'tcx> TypeFolder<'tcx> for Resolver<'cx, 'tcx> {
                 debug!("Resolver::fold_const: input const `{:?}` not fully resolvable", ct);
                 self.report_const_error(ct);
                 self.replaced_with_error = true;
-                self.tcx().mk_const(ty::Const { val: ty::ConstKind::Error, ty: ct.ty })
+                self.tcx().const_error(ct.ty)
             }
         }
     }

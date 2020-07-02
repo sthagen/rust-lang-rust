@@ -2,7 +2,7 @@
 //! allows bidirectional lookup; i.e., given a value, one can easily find the
 //! type, and vice versa.
 
-use arena::DroplessArena;
+use rustc_arena::DroplessArena;
 use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher, ToStableHashKey};
 use rustc_macros::{symbols, HashStable_Generic};
@@ -120,6 +120,7 @@ symbols! {
         abi_unadjusted,
         abi_vectorcall,
         abi_x86_interrupt,
+        abi_avr_interrupt,
         abort,
         aborts,
         address,
@@ -158,6 +159,7 @@ symbols! {
         assume_init,
         async_await,
         async_closure,
+        atomics,
         attr,
         attributes,
         attr_literals,
@@ -226,6 +228,7 @@ symbols! {
         const_loop,
         const_mut_refs,
         const_panic,
+        const_precise_live_drops,
         const_raw_ptr_deref,
         const_raw_ptr_to_usize_cast,
         const_transmute,
@@ -238,6 +241,7 @@ symbols! {
         copy_closures,
         core,
         core_intrinsics,
+        count_code_region,
         crate_id,
         crate_in_paths,
         crate_local,
@@ -343,6 +347,7 @@ symbols! {
         from_method,
         from_ok,
         from_usize,
+        from_trait,
         fundamental,
         future,
         Future,
@@ -396,6 +401,7 @@ symbols! {
         infer_outlives_requirements,
         infer_static_outlives_requirements,
         inline,
+        Input,
         intel,
         into_iter,
         IntoIterator,
@@ -422,6 +428,7 @@ symbols! {
         lhs,
         lib,
         lifetime,
+        likely,
         line,
         link,
         linkage,
@@ -583,7 +590,12 @@ symbols! {
         proc_macro_mod,
         proc_macro_non_items,
         proc_macro_path_invoc,
+        ProceduralMasqueradeDummyType,
+        ProcMacroHack,
+        profiler_builtins,
         profiler_runtime,
+        ptr_guaranteed_eq,
+        ptr_guaranteed_ne,
         ptr_offset_from,
         pub_restricted,
         pure,
@@ -805,6 +817,7 @@ symbols! {
         underscore_lifetimes,
         uniform_paths,
         universal_impl_trait,
+        unlikely,
         unmarked_api,
         unreachable_code,
         unrestricted_attribute_tokens,
@@ -824,6 +837,7 @@ symbols! {
         v1,
         val,
         var,
+        variant_count,
         vec,
         Vec,
         version,

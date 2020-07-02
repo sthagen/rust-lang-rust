@@ -1,4 +1,5 @@
 use crate::abi::Size;
+use crate::spec::Target;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_macros::HashStable_Generic;
 use rustc_span::Symbol;
@@ -83,12 +84,13 @@ macro_rules! def_regs {
             pub fn parse(
                 _arch: super::InlineAsmArch,
                 mut _has_feature: impl FnMut(&str) -> bool,
+                _target: &crate::spec::Target,
                 name: &str,
             ) -> Result<Self, &'static str> {
                 match name {
                     $(
                         $($alias)|* | $reg_name => {
-                            $($filter(_arch, &mut _has_feature, false)?;)?
+                            $($filter(_arch, &mut _has_feature, _target, false)?;)?
                             Ok(Self::$reg)
                         }
                     )*
@@ -103,6 +105,7 @@ macro_rules! def_regs {
         pub(super) fn fill_reg_map(
             _arch: super::InlineAsmArch,
             mut _has_feature: impl FnMut(&str) -> bool,
+            _target: &crate::spec::Target,
             _map: &mut rustc_data_structures::fx::FxHashMap<
                 super::InlineAsmRegClass,
                 rustc_data_structures::fx::FxHashSet<super::InlineAsmReg>,
@@ -111,7 +114,7 @@ macro_rules! def_regs {
             #[allow(unused_imports)]
             use super::{InlineAsmReg, InlineAsmRegClass};
             $(
-                if $($filter(_arch, &mut _has_feature, true).is_ok() &&)? true {
+                if $($filter(_arch, &mut _has_feature, _target, true).is_ok() &&)? true {
                     if let Some(set) = _map.get_mut(&InlineAsmRegClass::$arch($arch_regclass::$class)) {
                         set.insert(InlineAsmReg::$arch($arch_reg::$reg));
                     }
@@ -148,12 +151,14 @@ macro_rules! types {
 
 mod aarch64;
 mod arm;
+mod hexagon;
 mod nvptx;
 mod riscv;
 mod x86;
 
 pub use aarch64::{AArch64InlineAsmReg, AArch64InlineAsmRegClass};
 pub use arm::{ArmInlineAsmReg, ArmInlineAsmRegClass};
+pub use hexagon::{HexagonInlineAsmReg, HexagonInlineAsmRegClass};
 pub use nvptx::{NvptxInlineAsmReg, NvptxInlineAsmRegClass};
 pub use riscv::{RiscVInlineAsmReg, RiscVInlineAsmRegClass};
 pub use x86::{X86InlineAsmReg, X86InlineAsmRegClass};
@@ -167,6 +172,7 @@ pub enum InlineAsmArch {
     RiscV32,
     RiscV64,
     Nvptx64,
+    Hexagon,
 }
 
 impl FromStr for InlineAsmArch {
@@ -181,6 +187,7 @@ impl FromStr for InlineAsmArch {
             "riscv32" => Ok(Self::RiscV32),
             "riscv64" => Ok(Self::RiscV64),
             "nvptx64" => Ok(Self::Nvptx64),
+            "hexagon" => Ok(Self::Hexagon),
             _ => Err(()),
         }
     }
@@ -203,6 +210,7 @@ pub enum InlineAsmReg {
     AArch64(AArch64InlineAsmReg),
     RiscV(RiscVInlineAsmReg),
     Nvptx(NvptxInlineAsmReg),
+    Hexagon(HexagonInlineAsmReg),
 }
 
 impl InlineAsmReg {
@@ -212,6 +220,7 @@ impl InlineAsmReg {
             Self::Arm(r) => r.name(),
             Self::AArch64(r) => r.name(),
             Self::RiscV(r) => r.name(),
+            Self::Hexagon(r) => r.name(),
         }
     }
 
@@ -221,12 +230,14 @@ impl InlineAsmReg {
             Self::Arm(r) => InlineAsmRegClass::Arm(r.reg_class()),
             Self::AArch64(r) => InlineAsmRegClass::AArch64(r.reg_class()),
             Self::RiscV(r) => InlineAsmRegClass::RiscV(r.reg_class()),
+            Self::Hexagon(r) => InlineAsmRegClass::Hexagon(r.reg_class()),
         }
     }
 
     pub fn parse(
         arch: InlineAsmArch,
         has_feature: impl FnMut(&str) -> bool,
+        target: &Target,
         name: Symbol,
     ) -> Result<Self, &'static str> {
         // FIXME: use direct symbol comparison for register names
@@ -234,17 +245,22 @@ impl InlineAsmReg {
         let name = name.as_str();
         Ok(match arch {
             InlineAsmArch::X86 | InlineAsmArch::X86_64 => {
-                Self::X86(X86InlineAsmReg::parse(arch, has_feature, &name)?)
+                Self::X86(X86InlineAsmReg::parse(arch, has_feature, target, &name)?)
             }
-            InlineAsmArch::Arm => Self::Arm(ArmInlineAsmReg::parse(arch, has_feature, &name)?),
+            InlineAsmArch::Arm => {
+                Self::Arm(ArmInlineAsmReg::parse(arch, has_feature, target, &name)?)
+            }
             InlineAsmArch::AArch64 => {
-                Self::AArch64(AArch64InlineAsmReg::parse(arch, has_feature, &name)?)
+                Self::AArch64(AArch64InlineAsmReg::parse(arch, has_feature, target, &name)?)
             }
             InlineAsmArch::RiscV32 | InlineAsmArch::RiscV64 => {
-                Self::RiscV(RiscVInlineAsmReg::parse(arch, has_feature, &name)?)
+                Self::RiscV(RiscVInlineAsmReg::parse(arch, has_feature, target, &name)?)
             }
             InlineAsmArch::Nvptx64 => {
-                Self::Nvptx(NvptxInlineAsmReg::parse(arch, has_feature, &name)?)
+                Self::Nvptx(NvptxInlineAsmReg::parse(arch, has_feature, target, &name)?)
+            }
+            InlineAsmArch::Hexagon => {
+                Self::Hexagon(HexagonInlineAsmReg::parse(arch, has_feature, target, &name)?)
             }
         })
     }
@@ -262,6 +278,7 @@ impl InlineAsmReg {
             Self::Arm(r) => r.emit(out, arch, modifier),
             Self::AArch64(r) => r.emit(out, arch, modifier),
             Self::RiscV(r) => r.emit(out, arch, modifier),
+            Self::Hexagon(r) => r.emit(out, arch, modifier),
         }
     }
 
@@ -271,6 +288,7 @@ impl InlineAsmReg {
             Self::Arm(r) => r.overlapping_regs(|r| cb(Self::Arm(r))),
             Self::AArch64(_) => cb(self),
             Self::RiscV(_) => cb(self),
+            Self::Hexagon(r) => r.overlapping_regs(|r| cb(Self::Hexagon(r))),
         }
     }
 }
@@ -292,6 +310,7 @@ pub enum InlineAsmRegClass {
     AArch64(AArch64InlineAsmRegClass),
     RiscV(RiscVInlineAsmRegClass),
     Nvptx(NvptxInlineAsmRegClass),
+    Hexagon(HexagonInlineAsmRegClass),
 }
 
 impl InlineAsmRegClass {
@@ -302,6 +321,7 @@ impl InlineAsmRegClass {
             Self::AArch64(r) => r.name(),
             Self::RiscV(r) => r.name(),
             Self::Nvptx(r) => r.name(),
+            Self::Hexagon(r) => r.name(),
         }
     }
 
@@ -315,6 +335,7 @@ impl InlineAsmRegClass {
             Self::AArch64(r) => r.suggest_class(arch, ty).map(InlineAsmRegClass::AArch64),
             Self::RiscV(r) => r.suggest_class(arch, ty).map(InlineAsmRegClass::RiscV),
             Self::Nvptx(r) => r.suggest_class(arch, ty).map(InlineAsmRegClass::Nvptx),
+            Self::Hexagon(r) => r.suggest_class(arch, ty).map(InlineAsmRegClass::Hexagon),
         }
     }
 
@@ -335,6 +356,7 @@ impl InlineAsmRegClass {
             Self::AArch64(r) => r.suggest_modifier(arch, ty),
             Self::RiscV(r) => r.suggest_modifier(arch, ty),
             Self::Nvptx(r) => r.suggest_modifier(arch, ty),
+            Self::Hexagon(r) => r.suggest_modifier(arch, ty),
         }
     }
 
@@ -351,6 +373,7 @@ impl InlineAsmRegClass {
             Self::AArch64(r) => r.default_modifier(arch),
             Self::RiscV(r) => r.default_modifier(arch),
             Self::Nvptx(r) => r.default_modifier(arch),
+            Self::Hexagon(r) => r.default_modifier(arch),
         }
     }
 
@@ -366,6 +389,7 @@ impl InlineAsmRegClass {
             Self::AArch64(r) => r.supported_types(arch),
             Self::RiscV(r) => r.supported_types(arch),
             Self::Nvptx(r) => r.supported_types(arch),
+            Self::Hexagon(r) => r.supported_types(arch),
         }
     }
 
@@ -384,6 +408,9 @@ impl InlineAsmRegClass {
                     Self::RiscV(RiscVInlineAsmRegClass::parse(arch, name)?)
                 }
                 InlineAsmArch::Nvptx64 => Self::Nvptx(NvptxInlineAsmRegClass::parse(arch, name)?),
+                InlineAsmArch::Hexagon => {
+                    Self::Hexagon(HexagonInlineAsmRegClass::parse(arch, name)?)
+                }
             })
         })
     }
@@ -397,6 +424,7 @@ impl InlineAsmRegClass {
             Self::AArch64(r) => r.valid_modifiers(arch),
             Self::RiscV(r) => r.valid_modifiers(arch),
             Self::Nvptx(r) => r.valid_modifiers(arch),
+            Self::Hexagon(r) => r.valid_modifiers(arch),
         }
     }
 }
@@ -514,31 +542,37 @@ impl fmt::Display for InlineAsmType {
 pub fn allocatable_registers(
     arch: InlineAsmArch,
     has_feature: impl FnMut(&str) -> bool,
+    target: &crate::spec::Target,
 ) -> FxHashMap<InlineAsmRegClass, FxHashSet<InlineAsmReg>> {
     match arch {
         InlineAsmArch::X86 | InlineAsmArch::X86_64 => {
             let mut map = x86::regclass_map();
-            x86::fill_reg_map(arch, has_feature, &mut map);
+            x86::fill_reg_map(arch, has_feature, target, &mut map);
             map
         }
         InlineAsmArch::Arm => {
             let mut map = arm::regclass_map();
-            arm::fill_reg_map(arch, has_feature, &mut map);
+            arm::fill_reg_map(arch, has_feature, target, &mut map);
             map
         }
         InlineAsmArch::AArch64 => {
             let mut map = aarch64::regclass_map();
-            aarch64::fill_reg_map(arch, has_feature, &mut map);
+            aarch64::fill_reg_map(arch, has_feature, target, &mut map);
             map
         }
         InlineAsmArch::RiscV32 | InlineAsmArch::RiscV64 => {
             let mut map = riscv::regclass_map();
-            riscv::fill_reg_map(arch, has_feature, &mut map);
+            riscv::fill_reg_map(arch, has_feature, target, &mut map);
             map
         }
         InlineAsmArch::Nvptx64 => {
             let mut map = nvptx::regclass_map();
-            nvptx::fill_reg_map(arch, has_feature, &mut map);
+            nvptx::fill_reg_map(arch, has_feature, target, &mut map);
+            map
+        }
+        InlineAsmArch::Hexagon => {
+            let mut map = hexagon::regclass_map();
+            hexagon::fill_reg_map(arch, has_feature, target, &mut map);
             map
         }
     }

@@ -184,6 +184,7 @@ def default_build_triple():
     ostype = require(["uname", "-s"], exit=required)
     cputype = require(['uname', '-m'], exit=required)
 
+    # If we do not have `uname`, assume Windows.
     if ostype is None or cputype is None:
         return 'x86_64-pc-windows-msvc'
 
@@ -236,6 +237,11 @@ def default_build_triple():
         if ostype.endswith('WOW64'):
             cputype = 'x86_64'
         ostype = 'pc-windows-gnu'
+    elif sys.platform == 'win32':
+        # Some Windows platforms might have a `uname` command that returns a
+        # non-standard string (e.g. gnuwin32 tools returns `windows32`). In
+        # these cases, fall back to using sys.platform.
+        return 'x86_64-pc-windows-msvc'
     else:
         err = "unknown OS type: {}".format(ostype)
         sys.exit(err)
@@ -893,15 +899,18 @@ def bootstrap(help_triggered):
     build.verbose = args.verbose
     build.clean = args.clean
 
-    try:
-        toml_path = args.config or 'config.toml'
+    # Read from `RUST_BOOTSTRAP_CONFIG`, then `--config`, then fallback to `config.toml` (if it
+    # exists).
+    toml_path = os.getenv('RUST_BOOTSTRAP_CONFIG') or args.config
+    if not toml_path and os.path.exists('config.toml'):
+        toml_path = 'config.toml'
+
+    if toml_path:
         if not os.path.exists(toml_path):
             toml_path = os.path.join(build.rust_root, toml_path)
 
         with open(toml_path) as config:
             build.config_toml = config.read()
-    except (OSError, IOError):
-        pass
 
     config_verbose = build.get_toml('verbose', 'build')
     if config_verbose is not None:
@@ -951,6 +960,8 @@ def bootstrap(help_triggered):
     env["RUSTC_BOOTSTRAP"] = '1'
     env["CARGO"] = build.cargo()
     env["RUSTC"] = build.rustc()
+    if toml_path:
+        env["BOOTSTRAP_CONFIG"] = toml_path
     if build.rustfmt():
         env["RUSTFMT"] = build.rustfmt()
     run(args, env=env, verbose=build.verbose)

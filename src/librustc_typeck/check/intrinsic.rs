@@ -74,9 +74,8 @@ pub fn intrinsic_operation_unsafety(intrinsic: &str) -> hir::Unsafety {
         | "wrapping_add" | "wrapping_sub" | "wrapping_mul" | "saturating_add"
         | "saturating_sub" | "rotate_left" | "rotate_right" | "ctpop" | "ctlz" | "cttz"
         | "bswap" | "bitreverse" | "discriminant_value" | "type_id" | "likely" | "unlikely"
-        | "minnumf32" | "minnumf64" | "maxnumf32" | "maxnumf64" | "type_name" => {
-            hir::Unsafety::Normal
-        }
+        | "ptr_guaranteed_eq" | "ptr_guaranteed_ne" | "minnumf32" | "minnumf64" | "maxnumf32"
+        | "maxnumf64" | "type_name" | "variant_count" => hir::Unsafety::Normal,
         _ => hir::Unsafety::Unsafe,
     }
 }
@@ -138,7 +137,9 @@ pub fn check_intrinsic_type(tcx: TyCtxt<'_>, it: &hir::ForeignItem<'_>) {
         let unsafety = intrinsic_operation_unsafety(&name[..]);
         let (n_tps, inputs, output) = match &name[..] {
             "breakpoint" => (0, Vec::new(), tcx.mk_unit()),
-            "size_of" | "pref_align_of" | "min_align_of" => (1, Vec::new(), tcx.types.usize),
+            "size_of" | "pref_align_of" | "min_align_of" | "variant_count" => {
+                (1, Vec::new(), tcx.types.usize)
+            }
             "size_of_val" | "min_align_of_val" => {
                 (1, vec![tcx.mk_imm_ptr(param(0))], tcx.types.usize)
             }
@@ -258,6 +259,10 @@ pub fn check_intrinsic_type(tcx: TyCtxt<'_>, it: &hir::ForeignItem<'_>) {
                 (1, vec![param(0), param(0)], tcx.intern_tup(&[param(0), tcx.types.bool]))
             }
 
+            "ptr_guaranteed_eq" | "ptr_guaranteed_ne" => {
+                (1, vec![tcx.mk_imm_ptr(param(0)), tcx.mk_imm_ptr(param(0))], tcx.types.bool)
+            }
+
             "ptr_offset_from" => {
                 (1, vec![tcx.mk_imm_ptr(param(0)), tcx.mk_imm_ptr(param(0))], tcx.types.isize)
             }
@@ -346,6 +351,8 @@ pub fn check_intrinsic_type(tcx: TyCtxt<'_>, it: &hir::ForeignItem<'_>) {
                 // so it's not trivial to check this
                 return;
             }
+
+            "count_code_region" => (0, vec![tcx.types.u32], tcx.mk_unit()),
 
             ref other => {
                 struct_span_err!(
