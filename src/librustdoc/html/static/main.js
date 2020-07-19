@@ -112,9 +112,11 @@ function defocusSearchBar() {
     }
 
     function getPageId() {
-        var id = document.location.href.split("#")[1];
-        if (id) {
-            return id.split("?")[0].split("&")[0];
+        if (window.location.hash) {
+            var tmp = window.location.hash.replace(/^#/, "");
+            if (tmp.length > 0) {
+                return tmp;
+            }
         }
         return null;
     }
@@ -2241,8 +2243,7 @@ function defocusSearchBar() {
                 relatedDoc = relatedDoc.nextElementSibling;
             }
 
-            if ((!relatedDoc && hasClass(docblock, "docblock") === false) ||
-                (pageId && document.getElementById(pageId))) {
+            if (!relatedDoc && hasClass(docblock, "docblock") === false) {
                 return;
             }
 
@@ -2362,6 +2363,7 @@ function defocusSearchBar() {
     (function() {
         var toggle = createSimpleToggle(false);
         var hideMethodDocs = getCurrentValue("rustdoc-auto-hide-method-docs") === "true";
+        var hideImplementors = getCurrentValue("rustdoc-auto-collapse-implementors") !== "false";
         var pageId = getPageId();
 
         var func = function(e) {
@@ -2391,7 +2393,13 @@ function defocusSearchBar() {
             if (hasClass(e, "impl") &&
                 (next.getElementsByClassName("method").length > 0 ||
                  next.getElementsByClassName("associatedconstant").length > 0)) {
-                insertAfter(toggle.cloneNode(true), e.childNodes[e.childNodes.length - 1]);
+                var newToggle = toggle.cloneNode(true);
+                insertAfter(newToggle, e.childNodes[e.childNodes.length - 1]);
+                // In case the option "auto-collapse implementors" is not set to false, we collapse
+                // all implementors.
+                if (hideImplementors === true && e.parentNode.id === "implementors-list") {
+                    collapseDocs(newToggle, "hide", pageId);
+                }
             }
         };
 
@@ -2551,6 +2559,13 @@ function defocusSearchBar() {
 
         onEachLazy(document.getElementsByClassName("docblock"), buildToggleWrapper);
         onEachLazy(document.getElementsByClassName("sub-variant"), buildToggleWrapper);
+        var pageId = getPageId();
+
+        autoCollapse(pageId, getCurrentValue("rustdoc-collapse") === "true");
+
+        if (pageId !== null) {
+            expandSection(pageId);
+        }
     }());
 
     function createToggleWrapper(tog) {
@@ -2621,6 +2636,13 @@ function defocusSearchBar() {
         });
     }());
 
+    onEachLazy(document.getElementsByClassName("important-traits"), function(e) {
+        e.onclick = function() {
+            this.getElementsByClassName('important-traits-tooltiptext')[0]
+                .classList.toggle("force-tooltip");
+        };
+    });
+
     // In the search display, allows to switch between tabs.
     function printTab(nb) {
         if (nb === 0 || nb === 1 || nb === 2) {
@@ -2685,12 +2707,6 @@ function defocusSearchBar() {
     window.onresize = function() {
         hideSidebar();
     };
-
-    autoCollapse(getPageId(), getCurrentValue("rustdoc-collapse") === "true");
-
-    if (window.location.hash && window.location.hash.length > 0) {
-        expandSection(window.location.hash.replace(/^#/, ""));
-    }
 
     if (main) {
         onEachLazy(main.getElementsByClassName("loading-content"), function(e) {

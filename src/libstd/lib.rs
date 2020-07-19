@@ -85,8 +85,9 @@
 //! # Contributing changes to the documentation
 //!
 //! Check out the rust contribution guidelines [here](
-//! https://github.com/rust-lang/rust/blob/master/CONTRIBUTING.md).
-//! The source for this documentation can be found on [Github](https://github.com/rust-lang).
+//! https://rustc-dev-guide.rust-lang.org/getting-started.html).
+//! The source for this documentation can be found on
+//! [GitHub](https://github.com/rust-lang/rust).
 //! To contribute changes, make sure you read the guidelines first, then submit
 //! pull-requests for your suggested changes.
 //!
@@ -197,7 +198,8 @@
 //! [primitive types]: ../book/ch03-02-data-types.html
 //! [rust-discord]: https://discord.gg/rust-lang
 
-#![stable(feature = "rust1", since = "1.0.0")]
+#![cfg_attr(not(feature = "restricted-std"), stable(feature = "rust1", since = "1.0.0"))]
+#![cfg_attr(feature = "restricted-std", unstable(feature = "restricted_std", issue = "none"))]
 #![doc(
     html_root_url = "https://doc.rust-lang.org/nightly/",
     html_playground_url = "https://play.rust-lang.org/",
@@ -242,8 +244,8 @@
 #![feature(atomic_mut_ptr)]
 #![feature(box_syntax)]
 #![feature(c_variadic)]
-#![feature(cfg_accessible)]
 #![feature(can_vector)]
+#![feature(cfg_accessible)]
 #![feature(cfg_target_has_atomic)]
 #![feature(cfg_target_thread_local)]
 #![feature(char_error_internals)]
@@ -260,6 +262,7 @@
 #![feature(doc_cfg)]
 #![feature(doc_keyword)]
 #![feature(doc_masked)]
+#![cfg_attr(not(bootstrap), feature(doc_spotlight))]
 #![feature(dropck_eyepatch)]
 #![feature(duration_constants)]
 #![feature(exact_size_is_empty)]
@@ -276,20 +279,23 @@
 #![feature(hashmap_internals)]
 #![feature(int_error_internals)]
 #![feature(int_error_matching)]
-#![feature(into_future)]
 #![feature(integer_atomics)]
+#![feature(into_future)]
 #![feature(lang_items)]
 #![feature(libc)]
 #![feature(link_args)]
 #![feature(linkage)]
 #![feature(llvm_asm)]
 #![feature(log_syntax)]
+#![feature(maybe_uninit_extra)]
 #![feature(maybe_uninit_ref)]
 #![feature(maybe_uninit_slice)]
+#![feature(min_specialization)]
 #![feature(needs_panic_runtime)]
 #![feature(negative_impls)]
 #![feature(never_type)]
 #![feature(nll)]
+#![feature(once_cell)]
 #![feature(optin_builtin_traits)]
 #![feature(or_patterns)]
 #![feature(panic_info_message)]
@@ -305,7 +311,7 @@
 #![feature(shrink_to)]
 #![feature(slice_concat_ext)]
 #![feature(slice_internals)]
-#![feature(min_specialization)]
+#![feature(slice_strip)]
 #![feature(staged_api)]
 #![feature(std_internals)]
 #![feature(stdsimd)]
@@ -316,7 +322,6 @@
 #![feature(toowned_clone_into)]
 #![feature(total_cmp)]
 #![feature(trace_macros)]
-#![cfg_attr(bootstrap, feature(track_caller))]
 #![feature(try_reserve)]
 #![feature(unboxed_closures)]
 #![feature(unsafe_block_in_unsafe_fn)]
@@ -474,6 +479,9 @@ pub mod process;
 pub mod sync;
 pub mod time;
 
+#[unstable(feature = "once_cell", issue = "74465")]
+pub mod lazy;
+
 #[stable(feature = "futures_api", since = "1.36.0")]
 pub mod task {
     //! Types and Traits for working with asynchronous tasks.
@@ -504,6 +512,10 @@ mod panicking;
 // The runtime entry point and a few unstable public functions used by the
 // compiler
 pub mod rt;
+
+#[path = "../backtrace/src/lib.rs"]
+#[allow(dead_code, unused_attributes)]
+mod backtrace_rs;
 
 // Pull in the `std_detect` crate directly into libstd. The contents of
 // `std_detect` are in a different repository: rust-lang/stdarch.
@@ -551,3 +563,9 @@ include!("primitive_docs.rs");
 // the rustdoc documentation for the existing keywords. Using `include!`
 // because rustdoc only looks for these modules at the crate level.
 include!("keyword_docs.rs");
+
+// This is required to avoid an unstable error when `restricted-std` is not
+// enabled. The use of #![feature(restricted_std)] in rustc-std-workspace-std
+// is unconditional, so the unstable feature needs to be defined somewhere.
+#[cfg_attr(not(feature = "restricted-std"), unstable(feature = "restricted_std", issue = "none"))]
+mod __restricted_std_workaround {}

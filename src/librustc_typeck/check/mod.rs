@@ -51,7 +51,7 @@ and `fcx.expr_ty()` / `fcx.node_ty()` to write/obtain the types of
 nodes within the function.
 
 The types of top-level items, which never contain unbound type
-variables, are stored directly into the `tcx` tables.
+variables, are stored directly into the `tcx` typeck_results.
 
 N.B., a type variable is not the same thing as a type parameter.  A
 type variable is rather an "instance" of a type parameter: that is,
@@ -103,7 +103,7 @@ use rustc_hir::itemlikevisit::ItemLikeVisitor;
 use rustc_hir::lang_items::{
     FutureTraitLangItem, PinTypeLangItem, SizedTraitLangItem, VaListTypeLangItem,
 };
-use rustc_hir::{ExprKind, GenericArg, HirIdMap, Item, ItemKind, Node, PatKind, QPath};
+use rustc_hir::{ExprKind, GenericArg, HirIdMap, ItemKind, Node, PatKind, QPath};
 use rustc_index::bit_set::BitSet;
 use rustc_index::vec::Idx;
 use rustc_infer::infer;
@@ -182,24 +182,28 @@ pub struct LocalTy<'tcx> {
     revealed_ty: Ty<'tcx>,
 }
 
-/// A wrapper for `InferCtxt`'s `in_progress_tables` field.
+/// A wrapper for `InferCtxt`'s `in_progress_typeck_results` field.
 #[derive(Copy, Clone)]
 struct MaybeInProgressTables<'a, 'tcx> {
-    maybe_tables: Option<&'a RefCell<ty::TypeckTables<'tcx>>>,
+    maybe_typeck_results: Option<&'a RefCell<ty::TypeckResults<'tcx>>>,
 }
 
 impl<'a, 'tcx> MaybeInProgressTables<'a, 'tcx> {
-    fn borrow(self) -> Ref<'a, ty::TypeckTables<'tcx>> {
-        match self.maybe_tables {
-            Some(tables) => tables.borrow(),
-            None => bug!("MaybeInProgressTables: inh/fcx.tables.borrow() with no tables"),
+    fn borrow(self) -> Ref<'a, ty::TypeckResults<'tcx>> {
+        match self.maybe_typeck_results {
+            Some(typeck_results) => typeck_results.borrow(),
+            None => bug!(
+                "MaybeInProgressTables: inh/fcx.typeck_results.borrow() with no typeck results"
+            ),
         }
     }
 
-    fn borrow_mut(self) -> RefMut<'a, ty::TypeckTables<'tcx>> {
-        match self.maybe_tables {
-            Some(tables) => tables.borrow_mut(),
-            None => bug!("MaybeInProgressTables: inh/fcx.tables.borrow_mut() with no tables"),
+    fn borrow_mut(self) -> RefMut<'a, ty::TypeckResults<'tcx>> {
+        match self.maybe_typeck_results {
+            Some(typeck_results) => typeck_results.borrow_mut(),
+            None => bug!(
+                "MaybeInProgressTables: inh/fcx.typeck_results.borrow_mut() with no typeck results"
+            ),
         }
     }
 }
@@ -216,7 +220,7 @@ impl<'a, 'tcx> MaybeInProgressTables<'a, 'tcx> {
 pub struct Inherited<'a, 'tcx> {
     infcx: InferCtxt<'a, 'tcx>,
 
-    tables: MaybeInProgressTables<'a, 'tcx>,
+    typeck_results: MaybeInProgressTables<'a, 'tcx>,
 
     locals: RefCell<HirIdMap<LocalTy<'tcx>>>,
 
@@ -645,7 +649,7 @@ impl Inherited<'_, 'tcx> {
         let hir_owner = tcx.hir().local_def_id_to_hir_id(def_id).owner;
 
         InheritedBuilder {
-            infcx: tcx.infer_ctxt().with_fresh_in_progress_tables(hir_owner),
+            infcx: tcx.infer_ctxt().with_fresh_in_progress_typeck_results(hir_owner),
             def_id,
         }
     }
@@ -668,7 +672,9 @@ impl Inherited<'a, 'tcx> {
         let body_id = tcx.hir().maybe_body_owned_by(item_id);
 
         Inherited {
-            tables: MaybeInProgressTables { maybe_tables: infcx.in_progress_tables },
+            typeck_results: MaybeInProgressTables {
+                maybe_typeck_results: infcx.in_progress_typeck_results,
+            },
             infcx,
             fulfillment_cx: RefCell::new(TraitEngine::new(tcx)),
             locals: RefCell::new(Default::default()),
@@ -744,7 +750,7 @@ fn check_mod_item_types(tcx: TyCtxt<'_>, module_def_id: LocalDefId) {
 fn typeck_item_bodies(tcx: TyCtxt<'_>, crate_num: CrateNum) {
     debug_assert!(crate_num == LOCAL_CRATE);
     tcx.par_body_owners(|body_owner_def_id| {
-        tcx.ensure().typeck_tables_of(body_owner_def_id);
+        tcx.ensure().typeck(body_owner_def_id);
     });
 }
 
@@ -760,13 +766,14 @@ fn check_impl_item_well_formed(tcx: TyCtxt<'_>, def_id: LocalDefId) {
     wfcheck::check_impl_item(tcx, def_id);
 }
 
-pub fn provide(providers: &mut Providers<'_>) {
+pub fn provide(providers: &mut Providers) {
     method::provide(providers);
     *providers = Providers {
         typeck_item_bodies,
-        typeck_tables_of,
-        diagnostic_only_typeck_tables_of,
-        has_typeck_tables,
+        typeck_const_arg,
+        typeck,
+        diagnostic_only_typeck,
+        has_typeck_results,
         adt_destructor,
         used_trait_imports,
         check_item_well_formed,
@@ -786,10 +793,10 @@ fn adt_destructor(tcx: TyCtxt<'_>, def_id: DefId) -> Option<ty::Destructor> {
 /// it's body-id, fn-header and fn-decl (if any). Otherwise,
 /// returns `None`.
 ///
-/// If this function returns `Some`, then `typeck_tables(def_id)` will
-/// succeed; if it returns `None`, then `typeck_tables(def_id)` may or
+/// If this function returns `Some`, then `typeck_results(def_id)` will
+/// succeed; if it returns `None`, then `typeck_results(def_id)` may or
 /// may not succeed. In some cases where this function returns `None`
-/// (notably closures), `typeck_tables(def_id)` would wind up
+/// (notably closures), `typeck_results(def_id)` would wind up
 /// redirecting to the owning function.
 fn primary_body_of(
     tcx: TyCtxt<'_>,
@@ -824,12 +831,12 @@ fn primary_body_of(
     }
 }
 
-fn has_typeck_tables(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
-    // Closures' tables come from their outermost function,
+fn has_typeck_results(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
+    // Closures' typeck results come from their outermost function,
     // as they are part of the same "inference environment".
     let outer_def_id = tcx.closure_base_def_id(def_id);
     if outer_def_id != def_id {
-        return tcx.has_typeck_tables(outer_def_id);
+        return tcx.has_typeck_results(outer_def_id);
     }
 
     if let Some(def_id) = def_id.as_local() {
@@ -841,7 +848,7 @@ fn has_typeck_tables(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
 }
 
 fn used_trait_imports(tcx: TyCtxt<'_>, def_id: LocalDefId) -> &FxHashSet<LocalDefId> {
-    &*tcx.typeck_tables_of(def_id).used_trait_imports
+    &*tcx.typeck(def_id).used_trait_imports
 }
 
 /// Inspects the substs of opaque types, replacing any inference variables
@@ -955,34 +962,43 @@ where
     val.fold_with(&mut FixupFolder { tcx })
 }
 
-fn typeck_tables_of<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> &ty::TypeckTables<'tcx> {
-    let fallback = move || tcx.type_of(def_id.to_def_id());
-    typeck_tables_of_with_fallback(tcx, def_id, fallback)
+fn typeck_const_arg<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    (did, param_did): (LocalDefId, DefId),
+) -> &ty::TypeckResults<'tcx> {
+    let fallback = move || tcx.type_of(param_did);
+    typeck_with_fallback(tcx, did, fallback)
 }
 
-/// Used only to get `TypeckTables` for type inference during error recovery.
+fn typeck<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> &ty::TypeckResults<'tcx> {
+    if let Some(param_did) = tcx.opt_const_param_of(def_id) {
+        tcx.typeck_const_arg((def_id, param_did))
+    } else {
+        let fallback = move || tcx.type_of(def_id.to_def_id());
+        typeck_with_fallback(tcx, def_id, fallback)
+    }
+}
+
+/// Used only to get `TypeckResults` for type inference during error recovery.
 /// Currently only used for type inference of `static`s and `const`s to avoid type cycle errors.
-fn diagnostic_only_typeck_tables_of<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    def_id: LocalDefId,
-) -> &ty::TypeckTables<'tcx> {
+fn diagnostic_only_typeck<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> &ty::TypeckResults<'tcx> {
     let fallback = move || {
         let span = tcx.hir().span(tcx.hir().as_local_hir_id(def_id));
         tcx.ty_error_with_message(span, "diagnostic only typeck table used")
     };
-    typeck_tables_of_with_fallback(tcx, def_id, fallback)
+    typeck_with_fallback(tcx, def_id, fallback)
 }
 
-fn typeck_tables_of_with_fallback<'tcx>(
+fn typeck_with_fallback<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: LocalDefId,
     fallback: impl Fn() -> Ty<'tcx> + 'tcx,
-) -> &'tcx ty::TypeckTables<'tcx> {
-    // Closures' tables come from their outermost function,
+) -> &'tcx ty::TypeckResults<'tcx> {
+    // Closures' typeck results come from their outermost function,
     // as they are part of the same "inference environment".
     let outer_def_id = tcx.closure_base_def_id(def_id.to_def_id()).expect_local();
     if outer_def_id != def_id {
-        return tcx.typeck_tables_of(outer_def_id);
+        return tcx.typeck(outer_def_id);
     }
 
     let id = tcx.hir().as_local_hir_id(def_id);
@@ -994,7 +1010,7 @@ fn typeck_tables_of_with_fallback<'tcx>(
     });
     let body = tcx.hir().body(body_id);
 
-    let tables = Inherited::build(tcx, def_id).enter(|inh| {
+    let typeck_results = Inherited::build(tcx, def_id).enter(|inh| {
         let param_env = tcx.param_env(def_id);
         let fcx = if let (Some(header), Some(decl)) = (fn_header, fn_decl) {
             let fn_sig = if crate::collect::get_infer_ret_ty(&decl.output).is_some() {
@@ -1124,11 +1140,11 @@ fn typeck_tables_of_with_fallback<'tcx>(
         fcx.resolve_type_vars_in_body(body)
     });
 
-    // Consistency check our TypeckTables instance can hold all ItemLocalIds
+    // Consistency check our TypeckResults instance can hold all ItemLocalIds
     // it will need to hold.
-    assert_eq!(tables.hir_owner, id.owner);
+    assert_eq!(typeck_results.hir_owner, id.owner);
 
-    tables
+    typeck_results
 }
 
 fn check_abi(tcx: TyCtxt<'_>, span: Span, abi: Abi) {
@@ -1201,7 +1217,11 @@ impl<'a, 'tcx> Visitor<'tcx> for GatherLocalsVisitor<'a, 'tcx> {
                     "visit_local: ty.hir_id={:?} o_ty={:?} revealed_ty={:?} c_ty={:?}",
                     ty.hir_id, o_ty, revealed_ty, c_ty
                 );
-                self.fcx.tables.borrow_mut().user_provided_types_mut().insert(ty.hir_id, c_ty);
+                self.fcx
+                    .typeck_results
+                    .borrow_mut()
+                    .user_provided_types_mut()
+                    .insert(ty.hir_id, c_ty);
 
                 Some(LocalTy { decl_ty: o_ty, revealed_ty })
             }
@@ -1321,8 +1341,8 @@ fn check_fn<'a, 'tcx>(
         fcx.resume_yield_tys = Some((resume_ty, yield_ty));
     }
 
-    let outer_def_id = tcx.closure_base_def_id(hir.local_def_id(fn_id).to_def_id());
-    let outer_hir_id = hir.as_local_hir_id(outer_def_id.expect_local());
+    let outer_def_id = tcx.closure_base_def_id(hir.local_def_id(fn_id).to_def_id()).expect_local();
+    let outer_hir_id = hir.as_local_hir_id(outer_def_id);
     GatherLocalsVisitor { fcx: &fcx, parent_id: outer_hir_id }.visit_body(body);
 
     // C-variadic fns also have a `VaList` input that's not listed in `fn_sig`
@@ -1342,20 +1362,21 @@ fn check_fn<'a, 'tcx>(
     let inputs_fn = fn_sig.inputs().iter().copied();
     for (idx, (param_ty, param)) in inputs_fn.chain(maybe_va_list).zip(body.params).enumerate() {
         // Check the pattern.
-        fcx.check_pat_top(&param.pat, param_ty, try { inputs_hir?.get(idx)?.span }, false);
+        let ty_span = try { inputs_hir?.get(idx)?.span };
+        fcx.check_pat_top(&param.pat, param_ty, ty_span, false);
 
         // Check that argument is Sized.
         // The check for a non-trivial pattern is a hack to avoid duplicate warnings
         // for simple cases like `fn foo(x: Trait)`,
         // where we would error once on the parameter as a whole, and once on the binding `x`.
         if param.pat.simple_ident().is_none() && !tcx.features().unsized_locals {
-            fcx.require_type_is_sized(param_ty, param.pat.span, traits::SizedArgumentType);
+            fcx.require_type_is_sized(param_ty, param.pat.span, traits::SizedArgumentType(ty_span));
         }
 
         fcx.write_ty(param.hir_id, param_ty);
     }
 
-    inherited.tables.borrow_mut().liberated_fn_sigs_mut().insert(fn_id, fn_sig);
+    inherited.typeck_results.borrow_mut().liberated_fn_sigs_mut().insert(fn_id, fn_sig);
 
     if let ty::Dynamic(..) = declared_ret_ty.kind {
         // FIXME: We need to verify that the return type is `Sized` after the return expression has
@@ -1744,17 +1765,17 @@ fn opaque_type_cycle_error(tcx: TyCtxt<'tcx>, def_id: LocalDefId, span: Span) {
 
     let mut label = false;
     if let Some((hir_id, visitor)) = get_owner_return_paths(tcx, def_id) {
-        let tables = tcx.typeck_tables_of(tcx.hir().local_def_id(hir_id));
+        let typeck_results = tcx.typeck(tcx.hir().local_def_id(hir_id));
         if visitor
             .returns
             .iter()
-            .filter_map(|expr| tables.node_type_opt(expr.hir_id))
+            .filter_map(|expr| typeck_results.node_type_opt(expr.hir_id))
             .all(|ty| matches!(ty.kind, ty::Never))
         {
             let spans = visitor
                 .returns
                 .iter()
-                .filter(|expr| tables.node_type_opt(expr.hir_id).is_some())
+                .filter(|expr| typeck_results.node_type_opt(expr.hir_id).is_some())
                 .map(|expr| expr.span)
                 .collect::<Vec<Span>>();
             let span_len = spans.len();
@@ -1777,7 +1798,7 @@ fn opaque_type_cycle_error(tcx: TyCtxt<'tcx>, def_id: LocalDefId, span: Span) {
             for (sp, ty) in visitor
                 .returns
                 .iter()
-                .filter_map(|e| tables.node_type_opt(e.hir_id).map(|t| (e.span, t)))
+                .filter_map(|e| typeck_results.node_type_opt(e.hir_id).map(|t| (e.span, t)))
                 .filter(|(_, ty)| !matches!(ty.kind, ty::Never))
             {
                 struct VisitTypes(Vec<DefId>);
@@ -1847,9 +1868,9 @@ fn binding_opaque_type_cycle_error(
                 ..
             }) => {
                 let hir_id = tcx.hir().as_local_hir_id(def_id);
-                let tables =
-                    tcx.typeck_tables_of(tcx.hir().local_def_id(tcx.hir().get_parent_item(hir_id)));
-                if let Some(ty) = tables.node_type_opt(expr.hir_id) {
+                let typeck_results =
+                    tcx.typeck(tcx.hir().local_def_id(tcx.hir().get_parent_item(hir_id)));
+                if let Some(ty) = typeck_results.node_type_opt(expr.hir_id) {
                     err.span_label(
                         expr.span,
                         &format!(
@@ -1917,11 +1938,11 @@ pub fn check_item_type<'tcx>(tcx: TyCtxt<'tcx>, it: &'tcx hir::Item<'tcx>) {
         // Consts can play a role in type-checking, so they are included here.
         hir::ItemKind::Static(..) => {
             let def_id = tcx.hir().local_def_id(it.hir_id);
-            tcx.ensure().typeck_tables_of(def_id);
+            tcx.ensure().typeck(def_id);
             maybe_check_static_with_link_section(tcx, def_id, it.span);
         }
         hir::ItemKind::Const(..) => {
-            tcx.ensure().typeck_tables_of(tcx.hir().local_def_id(it.hir_id));
+            tcx.ensure().typeck(tcx.hir().local_def_id(it.hir_id));
         }
         hir::ItemKind::Enum(ref enum_definition, _) => {
             check_enum(tcx, it.span, &enum_definition.variants, it.hir_id);
@@ -2624,34 +2645,31 @@ fn check_packed(tcx: TyCtxt<'_>, sp: Span, def: &ty::AdtDef) {
                     "packed type cannot transitively contain a `#[repr(align)]` type"
                 );
 
-                let hir = tcx.hir();
-                let hir_id = hir.as_local_hir_id(def_spans[0].0.expect_local());
-                if let Node::Item(Item { ident, .. }) = hir.get(hir_id) {
-                    err.span_note(
-                        tcx.def_span(def_spans[0].0),
-                        &format!("`{}` has a `#[repr(align)]` attribute", ident),
-                    );
-                }
+                err.span_note(
+                    tcx.def_span(def_spans[0].0),
+                    &format!(
+                        "`{}` has a `#[repr(align)]` attribute",
+                        tcx.item_name(def_spans[0].0)
+                    ),
+                );
 
                 if def_spans.len() > 2 {
                     let mut first = true;
                     for (adt_def, span) in def_spans.iter().skip(1).rev() {
-                        let hir_id = hir.as_local_hir_id(adt_def.expect_local());
-                        if let Node::Item(Item { ident, .. }) = hir.get(hir_id) {
-                            err.span_note(
-                                *span,
-                                &if first {
-                                    format!(
-                                        "`{}` contains a field of type `{}`",
-                                        tcx.type_of(def.did),
-                                        ident
-                                    )
-                                } else {
-                                    format!("...which contains a field of type `{}`", ident)
-                                },
-                            );
-                            first = false;
-                        }
+                        let ident = tcx.item_name(*adt_def);
+                        err.span_note(
+                            *span,
+                            &if first {
+                                format!(
+                                    "`{}` contains a field of type `{}`",
+                                    tcx.type_of(def.did),
+                                    ident
+                                )
+                            } else {
+                                format!("...which contains a field of type `{}`", ident)
+                            },
+                        );
+                        first = false;
                     }
                 }
 
@@ -2832,7 +2850,7 @@ pub fn check_enum<'tcx>(
 
     for v in vs {
         if let Some(ref e) = v.disr_expr {
-            tcx.ensure().typeck_tables_of(tcx.hir().local_def_id(e.hir_id));
+            tcx.ensure().typeck(tcx.hir().local_def_id(e.hir_id));
         }
     }
 
@@ -2927,18 +2945,20 @@ impl<'a, 'tcx> AstConv<'tcx> for FnCtxt<'a, 'tcx> {
         let index = generics.param_def_id_to_index[&def_id];
         ty::GenericPredicates {
             parent: None,
-            predicates: tcx.arena.alloc_from_iter(self.param_env.caller_bounds.iter().filter_map(
-                |predicate| match predicate.kind() {
-                    ty::PredicateKind::Trait(ref data, _)
-                        if data.skip_binder().self_ty().is_param(index) =>
-                    {
-                        // HACK(eddyb) should get the original `Span`.
-                        let span = tcx.def_span(def_id);
-                        Some((predicate, span))
+            predicates: tcx.arena.alloc_from_iter(
+                self.param_env.caller_bounds().iter().filter_map(|predicate| {
+                    match predicate.kind() {
+                        ty::PredicateKind::Trait(ref data, _)
+                            if data.skip_binder().self_ty().is_param(index) =>
+                        {
+                            // HACK(eddyb) should get the original `Span`.
+                            let span = tcx.def_span(def_id);
+                            Some((predicate, span))
+                        }
+                        _ => None,
                     }
-                    _ => None,
-                },
-            )),
+                }),
+            ),
         }
     }
 
@@ -3199,7 +3219,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             self.resolve_vars_if_possible(&ty),
             self.tag()
         );
-        self.tables.borrow_mut().node_types_mut().insert(id, ty);
+        self.typeck_results.borrow_mut().node_types_mut().insert(id, ty);
 
         if ty.references_error() {
             self.has_errors.set(true);
@@ -3208,11 +3228,11 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     }
 
     pub fn write_field_index(&self, hir_id: hir::HirId, index: usize) {
-        self.tables.borrow_mut().field_indices_mut().insert(hir_id, index);
+        self.typeck_results.borrow_mut().field_indices_mut().insert(hir_id, index);
     }
 
     fn write_resolution(&self, hir_id: hir::HirId, r: Result<(DefKind, DefId), ErrorReported>) {
-        self.tables.borrow_mut().type_dependent_defs_mut().insert(hir_id, r);
+        self.typeck_results.borrow_mut().type_dependent_defs_mut().insert(hir_id, r);
     }
 
     pub fn write_method_call(&self, hir_id: hir::HirId, method: MethodCallee<'tcx>) {
@@ -3266,7 +3286,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         if !substs.is_noop() {
             debug!("write_substs({:?}, {:?}) in fcx {}", node_id, substs, self.tag());
 
-            self.tables.borrow_mut().node_substs_mut().insert(node_id, substs);
+            self.typeck_results.borrow_mut().node_substs_mut().insert(node_id, substs);
         }
     }
 
@@ -3317,7 +3337,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         );
 
         if !canonical_user_type_annotation.is_identity() {
-            self.tables
+            self.typeck_results
                 .borrow_mut()
                 .user_provided_types_mut()
                 .insert(hir_id, canonical_user_type_annotation);
@@ -3340,7 +3360,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             })
         });
 
-        match self.tables.borrow_mut().adjustments_mut().entry(expr.hir_id) {
+        match self.typeck_results.borrow_mut().adjustments_mut().entry(expr.hir_id) {
             Entry::Vacant(entry) => {
                 entry.insert(adj);
             }
@@ -3427,7 +3447,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
         let (value, opaque_type_map) =
             self.register_infer_ok_obligations(self.instantiate_opaque_types(
-                parent_def_id.to_def_id(),
+                parent_def_id,
                 self.body_id,
                 self.param_env,
                 value,
@@ -3525,7 +3545,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         if Self::can_contain_user_lifetime_bounds(ty) {
             let c_ty = self.infcx.canonicalize_response(&UserType::Ty(ty));
             debug!("to_ty_saving_user_provided_ty: c_ty={:?}", c_ty);
-            self.tables.borrow_mut().user_provided_types_mut().insert(ast_ty.hir_id, c_ty);
+            self.typeck_results.borrow_mut().user_provided_types_mut().insert(ast_ty.hir_id, c_ty);
         }
 
         ty
@@ -3534,6 +3554,24 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     pub fn to_const(&self, ast_c: &hir::AnonConst) -> &'tcx ty::Const<'tcx> {
         let const_def_id = self.tcx.hir().local_def_id(ast_c.hir_id);
         let c = ty::Const::from_anon_const(self.tcx, const_def_id);
+        self.register_wf_obligation(
+            c.into(),
+            self.tcx.hir().span(ast_c.hir_id),
+            ObligationCauseCode::MiscObligation,
+        );
+        c
+    }
+
+    pub fn const_arg_to_const(
+        &self,
+        ast_c: &hir::AnonConst,
+        param_def_id: DefId,
+    ) -> &'tcx ty::Const<'tcx> {
+        let const_def = ty::WithOptConstParam {
+            did: self.tcx.hir().local_def_id(ast_c.hir_id),
+            const_param_did: Some(param_def_id),
+        };
+        let c = ty::Const::from_opt_const_arg_anon_const(self.tcx, const_def);
         self.register_wf_obligation(
             c.into(),
             self.tcx.hir().span(ast_c.hir_id),
@@ -3557,7 +3595,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     }
 
     pub fn node_ty(&self, id: hir::HirId) -> Ty<'tcx> {
-        match self.tables.borrow().node_types().get(id) {
+        match self.typeck_results.borrow().node_types().get(id) {
             Some(&t) => t,
             None if self.is_tainted_by_errors() => self.tcx.ty_error(),
             None => {
@@ -4496,7 +4534,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             }
             QPath::TypeRelative(ref qself, ref segment) => (self.to_ty(qself), qself, segment),
         };
-        if let Some(&cached_result) = self.tables.borrow().type_dependent_defs().get(hir_id) {
+        if let Some(&cached_result) = self.typeck_results.borrow().type_dependent_defs().get(hir_id)
+        {
             // Return directly on cache hit. This is useful to avoid doubly reporting
             // errors with default match binding modes. See #44614.
             let def =
@@ -4670,8 +4709,10 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             let arm_spans: Vec<Span> = arms
                 .iter()
                 .filter_map(|arm| {
-                    self.in_progress_tables
-                        .and_then(|tables| tables.borrow().node_type_opt(arm.body.hir_id))
+                    self.in_progress_typeck_results
+                        .and_then(|typeck_results| {
+                            typeck_results.borrow().node_type_opt(arm.body.hir_id)
+                        })
                         .and_then(|arm_ty| {
                             if arm_ty.is_never() {
                                 None
@@ -5655,7 +5696,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         self.to_ty(ty).into()
                     }
                     (GenericParamDefKind::Const, GenericArg::Const(ct)) => {
-                        self.to_const(&ct.value).into()
+                        self.const_arg_to_const(&ct.value, param.def_id).into()
                     }
                     _ => unreachable!(),
                 },

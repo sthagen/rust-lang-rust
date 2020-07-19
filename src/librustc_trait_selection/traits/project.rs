@@ -23,11 +23,12 @@ use crate::traits::error_reporting::InferCtxtExt;
 use rustc_data_structures::stack::ensure_sufficient_stack;
 use rustc_errors::ErrorReported;
 use rustc_hir::def_id::DefId;
-use rustc_hir::lang_items::{FnOnceOutputLangItem, FnOnceTraitLangItem, GeneratorTraitLangItem};
+use rustc_hir::lang_items::{
+    DiscriminantTypeLangItem, FnOnceOutputLangItem, FnOnceTraitLangItem, GeneratorTraitLangItem,
+};
 use rustc_infer::infer::resolve::OpportunisticRegionResolver;
 use rustc_middle::ty::fold::{TypeFoldable, TypeFolder};
 use rustc_middle::ty::subst::Subst;
-use rustc_middle::ty::util::IntTypeExt;
 use rustc_middle::ty::{self, ToPolyTraitRef, ToPredicate, Ty, TyCtxt, WithConstness};
 use rustc_span::symbol::sym;
 use rustc_span::DUMMY_SP;
@@ -326,7 +327,7 @@ impl<'a, 'b, 'tcx> TypeFolder<'tcx> for AssocTypeNormalizer<'a, 'b, 'tcx> {
             ty::Opaque(def_id, substs) if !substs.has_escaping_bound_vars() => {
                 // (*)
                 // Only normalize `impl Trait` after type-checking, usually in codegen.
-                match self.param_env.reveal {
+                match self.param_env.reveal() {
                     Reveal::UserFacing => ty,
 
                     Reveal::All => {
@@ -869,7 +870,7 @@ fn assemble_candidates_from_param_env<'cx, 'tcx>(
         obligation_trait_ref,
         candidate_set,
         ProjectionTyCandidate::ParamEnv,
-        obligation.param_env.caller_bounds.iter(),
+        obligation.param_env.caller_bounds().iter(),
     );
 }
 
@@ -1028,7 +1029,7 @@ fn assemble_candidates_from_impls<'cx, 'tcx>(
                     // and the obligation is monomorphic, otherwise passes such as
                     // transmute checking and polymorphic MIR optimizations could
                     // get a result which isn't correct for all monomorphizations.
-                    if obligation.param_env.reveal == Reveal::All {
+                    if obligation.param_env.reveal() == Reveal::All {
                         // NOTE(eddyb) inference variables can resolve to parameters, so
                         // assume `poly_trait_ref` isn't monomorphic, if it contains any.
                         let poly_trait_ref =
@@ -1324,22 +1325,11 @@ fn confirm_discriminant_kind_candidate<'cx, 'tcx>(
     let self_ty = selcx.infcx().shallow_resolve(obligation.predicate.self_ty());
     let substs = tcx.mk_substs([self_ty.into()].iter());
 
-    let assoc_items = tcx.associated_items(tcx.lang_items().discriminant_kind_trait().unwrap());
-    // FIXME: emit an error if the trait definition is wrong
-    let discriminant_def_id = assoc_items.in_definition_order().next().unwrap().def_id;
-
-    let discriminant_ty = match self_ty.kind {
-        // Use the discriminant type for enums.
-        ty::Adt(adt, _) if adt.is_enum() => adt.repr.discr_type().to_ty(tcx),
-        // Default to `i32` for generators.
-        ty::Generator(..) => tcx.types.i32,
-        // Use `u8` for all other types.
-        _ => tcx.types.u8,
-    };
+    let discriminant_def_id = tcx.require_lang_item(DiscriminantTypeLangItem, None);
 
     let predicate = ty::ProjectionPredicate {
         projection_ty: ty::ProjectionTy { substs, item_def_id: discriminant_def_id },
-        ty: discriminant_ty,
+        ty: self_ty.discriminant_ty(tcx),
     };
 
     confirm_param_env_candidate(selcx, obligation, ty::Binder::bind(predicate))

@@ -42,6 +42,7 @@ use std::str;
 use std::string::ToString;
 use std::sync::Arc;
 
+use itertools::Itertools;
 use rustc_ast_pretty::pprust;
 use rustc_data_structures::flock;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
@@ -187,16 +188,14 @@ crate struct SharedContext {
     /// This flag indicates whether listings of modules (in the side bar and documentation itself)
     /// should be ordered alphabetically or in order of appearance (in the source code).
     pub sort_modules_alphabetically: bool,
-    /// Additional themes to be added to the generated docs.
-    pub themes: Vec<PathBuf>,
+    /// Additional CSS files to be added to the generated docs.
+    pub style_files: Vec<StylePath>,
     /// Suffix to be added on resource files (if suffix is "-v2" then "light.css" becomes
     /// "light-v2.css").
     pub resource_suffix: String,
     /// Optional path string to be used to load static files on output pages. If not set, uses
     /// combinations of `../` to reach the documentation root.
     pub static_root_path: Option<String>,
-    /// Option disabled by default to generate files used by RLS and some other tools.
-    pub generate_redirect_pages: bool,
     /// The fs handle we are working with.
     pub fs: DocFS,
     /// The default edition used to parse doctests.
@@ -419,6 +418,14 @@ impl Serialize for TypeWithKind {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct StylePath {
+    /// The path to the theme
+    pub path: PathBuf,
+    /// What the `disabled` attribute should be set to in the HTML tag
+    pub disabled: bool,
+}
+
 thread_local!(static CACHE_KEY: RefCell<Arc<Cache>> = Default::default());
 thread_local!(pub static CURRENT_DEPTH: Cell<usize> = Cell::new(0));
 
@@ -462,13 +469,12 @@ pub fn run(
         id_map,
         playground_url,
         sort_modules_alphabetically,
-        themes,
+        themes: style_files,
         extension_css,
         extern_html_root_urls,
         resource_suffix,
         static_root_path,
         generate_search_filter,
-        generate_redirect_pages,
         document_private,
         ..
     } = options;
@@ -533,15 +539,27 @@ pub fn run(
         layout,
         created_dirs: Default::default(),
         sort_modules_alphabetically,
-        themes,
+        style_files,
         resource_suffix,
         static_root_path,
-        generate_redirect_pages,
         fs: DocFS::new(&errors),
         edition,
         codes: ErrorCodes::from(UnstableFeatures::from_environment().is_nightly_build()),
         playground,
     };
+
+    // Add the default themes to the `Vec` of stylepaths
+    //
+    // Note that these must be added before `sources::render` is called
+    // so that the resulting source pages are styled
+    //
+    // `light.css` is not disabled because it is the stylesheet that stays loaded
+    // by the browser as the theme stylesheet. The theme system (hackily) works by
+    // changing the href to this stylesheet. All other themes are disabled to
+    // prevent rule conflicts
+    scx.style_files.push(StylePath { path: PathBuf::from("light.css"), disabled: false });
+    scx.style_files.push(StylePath { path: PathBuf::from("dark.css"), disabled: true });
+    scx.style_files.push(StylePath { path: PathBuf::from("ayu.css"), disabled: true });
 
     let dst = output;
     scx.ensure_dir(&dst)?;
@@ -619,11 +637,40 @@ fn write_shared(
     // then we'll run over the "official" styles.
     let mut themes: FxHashSet<String> = FxHashSet::default();
 
-    for entry in &cx.shared.themes {
-        let content = try_err!(fs::read(&entry), &entry);
-        let theme = try_none!(try_none!(entry.file_stem(), &entry).to_str(), &entry);
-        let extension = try_none!(try_none!(entry.extension(), &entry).to_str(), &entry);
-        cx.shared.fs.write(cx.path(&format!("{}.{}", theme, extension)), content.as_slice())?;
+    for entry in &cx.shared.style_files {
+        let theme = try_none!(try_none!(entry.path.file_stem(), &entry.path).to_str(), &entry.path);
+        let extension =
+            try_none!(try_none!(entry.path.extension(), &entry.path).to_str(), &entry.path);
+
+        // Handle the official themes
+        match theme {
+            "light" => write_minify(
+                &cx.shared.fs,
+                cx.path("light.css"),
+                static_files::themes::LIGHT,
+                options.enable_minification,
+            )?,
+            "dark" => write_minify(
+                &cx.shared.fs,
+                cx.path("dark.css"),
+                static_files::themes::DARK,
+                options.enable_minification,
+            )?,
+            "ayu" => write_minify(
+                &cx.shared.fs,
+                cx.path("ayu.css"),
+                static_files::themes::AYU,
+                options.enable_minification,
+            )?,
+            _ => {
+                // Handle added third-party themes
+                let content = try_err!(fs::read(&entry.path), &entry.path);
+                cx.shared
+                    .fs
+                    .write(cx.path(&format!("{}.{}", theme, extension)), content.as_slice())?;
+            }
+        };
+
         themes.insert(theme.to_owned());
     }
 
@@ -637,20 +684,6 @@ fn write_shared(
     write(cx.path("brush.svg"), static_files::BRUSH_SVG)?;
     write(cx.path("wheel.svg"), static_files::WHEEL_SVG)?;
     write(cx.path("down-arrow.svg"), static_files::DOWN_ARROW_SVG)?;
-    write_minify(
-        &cx.shared.fs,
-        cx.path("light.css"),
-        static_files::themes::LIGHT,
-        options.enable_minification,
-    )?;
-    themes.insert("light".to_owned());
-    write_minify(
-        &cx.shared.fs,
-        cx.path("dark.css"),
-        static_files::themes::DARK,
-        options.enable_minification,
-    )?;
-    themes.insert("dark".to_owned());
 
     let mut themes: Vec<&String> = themes.iter().collect();
     themes.sort();
@@ -961,7 +994,7 @@ themePicker.onblur = handleThemeButtonsBlur;
                     })
                     .collect::<String>()
             );
-            let v = layout::render(&cx.shared.layout, &page, "", content, &cx.shared.themes);
+            let v = layout::render(&cx.shared.layout, &page, "", content, &cx.shared.style_files);
             cx.shared.fs.write(&dst, v.as_bytes())?;
         }
     }
@@ -1289,8 +1322,9 @@ fn settings(root_path: &str, suffix: &str) -> String {
             .into(),
         ("auto-hide-attributes", "Auto-hide item attributes.", true).into(),
         ("auto-hide-method-docs", "Auto-hide item methods' documentation", false).into(),
-        ("auto-hide-trait-implementations", "Auto-hide trait implementations documentation", true)
+        ("auto-hide-trait-implementations", "Auto-hide trait implementation documentation", true)
             .into(),
+        ("auto-collapse-implementors", "Auto-hide implementors of a trait", true).into(),
         ("go-to-only-result", "Directly go to item in search if there is only one result", false)
             .into(),
         ("line-numbers", "Show line numbers on code examples", false).into(),
@@ -1379,7 +1413,7 @@ impl Context {
             &page,
             sidebar,
             |buf: &mut Buffer| all.print(buf),
-            &self.shared.themes,
+            &self.shared.style_files,
         );
         self.shared.fs.write(&final_file, v.as_bytes())?;
 
@@ -1388,9 +1422,9 @@ impl Context {
         page.description = "Settings of Rustdoc";
         page.root_path = "./";
 
-        let mut themes = self.shared.themes.clone();
+        let mut style_files = self.shared.style_files.clone();
         let sidebar = "<p class='location'>Settings</p><div class='sidebar-elems'></div>";
-        themes.push(PathBuf::from("settings.css"));
+        style_files.push(StylePath { path: PathBuf::from("settings.css"), disabled: false });
         let v = layout::render(
             &self.shared.layout,
             &page,
@@ -1399,7 +1433,7 @@ impl Context {
                 self.shared.static_root_path.as_deref().unwrap_or("./"),
                 &self.shared.resource_suffix,
             ),
-            &themes,
+            &style_files,
         );
         self.shared.fs.write(&settings_file, v.as_bytes())?;
 
@@ -1461,7 +1495,7 @@ impl Context {
                 &page,
                 |buf: &mut _| print_sidebar(self, it, buf),
                 |buf: &mut _| print_item(self, it, buf),
-                &self.shared.themes,
+                &self.shared.style_files,
             )
         } else {
             let mut url = self.root_path();
@@ -1555,14 +1589,6 @@ impl Context {
 
                 if !self.render_redirect_pages {
                     all.append(full_path(self, &item), &item_type);
-                }
-                if self.shared.generate_redirect_pages {
-                    // Redirect from a sane URL using the namespace to Rustdoc's
-                    // URL for the page.
-                    let redir_name = format!("{}.{}.html", name, item_type.name_space());
-                    let redir_dst = self.dst.join(redir_name);
-                    let v = layout::redirect(file_name);
-                    self.shared.fs.write(&redir_dst, v.as_bytes())?;
                 }
                 // If the item is a macro, redirect from the old macro URL (with !)
                 // to the new one (without).
@@ -1869,7 +1895,7 @@ fn render_markdown(
             cx.shared.edition,
             &cx.shared.playground
         )
-        .to_string()
+        .into_string()
     )
 }
 
@@ -2159,7 +2185,7 @@ fn item_module(w: &mut Buffer, cx: &Context, item: &clean::Item, items: &[clean:
                        </tr>",
                     name = *myitem.name.as_ref().unwrap(),
                     stab_tags = stability_tags(myitem),
-                    docs = MarkdownSummaryLine(doc_value, &myitem.links()).to_string(),
+                    docs = MarkdownSummaryLine(doc_value, &myitem.links()).into_string(),
                     class = myitem.type_(),
                     add = add,
                     stab = stab.unwrap_or_else(String::new),
@@ -2204,12 +2230,15 @@ fn stability_tags(item: &clean::Item) -> String {
         tags += &tag_html("deprecated", message);
     }
 
-    if let Some(stab) = item.stability.as_ref().filter(|s| s.level == stability::Unstable) {
-        if stab.feature.as_deref() == Some("rustc_private") {
-            tags += &tag_html("internal", "Internal");
-        } else {
-            tags += &tag_html("unstable", "Experimental");
-        }
+    // The "rustc_private" crates are permanently unstable so it makes no sense
+    // to render "unstable" everywhere.
+    if item
+        .stability
+        .as_ref()
+        .map(|s| s.level == stability::Unstable && s.feature.as_deref() != Some("rustc_private"))
+        == Some(true)
+    {
+        tags += &tag_html("unstable", "Experimental");
     }
 
     if let Some(ref cfg) = item.attrs.cfg {
@@ -2252,7 +2281,7 @@ fn short_stability(item: &clean::Item, cx: &Context) -> Vec<String> {
                 cx.shared.edition,
                 &cx.shared.playground,
             );
-            message.push_str(&format!(": {}", html.to_string()));
+            message.push_str(&format!(": {}", html.into_string()));
         }
         stability.push(format!(
             "<div class='stab deprecated'><span class='emoji'>👎</span> {}</div>",
@@ -2260,15 +2289,13 @@ fn short_stability(item: &clean::Item, cx: &Context) -> Vec<String> {
         ));
     }
 
-    if let Some(stab) = item.stability.as_ref().filter(|stab| stab.level == stability::Unstable) {
-        let is_rustc_private = stab.feature.as_deref() == Some("rustc_private");
-
-        let mut message = if is_rustc_private {
-            "<span class='emoji'>⚙️</span> This is an internal compiler API."
-        } else {
-            "<span class='emoji'>🔬</span> This is a nightly-only experimental API."
-        }
-        .to_owned();
+    // Render unstable items. But don't render "rustc_private" crates (internal compiler crates).
+    // Those crates are permanently unstable so it makes no sense to render "unstable" everywhere.
+    if let Some(stab) = item.stability.as_ref().filter(|stab| {
+        stab.level == stability::Unstable && stab.feature.as_deref() != Some("rustc_private")
+    }) {
+        let mut message =
+            "<span class='emoji'>🔬</span> This is a nightly-only experimental API.".to_owned();
 
         if let Some(feature) = stab.feature.as_deref() {
             let mut feature = format!("<code>{}</code>", Escape(&feature));
@@ -2284,17 +2311,6 @@ fn short_stability(item: &clean::Item, cx: &Context) -> Vec<String> {
         }
 
         if let Some(unstable_reason) = &stab.unstable_reason {
-            // Provide a more informative message than the compiler help.
-            let unstable_reason = if is_rustc_private {
-                "This crate is being loaded from the sysroot, a permanently unstable location \
-                for private compiler dependencies. It is not intended for general use. Prefer \
-                using a public version of this crate from \
-                [crates.io](https://crates.io) via [`Cargo.toml`]\
-                (https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html)."
-            } else {
-                unstable_reason
-            };
-
             let mut ids = cx.id_map.borrow_mut();
             message = format!(
                 "<details><summary>{}</summary>{}</details>",
@@ -2306,12 +2322,11 @@ fn short_stability(item: &clean::Item, cx: &Context) -> Vec<String> {
                     cx.shared.edition,
                     &cx.shared.playground,
                 )
-                .to_string()
+                .into_string()
             );
         }
 
-        let class = if is_rustc_private { "internal" } else { "unstable" };
-        stability.push(format!("<div class='stab {}'>{}</div>", class, message));
+        stability.push(format!("<div class='stab unstable'>{}</div>", message));
     }
 
     if let Some(ref cfg) = item.attrs.cfg {
@@ -2389,7 +2404,7 @@ fn item_function(w: &mut Buffer, cx: &Context, it: &clean::Item, f: &clean::Func
     write!(
         w,
         "{vis}{constness}{asyncness}{unsafety}{abi}fn \
-           {name}{generics}{decl}{where_clause}</pre>",
+           {name}{generics}{decl}{spotlight}{where_clause}</pre>",
         vis = it.visibility.print_with_space(),
         constness = f.header.constness.print_with_space(),
         asyncness = f.header.asyncness.print_with_space(),
@@ -2399,7 +2414,8 @@ fn item_function(w: &mut Buffer, cx: &Context, it: &clean::Item, f: &clean::Func
         generics = f.generics.print(),
         where_clause = WhereClause { gens: &f.generics, indent: 0, end_newline: true },
         decl = Function { decl: &f.decl, header_len, indent: 0, asyncness: f.header.asyncness }
-            .print()
+            .print(),
+        spotlight = spotlight_decl(&f.decl),
     );
     document(w, cx, it)
 }
@@ -2586,8 +2602,7 @@ fn item_trait(w: &mut Buffer, cx: &Context, it: &clean::Item, t: &clean::Trait) 
         let name = m.name.as_ref().unwrap();
         let item_type = m.type_();
         let id = cx.derive_id(format!("{}.{}", item_type, name));
-        let ns_id = cx.derive_id(format!("{}.{}", name, item_type.name_space()));
-        write!(w, "<h3 id='{id}' class='method'><code id='{ns_id}'>", id = id, ns_id = ns_id);
+        write!(w, "<h3 id='{id}' class='method'><code>", id = id,);
         render_assoc_item(w, m, AssocItemLink::Anchor(Some(&id)), ItemType::Impl);
         write!(w, "</code>");
         render_stability_since(w, m, t);
@@ -2901,7 +2916,7 @@ fn render_assoc_item(
         write!(
             w,
             "{}{}{}{}{}{}{}fn <a href='{href}' class='fnname'>{name}</a>\
-                   {generics}{decl}{where_clause}",
+                   {generics}{decl}{spotlight}{where_clause}",
             if parent == ItemType::Trait { "    " } else { "" },
             meth.visibility.print_with_space(),
             header.constness.print_with_space(),
@@ -2913,6 +2928,7 @@ fn render_assoc_item(
             name = name,
             generics = g.print(),
             decl = Function { decl: d, header_len, indent, asyncness: header.asyncness }.print(),
+            spotlight = spotlight_decl(&d),
             where_clause = WhereClause { gens: g, indent, end_newline }
         )
     }
@@ -2972,20 +2988,14 @@ fn item_struct(w: &mut Buffer, cx: &Context, it: &clean::Item, s: &clean::Struct
                     ItemType::StructField,
                     field.name.as_ref().unwrap()
                 ));
-                let ns_id = cx.derive_id(format!(
-                    "{}.{}",
-                    field.name.as_ref().unwrap(),
-                    ItemType::StructField.name_space()
-                ));
                 write!(
                     w,
                     "<span id=\"{id}\" class=\"{item_type} small-section-header\">\
                            <a href=\"#{id}\" class=\"anchor field\"></a>\
-                           <code id=\"{ns_id}\">{name}: {ty}</code>\
+                           <code>{name}: {ty}</code>\
                            </span>",
                     item_type = ItemType::StructField,
                     id = id,
-                    ns_id = ns_id,
                     name = field.name.as_ref().unwrap(),
                     ty = ty.print()
                 );
@@ -3103,18 +3113,12 @@ fn item_enum(w: &mut Buffer, cx: &Context, it: &clean::Item, e: &clean::Enum) {
         for variant in &e.variants {
             let id =
                 cx.derive_id(format!("{}.{}", ItemType::Variant, variant.name.as_ref().unwrap()));
-            let ns_id = cx.derive_id(format!(
-                "{}.{}",
-                variant.name.as_ref().unwrap(),
-                ItemType::Variant.name_space()
-            ));
             write!(
                 w,
                 "<div id=\"{id}\" class=\"variant small-section-header\">\
-                       <a href=\"#{id}\" class=\"anchor field\"></a>\
-                       <code id='{ns_id}'>{name}",
+                    <a href=\"#{id}\" class=\"anchor field\"></a>\
+                    <code>{name}",
                 id = id,
-                ns_id = ns_id,
                 name = variant.name.as_ref().unwrap()
             );
             if let clean::VariantItem(ref var) = variant.inner {
@@ -3155,21 +3159,13 @@ fn item_enum(w: &mut Buffer, cx: &Context, it: &clean::Item, e: &clean::Enum) {
                             variant.name.as_ref().unwrap(),
                             field.name.as_ref().unwrap()
                         ));
-                        let ns_id = cx.derive_id(format!(
-                            "{}.{}.{}.{}",
-                            variant.name.as_ref().unwrap(),
-                            ItemType::Variant.name_space(),
-                            field.name.as_ref().unwrap(),
-                            ItemType::StructField.name_space()
-                        ));
                         write!(
                             w,
                             "<span id=\"{id}\" class=\"variant small-section-header\">\
                                    <a href=\"#{id}\" class=\"anchor field\"></a>\
-                                   <code id='{ns_id}'>{f}:&nbsp;{t}\
+                                   <code>{f}:&nbsp;{t}\
                                    </code></span>",
                             id = id,
-                            ns_id = ns_id,
                             f = field.name.as_ref().unwrap(),
                             t = ty.print()
                         );
@@ -3184,7 +3180,7 @@ fn item_enum(w: &mut Buffer, cx: &Context, it: &clean::Item, e: &clean::Enum) {
     render_assoc_items(w, cx, it, it.def_id, AssocItemRender::All)
 }
 
-const ATTRIBUTE_WHITELIST: &[Symbol] = &[
+const ALLOWED_ATTRIBUTES: &[Symbol] = &[
     sym::export_name,
     sym::lang,
     sym::link_section,
@@ -3203,15 +3199,19 @@ const ATTRIBUTE_WHITELIST: &[Symbol] = &[
 //     bar: usize,
 // }
 fn render_attributes(w: &mut Buffer, it: &clean::Item, top: bool) {
-    let mut attrs = String::new();
+    let attrs = it
+        .attrs
+        .other_attrs
+        .iter()
+        .filter_map(|attr| {
+            if ALLOWED_ATTRIBUTES.contains(&attr.name_or_empty()) {
+                Some(pprust::attribute_to_string(&attr))
+            } else {
+                None
+            }
+        })
+        .join("\n");
 
-    for attr in &it.attrs.other_attrs {
-        if !ATTRIBUTE_WHITELIST.contains(&attr.name_or_empty()) {
-            continue;
-        }
-
-        attrs.push_str(&pprust::attribute_to_string(&attr));
-    }
     if !attrs.is_empty() {
         write!(
             w,
@@ -3550,6 +3550,62 @@ fn should_render_item(item: &clean::Item, deref_mut_: bool) -> bool {
     }
 }
 
+fn spotlight_decl(decl: &clean::FnDecl) -> String {
+    let mut out = Buffer::html();
+    let mut trait_ = String::new();
+
+    if let Some(did) = decl.output.def_id() {
+        let c = cache();
+        if let Some(impls) = c.impls.get(&did) {
+            for i in impls {
+                let impl_ = i.inner_impl();
+                if impl_.trait_.def_id().map_or(false, |d| c.traits[&d].is_spotlight) {
+                    if out.is_empty() {
+                        out.push_str(&format!(
+                            "<h3 class=\"important\">Important traits for {}</h3>\
+                                      <code class=\"content\">",
+                            impl_.for_.print()
+                        ));
+                        trait_.push_str(&impl_.for_.print().to_string());
+                    }
+
+                    //use the "where" class here to make it small
+                    out.push_str(&format!(
+                        "<span class=\"where fmt-newline\">{}</span>",
+                        impl_.print()
+                    ));
+                    let t_did = impl_.trait_.def_id().unwrap();
+                    for it in &impl_.items {
+                        if let clean::TypedefItem(ref tydef, _) = it.inner {
+                            out.push_str("<span class=\"where fmt-newline\">    ");
+                            assoc_type(
+                                &mut out,
+                                it,
+                                &[],
+                                Some(&tydef.type_),
+                                AssocItemLink::GotoSource(t_did, &FxHashSet::default()),
+                                "",
+                            );
+                            out.push_str(";</span>");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if !out.is_empty() {
+        out.insert_str(
+            0,
+            "<span class=\"important-traits\"><span class=\"important-traits-tooltip\">ⓘ<div class='important-traits-tooltiptext'><span class=\"docblock\">"
+
+        );
+        out.push_str("</code></span></div></span></span>");
+    }
+
+    out.into_inner()
+}
+
 fn render_impl(
     w: &mut Buffer,
     cx: &Context,
@@ -3623,7 +3679,7 @@ fn render_impl(
                     cx.shared.edition,
                     &cx.shared.playground
                 )
-                .to_string()
+                .into_string()
             );
         }
     }
@@ -3661,9 +3717,8 @@ fn render_impl(
                 // Only render when the method is not static or we allow static methods
                 if render_method_item {
                     let id = cx.derive_id(format!("{}.{}", item_type, name));
-                    let ns_id = cx.derive_id(format!("{}.{}", name, item_type.name_space()));
                     write!(w, "<h4 id='{}' class=\"{}{}\">", id, item_type, extra_class);
-                    write!(w, "<code id='{}'>", ns_id);
+                    write!(w, "<code>");
                     render_assoc_item(w, item, link.anchor(&id), ItemType::Impl);
                     write!(w, "</code>");
                     render_stability_since_raw(w, item.stable_since(), outer_version);
@@ -3679,17 +3734,13 @@ fn render_impl(
             }
             clean::TypedefItem(ref tydef, _) => {
                 let id = cx.derive_id(format!("{}.{}", ItemType::AssocType, name));
-                let ns_id = cx.derive_id(format!("{}.{}", name, item_type.name_space()));
-                write!(w, "<h4 id='{}' class=\"{}{}\">", id, item_type, extra_class);
-                write!(w, "<code id='{}'>", ns_id);
+                write!(w, "<h4 id='{}' class=\"{}{}\"><code>", id, item_type, extra_class);
                 assoc_type(w, item, &Vec::new(), Some(&tydef.type_), link.anchor(&id), "");
                 write!(w, "</code></h4>");
             }
             clean::AssocConstItem(ref ty, ref default) => {
                 let id = cx.derive_id(format!("{}.{}", item_type, name));
-                let ns_id = cx.derive_id(format!("{}.{}", name, item_type.name_space()));
-                write!(w, "<h4 id='{}' class=\"{}{}\">", id, item_type, extra_class);
-                write!(w, "<code id='{}'>", ns_id);
+                write!(w, "<h4 id='{}' class=\"{}{}\"><code>", id, item_type, extra_class);
                 assoc_const(w, item, ty, default.as_ref(), link.anchor(&id), "");
                 write!(w, "</code>");
                 render_stability_since_raw(w, item.stable_since(), outer_version);
@@ -3704,9 +3755,7 @@ fn render_impl(
             }
             clean::AssocTypeItem(ref bounds, ref default) => {
                 let id = cx.derive_id(format!("{}.{}", item_type, name));
-                let ns_id = cx.derive_id(format!("{}.{}", name, item_type.name_space()));
-                write!(w, "<h4 id='{}' class=\"{}{}\">", id, item_type, extra_class);
-                write!(w, "<code id='{}'>", ns_id);
+                write!(w, "<h4 id='{}' class=\"{}{}\"><code>", id, item_type, extra_class);
                 assoc_type(w, item, bounds, default.as_ref(), link.anchor(&id), "");
                 write!(w, "</code></h4>");
             }
@@ -4095,6 +4144,10 @@ fn sidebar_assoc_items(it: &clean::Item) -> String {
                         _ => None,
                     })
                 {
+                    let deref_mut = v
+                        .iter()
+                        .filter(|i| i.inner_impl().trait_.is_some())
+                        .any(|i| i.inner_impl().trait_.def_id() == c.deref_mut_trait_did);
                     let inner_impl = target
                         .def_id()
                         .or(target
@@ -4115,7 +4168,9 @@ fn sidebar_assoc_items(it: &clean::Item) -> String {
                         let mut ret = impls
                             .iter()
                             .filter(|i| i.inner_impl().trait_.is_none())
-                            .flat_map(|i| get_methods(i.inner_impl(), true, &mut used_links, true))
+                            .flat_map(|i| {
+                                get_methods(i.inner_impl(), true, &mut used_links, deref_mut)
+                            })
                             .collect::<Vec<_>>();
                         // We want links' order to be reproducible so we don't use unstable sort.
                         ret.sort();
@@ -4519,7 +4574,12 @@ fn sidebar_foreign_type(buf: &mut Buffer, it: &clean::Item) {
 
 fn item_macro(w: &mut Buffer, cx: &Context, it: &clean::Item, t: &clean::Macro) {
     wrap_into_docblock(w, |w| {
-        w.write_str(&highlight::render_with_highlighting(&t.source, Some("macro"), None, None))
+        w.write_str(&highlight::render_with_highlighting(
+            t.source.clone(),
+            Some("macro"),
+            None,
+            None,
+        ))
     });
     document(w, cx, it)
 }

@@ -310,8 +310,10 @@ impl<T> [T] {
     where
         I: SliceIndex<Self>,
     {
-        // SAFETY: the caller must uphold the safety requirements for `get_unchecked`.
-        unsafe { index.get_unchecked(self) }
+        // SAFETY: the caller must uphold most of the safety requirements for `get_unchecked`;
+        // the slice is dereferencable because `self` is a safe reference.
+        // The returned pointer is safe because impls of `SliceIndex` have to guarantee that it is.
+        unsafe { &*index.get_unchecked(self) }
     }
 
     /// Returns a mutable reference to an element or subslice, without doing
@@ -342,8 +344,10 @@ impl<T> [T] {
     where
         I: SliceIndex<Self>,
     {
-        // SAFETY: the caller must uphold the safety requirements for `get_unchecked_mut`.
-        unsafe { index.get_unchecked_mut(self) }
+        // SAFETY: the caller must uphold the safety requirements for `get_unchecked_mut`;
+        // the slice is dereferencable because `self` is a safe reference.
+        // The returned pointer is safe because impls of `SliceIndex` have to guarantee that it is.
+        unsafe { &mut *index.get_unchecked_mut(self) }
     }
 
     /// Returns a raw pointer to the slice's buffer.
@@ -2795,7 +2799,7 @@ impl [u8] {
     #[stable(feature = "ascii_methods_on_intrinsics", since = "1.23.0")]
     #[inline]
     pub fn is_ascii(&self) -> bool {
-        self.iter().all(|b| b.is_ascii())
+        is_ascii(self)
     }
 
     /// Checks that two slices are an ASCII case-insensitive match.
@@ -2841,6 +2845,106 @@ impl [u8] {
             byte.make_ascii_lowercase();
         }
     }
+}
+
+/// Returns `true` if any byte in the word `v` is nonascii (>= 128). Snarfed
+/// from `../str/mod.rs`, which does something similar for utf8 validation.
+#[inline]
+fn contains_nonascii(v: usize) -> bool {
+    const NONASCII_MASK: usize = 0x80808080_80808080u64 as usize;
+    (NONASCII_MASK & v) != 0
+}
+
+/// Optimized ASCII test that will use usize-at-a-time operations instead of
+/// byte-at-a-time operations (when possible).
+///
+/// The algorithm we use here is pretty simple. If `s` is too short, we just
+/// check each byte and be done with it. Otherwise:
+///
+/// - Read the first word with an unaligned load.
+/// - Align the pointer, read subsequent words until end with aligned loads.
+/// - If there's a tail, the last `usize` from `s` with an unaligned load.
+///
+/// If any of these loads produces something for which `contains_nonascii`
+/// (above) returns true, then we know the answer is false.
+#[inline]
+fn is_ascii(s: &[u8]) -> bool {
+    const USIZE_SIZE: usize = mem::size_of::<usize>();
+
+    let len = s.len();
+    let align_offset = s.as_ptr().align_offset(USIZE_SIZE);
+
+    // If we wouldn't gain anything from the word-at-a-time implementation, fall
+    // back to a scalar loop.
+    //
+    // We also do this for architectures where `size_of::<usize>()` isn't
+    // sufficient alignment for `usize`, because it's a weird edge case.
+    if len < USIZE_SIZE || len < align_offset || USIZE_SIZE < mem::align_of::<usize>() {
+        return s.iter().all(|b| b.is_ascii());
+    }
+
+    // We always read the first word unaligned, which means `align_offset` is
+    // 0, we'd read the same value again for the aligned read.
+    let offset_to_aligned = if align_offset == 0 { USIZE_SIZE } else { align_offset };
+
+    let start = s.as_ptr();
+    // SAFETY: We verify `len < USIZE_SIZE` above.
+    let first_word = unsafe { (start as *const usize).read_unaligned() };
+
+    if contains_nonascii(first_word) {
+        return false;
+    }
+    // We checked this above, somewhat implicitly. Note that `offset_to_aligned`
+    // is either `align_offset` or `USIZE_SIZE`, both of are explicitly checked
+    // above.
+    debug_assert!(offset_to_aligned <= len);
+
+    // word_ptr is the (properly aligned) usize ptr we use to read the middle chunk of the slice.
+    let mut word_ptr = unsafe { start.add(offset_to_aligned) as *const usize };
+
+    // `byte_pos` is the byte index of `word_ptr`, used for loop end checks.
+    let mut byte_pos = offset_to_aligned;
+
+    // Paranoia check about alignment, since we're about to do a bunch of
+    // unaligned loads. In practice this should be impossible barring a bug in
+    // `align_offset` though.
+    debug_assert_eq!((word_ptr as usize) % mem::align_of::<usize>(), 0);
+
+    while byte_pos <= len - USIZE_SIZE {
+        debug_assert!(
+            // Sanity check that the read is in bounds
+            (word_ptr as usize + USIZE_SIZE) <= (start.wrapping_add(len) as usize) &&
+            // And that our assumptions about `byte_pos` hold.
+            (word_ptr as usize) - (start as usize) == byte_pos
+        );
+
+        // Safety: We know `word_ptr` is properly aligned (because of
+        // `align_offset`), and we know that we have enough bytes between `word_ptr` and the end
+        let word = unsafe { word_ptr.read() };
+        if contains_nonascii(word) {
+            return false;
+        }
+
+        byte_pos += USIZE_SIZE;
+        // SAFETY: We know that `byte_pos <= len - USIZE_SIZE`, which means that
+        // after this `add`, `word_ptr` will be at most one-past-the-end.
+        word_ptr = unsafe { word_ptr.add(1) };
+    }
+
+    // If we have anything left over, it should be at-most 1 usize worth of bytes,
+    // which we check with a read_unaligned.
+    if byte_pos == len {
+        return true;
+    }
+
+    // Sanity check to ensure there really is only one `usize` left. This should
+    // be guaranteed by our loop condition.
+    debug_assert!(byte_pos < len && len - byte_pos < USIZE_SIZE);
+
+    // SAFETY: This relies on `len >= USIZE_SIZE`, which we check at the start.
+    let last_word = unsafe { (start.add(len - USIZE_SIZE) as *const usize).read_unaligned() };
+
+    !contains_nonascii(last_word)
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
@@ -2910,6 +3014,9 @@ mod private_slice_index {
 }
 
 /// A helper trait used for indexing operations.
+///
+/// Implementations of this trait have to promise that if the argument
+/// to `get_(mut_)unchecked` is a safe reference, then so is the result.
 #[stable(feature = "slice_get_slice", since = "1.28.0")]
 #[rustc_on_unimplemented(
     on(T = "str", label = "string indices are ranges of `usize`",),
@@ -2921,7 +3028,7 @@ see chapter in The Book <https://doc.rust-lang.org/book/ch08-02-strings.html#ind
     message = "the type `{T}` cannot be indexed by `{Self}`",
     label = "slice indices are of type `usize` or ranges of `usize`"
 )]
-pub trait SliceIndex<T: ?Sized>: private_slice_index::Sealed {
+pub unsafe trait SliceIndex<T: ?Sized>: private_slice_index::Sealed {
     /// The output type returned by methods.
     #[stable(feature = "slice_get_slice", since = "1.28.0")]
     type Output: ?Sized;
@@ -2938,21 +3045,21 @@ pub trait SliceIndex<T: ?Sized>: private_slice_index::Sealed {
 
     /// Returns a shared reference to the output at this location, without
     /// performing any bounds checking.
-    /// Calling this method with an out-of-bounds index is *[undefined behavior]*
-    /// even if the resulting reference is not used.
+    /// Calling this method with an out-of-bounds index or a dangling `slice` pointer
+    /// is *[undefined behavior]* even if the resulting reference is not used.
     ///
     /// [undefined behavior]: ../../reference/behavior-considered-undefined.html
     #[unstable(feature = "slice_index_methods", issue = "none")]
-    unsafe fn get_unchecked(self, slice: &T) -> &Self::Output;
+    unsafe fn get_unchecked(self, slice: *const T) -> *const Self::Output;
 
     /// Returns a mutable reference to the output at this location, without
     /// performing any bounds checking.
-    /// Calling this method with an out-of-bounds index is *[undefined behavior]*
-    /// even if the resulting reference is not used.
+    /// Calling this method with an out-of-bounds index or a dangling `slice` pointer
+    /// is *[undefined behavior]* even if the resulting reference is not used.
     ///
     /// [undefined behavior]: ../../reference/behavior-considered-undefined.html
     #[unstable(feature = "slice_index_methods", issue = "none")]
-    unsafe fn get_unchecked_mut(self, slice: &mut T) -> &mut Self::Output;
+    unsafe fn get_unchecked_mut(self, slice: *mut T) -> *mut Self::Output;
 
     /// Returns a shared reference to the output at this location, panicking
     /// if out of bounds.
@@ -2968,33 +3075,32 @@ pub trait SliceIndex<T: ?Sized>: private_slice_index::Sealed {
 }
 
 #[stable(feature = "slice_get_slice_impls", since = "1.15.0")]
-impl<T> SliceIndex<[T]> for usize {
+unsafe impl<T> SliceIndex<[T]> for usize {
     type Output = T;
 
     #[inline]
     fn get(self, slice: &[T]) -> Option<&T> {
-        if self < slice.len() { unsafe { Some(self.get_unchecked(slice)) } } else { None }
+        if self < slice.len() { unsafe { Some(&*self.get_unchecked(slice)) } } else { None }
     }
 
     #[inline]
     fn get_mut(self, slice: &mut [T]) -> Option<&mut T> {
-        if self < slice.len() { unsafe { Some(self.get_unchecked_mut(slice)) } } else { None }
+        if self < slice.len() { unsafe { Some(&mut *self.get_unchecked_mut(slice)) } } else { None }
     }
 
     #[inline]
-    unsafe fn get_unchecked(self, slice: &[T]) -> &T {
-        // SAFETY: `slice` cannot be longer than `isize::MAX` and
-        // the caller guarantees that `self` is in bounds of `slice`
-        // so `self` cannot overflow an `isize`, so the call to `add` is safe.
-        // The obtained pointer comes from a reference which is guaranteed
-        // to be valid.
-        unsafe { &*slice.as_ptr().add(self) }
+    unsafe fn get_unchecked(self, slice: *const [T]) -> *const T {
+        // SAFETY: the caller guarantees that `slice` is not dangling, so it
+        // cannot be longer than `isize::MAX`. They also guarantee that
+        // `self` is in bounds of `slice` so `self` cannot overflow an `isize`,
+        // so the call to `add` is safe.
+        unsafe { slice.as_ptr().add(self) }
     }
 
     #[inline]
-    unsafe fn get_unchecked_mut(self, slice: &mut [T]) -> &mut T {
+    unsafe fn get_unchecked_mut(self, slice: *mut [T]) -> *mut T {
         // SAFETY: see comments for `get_unchecked` above.
-        unsafe { &mut *slice.as_mut_ptr().add(self) }
+        unsafe { slice.as_mut_ptr().add(self) }
     }
 
     #[inline]
@@ -3011,7 +3117,7 @@ impl<T> SliceIndex<[T]> for usize {
 }
 
 #[stable(feature = "slice_get_slice_impls", since = "1.15.0")]
-impl<T> SliceIndex<[T]> for ops::Range<usize> {
+unsafe impl<T> SliceIndex<[T]> for ops::Range<usize> {
     type Output = [T];
 
     #[inline]
@@ -3019,7 +3125,7 @@ impl<T> SliceIndex<[T]> for ops::Range<usize> {
         if self.start > self.end || self.end > slice.len() {
             None
         } else {
-            unsafe { Some(self.get_unchecked(slice)) }
+            unsafe { Some(&*self.get_unchecked(slice)) }
         }
     }
 
@@ -3028,24 +3134,25 @@ impl<T> SliceIndex<[T]> for ops::Range<usize> {
         if self.start > self.end || self.end > slice.len() {
             None
         } else {
-            unsafe { Some(self.get_unchecked_mut(slice)) }
+            unsafe { Some(&mut *self.get_unchecked_mut(slice)) }
         }
     }
 
     #[inline]
-    unsafe fn get_unchecked(self, slice: &[T]) -> &[T] {
-        // SAFETY: `slice` cannot be longer than `isize::MAX` and
-        // the caller guarantees that `self` is in bounds of `slice`
-        // so `self` cannot overflow an `isize`, so the call to `add` is safe.
-        // Also, since the caller guarantees that `self` is in bounds of `slice`,
-        // `from_raw_parts` will give a subslice of `slice` which is always safe.
-        unsafe { from_raw_parts(slice.as_ptr().add(self.start), self.end - self.start) }
+    unsafe fn get_unchecked(self, slice: *const [T]) -> *const [T] {
+        // SAFETY: the caller guarantees that `slice` is not dangling, so it
+        // cannot be longer than `isize::MAX`. They also guarantee that
+        // `self` is in bounds of `slice` so `self` cannot overflow an `isize`,
+        // so the call to `add` is safe.
+        unsafe { ptr::slice_from_raw_parts(slice.as_ptr().add(self.start), self.end - self.start) }
     }
 
     #[inline]
-    unsafe fn get_unchecked_mut(self, slice: &mut [T]) -> &mut [T] {
+    unsafe fn get_unchecked_mut(self, slice: *mut [T]) -> *mut [T] {
         // SAFETY: see comments for `get_unchecked` above.
-        unsafe { from_raw_parts_mut(slice.as_mut_ptr().add(self.start), self.end - self.start) }
+        unsafe {
+            ptr::slice_from_raw_parts_mut(slice.as_mut_ptr().add(self.start), self.end - self.start)
+        }
     }
 
     #[inline]
@@ -3055,7 +3162,7 @@ impl<T> SliceIndex<[T]> for ops::Range<usize> {
         } else if self.end > slice.len() {
             slice_index_len_fail(self.end, slice.len());
         }
-        unsafe { self.get_unchecked(slice) }
+        unsafe { &*self.get_unchecked(slice) }
     }
 
     #[inline]
@@ -3065,12 +3172,12 @@ impl<T> SliceIndex<[T]> for ops::Range<usize> {
         } else if self.end > slice.len() {
             slice_index_len_fail(self.end, slice.len());
         }
-        unsafe { self.get_unchecked_mut(slice) }
+        unsafe { &mut *self.get_unchecked_mut(slice) }
     }
 }
 
 #[stable(feature = "slice_get_slice_impls", since = "1.15.0")]
-impl<T> SliceIndex<[T]> for ops::RangeTo<usize> {
+unsafe impl<T> SliceIndex<[T]> for ops::RangeTo<usize> {
     type Output = [T];
 
     #[inline]
@@ -3084,13 +3191,13 @@ impl<T> SliceIndex<[T]> for ops::RangeTo<usize> {
     }
 
     #[inline]
-    unsafe fn get_unchecked(self, slice: &[T]) -> &[T] {
+    unsafe fn get_unchecked(self, slice: *const [T]) -> *const [T] {
         // SAFETY: the caller has to uphold the safety contract for `get_unchecked`.
         unsafe { (0..self.end).get_unchecked(slice) }
     }
 
     #[inline]
-    unsafe fn get_unchecked_mut(self, slice: &mut [T]) -> &mut [T] {
+    unsafe fn get_unchecked_mut(self, slice: *mut [T]) -> *mut [T] {
         // SAFETY: the caller has to uphold the safety contract for `get_unchecked_mut`.
         unsafe { (0..self.end).get_unchecked_mut(slice) }
     }
@@ -3107,7 +3214,7 @@ impl<T> SliceIndex<[T]> for ops::RangeTo<usize> {
 }
 
 #[stable(feature = "slice_get_slice_impls", since = "1.15.0")]
-impl<T> SliceIndex<[T]> for ops::RangeFrom<usize> {
+unsafe impl<T> SliceIndex<[T]> for ops::RangeFrom<usize> {
     type Output = [T];
 
     #[inline]
@@ -3121,13 +3228,13 @@ impl<T> SliceIndex<[T]> for ops::RangeFrom<usize> {
     }
 
     #[inline]
-    unsafe fn get_unchecked(self, slice: &[T]) -> &[T] {
+    unsafe fn get_unchecked(self, slice: *const [T]) -> *const [T] {
         // SAFETY: the caller has to uphold the safety contract for `get_unchecked`.
         unsafe { (self.start..slice.len()).get_unchecked(slice) }
     }
 
     #[inline]
-    unsafe fn get_unchecked_mut(self, slice: &mut [T]) -> &mut [T] {
+    unsafe fn get_unchecked_mut(self, slice: *mut [T]) -> *mut [T] {
         // SAFETY: the caller has to uphold the safety contract for `get_unchecked_mut`.
         unsafe { (self.start..slice.len()).get_unchecked_mut(slice) }
     }
@@ -3144,7 +3251,7 @@ impl<T> SliceIndex<[T]> for ops::RangeFrom<usize> {
 }
 
 #[stable(feature = "slice_get_slice_impls", since = "1.15.0")]
-impl<T> SliceIndex<[T]> for ops::RangeFull {
+unsafe impl<T> SliceIndex<[T]> for ops::RangeFull {
     type Output = [T];
 
     #[inline]
@@ -3158,12 +3265,12 @@ impl<T> SliceIndex<[T]> for ops::RangeFull {
     }
 
     #[inline]
-    unsafe fn get_unchecked(self, slice: &[T]) -> &[T] {
+    unsafe fn get_unchecked(self, slice: *const [T]) -> *const [T] {
         slice
     }
 
     #[inline]
-    unsafe fn get_unchecked_mut(self, slice: &mut [T]) -> &mut [T] {
+    unsafe fn get_unchecked_mut(self, slice: *mut [T]) -> *mut [T] {
         slice
     }
 
@@ -3179,7 +3286,7 @@ impl<T> SliceIndex<[T]> for ops::RangeFull {
 }
 
 #[stable(feature = "inclusive_range", since = "1.26.0")]
-impl<T> SliceIndex<[T]> for ops::RangeInclusive<usize> {
+unsafe impl<T> SliceIndex<[T]> for ops::RangeInclusive<usize> {
     type Output = [T];
 
     #[inline]
@@ -3197,13 +3304,13 @@ impl<T> SliceIndex<[T]> for ops::RangeInclusive<usize> {
     }
 
     #[inline]
-    unsafe fn get_unchecked(self, slice: &[T]) -> &[T] {
+    unsafe fn get_unchecked(self, slice: *const [T]) -> *const [T] {
         // SAFETY: the caller has to uphold the safety contract for `get_unchecked`.
         unsafe { (*self.start()..self.end() + 1).get_unchecked(slice) }
     }
 
     #[inline]
-    unsafe fn get_unchecked_mut(self, slice: &mut [T]) -> &mut [T] {
+    unsafe fn get_unchecked_mut(self, slice: *mut [T]) -> *mut [T] {
         // SAFETY: the caller has to uphold the safety contract for `get_unchecked_mut`.
         unsafe { (*self.start()..self.end() + 1).get_unchecked_mut(slice) }
     }
@@ -3226,7 +3333,7 @@ impl<T> SliceIndex<[T]> for ops::RangeInclusive<usize> {
 }
 
 #[stable(feature = "inclusive_range", since = "1.26.0")]
-impl<T> SliceIndex<[T]> for ops::RangeToInclusive<usize> {
+unsafe impl<T> SliceIndex<[T]> for ops::RangeToInclusive<usize> {
     type Output = [T];
 
     #[inline]
@@ -3240,13 +3347,13 @@ impl<T> SliceIndex<[T]> for ops::RangeToInclusive<usize> {
     }
 
     #[inline]
-    unsafe fn get_unchecked(self, slice: &[T]) -> &[T] {
+    unsafe fn get_unchecked(self, slice: *const [T]) -> *const [T] {
         // SAFETY: the caller has to uphold the safety contract for `get_unchecked`.
         unsafe { (0..=self.end).get_unchecked(slice) }
     }
 
     #[inline]
-    unsafe fn get_unchecked_mut(self, slice: &mut [T]) -> &mut [T] {
+    unsafe fn get_unchecked_mut(self, slice: *mut [T]) -> *mut [T] {
         // SAFETY: the caller has to uphold the safety contract for `get_unchecked_mut`.
         unsafe { (0..=self.end).get_unchecked_mut(slice) }
     }
@@ -5988,7 +6095,7 @@ pub unsafe fn from_raw_parts<'a, T>(data: *const T, len: usize) -> &'a [T] {
 ///
 /// Behavior is undefined if any of the following conditions are violated:
 ///
-/// * `data` must be [valid] for writes for `len * mem::size_of::<T>()` many bytes,
+/// * `data` must be [valid] for boths reads and writes for `len * mem::size_of::<T>()` many bytes,
 ///   and it must be properly aligned. This means in particular:
 ///
 ///     * The entire memory range of this slice must be contained within a single allocated object!
@@ -6126,14 +6233,8 @@ where
             return false;
         }
 
-        #[cfg(bootstrap)]
-        if self.as_ptr() == other.as_ptr() {
-            return true;
-        }
-
         // While performance would suffer if `guaranteed_eq` just returned `false`
         // for all arguments, correctness and return value of this function are not affected.
-        #[cfg(not(bootstrap))]
         if self.as_ptr().guaranteed_eq(other.as_ptr()) {
             return true;
         }
@@ -6152,14 +6253,8 @@ where
             return false;
         }
 
-        #[cfg(bootstrap)]
-        if self.as_ptr() == other.as_ptr() {
-            return true;
-        }
-
         // While performance would suffer if `guaranteed_eq` just returned `false`
         // for all arguments, correctness and return value of this function are not affected.
-        #[cfg(not(bootstrap))]
         if self.as_ptr().guaranteed_eq(other.as_ptr()) {
             return true;
         }

@@ -17,7 +17,6 @@ use rustc_middle::middle::cstore::{CrateSource, CrateStore, EncodedMetadata};
 use rustc_middle::middle::exported_symbols::ExportedSymbol;
 use rustc_middle::middle::stability::DeprecationEntry;
 use rustc_middle::ty::query::Providers;
-use rustc_middle::ty::query::QueryConfig;
 use rustc_middle::ty::{self, TyCtxt};
 use rustc_session::utils::NativeLibKind;
 use rustc_session::{CrateDisambiguator, Session};
@@ -31,13 +30,11 @@ use std::any::Any;
 macro_rules! provide {
     (<$lt:tt> $tcx:ident, $def_id:ident, $other:ident, $cdata:ident,
       $($name:ident => $compute:block)*) => {
-        pub fn provide_extern<$lt>(providers: &mut Providers<$lt>) {
-            // HACK(eddyb) `$lt: $lt` forces `$lt` to be early-bound, which
-            // allows the associated type in the return type to be normalized.
-            $(fn $name<$lt: $lt, T: IntoArgs>(
+        pub fn provide_extern(providers: &mut Providers) {
+            $(fn $name<$lt>(
                 $tcx: TyCtxt<$lt>,
-                def_id_arg: T,
-            ) -> <ty::queries::$name<$lt> as QueryConfig<TyCtxt<$lt>>>::Value {
+                def_id_arg: ty::query::query_keys::$name<$lt>,
+            ) -> ty::query::query_values::$name<$lt> {
                 let _prof_timer =
                     $tcx.prof.generic_activity("metadata_decode_entry");
 
@@ -114,8 +111,8 @@ provide! { <'tcx> tcx, def_id, other, cdata,
             bug!("coerce_unsized_info: `{:?}` is missing its info", def_id);
         })
     }
-    optimized_mir => { cdata.get_optimized_mir(tcx, def_id.index) }
-    promoted_mir => { cdata.get_promoted_mir(tcx, def_id.index) }
+    optimized_mir => { tcx.arena.alloc(cdata.get_optimized_mir(tcx, def_id.index)) }
+    promoted_mir => { tcx.arena.alloc(cdata.get_promoted_mir(tcx, def_id.index)) }
     mir_const_qualif => { cdata.mir_const_qualif(def_id.index) }
     fn_sig => { cdata.fn_sig(def_id.index, tcx) }
     inherent_impls => { cdata.get_inherent_implementations_for_type(tcx, def_id.index) }
@@ -243,7 +240,7 @@ provide! { <'tcx> tcx, def_id, other, cdata,
     crate_extern_paths => { cdata.source().paths().cloned().collect() }
 }
 
-pub fn provide(providers: &mut Providers<'_>) {
+pub fn provide(providers: &mut Providers) {
     // FIXME(#44234) - almost all of these queries have no sub-queries and
     // therefore no actual inputs, they're just reading tables calculated in
     // resolve! Does this work? Unsure! That's what the issue is about

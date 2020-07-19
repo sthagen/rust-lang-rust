@@ -84,7 +84,7 @@ pub struct PendingPredicateObligation<'tcx> {
 
 // `PendingPredicateObligation` is used a lot. Make sure it doesn't unintentionally get bigger.
 #[cfg(target_arch = "x86_64")]
-static_assert_size!(PendingPredicateObligation<'_>, 72);
+static_assert_size!(PendingPredicateObligation<'_>, 64);
 
 impl<'a, 'tcx> FulfillmentContext<'tcx> {
     /// Creates a new fulfillment context.
@@ -524,10 +524,10 @@ impl<'a, 'b, 'tcx> ObligationProcessor for FulfillProcessor<'a, 'b, 'tcx> {
                 let stalled_on = &mut pending_obligation.stalled_on;
 
                 let mut evaluate = |c: &'tcx Const<'tcx>| {
-                    if let ty::ConstKind::Unevaluated(def_id, substs, promoted) = c.val {
+                    if let ty::ConstKind::Unevaluated(def, substs, promoted) = c.val {
                         match self.selcx.infcx().const_eval_resolve(
                             obligation.param_env,
-                            def_id,
+                            def,
                             substs,
                             promoted,
                             Some(obligation.cause.span),

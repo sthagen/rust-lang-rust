@@ -484,7 +484,7 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
         lint: &'static lint::Lint,
         source_info: SourceInfo,
         message: &'static str,
-        panic: AssertKind<ConstInt>,
+        panic: AssertKind<impl std::fmt::Debug>,
     ) -> Option<()> {
         let lint_root = self.lint_root(source_info)?;
         self.tcx.struct_span_lint_hir(lint, lint_root, source_info.span, |lint| {
@@ -638,8 +638,20 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
 
                 return None;
             }
+            Rvalue::ThreadLocalRef(def_id) => {
+                trace!("skipping ThreadLocalRef({:?})", def_id);
 
-            _ => {}
+                return None;
+            }
+
+            // There's no other checking to do at this time.
+            Rvalue::Aggregate(..)
+            | Rvalue::Use(..)
+            | Rvalue::Repeat(..)
+            | Rvalue::Len(..)
+            | Rvalue::Cast(..)
+            | Rvalue::Discriminant(..)
+            | Rvalue::NullaryOp(..) => {}
         }
 
         // FIXME we need to revisit this for #67176
@@ -992,6 +1004,45 @@ impl<'mir, 'tcx> MutVisitor<'tcx> for ConstPropagator<'mir, 'tcx> {
                     let expected = ScalarMaybeUninit::from(Scalar::from_bool(*expected));
                     let value_const = self.ecx.read_scalar(value).unwrap();
                     if expected != value_const {
+                        enum DbgVal<T> {
+                            Val(T),
+                            Underscore,
+                        }
+                        impl<T: std::fmt::Debug> std::fmt::Debug for DbgVal<T> {
+                            fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                                match self {
+                                    Self::Val(val) => val.fmt(fmt),
+                                    Self::Underscore => fmt.write_str("_"),
+                                }
+                            }
+                        }
+                        let mut eval_to_int = |op| {
+                            // This can be `None` if the lhs wasn't const propagated and we just
+                            // triggered the assert on the value of the rhs.
+                            match self.eval_operand(op, source_info) {
+                                Some(op) => {
+                                    DbgVal::Val(self.ecx.read_immediate(op).unwrap().to_const_int())
+                                }
+                                None => DbgVal::Underscore,
+                            }
+                        };
+                        let msg = match msg {
+                            AssertKind::DivisionByZero(op) => {
+                                Some(AssertKind::DivisionByZero(eval_to_int(op)))
+                            }
+                            AssertKind::RemainderByZero(op) => {
+                                Some(AssertKind::RemainderByZero(eval_to_int(op)))
+                            }
+                            AssertKind::BoundsCheck { ref len, ref index } => {
+                                let len = eval_to_int(len);
+                                let index = eval_to_int(index);
+                                Some(AssertKind::BoundsCheck { len, index })
+                            }
+                            // Overflow is are already covered by checks on the binary operators.
+                            AssertKind::Overflow(..) | AssertKind::OverflowNeg(_) => None,
+                            // Need proper const propagator for these.
+                            _ => None,
+                        };
                         // Poison all places this operand references so that further code
                         // doesn't use the invalid value
                         match cond {
@@ -1000,35 +1051,14 @@ impl<'mir, 'tcx> MutVisitor<'tcx> for ConstPropagator<'mir, 'tcx> {
                             }
                             Operand::Constant(_) => {}
                         }
-                        let mut eval_to_int = |op| {
-                            let op = self
-                                .eval_operand(op, source_info)
-                                .expect("if we got here, it must be const");
-                            self.ecx.read_immediate(op).unwrap().to_const_int()
-                        };
-                        let msg = match msg {
-                            AssertKind::DivisionByZero(op) => {
-                                AssertKind::DivisionByZero(eval_to_int(op))
-                            }
-                            AssertKind::RemainderByZero(op) => {
-                                AssertKind::RemainderByZero(eval_to_int(op))
-                            }
-                            AssertKind::BoundsCheck { ref len, ref index } => {
-                                let len = eval_to_int(len);
-                                let index = eval_to_int(index);
-                                AssertKind::BoundsCheck { len, index }
-                            }
-                            // Overflow is are already covered by checks on the binary operators.
-                            AssertKind::Overflow(..) | AssertKind::OverflowNeg(_) => return,
-                            // Need proper const propagator for these.
-                            _ => return,
-                        };
-                        self.report_assert_as_lint(
-                            lint::builtin::UNCONDITIONAL_PANIC,
-                            source_info,
-                            "this operation will panic at runtime",
-                            msg,
-                        );
+                        if let Some(msg) = msg {
+                            self.report_assert_as_lint(
+                                lint::builtin::UNCONDITIONAL_PANIC,
+                                source_info,
+                                "this operation will panic at runtime",
+                                msg,
+                            );
+                        }
                     } else {
                         if self.should_const_prop(value) {
                             if let ScalarMaybeUninit::Scalar(scalar) = value_const {

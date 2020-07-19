@@ -558,7 +558,7 @@ impl<'tcx> EncodeContext<'tcx> {
         // Encode exported symbols info. This is prefetched in `encode_metadata` so we encode
         // this late to give the prefetching as much time as possible to complete.
         i = self.position();
-        let exported_symbols = self.tcx.exported_symbols(LOCAL_CRATE);
+        let exported_symbols = tcx.exported_symbols(LOCAL_CRATE);
         let exported_symbols = self.encode_exported_symbols(&exported_symbols);
         let exported_symbols_bytes = self.position() - i;
 
@@ -622,7 +622,7 @@ impl<'tcx> EncodeContext<'tcx> {
 
         let total_bytes = self.position();
 
-        if self.tcx.sess.meta_stats() {
+        if tcx.sess.meta_stats() {
             let mut zero_bytes = 0;
             for e in self.opaque.data.iter() {
                 if *e == 0 {
@@ -1369,9 +1369,9 @@ impl EncodeContext<'tcx> {
         debug!("EncodeContext::encode_info_for_closure({:?})", def_id);
 
         // NOTE(eddyb) `tcx.type_of(def_id)` isn't used because it's fully generic,
-        // including on the signature, which is inferred in `typeck_tables_of.
+        // including on the signature, which is inferred in `typeck.
         let hir_id = self.tcx.hir().as_local_hir_id(def_id);
-        let ty = self.tcx.typeck_tables_of(def_id).node_type(hir_id);
+        let ty = self.tcx.typeck(def_id).node_type(hir_id);
 
         record!(self.tables.kind[def_id.to_def_id()] <- match ty.kind {
             ty::Generator(..) => {
@@ -1541,7 +1541,7 @@ impl EncodeContext<'tcx> {
     ) -> Lazy<[(ExportedSymbol<'tcx>, SymbolExportLevel)]> {
         // The metadata symbol name is special. It should not show up in
         // downstream crates.
-        let metadata_symbol_name = SymbolName::new(&metadata_symbol_name(self.tcx));
+        let metadata_symbol_name = SymbolName::new(self.tcx, &metadata_symbol_name(self.tcx));
 
         self.lazy(
             exported_symbols

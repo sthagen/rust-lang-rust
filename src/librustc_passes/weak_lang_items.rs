@@ -7,7 +7,7 @@ use rustc_hir::intravisit::{self, NestedVisitorMap, Visitor};
 use rustc_hir::lang_items;
 use rustc_hir::lang_items::ITEM_REFS;
 use rustc_hir::weak_lang_items::WEAK_ITEMS_REFS;
-use rustc_middle::middle::lang_items::whitelisted;
+use rustc_middle::middle::lang_items::required;
 use rustc_middle::ty::TyCtxt;
 use rustc_session::config::CrateType;
 use rustc_span::symbol::sym;
@@ -59,7 +59,7 @@ fn verify<'tcx>(tcx: TyCtxt<'tcx>, items: &lang_items::LanguageItems) {
     }
 
     for (name, &item) in WEAK_ITEMS_REFS.iter() {
-        if missing.contains(&item) && !whitelisted(tcx, item) && items.require(item).is_err() {
+        if missing.contains(&item) && required(tcx, item) && items.require(item).is_err() {
             if item == lang_items::PanicImplLangItem {
                 tcx.sess.err("`#[panic_handler]` function required, but not found");
             } else if item == lang_items::OomLangItem {
@@ -81,7 +81,7 @@ impl<'a, 'tcx> Context<'a, 'tcx> {
             // `core::intrinsics::code_count_region()` is (currently) the only `extern` lang item
             // that is never actually linked. It is not a `weak_lang_item` that can be registered
             // when used, and should be registered here instead.
-            if let Some((item_index, _)) = ITEM_REFS.get(&*name.as_str()).cloned() {
+            if let Some((item_index, _)) = ITEM_REFS.get(&name).cloned() {
                 if self.items.items[item_index].is_none() {
                     let item_def_id = self.tcx.hir().local_def_id(hir_id).to_def_id();
                     self.items.items[item_index] = Some(item_def_id);

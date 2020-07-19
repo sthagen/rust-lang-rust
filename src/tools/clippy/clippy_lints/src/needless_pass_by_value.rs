@@ -100,7 +100,7 @@ impl<'tcx> LateLintPass<'tcx> for NeedlessPassByValue {
 
         // Allow `Borrow` or functions to be taken by value
         let borrow_trait = need!(get_trait_def_id(cx, &paths::BORROW_TRAIT));
-        let whitelisted_traits = [
+        let allowed_traits = [
             need!(cx.tcx.lang_items().fn_trait()),
             need!(cx.tcx.lang_items().fn_once_trait()),
             need!(cx.tcx.lang_items().fn_mut_trait()),
@@ -111,7 +111,7 @@ impl<'tcx> LateLintPass<'tcx> for NeedlessPassByValue {
 
         let fn_def_id = cx.tcx.hir().local_def_id(hir_id);
 
-        let preds = traits::elaborate_predicates(cx.tcx, cx.param_env.caller_bounds.iter())
+        let preds = traits::elaborate_predicates(cx.tcx, cx.param_env.caller_bounds().iter())
             .filter(|p| !p.is_global())
             .filter_map(|obligation| {
                 if let ty::PredicateKind::Trait(poly_trait_ref, _) = obligation.predicate.kind() {
@@ -135,7 +135,8 @@ impl<'tcx> LateLintPass<'tcx> for NeedlessPassByValue {
         } = {
             let mut ctx = MovedVariablesCtxt::default();
             cx.tcx.infer_ctxt().enter(|infcx| {
-                euv::ExprUseVisitor::new(&mut ctx, &infcx, fn_def_id, cx.param_env, cx.tables()).consume_body(body);
+                euv::ExprUseVisitor::new(&mut ctx, &infcx, fn_def_id, cx.param_env, cx.typeck_results())
+                    .consume_body(body);
             });
             ctx
         };
@@ -184,7 +185,7 @@ impl<'tcx> LateLintPass<'tcx> for NeedlessPassByValue {
                 if !is_self(arg);
                 if !ty.is_mutable_ptr();
                 if !is_copy(cx, ty);
-                if !whitelisted_traits.iter().any(|&t| implements_trait(cx, ty, t, &[]));
+                if !allowed_traits.iter().any(|&t| implements_trait(cx, ty, t, &[]));
                 if !implements_borrow_trait;
                 if !all_borrowable_trait;
 

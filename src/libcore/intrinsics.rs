@@ -1126,7 +1126,7 @@ extern "rust-intrinsic" {
     ///
     /// // use `u32::from_ne_bytes` instead
     /// let num = u32::from_ne_bytes(raw_bytes);
-    /// // or use `u32::from_le_bytes` or `u32::from_ge_bytes` to specify the endianness
+    /// // or use `u32::from_le_bytes` or `u32::from_be_bytes` to specify the endianness
     /// let num = u32::from_le_bytes(raw_bytes);
     /// assert_eq!(num, 0x12345678);
     /// let num = u32::from_be_bytes(raw_bytes);
@@ -1285,7 +1285,9 @@ extern "rust-intrinsic" {
     /// }
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
-    #[rustc_const_unstable(feature = "const_transmute", issue = "53605")]
+    // NOTE: While this makes the intrinsic const stable, we have some custom code in const fn
+    // checks that prevent its use within `const fn`.
+    #[rustc_const_stable(feature = "const_transmute", since = "1.46.0")]
     pub fn transmute<T, U>(e: T) -> U;
 
     /// Returns `true` if the actual type given as `T` requires drop
@@ -1925,7 +1927,6 @@ extern "rust-intrinsic" {
     /// The to-be-stabilized version of this intrinsic is
     /// [`std::mem::variant_count`](../../std/mem/fn.variant_count.html)
     #[rustc_const_unstable(feature = "variant_count", issue = "73662")]
-    #[cfg(not(bootstrap))]
     pub fn variant_count<T>() -> usize;
 
     /// Rust's "try catch" construct which invokes the function pointer `try_fn`
@@ -1956,7 +1957,6 @@ extern "rust-intrinsic" {
     /// Internal placeholder for injecting code coverage counters when the "instrument-coverage"
     /// option is enabled. The placeholder is replaced with `llvm.instrprof.increment` during code
     /// generation.
-    #[cfg(not(bootstrap))]
     #[lang = "count_code_region"]
     pub fn count_code_region(index: u32, start_byte_pos: u32, end_byte_pos: u32);
 
@@ -1966,7 +1966,6 @@ extern "rust-intrinsic" {
     /// "coverage map", which is injected into the generated code, as additional data.
     /// This marker identifies a code region and two other counters or counter expressions
     /// whose sum is the number of times the code region was executed.
-    #[cfg(not(bootstrap))]
     pub fn coverage_counter_add(
         index: u32,
         left_index: u32,
@@ -1978,7 +1977,6 @@ extern "rust-intrinsic" {
     /// This marker identifies a code region and two other counters or counter expressions
     /// whose difference is the number of times the code region was executed.
     /// (See `coverage_counter_add` for more information.)
-    #[cfg(not(bootstrap))]
     pub fn coverage_counter_subtract(
         index: u32,
         left_index: u32,
@@ -1990,24 +1988,15 @@ extern "rust-intrinsic" {
     /// This marker identifies a code region to be added to the "coverage map" to indicate source
     /// code that can never be reached.
     /// (See `coverage_counter_add` for more information.)
-    #[cfg(not(bootstrap))]
     pub fn coverage_unreachable(start_byte_pos: u32, end_byte_pos: u32);
 
     /// See documentation of `<*const T>::guaranteed_eq` for details.
     #[rustc_const_unstable(feature = "const_raw_ptr_comparison", issue = "53020")]
-    #[cfg(not(bootstrap))]
     pub fn ptr_guaranteed_eq<T>(ptr: *const T, other: *const T) -> bool;
 
     /// See documentation of `<*const T>::guaranteed_ne` for details.
     #[rustc_const_unstable(feature = "const_raw_ptr_comparison", issue = "53020")]
-    #[cfg(not(bootstrap))]
     pub fn ptr_guaranteed_ne<T>(ptr: *const T, other: *const T) -> bool;
-}
-
-#[rustc_const_unstable(feature = "variant_count", issue = "73662")]
-#[cfg(bootstrap)]
-pub const fn variant_count<T>() -> usize {
-    0
 }
 
 // Some functions are defined here because they accidentally got made

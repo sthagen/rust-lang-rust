@@ -17,7 +17,7 @@ use rustc_middle::ty::print::with_crate_prefix;
 use rustc_middle::ty::{
     self, ToPolyTraitRef, ToPredicate, Ty, TyCtxt, TypeFoldable, WithConstness,
 };
-use rustc_span::symbol::{kw, Ident};
+use rustc_span::symbol::{kw, sym, Ident};
 use rustc_span::{source_map, FileName, Span};
 use rustc_trait_selection::traits::query::evaluate_obligation::InferCtxtExt;
 use rustc_trait_selection::traits::Obligation;
@@ -729,7 +729,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     let adt_def = actual.ty_adt_def().expect("enum is not an ADT");
                     if let Some(suggestion) = lev_distance::find_best_match_for_name(
                         adt_def.variants.iter().map(|s| &s.ident.name),
-                        &item_name.as_str(),
+                        item_name.name,
                         None,
                     ) {
                         err.span_suggestion(
@@ -743,7 +743,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
                 let mut fallback_span = true;
                 let msg = "remove this method call";
-                if item_name.as_str() == "as_str" && actual.peel_refs().is_str() {
+                if item_name.name == sym::as_str && actual.peel_refs().is_str() {
                     if let SelfSource::MethodCall(expr) = source {
                         let call_expr =
                             self.tcx.hir().expect_expr(self.tcx.hir().get_parent_node(expr.hir_id));
@@ -937,6 +937,12 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         // legal to implement.
         let mut candidates = all_traits(self.tcx)
             .into_iter()
+            // Don't issue suggestions for unstable traits since they're
+            // unlikely to be implementable anyway
+            .filter(|info| match self.tcx.lookup_stability(info.def_id) {
+                Some(attr) => attr.level.is_stable(),
+                None => true,
+            })
             .filter(|info| {
                 // We approximate the coherence rules to only suggest
                 // traits that are legal to implement by requiring that
@@ -1037,7 +1043,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             };
             // Obtain the span for `param` and use it for a structured suggestion.
             let mut suggested = false;
-            if let (Some(ref param), Some(ref table)) = (param_type, self.in_progress_tables) {
+            if let (Some(ref param), Some(ref table)) =
+                (param_type, self.in_progress_typeck_results)
+            {
                 let table_owner = table.borrow().hir_owner;
                 let generics = self.tcx.generics_of(table_owner.to_def_id());
                 let type_param = generics.type_param(param, self.tcx);
@@ -1292,7 +1300,7 @@ fn compute_all_traits(tcx: TyCtxt<'_>) -> Vec<DefId> {
     traits
 }
 
-pub fn provide(providers: &mut ty::query::Providers<'_>) {
+pub fn provide(providers: &mut ty::query::Providers) {
     providers.all_traits = |tcx, cnum| {
         assert_eq!(cnum, LOCAL_CRATE);
         &tcx.arena.alloc(compute_all_traits(tcx))[..]

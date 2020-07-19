@@ -79,7 +79,6 @@ x--expand-yaml-anchors--remove:
     steps:
       - name: disable git crlf conversion
         run: git config --global core.autocrlf false
-        shell: bash
 
       - name: checkout the source code
         uses: actions/checkout@v1
@@ -231,18 +230,10 @@ on:
 
 defaults:
   run:
-    # While on Linux and macOS builders it just forwards the arguments to the
-    # system bash, this wrapper allows switching from the host's bash.exe to
-    # the one we install along with MSYS2 mid-build on Windows.
-    #
-    # Once the step to install MSYS2 is executed, the CI_OVERRIDE_SHELL
-    # environment variable is set pointing to our MSYS2's bash.exe. From that
-    # moment the host's bash.exe will not be called anymore.
-    #
-    # This is needed because we can't launch our own bash.exe from the host
-    # bash.exe, as that would load two different cygwin1.dll in memory, causing
-    # "cygwin heap mismatch" errors.
-    shell: python src/ci/exec-with-shell.py {0}
+    # On Linux, macOS, and Windows, use the system-provided bash as the default
+    # shell. (This should only make a difference on Windows, where the default
+    # shell is PowerShell.)
+    shell: bash
 
 jobs:
   pr:
@@ -341,6 +332,9 @@ jobs:
           - name: dist-powerpc64le-linux
             <<: *job-linux-xl
 
+          - name: dist-riscv64-linux
+            <<: *job-linux-xl
+
           - name: dist-s390x-linux
             <<: *job-linux-xl
 
@@ -351,6 +345,9 @@ jobs:
             <<: *job-linux-xl
 
           - name: dist-x86_64-freebsd
+            <<: *job-linux-xl
+
+          - name: dist-x86_64-illumos
             <<: *job-linux-xl
 
           - name: dist-x86_64-linux
@@ -409,42 +406,6 @@ jobs:
             env:
               DEPLOY_TOOLSTATES_JSON: toolstates-linux.json
             <<: *job-linux-xl
-
-          ####################
-          #  macOS Builders  #
-          ####################
-
-          - name: dist-x86_64-apple
-            env:
-              SCRIPT: ./x.py dist
-              RUST_CONFIGURE_ARGS: --target=aarch64-apple-ios,x86_64-apple-ios --enable-full-tools --enable-sanitizers --enable-profiler --set rust.jemalloc
-              RUSTC_RETRY_LINKER_ON_SEGFAULT: 1
-              MACOSX_DEPLOYMENT_TARGET: 10.7
-              NO_LLVM_ASSERTIONS: 1
-              NO_DEBUG_ASSERTIONS: 1
-              DIST_REQUIRE_ALL_TOOLS: 1
-            <<: *job-macos-xl
-
-          - name: dist-x86_64-apple-alt
-            env:
-              SCRIPT: ./x.py dist
-              RUST_CONFIGURE_ARGS: --enable-extended --enable-profiler --set rust.jemalloc
-              RUSTC_RETRY_LINKER_ON_SEGFAULT: 1
-              MACOSX_DEPLOYMENT_TARGET: 10.7
-              NO_LLVM_ASSERTIONS: 1
-              NO_DEBUG_ASSERTIONS: 1
-            <<: *job-macos-xl
-
-          - name: x86_64-apple
-            env:
-              SCRIPT: ./x.py test
-              RUST_CONFIGURE_ARGS: --build=x86_64-apple-darwin --enable-sanitizers --enable-profiler --set rust.jemalloc
-              RUSTC_RETRY_LINKER_ON_SEGFAULT: 1
-              MACOSX_DEPLOYMENT_TARGET: 10.8
-              MACOSX_STD_DEPLOYMENT_TARGET: 10.7
-              NO_LLVM_ASSERTIONS: 1
-              NO_DEBUG_ASSERTIONS: 1
-            <<: *job-macos-xl
 
           ######################
           #  Windows Builders  #
@@ -591,6 +552,51 @@ jobs:
               SCRIPT: python x.py dist
             <<: *job-windows-xl
 
+  auto-fallible:
+    <<: *base-ci-job
+    name: auto-fallible
+    env:
+      <<: [*shared-ci-variables, *prod-variables]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/auto' && github.repository == 'rust-lang-ci/rust'
+    strategy:
+      matrix:
+        include:
+          ####################
+          #  macOS Builders  #
+          ####################
+
+          - name: dist-x86_64-apple
+            env:
+              SCRIPT: ./x.py dist
+              RUST_CONFIGURE_ARGS: --target=aarch64-apple-ios,x86_64-apple-ios --enable-full-tools --enable-sanitizers --enable-profiler --set rust.jemalloc
+              RUSTC_RETRY_LINKER_ON_SEGFAULT: 1
+              MACOSX_DEPLOYMENT_TARGET: 10.7
+              NO_LLVM_ASSERTIONS: 1
+              NO_DEBUG_ASSERTIONS: 1
+              DIST_REQUIRE_ALL_TOOLS: 1
+            <<: *job-macos-xl
+
+          - name: dist-x86_64-apple-alt
+            env:
+              SCRIPT: ./x.py dist
+              RUST_CONFIGURE_ARGS: --enable-extended --enable-profiler --set rust.jemalloc
+              RUSTC_RETRY_LINKER_ON_SEGFAULT: 1
+              MACOSX_DEPLOYMENT_TARGET: 10.7
+              NO_LLVM_ASSERTIONS: 1
+              NO_DEBUG_ASSERTIONS: 1
+            <<: *job-macos-xl
+
+          - name: x86_64-apple
+            env:
+              SCRIPT: ./x.py test
+              RUST_CONFIGURE_ARGS: --build=x86_64-apple-darwin --enable-sanitizers --enable-profiler --set rust.jemalloc
+              RUSTC_RETRY_LINKER_ON_SEGFAULT: 1
+              MACOSX_DEPLOYMENT_TARGET: 10.8
+              MACOSX_STD_DEPLOYMENT_TARGET: 10.7
+              NO_LLVM_ASSERTIONS: 1
+              NO_DEBUG_ASSERTIONS: 1
+            <<: *job-macos-xl
+
   master:
     name: master
     runs-on: ubuntu-latest
@@ -605,6 +611,7 @@ jobs:
 
       - name: publish toolstate
         run: src/ci/publish_toolstate.sh
+        shell: bash
         env:
           TOOLSTATE_REPO_ACCESS_TOKEN: ${{ secrets.TOOLSTATE_REPO_ACCESS_TOKEN }}
         <<: *step

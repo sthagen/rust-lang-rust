@@ -735,7 +735,7 @@ pub struct SyntaxExtension {
     pub kind: SyntaxExtensionKind,
     /// Span of the macro definition.
     pub span: Span,
-    /// Whitelist of unstable features that are treated as stable inside this macro.
+    /// List of unstable features that are treated as stable inside this macro.
     pub allow_internal_unstable: Option<Lrc<[Symbol]>>,
     /// Suppresses the `unsafe_code` lint for code produced by this macro.
     pub allow_internal_unsafe: bool,
@@ -1060,9 +1060,6 @@ impl<'a> ExtCtxt<'a> {
     }
     pub fn set_trace_macros(&mut self, x: bool) {
         self.ecfg.trace_mac = x
-    }
-    pub fn ident_of(&self, st: &str, sp: Span) -> Ident {
-        Ident::from_str_and_span(st, sp)
     }
     pub fn std_path(&self, components: &[Symbol]) -> Vec<Ident> {
         let def_site = self.with_def_site_ctxt(DUMMY_SP);

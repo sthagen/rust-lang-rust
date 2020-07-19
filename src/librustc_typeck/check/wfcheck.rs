@@ -394,6 +394,7 @@ fn check_type_defn<'tcx, F>(
                                 Some(i) => i,
                                 None => bug!(),
                             },
+                            span: field.span,
                             last,
                         },
                     ),
@@ -422,8 +423,11 @@ fn check_type_defn<'tcx, F>(
                 fcx.register_predicate(traits::Obligation::new(
                     cause,
                     fcx.param_env,
-                    ty::PredicateKind::ConstEvaluatable(discr_def_id.to_def_id(), discr_substs)
-                        .to_predicate(fcx.tcx),
+                    ty::PredicateKind::ConstEvaluatable(
+                        ty::WithOptConstParam::unknown(discr_def_id.to_def_id()),
+                        discr_substs,
+                    )
+                    .to_predicate(fcx.tcx),
                 ));
             }
         }
@@ -1326,10 +1330,10 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             .iter()
             .map(|field| {
                 let field_ty = self.tcx.type_of(self.tcx.hir().local_def_id(field.hir_id));
-                let field_ty = self.normalize_associated_types_in(field.span, &field_ty);
+                let field_ty = self.normalize_associated_types_in(field.ty.span, &field_ty);
                 let field_ty = self.resolve_vars_if_possible(&field_ty);
                 debug!("non_enum_variant: type of field {:?} is {:?}", field, field_ty);
-                AdtField { ty: field_ty, span: field.span }
+                AdtField { ty: field_ty, span: field.ty.span }
             })
             .collect();
         AdtVariant { fields, explicit_discr: None }

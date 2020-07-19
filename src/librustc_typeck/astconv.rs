@@ -886,8 +886,14 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                     }
                 }
                 (GenericParamDefKind::Const, GenericArg::Const(ct)) => {
-                    let ct_def_id = tcx.hir().local_def_id(ct.value.hir_id);
-                    ty::Const::from_anon_const(tcx, ct_def_id).into()
+                    ty::Const::from_opt_const_arg_anon_const(
+                        tcx,
+                        ty::WithOptConstParam {
+                            did: tcx.hir().local_def_id(ct.value.hir_id),
+                            const_param_did: Some(param.def_id),
+                        },
+                    )
+                    .into()
                 }
                 _ => unreachable!(),
             },
@@ -1247,7 +1253,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                             .generic_args()
                             .bindings
                             .iter()
-                            .find_map(|b| match (b.ident.as_str() == "Output", &b.kind) {
+                            .find_map(|b| match (b.ident.name == sym::Output, &b.kind) {
                                 (true, hir::TypeBindingKind::Equality { ty }) => {
                                     sess.source_map().span_to_snippet(ty.span).ok()
                                 }
@@ -2254,7 +2260,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
             .collect();
 
         if let (Some(suggested_name), true) = (
-            find_best_match_for_name(all_candidate_names.iter(), &assoc_name.as_str(), None),
+            find_best_match_for_name(all_candidate_names.iter(), assoc_name.name, None),
             assoc_name.span != DUMMY_SP,
         ) {
             err.span_suggestion(
@@ -2354,7 +2360,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                     let adt_def = qself_ty.ty_adt_def().expect("enum is not an ADT");
                     if let Some(suggested_name) = find_best_match_for_name(
                         adt_def.variants.iter().map(|variant| &variant.ident.name),
-                        &assoc_ident.as_str(),
+                        assoc_ident.name,
                         None,
                     ) {
                         err.span_suggestion(
@@ -3049,14 +3055,14 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         let bare_fn_ty =
             ty::Binder::bind(tcx.mk_fn_sig(input_tys, output_ty, decl.c_variadic, unsafety, abi));
 
-        if let (false, Some(ident_span)) = (self.allow_ty_infer(), ident_span) {
+        if !self.allow_ty_infer() {
             // We always collect the spans for placeholder types when evaluating `fn`s, but we
             // only want to emit an error complaining about them if infer types (`_`) are not
             // allowed. `allow_ty_infer` gates this behavior. We check for the presence of
             // `ident_span` to not emit an error twice when we have `fn foo(_: fn() -> _)`.
             crate::collect::placeholder_type_error(
                 tcx,
-                ident_span.shrink_to_hi(),
+                ident_span.map(|sp| sp.shrink_to_hi()),
                 &generics.params[..],
                 visitor.0,
                 true,

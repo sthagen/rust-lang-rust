@@ -56,9 +56,11 @@ fn filter_dirs(path: &Path) -> bool {
         "src/tools/clippy",
         "src/tools/miri",
         "src/tools/rls",
+        "src/tools/rust-analyzer",
         "src/tools/rust-installer",
         "src/tools/rustfmt",
         "src/doc/book",
+        "src/backtrace",
         // Filter RLS output directories
         "target/rls",
     ];

@@ -111,12 +111,17 @@ impl<'a> Resolver<'a> {
             (self.cstore().crate_name_untracked(def_id.krate), None)
         } else {
             let def_key = self.cstore().def_key(def_id);
-            (
-                // This unwrap is safe: crates must always have a name
-                def_key.disambiguated_data.data.get_opt_name().unwrap(),
-                // This unwrap is safe since we know this isn't the root
-                Some(self.get_module(DefId { index: def_key.parent.unwrap(), ..def_id })),
-            )
+            let name = def_key
+                .disambiguated_data
+                .data
+                .get_opt_name()
+                .expect("given a DefId that wasn't a module");
+            // This unwrap is safe since we know this isn't the root
+            let parent = Some(self.get_module(DefId {
+                index: def_key.parent.expect("failed to get parent for module"),
+                ..def_id
+            }));
+            (name, parent)
         };
 
         // Allocate and return a new module with the information we found
@@ -300,9 +305,7 @@ impl<'a, 'b> BuildReducedGraphVisitor<'a, 'b> {
     }
 
     fn insert_field_names(&mut self, def_id: DefId, field_names: Vec<Spanned<Symbol>>) {
-        if !field_names.is_empty() {
-            self.r.field_names.insert(def_id, field_names);
-        }
+        self.r.field_names.insert(def_id, field_names);
     }
 
     fn block_needs_anonymous_module(&mut self, block: &Block) -> bool {
@@ -1428,6 +1431,8 @@ impl<'a, 'b> Visitor<'b> for BuildReducedGraphVisitor<'a, 'b> {
         let ctor_kind = CtorKind::from_ast(&variant.data);
         let ctor_res = Res::Def(DefKind::Ctor(CtorOf::Variant, ctor_kind), ctor_def_id);
         self.r.define(parent, ident, ValueNS, (ctor_res, ctor_vis, variant.span, expn_id));
+        // Record field names for error reporting.
+        self.insert_field_names_local(ctor_def_id, &variant.data);
 
         visit::walk_variant(self, variant);
     }

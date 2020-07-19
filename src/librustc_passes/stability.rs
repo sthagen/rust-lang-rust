@@ -476,7 +476,7 @@ fn check_mod_unstable_api_usage(tcx: TyCtxt<'_>, module_def_id: LocalDefId) {
     tcx.hir().visit_item_likes_in_module(module_def_id, &mut Checker { tcx }.as_deep_visitor());
 }
 
-pub(crate) fn provide(providers: &mut Providers<'_>) {
+pub(crate) fn provide(providers: &mut Providers) {
     *providers = Providers { check_mod_unstable_api_usage, ..*providers };
     providers.stability_index = |tcx, cnum| {
         assert_eq!(cnum, LOCAL_CRATE);
@@ -502,7 +502,8 @@ impl Visitor<'tcx> for Checker<'tcx> {
         match item.kind {
             hir::ItemKind::ExternCrate(_) => {
                 // compiler-generated `extern crate` items have a dummy span.
-                if item.span.is_dummy() {
+                // `std` is still checked for the `restricted-std` feature.
+                if item.span.is_dummy() && item.ident.as_str() != "std" {
                     return;
                 }
 
@@ -620,7 +621,7 @@ pub fn check_unused_or_stable_features(tcx: TyCtxt<'_>) {
     // available as we'd like it to be.
     // FIXME: only remove `libc` when `stdbuild` is active.
     // FIXME: remove special casing for `test`.
-    remaining_lib_features.remove(&Symbol::intern("libc"));
+    remaining_lib_features.remove(&sym::libc);
     remaining_lib_features.remove(&sym::test);
 
     let check_features = |remaining_lib_features: &mut FxHashMap<_, _>, defined_features: &[_]| {

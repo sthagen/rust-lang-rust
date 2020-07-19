@@ -383,6 +383,7 @@ E0669: include_str!("./error_codes/E0669.md"),
 E0670: include_str!("./error_codes/E0670.md"),
 E0671: include_str!("./error_codes/E0671.md"),
 E0687: include_str!("./error_codes/E0687.md"),
+E0688: include_str!("./error_codes/E0688.md"),
 E0689: include_str!("./error_codes/E0689.md"),
 E0690: include_str!("./error_codes/E0690.md"),
 E0691: include_str!("./error_codes/E0691.md"),
@@ -449,6 +450,9 @@ E0764: include_str!("./error_codes/E0764.md"),
 E0765: include_str!("./error_codes/E0765.md"),
 E0766: include_str!("./error_codes/E0766.md"),
 E0767: include_str!("./error_codes/E0767.md"),
+E0768: include_str!("./error_codes/E0768.md"),
+E0769: include_str!("./error_codes/E0769.md"),
+E0770: include_str!("./error_codes/E0770.md"),
 ;
 //  E0006, // merged with E0005
 //  E0008, // cannot bind by-move into a pattern guard
@@ -615,7 +619,6 @@ E0767: include_str!("./error_codes/E0767.md"),
     E0640, // infer outlives requirements
 //  E0645, // trait aliases not finished
     E0667, // `impl Trait` in projections
-    E0688, // in-band lifetimes cannot be mixed with explicit lifetime binders
 //  E0694, // an unknown tool name found in scoped attributes
 //  E0702, // replaced with a generic attribute input check
 //  E0707, // multiple elided lifetimes used in arguments of `async fn`
