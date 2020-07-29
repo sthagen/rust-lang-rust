@@ -552,10 +552,8 @@ fn type_param_predicates(
     let extra_predicates = extend.into_iter().chain(
         icx.type_parameter_bounds_in_generics(ast_generics, param_id, ty, OnlySelfBounds(true))
             .into_iter()
-            .filter(|(predicate, _)| match predicate.kind() {
-                ty::PredicateKind::Trait(ref data, _) => {
-                    data.skip_binder().self_ty().is_param(index)
-                }
+            .filter(|(predicate, _)| match predicate.skip_binders() {
+                ty::PredicateAtom::Trait(data, _) => data.self_ty().is_param(index),
                 _ => false,
             }),
     );
@@ -730,7 +728,13 @@ fn convert_trait_item(tcx: TyCtxt<'_>, trait_item_id: hir::HirId) {
             placeholder_type_error(tcx, None, &[], visitor.0, false);
         }
 
-        hir::TraitItemKind::Type(_, None) => {}
+        hir::TraitItemKind::Type(_, None) => {
+            // #74612: Visit and try to find bad placeholders
+            // even if there is no concrete type.
+            let mut visitor = PlaceholderHirTyCollector::default();
+            visitor.visit_trait_item(trait_item);
+            placeholder_type_error(tcx, None, &[], visitor.0, false);
+        }
     };
 
     tcx.ensure().predicates_of(def_id);
@@ -854,7 +858,6 @@ fn convert_variant(
         _ => false,
     };
     ty::VariantDef::new(
-        tcx,
         ident,
         variant_did.map(LocalDefId::to_def_id),
         ctor_did.map(LocalDefId::to_def_id),
@@ -864,6 +867,10 @@ fn convert_variant(
         adt_kind,
         parent_did.to_def_id(),
         recovered,
+        adt_kind == AdtKind::Struct && tcx.has_attr(parent_did.to_def_id(), sym::non_exhaustive)
+            || variant_did.map_or(false, |variant_did| {
+                tcx.has_attr(variant_did.to_def_id(), sym::non_exhaustive)
+            }),
     )
 }
 
@@ -1000,7 +1007,7 @@ fn super_predicates_of(tcx: TyCtxt<'_>, trait_def_id: DefId) -> ty::GenericPredi
     // which will, in turn, reach indirect supertraits.
     for &(pred, span) in superbounds {
         debug!("superbound: {:?}", pred);
-        if let ty::PredicateKind::Trait(bound, _) = pred.kind() {
+        if let ty::PredicateAtom::Trait(bound, _) = pred.skip_binders() {
             tcx.at(span).super_predicates_of(bound.def_id());
         }
     }
@@ -1356,13 +1363,9 @@ fn generics_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::Generics {
     let type_start = own_start - has_self as u32 + params.len() as u32;
     let mut i = 0;
 
-    // FIXME(const_generics): a few places in the compiler expect generic params
-    // to be in the order lifetimes, then type params, then const params.
-    //
-    // To prevent internal errors in case const parameters are supplied before
-    // type parameters we first add all type params, then all const params.
-    params.extend(ast_generics.params.iter().filter_map(|param| {
-        if let GenericParamKind::Type { ref default, synthetic, .. } = param.kind {
+    params.extend(ast_generics.params.iter().filter_map(|param| match param.kind {
+        GenericParamKind::Lifetime { .. } => None,
+        GenericParamKind::Type { ref default, synthetic, .. } => {
             if !allow_defaults && default.is_some() {
                 if !tcx.features().default_type_parameter_fallback {
                     tcx.struct_span_lint_hir(
@@ -1372,7 +1375,7 @@ fn generics_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::Generics {
                         |lint| {
                             lint.build(
                                 "defaults for type parameters are only allowed in \
-                                        `struct`, `enum`, `type`, or `trait` definitions.",
+                                 `struct`, `enum`, `type`, or `trait` definitions.",
                             )
                             .emit();
                         },
@@ -1397,13 +1400,8 @@ fn generics_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::Generics {
             };
             i += 1;
             Some(param_def)
-        } else {
-            None
         }
-    }));
-
-    params.extend(ast_generics.params.iter().filter_map(|param| {
-        if let GenericParamKind::Const { .. } = param.kind {
+        GenericParamKind::Const { .. } => {
             let param_def = ty::GenericParamDef {
                 index: type_start + i as u32,
                 name: param.name.ident().name,
@@ -1413,8 +1411,6 @@ fn generics_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::Generics {
             };
             i += 1;
             Some(param_def)
-        } else {
-            None
         }
     }));
 
@@ -1893,14 +1889,24 @@ fn explicit_predicates_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::GenericPredicat
     // Collect the predicates that were written inline by the user on each
     // type parameter (e.g., `<T: Foo>`).
     for param in ast_generics.params {
-        if let GenericParamKind::Type { .. } = param.kind {
-            let name = param.name.ident().name;
-            let param_ty = ty::ParamTy::new(index, name).to_ty(tcx);
-            index += 1;
+        match param.kind {
+            // We already dealt with early bound lifetimes above.
+            GenericParamKind::Lifetime { .. } => (),
+            GenericParamKind::Type { .. } => {
+                let name = param.name.ident().name;
+                let param_ty = ty::ParamTy::new(index, name).to_ty(tcx);
+                index += 1;
 
-            let sized = SizedByDefault::Yes;
-            let bounds = AstConv::compute_bounds(&icx, param_ty, &param.bounds, sized, param.span);
-            predicates.extend(bounds.predicates(tcx, param_ty));
+                let sized = SizedByDefault::Yes;
+                let bounds =
+                    AstConv::compute_bounds(&icx, param_ty, &param.bounds, sized, param.span);
+                predicates.extend(bounds.predicates(tcx, param_ty));
+            }
+            GenericParamKind::Const { .. } => {
+                // Bounds on const parameters are currently not possible.
+                debug_assert!(param.bounds.is_empty());
+                index += 1;
+            }
         }
     }
 
@@ -1927,8 +1933,8 @@ fn explicit_predicates_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::GenericPredicat
                         let re_root_empty = tcx.lifetimes.re_root_empty;
                         let predicate = ty::OutlivesPredicate(ty, re_root_empty);
                         predicates.push((
-                            ty::PredicateKind::TypeOutlives(ty::Binder::bind(predicate))
-                                .to_predicate(tcx),
+                            ty::PredicateAtom::TypeOutlives(predicate)
+                                .potentially_quantified(tcx, ty::PredicateKind::ForAll),
                             span,
                         ));
                     }
@@ -1956,9 +1962,9 @@ fn explicit_predicates_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::GenericPredicat
 
                         &hir::GenericBound::Outlives(ref lifetime) => {
                             let region = AstConv::ast_region_to_region(&icx, lifetime, None);
-                            let pred = ty::Binder::bind(ty::OutlivesPredicate(ty, region));
                             predicates.push((
-                                ty::PredicateKind::TypeOutlives(pred).to_predicate(tcx),
+                                ty::PredicateAtom::TypeOutlives(ty::OutlivesPredicate(ty, region))
+                                    .potentially_quantified(tcx, ty::PredicateKind::ForAll),
                                 lifetime.span,
                             ))
                         }
@@ -1975,9 +1981,9 @@ fn explicit_predicates_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::GenericPredicat
                         }
                         _ => bug!(),
                     };
-                    let pred = ty::Binder::bind(ty::OutlivesPredicate(r1, r2));
+                    let pred = ty::PredicateAtom::RegionOutlives(ty::OutlivesPredicate(r1, r2));
 
-                    (ty::PredicateKind::RegionOutlives(pred).to_predicate(icx.tcx), span)
+                    (pred.potentially_quantified(icx.tcx, ty::PredicateKind::ForAll), span)
                 }))
             }
 
@@ -2105,8 +2111,9 @@ fn predicates_from_bound<'tcx>(
         }
         hir::GenericBound::Outlives(ref lifetime) => {
             let region = astconv.ast_region_to_region(lifetime, None);
-            let pred = ty::Binder::bind(ty::OutlivesPredicate(param_ty, region));
-            vec![(ty::PredicateKind::TypeOutlives(pred).to_predicate(astconv.tcx()), lifetime.span)]
+            let pred = ty::PredicateAtom::TypeOutlives(ty::OutlivesPredicate(param_ty, region))
+                .potentially_quantified(astconv.tcx(), ty::PredicateKind::ForAll);
+            vec![(pred, lifetime.span)]
         }
     }
 }

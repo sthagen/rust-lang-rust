@@ -1991,7 +1991,7 @@ impl Step for Distcheck {
             .current_dir(&dir);
         builder.run(&mut cmd);
 
-        let toml = dir.join("rust-src/lib/rustlib/src/rust/src/libstd/Cargo.toml");
+        let toml = dir.join("rust-src/lib/rustlib/src/rust/library/std/Cargo.toml");
         builder.run(
             Command::new(&builder.initial_cargo)
                 .arg("generate-lockfile")

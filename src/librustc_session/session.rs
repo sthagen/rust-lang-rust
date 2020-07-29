@@ -548,7 +548,7 @@ impl Session {
         self.opts.debugging_opts.asm_comments
     }
     pub fn verify_llvm_ir(&self) -> bool {
-        self.opts.debugging_opts.verify_llvm_ir || cfg!(always_verify_llvm_ir)
+        self.opts.debugging_opts.verify_llvm_ir || option_env!("RUSTC_VERIFY_LLVM_IR").is_some()
     }
     pub fn borrowck_stats(&self) -> bool {
         self.opts.debugging_opts.borrowck_stats
@@ -1232,7 +1232,7 @@ pub fn build_session(
         }
 
         // Only use this directory if it has a file we can expect to always find.
-        if candidate.join("src/libstd/lib.rs").is_file() { Some(candidate) } else { None }
+        if candidate.join("library/std/src/lib.rs").is_file() { Some(candidate) } else { None }
     };
 
     let asm_arch = if target_cfg.target.options.allow_asm {
@@ -1294,19 +1294,19 @@ pub fn build_session(
 // commandline argument, you can do so here.
 fn validate_commandline_args_with_session_available(sess: &Session) {
     // Since we don't know if code in an rlib will be linked to statically or
-    // dynamically downstream, rustc generates `__imp_` symbols that help the
-    // MSVC linker deal with this lack of knowledge (#27438). Unfortunately,
+    // dynamically downstream, rustc generates `__imp_` symbols that help linkers
+    // on Windows deal with this lack of knowledge (#27438). Unfortunately,
     // these manually generated symbols confuse LLD when it tries to merge
-    // bitcode during ThinLTO. Therefore we disallow dynamic linking on MSVC
+    // bitcode during ThinLTO. Therefore we disallow dynamic linking on Windows
     // when compiling for LLD ThinLTO. This way we can validly just not generate
     // the `dllimport` attributes and `__imp_` symbols in that case.
     if sess.opts.cg.linker_plugin_lto.enabled()
         && sess.opts.cg.prefer_dynamic
-        && sess.target.target.options.is_like_msvc
+        && sess.target.target.options.is_like_windows
     {
         sess.err(
             "Linker plugin based LTO is not supported together with \
-                  `-C prefer-dynamic` when targeting MSVC",
+                  `-C prefer-dynamic` when targeting Windows-like targets",
         );
     }
 

@@ -7,6 +7,7 @@ use crate::autoderef::Autoderef;
 use crate::infer::InferCtxt;
 use crate::traits::normalize_projection_type;
 
+use rustc_data_structures::stack::ensure_sufficient_stack;
 use rustc_errors::{error_code, struct_span_err, Applicability, DiagnosticBuilder, Style};
 use rustc_hir as hir;
 use rustc_hir::def::DefKind;
@@ -1299,10 +1300,8 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
         // the type. The last generator (`outer_generator` below) has information about where the
         // bound was introduced. At least one generator should be present for this diagnostic to be
         // modified.
-        let (mut trait_ref, mut target_ty) = match obligation.predicate.kind() {
-            ty::PredicateKind::Trait(p, _) => {
-                (Some(p.skip_binder().trait_ref), Some(p.skip_binder().self_ty()))
-            }
+        let (mut trait_ref, mut target_ty) = match obligation.predicate.skip_binders() {
+            ty::PredicateAtom::Trait(p, _) => (Some(p.trait_ref), Some(p.self_ty())),
             _ => (None, None),
         };
         let mut generator = None;
@@ -1706,6 +1705,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
             | ObligationCauseCode::IntrinsicType
             | ObligationCauseCode::MethodReceiver
             | ObligationCauseCode::ReturnNoExpression
+            | ObligationCauseCode::UnifyReceiver(..)
             | ObligationCauseCode::MiscObligation => {}
             ObligationCauseCode::SliceOrArrayElem => {
                 err.note("slice and array elements must have `Sized` type");
@@ -1911,12 +1911,15 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
 
                 let parent_predicate = parent_trait_ref.without_const().to_predicate(tcx);
                 if !self.is_recursive_obligation(obligated_types, &data.parent_code) {
-                    self.note_obligation_cause_code(
-                        err,
-                        &parent_predicate,
-                        &data.parent_code,
-                        obligated_types,
-                    );
+                    // #74711: avoid a stack overflow
+                    ensure_sufficient_stack(|| {
+                        self.note_obligation_cause_code(
+                            err,
+                            &parent_predicate,
+                            &data.parent_code,
+                            obligated_types,
+                        )
+                    });
                 }
             }
             ObligationCauseCode::ImplDerivedObligation(ref data) => {
@@ -1927,22 +1930,28 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                     parent_trait_ref.skip_binder().self_ty()
                 ));
                 let parent_predicate = parent_trait_ref.without_const().to_predicate(tcx);
-                self.note_obligation_cause_code(
-                    err,
-                    &parent_predicate,
-                    &data.parent_code,
-                    obligated_types,
-                );
+                // #74711: avoid a stack overflow
+                ensure_sufficient_stack(|| {
+                    self.note_obligation_cause_code(
+                        err,
+                        &parent_predicate,
+                        &data.parent_code,
+                        obligated_types,
+                    )
+                });
             }
             ObligationCauseCode::DerivedObligation(ref data) => {
                 let parent_trait_ref = self.resolve_vars_if_possible(&data.parent_trait_ref);
                 let parent_predicate = parent_trait_ref.without_const().to_predicate(tcx);
-                self.note_obligation_cause_code(
-                    err,
-                    &parent_predicate,
-                    &data.parent_code,
-                    obligated_types,
-                );
+                // #74711: avoid a stack overflow
+                ensure_sufficient_stack(|| {
+                    self.note_obligation_cause_code(
+                        err,
+                        &parent_predicate,
+                        &data.parent_code,
+                        obligated_types,
+                    )
+                });
             }
             ObligationCauseCode::CompareImplMethodObligation { .. } => {
                 err.note(&format!(

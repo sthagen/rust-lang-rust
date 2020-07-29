@@ -606,11 +606,6 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
             return;
         }
 
-        // For normal codegen, this Miri-specific intrinsic should never occur.
-        if intrinsic == Some(sym::miri_start_panic) {
-            bug!("`miri_start_panic` should never end up in compiled code");
-        }
-
         if self.codegen_panic_intrinsic(
             &helper,
             &mut bx,
@@ -888,7 +883,7 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
                                 let ptr = Pointer::new(AllocId(0), offset);
                                 alloc
                                     .read_scalar(&bx, ptr, size)
-                                    .and_then(|s| s.not_undef())
+                                    .and_then(|s| s.check_init())
                                     .unwrap_or_else(|e| {
                                         bx.tcx().sess.span_err(
                                             span,

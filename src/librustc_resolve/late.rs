@@ -570,7 +570,15 @@ impl<'a, 'ast> Visitor<'ast> for LateResolutionVisitor<'a, '_, 'ast> {
 
                     if let Some(ref ty) = default {
                         self.ribs[TypeNS].push(default_ban_rib);
-                        self.visit_ty(ty);
+                        self.with_rib(ValueNS, ForwardTyParamBanRibKind, |this| {
+                            // HACK: We use an empty `ForwardTyParamBanRibKind` here which
+                            // is only used to forbid the use of const parameters inside of
+                            // type defaults.
+                            //
+                            // While the rib name doesn't really fit here, it does allow us to use the same
+                            // code for both const and type parameters.
+                            this.visit_ty(ty);
+                        });
                         default_ban_rib = self.ribs[TypeNS].pop().unwrap();
                     }
 
@@ -1081,7 +1089,9 @@ impl<'a, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
     fn with_constant_rib(&mut self, f: impl FnOnce(&mut Self)) {
         debug!("with_constant_rib");
         self.with_rib(ValueNS, ConstantItemRibKind, |this| {
-            this.with_label_rib(ConstantItemRibKind, f);
+            this.with_rib(TypeNS, ConstantItemRibKind, |this| {
+                this.with_label_rib(ConstantItemRibKind, f);
+            })
         });
     }
 
@@ -1506,18 +1516,24 @@ impl<'a, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
         pat.walk(&mut |pat| {
             debug!("resolve_pattern pat={:?} node={:?}", pat, pat.kind);
             match pat.kind {
-                // In tuple struct patterns ignore the invalid `ident @ ...`.
-                // It will be handled as an error by the AST lowering.
-                PatKind::Ident(bmode, ident, ref sub)
-                    if !(is_tuple_struct_pat && sub.as_ref().filter(|p| p.is_rest()).is_some()) =>
-                {
-                    // First try to resolve the identifier as some existing entity,
-                    // then fall back to a fresh binding.
-                    let has_sub = sub.is_some();
-                    let res = self
-                        .try_resolve_as_non_binding(pat_src, pat, bmode, ident, has_sub)
-                        .unwrap_or_else(|| self.fresh_binding(ident, pat.id, pat_src, bindings));
-                    self.r.record_partial_res(pat.id, PartialRes::new(res));
+                PatKind::Ident(bmode, ident, ref sub) => {
+                    if is_tuple_struct_pat && sub.as_ref().filter(|p| p.is_rest()).is_some() {
+                        // In tuple struct patterns ignore the invalid `ident @ ...`.
+                        // It will be handled as an error by the AST lowering.
+                        self.r
+                            .session
+                            .delay_span_bug(ident.span, "ident in tuple pattern is invalid");
+                    } else {
+                        // First try to resolve the identifier as some existing entity,
+                        // then fall back to a fresh binding.
+                        let has_sub = sub.is_some();
+                        let res = self
+                            .try_resolve_as_non_binding(pat_src, pat, bmode, ident, has_sub)
+                            .unwrap_or_else(|| {
+                                self.fresh_binding(ident, pat.id, pat_src, bindings)
+                            });
+                        self.r.record_partial_res(pat.id, PartialRes::new(res));
+                    }
                 }
                 PatKind::TupleStruct(ref path, ..) => {
                     self.smart_resolve_path(pat.id, None, path, PathSource::TupleStruct(pat.span));

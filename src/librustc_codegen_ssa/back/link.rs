@@ -1598,7 +1598,9 @@ fn linker_with_args<'a, B: ArchiveBuilder<'a>>(
     }
 
     // NO-OPT-OUT, OBJECT-FILES-NO, AUDIT-ORDER
-    cmd.add_eh_frame_header();
+    if sess.target.target.options.eh_frame_header {
+        cmd.add_eh_frame_header();
+    }
 
     // NO-OPT-OUT, OBJECT-FILES-NO
     if crt_objects_fallback {
@@ -1700,7 +1702,7 @@ fn linker_with_args<'a, B: ArchiveBuilder<'a>>(
     }
 
     // OBJECT-FILES-NO, AUDIT-ORDER
-    if sess.opts.debugging_opts.control_flow_guard != CFGuard::Disabled {
+    if sess.opts.cg.control_flow_guard != CFGuard::Disabled {
         cmd.control_flow_guard();
     }
 

@@ -247,6 +247,7 @@ on:
     branches:
       - auto
       - try
+      - try-perf
       - master
   pull_request:
     branches:
@@ -285,7 +286,7 @@ jobs:
     name: try
     env:
       <<: [*shared-ci-variables, *prod-variables]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/try' && github.repository == 'rust-lang-ci/rust'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/try' || github.ref == 'refs/heads/try-perf') && github.repository == 'rust-lang-ci/rust'
     strategy:
       matrix:
         include:
@@ -470,7 +471,7 @@ jobs:
 
           - name: x86_64-msvc-cargo
             env:
-              SCRIPT: python x.py test src/tools/cargotest src/tools/cargo
+              SCRIPT: python x.py --stage 2 test src/tools/cargotest src/tools/cargo
               RUST_CONFIGURE_ARGS: --build=x86_64-pc-windows-msvc --enable-lld
               VCVARS_BAT: vcvars64.bat
               # FIXME(#59637)
@@ -612,7 +613,7 @@ jobs:
 
           - name: x86_64-apple
             env:
-              SCRIPT: ./x.py test
+              SCRIPT: ./x.py --stage 2 test
               RUST_CONFIGURE_ARGS: --build=x86_64-apple-darwin --enable-sanitizers --enable-profiler --set rust.jemalloc
               RUSTC_RETRY_LINKER_ON_SEGFAULT: 1
               MACOSX_DEPLOYMENT_TARGET: 10.8
@@ -645,11 +646,11 @@ jobs:
   # successful listening to webhooks only.
   try-success:
     needs: [try]
-    if: "success() && github.event_name == 'push' && github.ref == 'refs/heads/try' && github.repository == 'rust-lang-ci/rust'"
+    if: "success() && github.event_name == 'push' && (github.ref == 'refs/heads/try' || github.ref == 'refs/heads/try-perf') && github.repository == 'rust-lang-ci/rust'"
     <<: *base-success-job
   try-failure:
     needs: [try]
-    if: "!success() && github.event_name == 'push' && github.ref == 'refs/heads/try' && github.repository == 'rust-lang-ci/rust'"
+    if: "!success() && github.event_name == 'push' && (github.ref == 'refs/heads/try' || github.ref == 'refs/heads/try-perf') && github.repository == 'rust-lang-ci/rust'"
     <<: *base-failure-job
   auto-success:
     needs: [auto]

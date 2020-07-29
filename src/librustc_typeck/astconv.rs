@@ -1483,31 +1483,25 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                     tcx.collect_referenced_late_bound_regions(&ty::Binder::bind(ty));
                 debug!("late_bound_in_trait_ref = {:?}", late_bound_in_trait_ref);
                 debug!("late_bound_in_ty = {:?}", late_bound_in_ty);
-                for br in late_bound_in_ty.difference(&late_bound_in_trait_ref) {
-                    let br_name = match *br {
-                        ty::BrNamed(_, name) => name,
-                        _ => {
-                            span_bug!(
-                                binding.span,
-                                "anonymous bound region {:?} in binding but not trait ref",
-                                br
-                            );
-                        }
-                    };
-                    // FIXME: point at the type params that don't have appropriate lifetimes:
-                    // struct S1<F: for<'a> Fn(&i32, &i32) -> &'a i32>(F);
-                    //                         ----  ----     ^^^^^^^
-                    struct_span_err!(
-                        tcx.sess,
-                        binding.span,
-                        E0582,
-                        "binding for associated type `{}` references lifetime `{}`, \
-                         which does not appear in the trait input types",
-                        binding.item_name,
-                        br_name
-                    )
-                    .emit();
-                }
+
+                // FIXME: point at the type params that don't have appropriate lifetimes:
+                // struct S1<F: for<'a> Fn(&i32, &i32) -> &'a i32>(F);
+                //                         ----  ----     ^^^^^^^
+                self.validate_late_bound_regions(
+                    late_bound_in_trait_ref,
+                    late_bound_in_ty,
+                    |br_name| {
+                        struct_span_err!(
+                            tcx.sess,
+                            binding.span,
+                            E0582,
+                            "binding for associated type `{}` references {}, \
+                             which does not appear in the trait input types",
+                            binding.item_name,
+                            br_name
+                        )
+                    },
+                );
             }
         }
 
@@ -1711,8 +1705,10 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                     "conv_object_ty_poly_trait_ref: observing object predicate `{:?}`",
                     obligation.predicate
                 );
-                match obligation.predicate.kind() {
-                    ty::PredicateKind::Trait(pred, _) => {
+
+                match obligation.predicate.skip_binders() {
+                    ty::PredicateAtom::Trait(pred, _) => {
+                        let pred = ty::Binder::bind(pred);
                         associated_types.entry(span).or_default().extend(
                             tcx.associated_items(pred.def_id())
                                 .in_definition_order()
@@ -1720,7 +1716,8 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                                 .map(|item| item.def_id),
                         );
                     }
-                    &ty::PredicateKind::Projection(pred) => {
+                    ty::PredicateAtom::Projection(pred) => {
+                        let pred = ty::Binder::bind(pred);
                         // A `Self` within the original bound will be substituted with a
                         // `trait_object_dummy_self`, so check for that.
                         let references_self =
@@ -3080,33 +3077,48 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
             tcx.collect_constrained_late_bound_regions(&inputs.map_bound(|i| i.to_owned()));
         let output = bare_fn_ty.output();
         let late_bound_in_ret = tcx.collect_referenced_late_bound_regions(&output);
-        for br in late_bound_in_ret.difference(&late_bound_in_args) {
-            let lifetime_name = match *br {
-                ty::BrNamed(_, name) => format!("lifetime `{}`,", name),
-                ty::BrAnon(_) | ty::BrEnv => "an anonymous lifetime".to_string(),
-            };
-            let mut err = struct_span_err!(
+
+        self.validate_late_bound_regions(late_bound_in_args, late_bound_in_ret, |br_name| {
+            struct_span_err!(
                 tcx.sess,
                 decl.output.span(),
                 E0581,
-                "return type references {} which is not constrained by the fn input types",
-                lifetime_name
-            );
+                "return type references {}, which is not constrained by the fn input types",
+                br_name
+            )
+        });
+
+        bare_fn_ty
+    }
+
+    fn validate_late_bound_regions(
+        &self,
+        constrained_regions: FxHashSet<ty::BoundRegion>,
+        referenced_regions: FxHashSet<ty::BoundRegion>,
+        generate_err: impl Fn(&str) -> rustc_errors::DiagnosticBuilder<'tcx>,
+    ) {
+        for br in referenced_regions.difference(&constrained_regions) {
+            let br_name = match *br {
+                ty::BrNamed(_, name) => format!("lifetime `{}`", name),
+                ty::BrAnon(_) | ty::BrEnv => "an anonymous lifetime".to_string(),
+            };
+
+            let mut err = generate_err(&br_name);
+
             if let ty::BrAnon(_) = *br {
                 // The only way for an anonymous lifetime to wind up
                 // in the return type but **also** be unconstrained is
                 // if it only appears in "associated types" in the
-                // input. See #47511 for an example. In this case,
+                // input. See #47511 and #62200 for examples. In this case,
                 // though we can easily give a hint that ought to be
                 // relevant.
                 err.note(
                     "lifetimes appearing in an associated type are not considered constrained",
                 );
             }
+
             err.emit();
         }
-
-        bare_fn_ty
     }
 
     /// Given the bounds on an object, determines what single region bound (if any) we can

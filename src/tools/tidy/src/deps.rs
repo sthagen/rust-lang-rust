@@ -17,7 +17,6 @@ const LICENSES: &[&str] = &[
     "MIT",
     "Unlicense/MIT",
     "Unlicense OR MIT",
-    "0BSD OR MIT OR Apache-2.0", // adler license
 ];
 
 /// These are exceptions to Rust's permissive licensing policy, and
@@ -37,6 +36,7 @@ const EXCEPTIONS: &[(&str, &str)] = &[
     ("ryu", "Apache-2.0 OR BSL-1.0"),       // rls/cargo/... (because of serde)
     ("bytesize", "Apache-2.0"),             // cargo
     ("im-rc", "MPL-2.0+"),                  // cargo
+    ("adler32", "BSD-3-Clause AND Zlib"),   // cargo dep that isn't used
     ("constant_time_eq", "CC0-1.0"),        // rustfmt
     ("sized-chunks", "MPL-2.0+"),           // cargo via im-rc
     ("bitmaps", "MPL-2.0+"),                // cargo via im-rc
@@ -57,8 +57,7 @@ const RESTRICTED_DEPENDENCY_CRATES: &[&str] = &["rustc_middle", "rustc_codegen_l
 /// This list is here to provide a speed-bump to adding a new dependency to
 /// rustc. Please check with the compiler team before adding an entry.
 const PERMITTED_DEPENDENCIES: &[&str] = &[
-    "addr2line",
-    "adler",
+    "adler32",
     "aho-corasick",
     "annotate-snippets",
     "ansi_term",
@@ -66,6 +65,7 @@ const PERMITTED_DEPENDENCIES: &[&str] = &[
     "atty",
     "autocfg",
     "backtrace",
+    "backtrace-sys",
     "bitflags",
     "block-buffer",
     "block-padding",
@@ -98,7 +98,6 @@ const PERMITTED_DEPENDENCIES: &[&str] = &[
     "generic-array",
     "getopts",
     "getrandom",
-    "gimli",
     "hashbrown",
     "hermit-abi",
     "humantime",
@@ -120,7 +119,6 @@ const PERMITTED_DEPENDENCIES: &[&str] = &[
     "miniz_oxide",
     "nodrop",
     "num_cpus",
-    "object",
     "once_cell",
     "opaque-debug",
     "parking_lot",
@@ -185,11 +183,12 @@ const PERMITTED_DEPENDENCIES: &[&str] = &[
 
 /// Dependency checks.
 ///
-/// `path` is path to the `src` directory, `cargo` is path to the cargo executable.
-pub fn check(path: &Path, cargo: &Path, bad: &mut bool) {
+/// `root` is path to the directory with the root `Cargo.toml` (for the workspace). `cargo` is path
+/// to the cargo executable.
+pub fn check(root: &Path, cargo: &Path, bad: &mut bool) {
     let mut cmd = cargo_metadata::MetadataCommand::new();
     cmd.cargo_path(cargo)
-        .manifest_path(path.parent().unwrap().join("Cargo.toml"))
+        .manifest_path(root.join("Cargo.toml"))
         .features(cargo_metadata::CargoOpt::AllFeatures);
     let metadata = t!(cmd.exec());
     check_exceptions(&metadata, bad);
