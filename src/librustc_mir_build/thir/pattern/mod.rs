@@ -6,7 +6,7 @@ mod const_to_pat;
 
 pub(crate) use self::check_match::check_match;
 
-use crate::hair::util::UserAnnotatedTyHelpers;
+use crate::thir::util::UserAnnotatedTyHelpers;
 
 use rustc_ast::ast;
 use rustc_errors::struct_span_err;
@@ -16,7 +16,7 @@ use rustc_hir::pat_util::EnumerateAndAdjustIterator;
 use rustc_hir::RangeEnd;
 use rustc_index::vec::Idx;
 use rustc_middle::mir::interpret::{get_slice_bytes, sign_extend, ConstValue};
-use rustc_middle::mir::interpret::{LitToConstError, LitToConstInput};
+use rustc_middle::mir::interpret::{ErrorHandled, LitToConstError, LitToConstInput};
 use rustc_middle::mir::UserTypeProjection;
 use rustc_middle::mir::{BorrowKind, Field, Mutability};
 use rustc_middle::ty::subst::{GenericArg, SubstsRef};
@@ -402,7 +402,7 @@ impl<'a, 'tcx> PatCtxt<'a, 'tcx> {
         //
         // `vec![&&Option<i32>, &Option<i32>]`.
         //
-        // Applying the adjustments, we want to instead output `&&Some(n)` (as a HAIR pattern). So
+        // Applying the adjustments, we want to instead output `&&Some(n)` (as a THIR pattern). So
         // we wrap the unadjusted pattern in `PatKind::Deref` repeatedly, consuming the
         // adjustments in *reverse order* (last-in-first-out, so that the last `Deref` inserted
         // gets the least-dereferenced type).
@@ -776,7 +776,7 @@ impl<'a, 'tcx> PatCtxt<'a, 'tcx> {
 
         // Use `Reveal::All` here because patterns are always monomorphic even if their function
         // isn't.
-        let param_env_reveal_all = self.param_env.with_reveal_all();
+        let param_env_reveal_all = self.param_env.with_reveal_all_normalized(self.tcx);
         let substs = self.typeck_results.node_substs(id);
         let instance = match ty::Instance::resolve(self.tcx, param_env_reveal_all, def_id, substs) {
             Ok(Some(i)) => i,
@@ -833,6 +833,12 @@ impl<'a, 'tcx> PatCtxt<'a, 'tcx> {
                 } else {
                     pattern
                 }
+            }
+            Err(ErrorHandled::TooGeneric) => {
+                // While `Reported | Linted` cases will have diagnostics emitted already
+                // it is not true for TooGeneric case, so we need to give user more information.
+                self.tcx.sess.span_err(span, "constant pattern depends on a generic parameter");
+                pat_from_kind(PatKind::Wild)
             }
             Err(_) => {
                 self.tcx.sess.span_err(span, "could not evaluate constant pattern");
