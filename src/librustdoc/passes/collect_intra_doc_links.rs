@@ -217,9 +217,11 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
                         return Ok((res, Some(path_str.to_owned())));
                     }
                     Res::Def(DefKind::Mod, _) => {
-                        // This resolved to a module, but if we were passed `type@`,
-                        // we want primitive types to take precedence instead.
-                        if disambiguator == Some(Disambiguator::Namespace(Namespace::TypeNS)) {
+                        // This resolved to a module, but we want primitive types to take precedence instead.
+                        if matches!(
+                            disambiguator,
+                            None | Some(Disambiguator::Namespace(Namespace::TypeNS))
+                        ) {
                             if let Some(prim) = is_primitive(path_str, ns) {
                                 if extra_fragment.is_some() {
                                     return Err(ErrorKind::AnchorFailure(AnchorFailure::Primitive));
@@ -811,8 +813,8 @@ impl<'a, 'tcx> DocFolder for LinkCollector<'a, 'tcx> {
                 {
                     use rustc_hir::def_id::LOCAL_CRATE;
 
-                    let hir_src = self.cx.tcx.hir().as_local_hir_id(src_id);
-                    let hir_dst = self.cx.tcx.hir().as_local_hir_id(dst_id);
+                    let hir_src = self.cx.tcx.hir().local_def_id_to_hir_id(src_id);
+                    let hir_dst = self.cx.tcx.hir().local_def_id_to_hir_id(dst_id);
 
                     if self.cx.tcx.privacy_access_levels(LOCAL_CRATE).is_exported(hir_src)
                         && !self.cx.tcx.privacy_access_levels(LOCAL_CRATE).is_exported(hir_dst)

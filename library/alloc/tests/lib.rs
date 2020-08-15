@@ -1,9 +1,7 @@
 #![feature(allocator_api)]
 #![feature(box_syntax)]
-#![feature(btree_drain_filter)]
 #![feature(drain_filter)]
 #![feature(exact_size_is_empty)]
-#![feature(map_first_last)]
 #![feature(new_uninit)]
 #![feature(pattern)]
 #![feature(str_split_once)]
@@ -24,7 +22,7 @@ mod arc;
 mod binary_heap;
 mod borrow;
 mod boxed;
-mod btree;
+mod btree_set_hash;
 mod cow_str;
 mod fmt;
 mod heap;

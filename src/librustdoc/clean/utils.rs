@@ -2,9 +2,9 @@ use crate::clean::auto_trait::AutoTraitFinder;
 use crate::clean::blanket_impl::BlanketImplFinder;
 use crate::clean::{
     inline, Clean, Crate, Deprecation, ExternalCrate, FnDecl, FnRetTy, Generic, GenericArg,
-    GenericArgs, GenericBound, Generics, GetDefId, ImportSource, Item, ItemEnum, MacroKind, Path,
-    PathSegment, Primitive, PrimitiveType, ResolvedPath, Span, Stability, Type, TypeBinding,
-    TypeKind, Visibility, WherePredicate,
+    GenericArgs, GenericBound, Generics, GetDefId, ImportSource, Item, ItemEnum, Lifetime,
+    MacroKind, Path, PathSegment, Primitive, PrimitiveType, ResolvedPath, Span, Stability, Type,
+    TypeBinding, TypeKind, Visibility, WherePredicate,
 };
 use crate::core::DocContext;
 
@@ -121,7 +121,10 @@ pub fn external_generic_args(
     let args: Vec<_> = substs
         .iter()
         .filter_map(|kind| match kind.unpack() {
-            GenericArgKind::Lifetime(lt) => lt.clean(cx).map(GenericArg::Lifetime),
+            GenericArgKind::Lifetime(lt) => match lt {
+                ty::ReLateBound(_, ty::BrAnon(_)) => Some(GenericArg::Lifetime(Lifetime::elided())),
+                _ => lt.clean(cx).map(GenericArg::Lifetime),
+            },
             GenericArgKind::Type(_) if skip_self => {
                 skip_self = false;
                 None
@@ -385,7 +388,7 @@ pub fn build_deref_target_impls(cx: &DocContext<'_>, items: &[Item], ret: &mut V
             Bool => tcx.lang_items().bool_impl(),
             Str => tcx.lang_items().str_impl(),
             Slice => tcx.lang_items().slice_impl(),
-            Array => tcx.lang_items().slice_impl(),
+            Array => tcx.lang_items().array_impl(),
             Tuple => None,
             Unit => None,
             RawPointer => tcx.lang_items().const_ptr_impl(),
@@ -468,7 +471,7 @@ pub fn print_const(cx: &DocContext<'_>, n: &'tcx ty::Const<'_>) -> String {
     match n.val {
         ty::ConstKind::Unevaluated(def, _, promoted) => {
             let mut s = if let Some(def) = def.as_local() {
-                let hir_id = cx.tcx.hir().as_local_hir_id(def.did);
+                let hir_id = cx.tcx.hir().local_def_id_to_hir_id(def.did);
                 print_const_expr(cx, cx.tcx.hir().body_owned_by(hir_id))
             } else {
                 inline::print_inlined_const(cx, def.did)

@@ -14,7 +14,7 @@ type McfResult = Result<(), (Span, Cow<'static, str>)>;
 pub fn is_min_const_fn(tcx: TyCtxt<'tcx>, def_id: DefId, body: &'a Body<'tcx>) -> McfResult {
     // Prevent const trait methods from being annotated as `stable`.
     if tcx.features().staged_api {
-        let hir_id = tcx.hir().as_local_hir_id(def_id.expect_local());
+        let hir_id = tcx.hir().local_def_id_to_hir_id(def_id.expect_local());
         if crate::const_eval::is_parent_const_impl_raw(tcx, hir_id) {
             return Err((body.span, "trait methods cannot be stable const fn".into()));
         }
@@ -342,7 +342,7 @@ fn feature_allowed(tcx: TyCtxt<'tcx>, def_id: DefId, feature_gate: Symbol) -> bo
 
     // However, we cannot allow stable `const fn`s to use unstable features without an explicit
     // opt-in via `allow_internal_unstable`.
-    attr::allow_internal_unstable(&tcx.get_attrs(def_id), &tcx.sess.diagnostic())
+    attr::allow_internal_unstable(&tcx.sess, &tcx.get_attrs(def_id))
         .map_or(false, |mut features| features.any(|name| name == feature_gate))
 }
 
@@ -362,7 +362,7 @@ pub fn lib_feature_allowed(tcx: TyCtxt<'tcx>, def_id: DefId, feature_gate: Symbo
 
     // However, we cannot allow stable `const fn`s to use unstable features without an explicit
     // opt-in via `allow_internal_unstable`.
-    attr::allow_internal_unstable(&tcx.get_attrs(def_id), &tcx.sess.diagnostic())
+    attr::allow_internal_unstable(&tcx.sess, &tcx.get_attrs(def_id))
         .map_or(false, |mut features| features.any(|name| name == feature_gate))
 }
 

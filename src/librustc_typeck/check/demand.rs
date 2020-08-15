@@ -34,6 +34,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         }
         self.suggest_boxing_when_appropriate(err, expr, expected, expr_ty);
         self.suggest_missing_await(err, expr, expected, expr_ty);
+        self.suggest_missing_parentheses(err, expr);
         self.note_need_for_fn_pointer(err, expected, expr_ty);
     }
 
@@ -246,7 +247,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     //
                     // FIXME? Other potential candidate methods: `as_ref` and
                     // `as_mut`?
-                    .any(|a| a.check_name(sym::rustc_conversion_suggestion))
+                    .any(|a| self.sess().check_name(a, sym::rustc_conversion_suggestion))
         });
 
         methods

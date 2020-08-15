@@ -10,7 +10,6 @@ use rustc_hir::lang_items;
 use rustc_hir::{GeneratorKind, HirIdMap, Node};
 use rustc_index::vec::{Idx, IndexVec};
 use rustc_infer::infer::TyCtxtInferExt;
-use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use rustc_middle::middle::region;
 use rustc_middle::mir::*;
 use rustc_middle::ty::subst::Subst;
@@ -35,7 +34,7 @@ crate fn mir_built<'tcx>(
 
 /// Construct the MIR for a given `DefId`.
 fn mir_build(tcx: TyCtxt<'_>, def: ty::WithOptConstParam<LocalDefId>) -> Body<'_> {
-    let id = tcx.hir().as_local_hir_id(def.did);
+    let id = tcx.hir().local_def_id_to_hir_id(def.did);
 
     // Figure out what primary body this item has.
     let (body_id, return_ty_span) = match tcx.hir().get(id) {
@@ -537,7 +536,7 @@ macro_rules! unpack {
 fn should_abort_on_panic(tcx: TyCtxt<'_>, fn_def_id: LocalDefId, _abi: Abi) -> bool {
     // Validate `#[unwind]` syntax regardless of platform-specific panic strategy.
     let attrs = &tcx.get_attrs(fn_def_id.to_def_id());
-    let unwind_attr = attr::find_unwind_attr(Some(tcx.sess.diagnostic()), attrs);
+    let unwind_attr = attr::find_unwind_attr(&tcx.sess, attrs);
 
     // We never unwind, so it's not relevant to stop an unwind.
     if tcx.sess.panic_strategy() != PanicStrategy::Unwind {
@@ -798,21 +797,11 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         argument_scope: region::Scope,
         ast_body: &'tcx hir::Expr<'tcx>,
     ) -> BlockAnd<()> {
-        let tcx = self.hir.tcx();
-        let attrs = tcx.codegen_fn_attrs(fn_def_id);
-        let naked = attrs.flags.contains(CodegenFnAttrFlags::NAKED);
-
         // Allocate locals for the function arguments
         for &ArgInfo(ty, _, arg_opt, _) in arguments.iter() {
             let source_info =
                 SourceInfo::outermost(arg_opt.map_or(self.fn_span, |arg| arg.pat.span));
             let arg_local = self.local_decls.push(LocalDecl::with_source_info(ty, source_info));
-
-            // Emit function argument debuginfo only for non-naked functions.
-            // See: https://github.com/rust-lang/rust/issues/42779
-            if naked {
-                continue;
-            }
 
             // If this is a simple binding pattern, give debuginfo a nice name.
             if let Some(arg) = arg_opt {
@@ -826,6 +815,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             }
         }
 
+        let tcx = self.hir.tcx();
         let tcx_hir = tcx.hir();
         let hir_typeck_results = self.hir.typeck_results();
 

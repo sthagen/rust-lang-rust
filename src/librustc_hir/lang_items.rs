@@ -45,7 +45,7 @@ macro_rules! language_item_table {
 
         enum_from_u32! {
             /// A representation of all the valid language items in Rust.
-            #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, RustcEncodable, RustcDecodable)]
+            #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Encodable, Decodable)]
             pub enum LangItem {
                 $($variant,)*
             }
@@ -141,12 +141,20 @@ impl<CTX> HashStable<CTX> for LangItem {
 /// Extracts the first `lang = "$name"` out of a list of attributes.
 /// The attributes `#[panic_handler]` and `#[alloc_error_handler]`
 /// are also extracted out when found.
-pub fn extract(attrs: &[ast::Attribute]) -> Option<(Symbol, Span)> {
+///
+/// About the `check_name` argument: passing in a `Session` would be simpler,
+/// because then we could call `Session::check_name` directly. But we want to
+/// avoid the need for `librustc_hir` to depend on `librustc_session`, so we
+/// use a closure instead.
+pub fn extract<'a, F>(check_name: F, attrs: &'a [ast::Attribute]) -> Option<(Symbol, Span)>
+where
+    F: Fn(&'a ast::Attribute, Symbol) -> bool,
+{
     attrs.iter().find_map(|attr| {
         Some(match attr {
-            _ if attr.check_name(sym::lang) => (attr.value_str()?, attr.span),
-            _ if attr.check_name(sym::panic_handler) => (sym::panic_impl, attr.span),
-            _ if attr.check_name(sym::alloc_error_handler) => (sym::oom, attr.span),
+            _ if check_name(attr, sym::lang) => (attr.value_str()?, attr.span),
+            _ if check_name(attr, sym::panic_handler) => (sym::panic_impl, attr.span),
+            _ if check_name(attr, sym::alloc_error_handler) => (sym::oom, attr.span),
             _ => return None,
         })
     })
@@ -157,6 +165,7 @@ language_item_table! {
     BoolImplItem,                  sym::bool,               bool_impl,               Target::Impl;
     CharImplItem,                  sym::char,               char_impl,               Target::Impl;
     StrImplItem,                   sym::str,                str_impl,                Target::Impl;
+    ArrayImplItem,                 sym::array,              array_impl,              Target::Impl;
     SliceImplItem,                 sym::slice,              slice_impl,              Target::Impl;
     SliceU8ImplItem,               sym::slice_u8,           slice_u8_impl,           Target::Impl;
     StrAllocImplItem,              sym::str_alloc,          str_alloc_impl,          Target::Impl;

@@ -143,13 +143,13 @@ impl<'tcx> DocContext<'tcx> {
         def_id
     }
 
-    /// Like the function of the same name on the HIR map, but skips calling it on fake DefIds.
+    /// Like `hir().local_def_id_to_hir_id()`, but skips calling it on fake DefIds.
     /// (This avoids a slice-index-out-of-bounds panic.)
     pub fn as_local_hir_id(&self, def_id: DefId) -> Option<HirId> {
         if self.all_fake_def_ids.borrow().contains(&def_id) {
             None
         } else {
-            def_id.as_local().map(|def_id| self.tcx.hir().as_local_hir_id(def_id))
+            def_id.as_local().map(|def_id| self.tcx.hir().local_def_id_to_hir_id(def_id))
         }
     }
 
@@ -400,7 +400,7 @@ pub fn run_core(options: RustdocOptions) -> (clean::Crate, RenderInfo, RenderOpt
                 }
 
                 let hir = tcx.hir();
-                let body = hir.body(hir.body_owned_by(hir.as_local_hir_id(def_id)));
+                let body = hir.body(hir.body_owned_by(hir.local_def_id_to_hir_id(def_id)));
                 debug!("visiting body for {:?}", def_id);
                 EmitIgnoredResolutionErrors::new(tcx).visit_body(body);
                 (rustc_interface::DEFAULT_QUERY_PROVIDERS.typeck)(tcx, def_id)
@@ -452,10 +452,20 @@ pub fn run_core(options: RustdocOptions) -> (clean::Crate, RenderInfo, RenderOpt
                 // Certain queries assume that some checks were run elsewhere
                 // (see https://github.com/rust-lang/rust/pull/73566#issuecomment-656954425),
                 // so type-check everything other than function bodies in this crate before running lints.
+
                 // NOTE: this does not call `tcx.analysis()` so that we won't
                 // typeck function bodies or run the default rustc lints.
                 // (see `override_queries` in the `config`)
-                let _ = rustc_typeck::check_crate(tcx);
+
+                // HACK(jynelson) this calls an _extremely_ limited subset of `typeck`
+                // and might break if queries change their assumptions in the future.
+
+                // NOTE: This is copy/pasted from typeck/lib.rs and should be kept in sync with those changes.
+                tcx.sess.time("item_types_checking", || {
+                    for &module in tcx.hir().krate().modules.keys() {
+                        tcx.ensure().check_mod_item_types(tcx.hir().local_def_id(module));
+                    }
+                });
                 tcx.sess.abort_if_errors();
                 sess.time("missing_docs", || {
                     rustc_lint::check_crate(tcx, rustc_lint::builtin::MissingDoc::new);
