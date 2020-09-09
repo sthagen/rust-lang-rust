@@ -1573,7 +1573,7 @@ $EndFeature, "
 the boundary of the type.
 
 The only case where such wrapping can occur is when one takes the absolute value of the negative
-minimal value for the type this is a positive value that is too large to represent in the type. In
+minimal value for the type; this is a positive value that is too large to represent in the type. In
 such a case, this function returns `MIN` itself.
 
 # Examples
@@ -2470,7 +2470,7 @@ fn read_ne_", stringify!($SelfT), "(input: &mut &[u8]) -> ", stringify!($SelfT),
         doc_comment! {
             concat!("**This method is soft-deprecated.**
 
-Although using it won’t cause compilation warning,
+Although using it won’t cause a compilation warning,
 new code should use [`", stringify!($SelfT), "::MIN", "`](#associatedconstant.MIN) instead.
 
 Returns the smallest value that can be represented by this integer type."),
@@ -2486,7 +2486,7 @@ Returns the smallest value that can be represented by this integer type."),
         doc_comment! {
             concat!("**This method is soft-deprecated.**
 
-Although using it won’t cause compilation warning,
+Although using it won’t cause a compilation warning,
 new code should use [`", stringify!($SelfT), "::MAX", "`](#associatedconstant.MAX) instead.
 
 Returns the largest value that can be represented by this integer type."),

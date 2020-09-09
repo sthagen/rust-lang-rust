@@ -144,9 +144,11 @@ use crate::{
 #[stable(feature = "rust1", since = "1.0.0")]
 pub enum Option<T> {
     /// No value
+    #[lang = "None"]
     #[stable(feature = "rust1", since = "1.0.0")]
     None,
     /// Some value `T`
+    #[lang = "Some"]
     #[stable(feature = "rust1", since = "1.0.0")]
     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
 }

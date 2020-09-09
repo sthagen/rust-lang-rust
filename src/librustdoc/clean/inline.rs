@@ -2,7 +2,7 @@
 
 use std::iter::once;
 
-use rustc_ast::ast;
+use rustc_ast as ast;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_hir as hir;
 use rustc_hir::def::{CtorKind, DefKind, Res};
@@ -628,7 +628,9 @@ pub fn record_extern_trait(cx: &DocContext<'_>, did: DefId) {
         }
     }
 
-    cx.active_extern_traits.borrow_mut().insert(did);
+    {
+        cx.active_extern_traits.borrow_mut().insert(did);
+    }
 
     debug!("record_extern_trait: {:?}", did);
     let trait_ = build_external_trait(cx, did);

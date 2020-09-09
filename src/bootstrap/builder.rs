@@ -382,7 +382,7 @@ impl<'a> Builder<'a> {
                 native::Lld
             ),
             Kind::Check | Kind::Clippy | Kind::Fix | Kind::Format => {
-                describe!(check::Std, check::Rustc, check::Rustdoc, check::Clippy)
+                describe!(check::Std, check::Rustc, check::Rustdoc, check::Clippy, check::Bootstrap)
             }
             Kind::Test => describe!(
                 crate::toolstate::ToolStateCheck,
@@ -471,6 +471,7 @@ impl<'a> Builder<'a> {
                 dist::Clippy,
                 dist::Miri,
                 dist::LlvmTools,
+                dist::RustDev,
                 dist::Extended,
                 dist::HashSign
             ),
@@ -796,7 +797,7 @@ impl<'a> Builder<'a> {
         if cmd == "doc" || cmd == "rustdoc" {
             let my_out = match mode {
                 // This is the intended out directory for compiler documentation.
-                Mode::Rustc | Mode::ToolRustc | Mode::Codegen => self.compiler_doc_out(target),
+                Mode::Rustc | Mode::ToolRustc => self.compiler_doc_out(target),
                 Mode::Std => out_dir.join(target.triple).join("doc"),
                 _ => panic!("doc mode {:?} not expected", mode),
             };
@@ -859,6 +860,10 @@ impl<'a> Builder<'a> {
             rustflags.arg("--cfg=bootstrap");
         }
 
+        if self.config.rust_new_symbol_mangling {
+            rustflags.arg("-Zsymbol-mangling-version=v0");
+        }
+
         // FIXME: It might be better to use the same value for both `RUSTFLAGS` and `RUSTDOCFLAGS`,
         // but this breaks CI. At the very least, stage0 `rustdoc` needs `--cfg bootstrap`. See
         // #71458.
@@ -870,7 +875,7 @@ impl<'a> Builder<'a> {
 
         match mode {
             Mode::Std | Mode::ToolBootstrap | Mode::ToolStd => {}
-            Mode::Rustc | Mode::Codegen | Mode::ToolRustc => {
+            Mode::Rustc | Mode::ToolRustc => {
                 // Build proc macros both for the host and the target
                 if target != compiler.host && cmd != "check" {
                     cargo.arg("-Zdual-proc-macros");
@@ -1037,15 +1042,11 @@ impl<'a> Builder<'a> {
             }
         }
 
-        // FIXME: Don't use LLD with MSVC if we're compiling libtest, since it fails to link it.
-        // See https://github.com/rust-lang/rust/issues/68647.
-        let can_use_lld = mode != Mode::Std;
-
-        if let Some(host_linker) = self.linker(compiler.host, can_use_lld) {
+        if let Some(host_linker) = self.linker(compiler.host, true) {
             cargo.env("RUSTC_HOST_LINKER", host_linker);
         }
 
-        if let Some(target_linker) = self.linker(target, can_use_lld) {
+        if let Some(target_linker) = self.linker(target, true) {
             let target = crate::envify(&target.triple);
             cargo.env(&format!("CARGO_TARGET_{}_LINKER", target), target_linker);
         }
@@ -1059,7 +1060,7 @@ impl<'a> Builder<'a> {
         }
 
         let debuginfo_level = match mode {
-            Mode::Rustc | Mode::Codegen => self.config.rust_debuginfo_level_rustc,
+            Mode::Rustc => self.config.rust_debuginfo_level_rustc,
             Mode::Std => self.config.rust_debuginfo_level_std,
             Mode::ToolBootstrap | Mode::ToolStd | Mode::ToolRustc => {
                 self.config.rust_debuginfo_level_tools
@@ -1074,6 +1075,11 @@ impl<'a> Builder<'a> {
                 self.config.rust_debug_assertions.to_string()
             },
         );
+
+        if self.config.cmd.bless() {
+            // Bless `expect!` tests.
+            cargo.env("UPDATE_EXPECT", "1");
+        }
 
         if !mode.is_tool() {
             cargo.env("RUSTC_FORCE_UNSTABLE", "1");
@@ -1191,7 +1197,7 @@ impl<'a> Builder<'a> {
             rustdocflags.arg("-Winvalid_codeblock_attributes");
         }
 
-        if let Mode::Rustc | Mode::Codegen = mode {
+        if mode == Mode::Rustc {
             rustflags.arg("-Zunstable-options");
             rustflags.arg("-Wrustc::internal");
         }
@@ -1354,7 +1360,7 @@ impl<'a> Builder<'a> {
         // When we build Rust dylibs they're all intended for intermediate
         // usage, so make sure we pass the -Cprefer-dynamic flag instead of
         // linking all deps statically into the dylib.
-        if let Mode::Std | Mode::Rustc | Mode::Codegen = mode {
+        if matches!(mode, Mode::Std | Mode::Rustc) {
             rustflags.arg("-Cprefer-dynamic");
         }
 

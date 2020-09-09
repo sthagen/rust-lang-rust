@@ -73,6 +73,8 @@
 #![feature(const_discriminant)]
 #![feature(const_checked_int_methods)]
 #![feature(const_euclidean_int_methods)]
+#![feature(const_float_classify)]
+#![feature(const_float_bits_conv)]
 #![feature(const_overflowing_int_methods)]
 #![feature(const_int_unchecked_arith)]
 #![feature(const_int_pow)]
@@ -96,7 +98,7 @@
 #![feature(custom_inner_attributes)]
 #![feature(decl_macro)]
 #![feature(doc_cfg)]
-#![cfg_attr(not(bootstrap), feature(doc_spotlight))]
+#![feature(doc_spotlight)]
 #![feature(duration_consts_2)]
 #![feature(extern_types)]
 #![feature(fundamental)]
@@ -114,10 +116,11 @@
 #![feature(optin_builtin_traits)]
 #![feature(or_patterns)]
 #![feature(prelude_import)]
+#![feature(ptr_as_uninit)]
 #![feature(repr_simd, platform_intrinsics)]
 #![feature(rustc_attrs)]
 #![feature(simd_ffi)]
-#![feature(specialization)]
+#![feature(min_specialization)]
 #![feature(staged_api)]
 #![feature(std_internals)]
 #![feature(stmt_expr_attributes)]
@@ -217,52 +220,41 @@ pub mod ptr;
 /* Core language traits */
 
 pub mod borrow;
-#[cfg(not(test))] // See #65860
 pub mod clone;
-#[cfg(not(test))] // See #65860
 pub mod cmp;
 pub mod convert;
-#[cfg(not(test))] // See #65860
 pub mod default;
-#[cfg(not(test))] // See #65860
 pub mod marker;
 pub mod ops;
 
 /* Core types and methods on primitives */
 
 pub mod any;
-#[cfg(not(test))] // See #65860
 pub mod array;
 pub mod ascii;
 pub mod cell;
 pub mod char;
 pub mod ffi;
-#[cfg(not(test))] // See #65860
 pub mod iter;
 #[unstable(feature = "once_cell", issue = "74465")]
 pub mod lazy;
 pub mod option;
 pub mod panic;
 pub mod panicking;
-#[cfg(not(test))] // See #65860
 pub mod pin;
 pub mod raw;
 pub mod result;
 pub mod sync;
 
-#[cfg(not(test))] // See #65860
 pub mod fmt;
-#[cfg(not(test))] // See #65860
 pub mod hash;
 pub mod slice;
-#[cfg(not(test))] // See #65860
 pub mod str;
 pub mod time;
 
 pub mod unicode;
 
 /* Async */
-#[cfg(not(test))] // See #65860
 pub mod future;
 pub mod task;
 
