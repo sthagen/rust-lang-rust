@@ -10,12 +10,11 @@ use crate::ty::codec::{TyDecoder, TyEncoder};
 use crate::ty::fold::{TypeFoldable, TypeFolder, TypeVisitor};
 use crate::ty::print::{FmtPrinter, Printer};
 use crate::ty::subst::{Subst, SubstsRef};
-use crate::ty::{
-    self, AdtDef, CanonicalUserTypeAnnotations, List, Region, Ty, TyCtxt, UserTypeAnnotationIndex,
-};
+use crate::ty::{self, List, Ty, TyCtxt};
+use crate::ty::{AdtDef, InstanceDef, Region, UserTypeAnnotationIndex};
 use rustc_hir as hir;
 use rustc_hir::def::{CtorKind, Namespace};
-use rustc_hir::def_id::DefId;
+use rustc_hir::def_id::{DefId, CRATE_DEF_INDEX};
 use rustc_hir::{self, GeneratorKind};
 use rustc_target::abi::VariantIdx;
 
@@ -40,6 +39,7 @@ use std::{iter, mem, option};
 use self::predecessors::{PredecessorCache, Predecessors};
 pub use self::query::*;
 
+pub mod abstract_const;
 pub mod coverage;
 pub mod interpret;
 pub mod mono;
@@ -111,6 +111,38 @@ impl MirPhase {
     }
 }
 
+/// Where a specific `mir::Body` comes from.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(HashStable, TyEncodable, TyDecodable, TypeFoldable)]
+pub struct MirSource<'tcx> {
+    pub instance: InstanceDef<'tcx>,
+
+    /// If `Some`, this is a promoted rvalue within the parent function.
+    pub promoted: Option<Promoted>,
+}
+
+impl<'tcx> MirSource<'tcx> {
+    pub fn item(def_id: DefId) -> Self {
+        MirSource {
+            instance: InstanceDef::Item(ty::WithOptConstParam::unknown(def_id)),
+            promoted: None,
+        }
+    }
+
+    pub fn from_instance(instance: InstanceDef<'tcx>) -> Self {
+        MirSource { instance, promoted: None }
+    }
+
+    pub fn with_opt_param(self) -> ty::WithOptConstParam<DefId> {
+        self.instance.with_opt_param()
+    }
+
+    #[inline]
+    pub fn def_id(&self) -> DefId {
+        self.instance.def_id()
+    }
+}
+
 /// The lowered representation of a single function.
 #[derive(Clone, TyEncodable, TyDecodable, Debug, HashStable, TypeFoldable)]
 pub struct Body<'tcx> {
@@ -124,6 +156,8 @@ pub struct Body<'tcx> {
     /// promoted items have already been optimized, whereas ours have not. This field allows
     /// us to see the difference and forego optimization on the inlined promoted items.
     pub phase: MirPhase,
+
+    pub source: MirSource<'tcx>,
 
     /// A list of source scopes; these are referenced by statements
     /// and used for debuginfo. Indexed by a `SourceScope`.
@@ -150,7 +184,7 @@ pub struct Body<'tcx> {
     pub local_decls: LocalDecls<'tcx>,
 
     /// User type annotations.
-    pub user_type_annotations: CanonicalUserTypeAnnotations<'tcx>,
+    pub user_type_annotations: ty::CanonicalUserTypeAnnotations<'tcx>,
 
     /// The number of arguments this function takes.
     ///
@@ -186,15 +220,33 @@ pub struct Body<'tcx> {
     /// FIXME(oli-obk): rewrite the promoted during promotion to eliminate the cell components.
     pub ignore_interior_mut_in_const_validation: bool,
 
+    /// Does this body use generic parameters. This is used for the `ConstEvaluatable` check.
+    ///
+    /// Note that this does not actually mean that this body is not computable right now.
+    /// The repeat count in the following example is polymorphic, but can still be evaluated
+    /// without knowing anything about the type parameter `T`.
+    ///
+    /// ```rust
+    /// fn test<T>() {
+    ///     let _ = [0; std::mem::size_of::<*mut T>()];
+    /// }
+    /// ```
+    ///
+    /// **WARNING**: Do not change this flags after the MIR was originally created, even if an optimization
+    /// removed the last mention of all generic params. We do not want to rely on optimizations and
+    /// potentially allow things like `[u8; std::mem::size_of::<T>() * 0]` due to this.
+    pub is_polymorphic: bool,
+
     predecessor_cache: PredecessorCache,
 }
 
 impl<'tcx> Body<'tcx> {
     pub fn new(
+        source: MirSource<'tcx>,
         basic_blocks: IndexVec<BasicBlock, BasicBlockData<'tcx>>,
         source_scopes: IndexVec<SourceScope, SourceScopeData>,
         local_decls: LocalDecls<'tcx>,
-        user_type_annotations: CanonicalUserTypeAnnotations<'tcx>,
+        user_type_annotations: ty::CanonicalUserTypeAnnotations<'tcx>,
         arg_count: usize,
         var_debug_info: Vec<VarDebugInfo<'tcx>>,
         span: Span,
@@ -208,8 +260,9 @@ impl<'tcx> Body<'tcx> {
             local_decls.len()
         );
 
-        Body {
+        let mut body = Body {
             phase: MirPhase::Build,
+            source,
             basic_blocks,
             source_scopes,
             yield_ty: None,
@@ -224,8 +277,11 @@ impl<'tcx> Body<'tcx> {
             span,
             required_consts: Vec::new(),
             ignore_interior_mut_in_const_validation: false,
+            is_polymorphic: false,
             predecessor_cache: PredecessorCache::new(),
-        }
+        };
+        body.is_polymorphic = body.has_param_types_or_consts();
+        body
     }
 
     /// Returns a partially initialized MIR body containing only a list of basic blocks.
@@ -234,8 +290,9 @@ impl<'tcx> Body<'tcx> {
     /// is only useful for testing but cannot be `#[cfg(test)]` because it is used in a different
     /// crate.
     pub fn new_cfg_only(basic_blocks: IndexVec<BasicBlock, BasicBlockData<'tcx>>) -> Self {
-        Body {
+        let mut body = Body {
             phase: MirPhase::Build,
+            source: MirSource::item(DefId::local(CRATE_DEF_INDEX)),
             basic_blocks,
             source_scopes: IndexVec::new(),
             yield_ty: None,
@@ -250,8 +307,11 @@ impl<'tcx> Body<'tcx> {
             generator_kind: None,
             var_debug_info: Vec::new(),
             ignore_interior_mut_in_const_validation: false,
+            is_polymorphic: false,
             predecessor_cache: PredecessorCache::new(),
-        }
+        };
+        body.is_polymorphic = body.has_param_types_or_consts();
+        body
     }
 
     #[inline]
@@ -646,7 +706,7 @@ impl Atom for Local {
 }
 
 /// Classifies locals into categories. See `Body::local_kind`.
-#[derive(PartialEq, Eq, Debug, HashStable)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, HashStable)]
 pub enum LocalKind {
     /// User-declared variable binding.
     Var,
@@ -753,7 +813,7 @@ pub struct BlockTailInfo {
 /// argument, or the return place.
 #[derive(Clone, Debug, TyEncodable, TyDecodable, HashStable, TypeFoldable)]
 pub struct LocalDecl<'tcx> {
-    /// Whether this is a mutable minding (i.e., `let x` or `let mut x`).
+    /// Whether this is a mutable binding (i.e., `let x` or `let mut x`).
     ///
     /// Temporaries and the return place are always mutable.
     pub mutability: Mutability,
@@ -899,6 +959,8 @@ pub enum LocalInfo<'tcx> {
     User(ClearCrossCrate<BindingForm<'tcx>>),
     /// A temporary created that references the static with the given `DefId`.
     StaticRef { def_id: DefId, is_thread_local: bool },
+    /// A temporary created that references the const with the given `DefId`
+    ConstRef { def_id: DefId },
 }
 
 impl<'tcx> LocalDecl<'tcx> {
@@ -909,67 +971,59 @@ impl<'tcx> LocalDecl<'tcx> {
     /// - `let x = ...`,
     /// - or `match ... { C(x) => ... }`
     pub fn can_be_made_mutable(&self) -> bool {
-        match self.local_info {
-            Some(box LocalInfo::User(ClearCrossCrate::Set(BindingForm::Var(VarBindingForm {
-                binding_mode: ty::BindingMode::BindByValue(_),
-                opt_ty_info: _,
-                opt_match_place: _,
-                pat_span: _,
-            })))) => true,
-
-            Some(box LocalInfo::User(ClearCrossCrate::Set(BindingForm::ImplicitSelf(
-                ImplicitSelfKind::Imm,
-            )))) => true,
-
-            _ => false,
-        }
+        matches!(
+            self.local_info,
+            Some(box LocalInfo::User(ClearCrossCrate::Set(
+                BindingForm::Var(VarBindingForm {
+                    binding_mode: ty::BindingMode::BindByValue(_),
+                    opt_ty_info: _,
+                    opt_match_place: _,
+                    pat_span: _,
+                })
+                | BindingForm::ImplicitSelf(ImplicitSelfKind::Imm),
+            )))
+        )
     }
 
     /// Returns `true` if local is definitely not a `ref ident` or
     /// `ref mut ident` binding. (Such bindings cannot be made into
     /// mutable bindings, but the inverse does not necessarily hold).
     pub fn is_nonref_binding(&self) -> bool {
-        match self.local_info {
-            Some(box LocalInfo::User(ClearCrossCrate::Set(BindingForm::Var(VarBindingForm {
-                binding_mode: ty::BindingMode::BindByValue(_),
-                opt_ty_info: _,
-                opt_match_place: _,
-                pat_span: _,
-            })))) => true,
-
-            Some(box LocalInfo::User(ClearCrossCrate::Set(BindingForm::ImplicitSelf(_)))) => true,
-
-            _ => false,
-        }
+        matches!(
+            self.local_info,
+            Some(box LocalInfo::User(ClearCrossCrate::Set(
+                BindingForm::Var(VarBindingForm {
+                    binding_mode: ty::BindingMode::BindByValue(_),
+                    opt_ty_info: _,
+                    opt_match_place: _,
+                    pat_span: _,
+                })
+                | BindingForm::ImplicitSelf(_),
+            )))
+        )
     }
 
     /// Returns `true` if this variable is a named variable or function
     /// parameter declared by the user.
     #[inline]
     pub fn is_user_variable(&self) -> bool {
-        match self.local_info {
-            Some(box LocalInfo::User(_)) => true,
-            _ => false,
-        }
+        matches!(self.local_info, Some(box LocalInfo::User(_)))
     }
 
     /// Returns `true` if this is a reference to a variable bound in a `match`
     /// expression that is used to access said variable for the guard of the
     /// match arm.
     pub fn is_ref_for_guard(&self) -> bool {
-        match self.local_info {
-            Some(box LocalInfo::User(ClearCrossCrate::Set(BindingForm::RefForGuard))) => true,
-            _ => false,
-        }
+        matches!(
+            self.local_info,
+            Some(box LocalInfo::User(ClearCrossCrate::Set(BindingForm::RefForGuard)))
+        )
     }
 
     /// Returns `Some` if this is a reference to a static item that is used to
     /// access that static
     pub fn is_ref_to_static(&self) -> bool {
-        match self.local_info {
-            Some(box LocalInfo::StaticRef { .. }) => true,
-            _ => false,
-        }
+        matches!(self.local_info, Some(box LocalInfo::StaticRef { .. }))
     }
 
     /// Returns `Some` if this is a reference to a static item that is used to
@@ -1051,6 +1105,25 @@ pub struct VarDebugInfo<'tcx> {
 // BasicBlock
 
 rustc_index::newtype_index! {
+    /// A node in the MIR [control-flow graph][CFG].
+    ///
+    /// There are no branches (e.g., `if`s, function calls, etc.) within a basic block, which makes
+    /// it easier to do [data-flow analyses] and optimizations. Instead, branches are represented
+    /// as an edge in a graph between basic blocks.
+    ///
+    /// Basic blocks consist of a series of [statements][Statement], ending with a
+    /// [terminator][Terminator]. Basic blocks can have multiple predecessors and successors,
+    /// however there is a MIR pass ([`CriticalCallEdges`]) that removes *critical edges*, which
+    /// are edges that go from a multi-successor node to a multi-predecessor node. This pass is
+    /// needed because some analyses require that there are no critical edges in the CFG.
+    ///
+    /// Read more about basic blocks in the [rustc-dev-guide][guide-mir].
+    ///
+    /// [CFG]: https://rustc-dev-guide.rust-lang.org/appendix/background.html#cfg
+    /// [data-flow analyses]:
+    ///     https://rustc-dev-guide.rust-lang.org/appendix/background.html#what-is-a-dataflow-analysis
+    /// [`CriticalCallEdges`]: ../../rustc_mir/transform/add_call_guards/enum.AddCallGuards.html#variant.CriticalCallEdges
+    /// [guide-mir]: https://rustc-dev-guide.rust-lang.org/mir/
     pub struct BasicBlock {
         derive [HashStable]
         DEBUG_FORMAT = "bb{}",
@@ -1067,6 +1140,7 @@ impl BasicBlock {
 ///////////////////////////////////////////////////////////////////////////
 // BasicBlockData and Terminator
 
+/// See [`BasicBlock`] for documentation on what basic blocks are at a high level.
 #[derive(Clone, Debug, TyEncodable, TyDecodable, HashStable, TypeFoldable)]
 pub struct BasicBlockData<'tcx> {
     /// List of statements in this block.
@@ -1254,49 +1328,49 @@ impl<O> AssertKind<O> {
         match self {
             BoundsCheck { ref len, ref index } => write!(
                 f,
-                "\"index out of bounds: the len is {{}} but the index is {{}}\", {:?}, {:?}",
+                "\"index out of bounds: the length is {{}} but the index is {{}}\", {:?}, {:?}",
                 len, index
             ),
 
             OverflowNeg(op) => {
-                write!(f, "\"attempt to negate {{}} which would overflow\", {:?}", op)
+                write!(f, "\"attempt to negate `{{}}`, which would overflow\", {:?}", op)
             }
-            DivisionByZero(op) => write!(f, "\"attempt to divide {{}} by zero\", {:?}", op),
+            DivisionByZero(op) => write!(f, "\"attempt to divide `{{}}` by zero\", {:?}", op),
             RemainderByZero(op) => write!(
                 f,
-                "\"attempt to calculate the remainder of {{}} with a divisor of zero\", {:?}",
+                "\"attempt to calculate the remainder of `{{}}` with a divisor of zero\", {:?}",
                 op
             ),
             Overflow(BinOp::Add, l, r) => write!(
                 f,
-                "\"attempt to compute `{{}} + {{}}` which would overflow\", {:?}, {:?}",
+                "\"attempt to compute `{{}} + {{}}`, which would overflow\", {:?}, {:?}",
                 l, r
             ),
             Overflow(BinOp::Sub, l, r) => write!(
                 f,
-                "\"attempt to compute `{{}} - {{}}` which would overflow\", {:?}, {:?}",
+                "\"attempt to compute `{{}} - {{}}`, which would overflow\", {:?}, {:?}",
                 l, r
             ),
             Overflow(BinOp::Mul, l, r) => write!(
                 f,
-                "\"attempt to compute `{{}} * {{}}` which would overflow\", {:?}, {:?}",
+                "\"attempt to compute `{{}} * {{}}`, which would overflow\", {:?}, {:?}",
                 l, r
             ),
             Overflow(BinOp::Div, l, r) => write!(
                 f,
-                "\"attempt to compute `{{}} / {{}}` which would overflow\", {:?}, {:?}",
+                "\"attempt to compute `{{}} / {{}}`, which would overflow\", {:?}, {:?}",
                 l, r
             ),
             Overflow(BinOp::Rem, l, r) => write!(
                 f,
-                "\"attempt to compute the remainder of `{{}} % {{}}` which would overflow\", {:?}, {:?}",
+                "\"attempt to compute the remainder of `{{}} % {{}}`, which would overflow\", {:?}, {:?}",
                 l, r
             ),
             Overflow(BinOp::Shr, _, r) => {
-                write!(f, "\"attempt to shift right by {{}} which would overflow\", {:?}", r)
+                write!(f, "\"attempt to shift right by `{{}}`, which would overflow\", {:?}", r)
             }
             Overflow(BinOp::Shl, _, r) => {
-                write!(f, "\"attempt to shift left by {{}} which would overflow\", {:?}", r)
+                write!(f, "\"attempt to shift left by `{{}}`, which would overflow\", {:?}", r)
             }
             _ => write!(f, "\"{}\"", self.description()),
         }
@@ -1307,36 +1381,40 @@ impl<O: fmt::Debug> fmt::Debug for AssertKind<O> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use AssertKind::*;
         match self {
-            BoundsCheck { ref len, ref index } => {
-                write!(f, "index out of bounds: the len is {:?} but the index is {:?}", len, index)
-            }
-            OverflowNeg(op) => write!(f, "attempt to negate {:#?} which would overflow", op),
-            DivisionByZero(op) => write!(f, "attempt to divide {:#?} by zero", op),
-            RemainderByZero(op) => {
-                write!(f, "attempt to calculate the remainder of {:#?} with a divisor of zero", op)
-            }
+            BoundsCheck { ref len, ref index } => write!(
+                f,
+                "index out of bounds: the length is {:?} but the index is {:?}",
+                len, index
+            ),
+            OverflowNeg(op) => write!(f, "attempt to negate `{:#?}`, which would overflow", op),
+            DivisionByZero(op) => write!(f, "attempt to divide `{:#?}` by zero", op),
+            RemainderByZero(op) => write!(
+                f,
+                "attempt to calculate the remainder of `{:#?}` with a divisor of zero",
+                op
+            ),
             Overflow(BinOp::Add, l, r) => {
-                write!(f, "attempt to compute `{:#?} + {:#?}` which would overflow", l, r)
+                write!(f, "attempt to compute `{:#?} + {:#?}`, which would overflow", l, r)
             }
             Overflow(BinOp::Sub, l, r) => {
-                write!(f, "attempt to compute `{:#?} - {:#?}` which would overflow", l, r)
+                write!(f, "attempt to compute `{:#?} - {:#?}`, which would overflow", l, r)
             }
             Overflow(BinOp::Mul, l, r) => {
-                write!(f, "attempt to compute `{:#?} * {:#?}` which would overflow", l, r)
+                write!(f, "attempt to compute `{:#?} * {:#?}`, which would overflow", l, r)
             }
             Overflow(BinOp::Div, l, r) => {
-                write!(f, "attempt to compute `{:#?} / {:#?}` which would overflow", l, r)
+                write!(f, "attempt to compute `{:#?} / {:#?}`, which would overflow", l, r)
             }
             Overflow(BinOp::Rem, l, r) => write!(
                 f,
-                "attempt to compute the remainder of `{:#?} % {:#?}` which would overflow",
+                "attempt to compute the remainder of `{:#?} % {:#?}`, which would overflow",
                 l, r
             ),
             Overflow(BinOp::Shr, _, r) => {
-                write!(f, "attempt to shift right by {:#?} which would overflow", r)
+                write!(f, "attempt to shift right by `{:#?}`, which would overflow", r)
             }
             Overflow(BinOp::Shl, _, r) => {
-                write!(f, "attempt to shift left by {:#?} which would overflow", r)
+                write!(f, "attempt to shift left by `{:#?}`, which would overflow", r)
             }
             _ => write!(f, "{}", self.description()),
         }
@@ -2078,10 +2156,7 @@ pub enum BinOp {
 impl BinOp {
     pub fn is_checkable(self) -> bool {
         use self::BinOp::*;
-        match self {
-            Add | Sub | Mul | Shl | Shr => true,
-            _ => false,
-        }
+        matches!(self, Add | Sub | Mul | Shl | Shr)
     }
 }
 
@@ -2260,8 +2335,8 @@ impl<'tcx> Debug for Rvalue<'tcx> {
 /// Constants
 ///
 /// Two constants are equal if they are the same constant. Note that
-/// this does not necessarily mean that they are "==" in Rust -- in
-/// particular one must be wary of `NaN`!
+/// this does not necessarily mean that they are `==` in Rust. In
+/// particular, one must be wary of `NaN`!
 
 #[derive(Clone, Copy, PartialEq, TyEncodable, TyDecodable, HashStable)]
 pub struct Constant<'tcx> {

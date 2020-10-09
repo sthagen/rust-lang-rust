@@ -1,8 +1,7 @@
 //! Calls `chalk-solve` to solve a `ty::Predicate`
 //!
-//! In order to call `chalk-solve`, this file must convert a
-//! `ChalkCanonicalGoal` into a Chalk ucanonical goal. It then calls Chalk, and
-//! converts the answer back into rustc solution.
+//! In order to call `chalk-solve`, this file must convert a `CanonicalChalkEnvironmentAndGoal` into
+//! a Chalk uncanonical goal. It then calls Chalk, and converts the answer back into rustc solution.
 
 crate mod db;
 crate mod lowering;
@@ -20,7 +19,7 @@ use rustc_middle::ty::{self, BoundVar, ParamTy, TyCtxt, TypeFoldable};
 use rustc_infer::infer::canonical::{
     Canonical, CanonicalVarValues, Certainty, QueryRegionConstraints, QueryResponse,
 };
-use rustc_infer::traits::{self, ChalkCanonicalGoal};
+use rustc_infer::traits::{self, CanonicalChalkEnvironmentAndGoal};
 
 use crate::chalk::db::RustIrDatabase as ChalkRustIrDatabase;
 use crate::chalk::lowering::{
@@ -35,7 +34,7 @@ crate fn provide(p: &mut Providers) {
 
 crate fn evaluate_goal<'tcx>(
     tcx: TyCtxt<'tcx>,
-    obligation: ChalkCanonicalGoal<'tcx>,
+    obligation: CanonicalChalkEnvironmentAndGoal<'tcx>,
 ) -> Result<&'tcx Canonical<'tcx, QueryResponse<'tcx, ()>>, traits::query::NoSolution> {
     let interner = ChalkRustInterner { tcx };
 
@@ -43,10 +42,6 @@ crate fn evaluate_goal<'tcx>(
     let mut placeholders_collector = PlaceholdersCollector::new();
     obligation.visit_with(&mut placeholders_collector);
 
-    let restatic_placeholder = tcx.mk_region(ty::RegionKind::RePlaceholder(ty::Placeholder {
-        universe: ty::UniverseIndex::ROOT,
-        name: ty::BoundRegion::BrAnon(placeholders_collector.next_anon_region_placeholder),
-    }));
     let reempty_placeholder = tcx.mk_region(ty::RegionKind::RePlaceholder(ty::Placeholder {
         universe: ty::UniverseIndex::ROOT,
         name: ty::BoundRegion::BrAnon(placeholders_collector.next_anon_region_placeholder + 1),
@@ -58,8 +53,7 @@ crate fn evaluate_goal<'tcx>(
     // FIXME(chalk): we really should be substituting these back in the solution
     let _params: FxHashMap<usize, ParamTy> = params_substitutor.params;
 
-    let mut regions_substitutor =
-        RegionsSubstitutor::new(tcx, restatic_placeholder, reempty_placeholder);
+    let mut regions_substitutor = RegionsSubstitutor::new(tcx, reempty_placeholder);
     let obligation = obligation.fold_with(&mut regions_substitutor);
 
     let max_universe = obligation.max_universe.index();
@@ -102,7 +96,7 @@ crate fn evaluate_goal<'tcx>(
 
     use chalk_solve::Solver;
     let mut solver = chalk_engine::solve::SLGSolver::new(32, None);
-    let db = ChalkRustIrDatabase { interner, restatic_placeholder, reempty_placeholder };
+    let db = ChalkRustIrDatabase { interner, reempty_placeholder };
     let solution = chalk_solve::logging::with_tracing_logs(|| solver.solve(&db, &lowered_goal));
 
     // Ideally, the code to convert *back* to rustc types would live close to

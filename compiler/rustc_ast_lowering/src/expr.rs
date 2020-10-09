@@ -432,17 +432,25 @@ impl<'hir> LoweringContext<'_, 'hir> {
         self.with_catch_scope(body.id, |this| {
             let mut block = this.lower_block_noalloc(body, true);
 
-            let try_span = this.mark_span_with_reason(
-                DesugaringKind::TryBlock,
-                body.span,
-                this.allow_try_trait.clone(),
-            );
-
             // Final expression of the block (if present) or `()` with span at the end of block
-            let tail_expr = block
-                .expr
-                .take()
-                .unwrap_or_else(|| this.expr_unit(this.sess.source_map().end_point(try_span)));
+            let (try_span, tail_expr) = if let Some(expr) = block.expr.take() {
+                (
+                    this.mark_span_with_reason(
+                        DesugaringKind::TryBlock,
+                        expr.span,
+                        this.allow_try_trait.clone(),
+                    ),
+                    expr,
+                )
+            } else {
+                let try_span = this.mark_span_with_reason(
+                    DesugaringKind::TryBlock,
+                    this.sess.source_map().end_point(body.span),
+                    this.allow_try_trait.clone(),
+                );
+
+                (try_span, this.expr_unit(try_span))
+            };
 
             let ok_wrapped_span =
                 this.mark_span_with_reason(DesugaringKind::TryBlock, tail_expr.span, None);
@@ -1121,7 +1129,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                 // features. We check that at least one type is available for
                 // the current target.
                 let reg_class = reg.reg_class();
-                let mut required_features = vec![];
+                let mut required_features: Vec<&str> = vec![];
                 for &(_, feature) in reg_class.supported_types(asm_arch) {
                     if let Some(feature) = feature {
                         if self.sess.target_features.contains(&Symbol::intern(feature)) {
@@ -1135,7 +1143,8 @@ impl<'hir> LoweringContext<'_, 'hir> {
                         break;
                     }
                 }
-                required_features.sort();
+                // We are sorting primitive strs here and can use unstable sort here
+                required_features.sort_unstable();
                 required_features.dedup();
                 match &required_features[..] {
                     [] => {}
@@ -1552,7 +1561,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                 hir::LangItem::TryFromError,
                 unstable_span,
                 from_expr,
-                try_span,
+                unstable_span,
             );
             let thin_attrs = ThinVec::from(attrs);
             let catch_scope = self.catch_scopes.last().copied();

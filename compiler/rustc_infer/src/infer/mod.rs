@@ -21,7 +21,7 @@ use rustc_middle::infer::canonical::{Canonical, CanonicalVarValues};
 use rustc_middle::infer::unify_key::{ConstVarValue, ConstVariableValue};
 use rustc_middle::infer::unify_key::{ConstVariableOrigin, ConstVariableOriginKind, ToType};
 use rustc_middle::mir;
-use rustc_middle::mir::interpret::ConstEvalResult;
+use rustc_middle::mir::interpret::EvalToConstValueResult;
 use rustc_middle::traits::select;
 use rustc_middle::ty::error::{ExpectedFound, TypeError, UnconstrainedNumeric};
 use rustc_middle::ty::fold::{TypeFoldable, TypeFolder};
@@ -350,11 +350,6 @@ pub struct InferCtxt<'a, 'tcx> {
     /// bound.
     universe: Cell<ty::UniverseIndex>,
 }
-
-/// A map returned by `replace_bound_vars_with_placeholders()`
-/// indicating the placeholder region that each late-bound region was
-/// replaced with.
-pub type PlaceholderMap<'tcx> = BTreeMap<ty::BoundRegion, ty::Region<'tcx>>;
 
 /// See the `error_reporting` module for more details.
 #[derive(Clone, Debug, PartialEq, Eq, TypeFoldable)]
@@ -992,7 +987,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         }
 
         Some(self.commit_if_ok(|_snapshot| {
-            let (ty::SubtypePredicate { a_is_expected, a, b }, _) =
+            let ty::SubtypePredicate { a_is_expected, a, b } =
                 self.replace_bound_vars_with_placeholders(&predicate);
 
             let ok = self.at(cause, param_env).sub_exp(a_is_expected, a, b)?;
@@ -1007,7 +1002,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         predicate: ty::PolyRegionOutlivesPredicate<'tcx>,
     ) -> UnitResult<'tcx> {
         self.commit_if_ok(|_snapshot| {
-            let (ty::OutlivesPredicate(r_a, r_b), _) =
+            let ty::OutlivesPredicate(r_a, r_b) =
                 self.replace_bound_vars_with_placeholders(&predicate);
             let origin = SubregionOrigin::from_obligation_cause(cause, || {
                 RelateRegionParamBound(cause.span)
@@ -1163,7 +1158,10 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             }
             GenericParamDefKind::Const { .. } => {
                 let origin = ConstVariableOrigin {
-                    kind: ConstVariableOriginKind::ConstParameterDefinition(param.name),
+                    kind: ConstVariableOriginKind::ConstParameterDefinition(
+                        param.name,
+                        param.def_id,
+                    ),
                     span,
                 };
                 let const_var_id =
@@ -1275,7 +1273,6 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
     }
 
     /// Gives temporary access to the region constraint data.
-    #[allow(non_camel_case_types)] // bug with impl trait
     pub fn with_region_constraints<R>(
         &self,
         op: impl FnOnce(&RegionConstraintData<'tcx>) -> R,
@@ -1542,7 +1539,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         substs: SubstsRef<'tcx>,
         promoted: Option<mir::Promoted>,
         span: Option<Span>,
-    ) -> ConstEvalResult<'tcx> {
+    ) -> EvalToConstValueResult<'tcx> {
         let mut original_values = OriginalQueryValues::default();
         let canonical = self.canonicalize_query(&(param_env, substs), &mut original_values);
 

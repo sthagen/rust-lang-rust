@@ -361,7 +361,7 @@ pub fn build_deref_target_impls(cx: &DocContext<'_>, items: &[Item], ret: &mut V
         let primitive = match *target {
             ResolvedPath { did, .. } if did.is_local() => continue,
             ResolvedPath { did, .. } => {
-                ret.extend(inline::build_impls(cx, did, None));
+                ret.extend(inline::build_impls(cx, None, did, None));
                 continue;
             }
             _ => match target.primitive_type() {
@@ -371,7 +371,7 @@ pub fn build_deref_target_impls(cx: &DocContext<'_>, items: &[Item], ret: &mut V
         };
         for &did in primitive.impls(tcx) {
             if !did.is_local() {
-                inline::build_impl(cx, did, None, ret);
+                inline::build_impl(cx, None, did, None, ret);
             }
         }
     }
@@ -601,7 +601,7 @@ pub fn register_res(cx: &DocContext<'_>, res: Res) -> DefId {
         },
         Res::Def(DefKind::TraitAlias, i) => (i, TypeKind::TraitAlias),
         Res::SelfTy(Some(def_id), _) => (def_id, TypeKind::Trait),
-        Res::SelfTy(_, Some(impl_def_id)) => return impl_def_id,
+        Res::SelfTy(_, Some((impl_def_id, _))) => return impl_def_id,
         _ => return res.def_id(),
     };
     if did.is_local() {

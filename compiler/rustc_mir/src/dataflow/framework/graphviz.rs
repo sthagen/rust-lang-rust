@@ -1,11 +1,11 @@
 //! A helpful diagram for debugging dataflow problems.
 
 use std::borrow::Cow;
+use std::lazy::SyncOnceCell;
 use std::{io, ops, str};
 
 use regex::Regex;
 use rustc_graphviz as dot;
-use rustc_hir::def_id::DefId;
 use rustc_middle::mir::{self, BasicBlock, Body, Location};
 
 use super::fmt::{DebugDiffWithAdapter, DebugWithAdapter, DebugWithContext};
@@ -32,7 +32,6 @@ where
     A: Analysis<'tcx>,
 {
     body: &'a Body<'tcx>,
-    def_id: DefId,
     results: &'a Results<'tcx, A>,
     style: OutputStyle,
 }
@@ -41,13 +40,8 @@ impl<A> Formatter<'a, 'tcx, A>
 where
     A: Analysis<'tcx>,
 {
-    pub fn new(
-        body: &'a Body<'tcx>,
-        def_id: DefId,
-        results: &'a Results<'tcx, A>,
-        style: OutputStyle,
-    ) -> Self {
-        Formatter { body, def_id, results, style }
+    pub fn new(body: &'a Body<'tcx>, results: &'a Results<'tcx, A>, style: OutputStyle) -> Self {
+        Formatter { body, results, style }
     }
 }
 
@@ -76,7 +70,7 @@ where
     type Edge = CfgEdge;
 
     fn graph_id(&self) -> dot::Id<'_> {
-        let name = graphviz_safe_def_name(self.def_id);
+        let name = graphviz_safe_def_name(self.body.source.def_id());
         dot::Id::new(format!("graph_for_def_id_{}", name)).unwrap()
     }
 
@@ -570,6 +564,13 @@ where
     }
 }
 
+macro_rules! regex {
+    ($re:literal $(,)?) => {{
+        static RE: SyncOnceCell<regex::Regex> = SyncOnceCell::new();
+        RE.get_or_init(|| Regex::new($re).unwrap())
+    }};
+}
+
 fn diff_pretty<T, C>(new: T, old: T, ctxt: &C) -> String
 where
     T: DebugWithContext<C>,
@@ -578,7 +579,7 @@ where
         return String::new();
     }
 
-    let re = Regex::new("\u{001f}([+-])").unwrap();
+    let re = regex!("\t?\u{001f}([+-])");
 
     let raw_diff = format!("{:#?}", DebugDiffWithAdapter { new, old, ctxt });
 

@@ -9,10 +9,12 @@
 
 // ignore-tidy-filelength
 
+use core::array;
 use core::cmp::{self, Ordering};
 use core::fmt;
 use core::hash::{Hash, Hasher};
-use core::iter::{once, repeat_with, FromIterator, FusedIterator};
+use core::iter::{repeat_with, FromIterator, FusedIterator};
+use core::marker::PhantomData;
 use core::mem::{self, replace, ManuallyDrop};
 use core::ops::{Index, IndexMut, Range, RangeBounds, Try};
 use core::ptr::{self, NonNull};
@@ -32,12 +34,8 @@ mod tests;
 
 const INITIAL_CAPACITY: usize = 7; // 2^3 - 1
 const MINIMUM_CAPACITY: usize = 1; // 2 - 1
-#[cfg(target_pointer_width = "16")]
-const MAXIMUM_ZST_CAPACITY: usize = 1 << (16 - 1); // Largest possible power of two
-#[cfg(target_pointer_width = "32")]
-const MAXIMUM_ZST_CAPACITY: usize = 1 << (32 - 1); // Largest possible power of two
-#[cfg(target_pointer_width = "64")]
-const MAXIMUM_ZST_CAPACITY: usize = 1 << (64 - 1); // Largest possible power of two
+
+const MAXIMUM_ZST_CAPACITY: usize = 1 << (core::mem::size_of::<usize>() * 8 - 1); // Largest possible power of two
 
 /// A double-ended queue implemented with a growable ring buffer.
 ///
@@ -52,11 +50,11 @@ const MAXIMUM_ZST_CAPACITY: usize = 1 << (64 - 1); // Largest possible power of 
 /// so that its elements do not wrap, and returns a mutable slice to the
 /// now-contiguous element sequence.
 ///
-/// [`push_back`]: #method.push_back
-/// [`pop_front`]: #method.pop_front
-/// [`extend`]: #method.extend
-/// [`append`]: #method.append
-/// [`make_contiguous`]: #method.make_contiguous
+/// [`push_back`]: VecDeque::push_back
+/// [`pop_front`]: VecDeque::pop_front
+/// [`extend`]: VecDeque::extend
+/// [`append`]: VecDeque::append
+/// [`make_contiguous`]: VecDeque::make_contiguous
 #[cfg_attr(not(test), rustc_diagnostic_item = "vecdeque_type")]
 #[stable(feature = "rust1", since = "1.0.0")]
 pub struct VecDeque<T> {
@@ -103,7 +101,7 @@ impl<'a, 'b, T> PairSlices<'a, 'b, T> {
     }
 
     fn remainder(self) -> impl Iterator<Item = &'b [T]> {
-        once(self.b0).chain(once(self.b1))
+        array::IntoIter::new([self.b0, self.b1])
     }
 }
 
@@ -644,7 +642,7 @@ impl<T> VecDeque<T> {
     /// assert!(buf.capacity() >= 11);
     /// ```
     ///
-    /// [`reserve`]: #method.reserve
+    /// [`reserve`]: VecDeque::reserve
     #[stable(feature = "rust1", since = "1.0.0")]
     pub fn reserve_exact(&mut self, additional: usize) {
         self.reserve(additional);
@@ -985,14 +983,23 @@ impl<T> VecDeque<T> {
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
     pub fn iter_mut(&mut self) -> IterMut<'_, T> {
-        IterMut { tail: self.tail, head: self.head, ring: unsafe { self.buffer_as_mut_slice() } }
+        // SAFETY: The internal `IterMut` safety invariant is established because the
+        // `ring` we create is a dereferencable slice for lifetime '_.
+        IterMut {
+            tail: self.tail,
+            head: self.head,
+            ring: ptr::slice_from_raw_parts_mut(self.ptr(), self.cap()),
+            phantom: PhantomData,
+        }
     }
 
     /// Returns a pair of slices which contain, in order, the contents of the
     /// `VecDeque`.
     ///
-    /// If [`make_contiguous`](#method.make_contiguous) was previously called, all elements
-    /// of the `VecDeque` will be in the first slice and the second slice will be empty.
+    /// If [`make_contiguous`] was previously called, all elements of the
+    /// `VecDeque` will be in the first slice and the second slice will be empty.
+    ///
+    /// [`make_contiguous`]: VecDeque::make_contiguous
     ///
     /// # Examples
     ///
@@ -1024,8 +1031,10 @@ impl<T> VecDeque<T> {
     /// Returns a pair of slices which contain, in order, the contents of the
     /// `VecDeque`.
     ///
-    /// If [`make_contiguous`](#method.make_contiguous) was previously called, all elements
-    /// of the `VecDeque` will be in the first slice and the second slice will be empty.
+    /// If [`make_contiguous`] was previously called, all elements of the
+    /// `VecDeque` will be in the first slice and the second slice will be empty.
+    ///
+    /// [`make_contiguous`]: VecDeque::make_contiguous
     ///
     /// # Examples
     ///
@@ -1093,11 +1102,7 @@ impl<T> VecDeque<T> {
     where
         R: RangeBounds<usize>,
     {
-        // SAFETY: This buffer is only used to check the range. It might be partially
-        // uninitialized, but `check_range` needs a contiguous slice.
-        // https://github.com/rust-lang/rust/pull/75207#discussion_r471193682
-        let buffer = unsafe { slice::from_raw_parts(self.ptr(), self.len()) };
-        let Range { start, end } = buffer.check_range(range);
+        let Range { start, end } = slice::check_range(self.len(), range);
         let tail = self.wrap_add(self.tail, start);
         let head = self.wrap_add(self.tail, end);
         (tail, head)
@@ -1173,11 +1178,14 @@ impl<T> VecDeque<T> {
         R: RangeBounds<usize>,
     {
         let (tail, head) = self.range_tail_head(range);
+
+        // SAFETY: The internal `IterMut` safety invariant is established because the
+        // `ring` we create is a dereferencable slice for lifetime '_.
         IterMut {
             tail,
             head,
-            // The shared reference we have in &mut self is maintained in the '_ of IterMut.
-            ring: unsafe { self.buffer_as_mut_slice() },
+            ring: ptr::slice_from_raw_parts_mut(self.ptr(), self.cap()),
+            phantom: PhantomData,
         }
     }
 
@@ -2168,14 +2176,19 @@ impl<T> VecDeque<T> {
         }
     }
 
-    /// Rearranges the internal storage of this deque so it is one contiguous slice, which is then returned.
+    /// Rearranges the internal storage of this deque so it is one contiguous
+    /// slice, which is then returned.
     ///
-    /// This method does not allocate and does not change the order of the inserted elements.
-    /// As it returns a mutable slice, this can be used to sort or binary search a deque.
+    /// This method does not allocate and does not change the order of the
+    /// inserted elements. As it returns a mutable slice, this can be used to
+    /// sort or binary search a deque.
     ///
-    /// Once the internal storage is contiguous, the [`as_slices`](#method.as_slices) and
-    /// [`as_mut_slices`](#method.as_mut_slices) methods will return the entire contents of the
+    /// Once the internal storage is contiguous, the [`as_slices`] and
+    /// [`as_mut_slices`] methods will return the entire contents of the
     /// `VecDeque` in a single slice.
+    ///
+    /// [`as_slices`]: VecDeque::as_slices
+    /// [`as_mut_slices`]: VecDeque::as_mut_slices
     ///
     /// # Examples
     ///
@@ -2392,7 +2405,7 @@ impl<T> VecDeque<T> {
         }
     }
 
-    // Safety: the following two methods require that the rotation amount
+    // SAFETY: the following two methods require that the rotation amount
     // be less than half the length of the deque.
     //
     // `wrap_copy` requires that `min(x, cap() - x) + copy_len <= cap()`,
@@ -2491,6 +2504,25 @@ impl<T> RingSlices for &mut [T] {
     }
 }
 
+impl<T> RingSlices for *mut [T] {
+    fn slice(self, from: usize, to: usize) -> Self {
+        assert!(from <= to && to < self.len());
+        // Not using `get_unchecked_mut` to keep this a safe operation.
+        let len = to - from;
+        ptr::slice_from_raw_parts_mut(self.as_mut_ptr().wrapping_add(from), len)
+    }
+
+    fn split_at(self, mid: usize) -> (Self, Self) {
+        let len = self.len();
+        let ptr = self.as_mut_ptr();
+        assert!(mid <= len);
+        (
+            ptr::slice_from_raw_parts_mut(ptr, mid),
+            ptr::slice_from_raw_parts_mut(ptr.wrapping_add(mid), len - mid),
+        )
+    }
+}
+
 /// Calculate the number of elements left to be read in the buffer
 #[inline]
 fn count(tail: usize, head: usize, size: usize) -> usize {
@@ -2503,8 +2535,7 @@ fn count(tail: usize, head: usize, size: usize) -> usize {
 /// This `struct` is created by the [`iter`] method on [`VecDeque`]. See its
 /// documentation for more.
 ///
-/// [`iter`]: struct.VecDeque.html#method.iter
-/// [`VecDeque`]: struct.VecDeque.html
+/// [`iter`]: VecDeque::iter
 #[stable(feature = "rust1", since = "1.0.0")]
 pub struct Iter<'a, T: 'a> {
     ring: &'a [T],
@@ -2658,19 +2689,30 @@ impl<T> FusedIterator for Iter<'_, T> {}
 /// This `struct` is created by the [`iter_mut`] method on [`VecDeque`]. See its
 /// documentation for more.
 ///
-/// [`iter_mut`]: struct.VecDeque.html#method.iter_mut
-/// [`VecDeque`]: struct.VecDeque.html
+/// [`iter_mut`]: VecDeque::iter_mut
 #[stable(feature = "rust1", since = "1.0.0")]
 pub struct IterMut<'a, T: 'a> {
-    ring: &'a mut [T],
+    // Internal safety invariant: the entire slice is dereferencable.
+    ring: *mut [T],
     tail: usize,
     head: usize,
+    phantom: PhantomData<&'a mut [T]>,
 }
+
+// SAFETY: we do nothing thread-local and there is no interior mutability,
+// so the usual structural `Send`/`Sync` apply.
+#[stable(feature = "rust1", since = "1.0.0")]
+unsafe impl<T: Send> Send for IterMut<'_, T> {}
+#[stable(feature = "rust1", since = "1.0.0")]
+unsafe impl<T: Sync> Sync for IterMut<'_, T> {}
 
 #[stable(feature = "collection_debug", since = "1.17.0")]
 impl<T: fmt::Debug> fmt::Debug for IterMut<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let (front, back) = RingSlices::ring_slices(&*self.ring, self.head, self.tail);
+        let (front, back) = RingSlices::ring_slices(self.ring, self.head, self.tail);
+        // SAFETY: these are the elements we have not handed out yet, so aliasing is fine.
+        // The `IterMut` invariant also ensures everything is dereferencable.
+        let (front, back) = unsafe { (&*front, &*back) };
         f.debug_tuple("IterMut").field(&front).field(&back).finish()
     }
 }
@@ -2689,7 +2731,7 @@ impl<'a, T> Iterator for IterMut<'a, T> {
 
         unsafe {
             let elem = self.ring.get_unchecked_mut(tail);
-            Some(&mut *(elem as *mut _))
+            Some(&mut *elem)
         }
     }
 
@@ -2704,6 +2746,9 @@ impl<'a, T> Iterator for IterMut<'a, T> {
         F: FnMut(Acc, Self::Item) -> Acc,
     {
         let (front, back) = RingSlices::ring_slices(self.ring, self.head, self.tail);
+        // SAFETY: these are the elements we have not handed out yet, so aliasing is fine.
+        // The `IterMut` invariant also ensures everything is dereferencable.
+        let (front, back) = unsafe { (&mut *front, &mut *back) };
         accum = front.iter_mut().fold(accum, &mut f);
         back.iter_mut().fold(accum, &mut f)
     }
@@ -2735,7 +2780,7 @@ impl<'a, T> DoubleEndedIterator for IterMut<'a, T> {
 
         unsafe {
             let elem = self.ring.get_unchecked_mut(self.head);
-            Some(&mut *(elem as *mut _))
+            Some(&mut *elem)
         }
     }
 
@@ -2744,6 +2789,9 @@ impl<'a, T> DoubleEndedIterator for IterMut<'a, T> {
         F: FnMut(Acc, Self::Item) -> Acc,
     {
         let (front, back) = RingSlices::ring_slices(self.ring, self.head, self.tail);
+        // SAFETY: these are the elements we have not handed out yet, so aliasing is fine.
+        // The `IterMut` invariant also ensures everything is dereferencable.
+        let (front, back) = unsafe { (&mut *front, &mut *back) };
         accum = back.iter_mut().rfold(accum, &mut f);
         front.iter_mut().rfold(accum, &mut f)
     }
@@ -2764,8 +2812,7 @@ impl<T> FusedIterator for IterMut<'_, T> {}
 /// This `struct` is created by the [`into_iter`] method on [`VecDeque`]
 /// (provided by the `IntoIterator` trait). See its documentation for more.
 ///
-/// [`into_iter`]: struct.VecDeque.html#method.into_iter
-/// [`VecDeque`]: struct.VecDeque.html
+/// [`into_iter`]: VecDeque::into_iter
 #[derive(Clone)]
 #[stable(feature = "rust1", since = "1.0.0")]
 pub struct IntoIter<T> {
