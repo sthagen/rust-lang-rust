@@ -968,7 +968,7 @@ fn warn_if_doc(cx: &EarlyContext<'_>, node_span: Span, node_kind: &str, attrs: &
     while let Some(attr) = attrs.next() {
         if attr.is_doc_comment() {
             sugared_span =
-                Some(sugared_span.map_or_else(|| attr.span, |span| span.with_hi(attr.span.hi())));
+                Some(sugared_span.map_or(attr.span, |span| span.with_hi(attr.span.hi())));
         }
 
         if attrs.peek().map(|next_attr| next_attr.is_doc_comment()).unwrap_or_default() {
@@ -2288,11 +2288,19 @@ impl EarlyLintPass for IncompleteFeatures {
                             n, n,
                         ));
                     }
+                    if HAS_MIN_FEATURES.contains(&name) {
+                        builder.help(&format!(
+                            "consider using `min_{}` instead, which is more stable and complete",
+                            name,
+                        ));
+                    }
                     builder.emit();
                 })
             });
     }
 }
+
+const HAS_MIN_FEATURES: &[Symbol] = &[sym::const_generics, sym::specialization];
 
 declare_lint! {
     /// The `invalid_value` lint detects creating a value that is not valid,

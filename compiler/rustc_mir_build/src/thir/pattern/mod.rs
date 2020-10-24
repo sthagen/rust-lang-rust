@@ -856,6 +856,11 @@ impl<'a, 'tcx> PatCtxt<'a, 'tcx> {
             *self.lower_path(qpath, expr.hir_id, expr.span).kind
         } else {
             let (lit, neg) = match expr.kind {
+                hir::ExprKind::ConstBlock(ref anon_const) => {
+                    let anon_const_def_id = self.tcx.hir().local_def_id(anon_const.hir_id);
+                    let value = ty::Const::from_anon_const(self.tcx, anon_const_def_id);
+                    return *self.const_to_pat(value, expr.hir_id, expr.span, false).kind;
+                }
                 hir::ExprKind::Lit(ref lit) => (lit, false),
                 hir::ExprKind::Unary(hir::UnOp::UnNeg, ref expr) => {
                     let lit = match expr.kind {
@@ -1060,13 +1065,13 @@ crate fn compare_const_vals<'tcx>(
         use rustc_apfloat::Float;
         return match *ty.kind() {
             ty::Float(ast::FloatTy::F32) => {
-                let l = ::rustc_apfloat::ieee::Single::from_bits(a);
-                let r = ::rustc_apfloat::ieee::Single::from_bits(b);
+                let l = rustc_apfloat::ieee::Single::from_bits(a);
+                let r = rustc_apfloat::ieee::Single::from_bits(b);
                 l.partial_cmp(&r)
             }
             ty::Float(ast::FloatTy::F64) => {
-                let l = ::rustc_apfloat::ieee::Double::from_bits(a);
-                let r = ::rustc_apfloat::ieee::Double::from_bits(b);
+                let l = rustc_apfloat::ieee::Double::from_bits(a);
+                let r = rustc_apfloat::ieee::Double::from_bits(b);
                 l.partial_cmp(&r)
             }
             ty::Int(ity) => {

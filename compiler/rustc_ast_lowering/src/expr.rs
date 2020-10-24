@@ -30,6 +30,10 @@ impl<'hir> LoweringContext<'_, 'hir> {
             let kind = match e.kind {
                 ExprKind::Box(ref inner) => hir::ExprKind::Box(self.lower_expr(inner)),
                 ExprKind::Array(ref exprs) => hir::ExprKind::Array(self.lower_exprs(exprs)),
+                ExprKind::ConstBlock(ref anon_const) => {
+                    let anon_const = self.lower_anon_const(anon_const);
+                    hir::ExprKind::ConstBlock(anon_const)
+                }
                 ExprKind::Repeat(ref expr, ref count) => {
                     let expr = self.lower_expr(expr);
                     let count = self.lower_anon_const(count);
@@ -985,7 +989,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                             asm::InlineAsmReg::parse(
                                 sess.asm_arch?,
                                 |feature| sess.target_features.contains(&Symbol::intern(feature)),
-                                &sess.target.target,
+                                &sess.target,
                                 s,
                             )
                             .map_err(|e| {
@@ -1186,52 +1190,47 @@ impl<'hir> LoweringContext<'_, 'hir> {
                                          input| {
                             match used_regs.entry(r) {
                                 Entry::Occupied(o) => {
-                                    if !skip {
-                                        skip = true;
-
-                                        let idx2 = *o.get();
-                                        let op2 = &operands[idx2];
-                                        let op_sp2 = asm.operands[idx2].1;
-                                        let reg2 = match op2.reg() {
-                                            Some(asm::InlineAsmRegOrRegClass::Reg(r)) => r,
-                                            _ => unreachable!(),
-                                        };
-
-                                        let msg = format!(
-                                            "register `{}` conflicts with register `{}`",
-                                            reg.name(),
-                                            reg2.name()
-                                        );
-                                        let mut err = sess.struct_span_err(op_sp, &msg);
-                                        err.span_label(
-                                            op_sp,
-                                            &format!("register `{}`", reg.name()),
-                                        );
-                                        err.span_label(
-                                            op_sp2,
-                                            &format!("register `{}`", reg2.name()),
-                                        );
-
-                                        match (op, op2) {
-                                            (
-                                                hir::InlineAsmOperand::In { .. },
-                                                hir::InlineAsmOperand::Out { late, .. },
-                                            )
-                                            | (
-                                                hir::InlineAsmOperand::Out { late, .. },
-                                                hir::InlineAsmOperand::In { .. },
-                                            ) => {
-                                                assert!(!*late);
-                                                let out_op_sp = if input { op_sp2 } else { op_sp };
-                                                let msg = "use `lateout` instead of \
-                                                     `out` to avoid conflict";
-                                                err.span_help(out_op_sp, msg);
-                                            }
-                                            _ => {}
-                                        }
-
-                                        err.emit();
+                                    if skip {
+                                        return;
                                     }
+                                    skip = true;
+
+                                    let idx2 = *o.get();
+                                    let op2 = &operands[idx2];
+                                    let op_sp2 = asm.operands[idx2].1;
+                                    let reg2 = match op2.reg() {
+                                        Some(asm::InlineAsmRegOrRegClass::Reg(r)) => r,
+                                        _ => unreachable!(),
+                                    };
+
+                                    let msg = format!(
+                                        "register `{}` conflicts with register `{}`",
+                                        reg.name(),
+                                        reg2.name()
+                                    );
+                                    let mut err = sess.struct_span_err(op_sp, &msg);
+                                    err.span_label(op_sp, &format!("register `{}`", reg.name()));
+                                    err.span_label(op_sp2, &format!("register `{}`", reg2.name()));
+
+                                    match (op, op2) {
+                                        (
+                                            hir::InlineAsmOperand::In { .. },
+                                            hir::InlineAsmOperand::Out { late, .. },
+                                        )
+                                        | (
+                                            hir::InlineAsmOperand::Out { late, .. },
+                                            hir::InlineAsmOperand::In { .. },
+                                        ) => {
+                                            assert!(!*late);
+                                            let out_op_sp = if input { op_sp2 } else { op_sp };
+                                            let msg = "use `lateout` instead of \
+                                                    `out` to avoid conflict";
+                                            err.span_help(out_op_sp, msg);
+                                        }
+                                        _ => {}
+                                    }
+
+                                    err.emit();
                                 }
                                 Entry::Vacant(v) => {
                                     v.insert(idx);

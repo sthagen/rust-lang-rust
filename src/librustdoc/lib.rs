@@ -3,11 +3,13 @@
     html_playground_url = "https://play.rust-lang.org/"
 )]
 #![feature(rustc_private)]
+#![feature(array_methods)]
 #![feature(box_patterns)]
 #![feature(box_syntax)]
 #![feature(in_band_lifetimes)]
 #![feature(nll)]
 #![feature(or_patterns)]
+#![feature(peekable_next_if)]
 #![feature(test)]
 #![feature(crate_visibility_modifier)]
 #![feature(never_type)]
@@ -82,12 +84,6 @@ mod passes;
 mod theme;
 mod visit_ast;
 mod visit_lib;
-
-struct Output {
-    krate: clean::Crate,
-    renderinfo: config::RenderInfo,
-    renderopts: config::RenderOptions,
-}
 
 pub fn main() {
     rustc_driver::set_sigpipe_handler();
@@ -519,15 +515,12 @@ fn main_options(options: config::Options) -> MainResult {
 
     krate.version = crate_version;
 
-    let out = Output { krate, renderinfo, renderopts };
-
     if show_coverage {
         // if we ran coverage, bail early, we don't need to also generate docs at this point
         // (also we didn't load in any of the useful passes)
         return Ok(());
     }
 
-    let Output { krate, renderinfo, renderopts } = out;
     info!("going to format");
     let (error_format, edition, debugging_options) = diag_opts;
     let diag = core::new_handler(error_format, None, &debugging_options);

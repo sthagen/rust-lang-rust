@@ -4,7 +4,6 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::iter::FromIterator;
 use std::lazy::SyncOnceCell as OnceCell;
-use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::{slice, vec};
@@ -12,18 +11,20 @@ use std::{slice, vec};
 use rustc_ast::attr;
 use rustc_ast::util::comments::beautify_doc_string;
 use rustc_ast::{self as ast, AttrStyle};
+use rustc_ast::{FloatTy, IntTy, UintTy};
+use rustc_attr::{Stability, StabilityLevel};
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
+use rustc_feature::UnstableFeatures;
 use rustc_hir as hir;
 use rustc_hir::def::Res;
 use rustc_hir::def_id::{CrateNum, DefId, LOCAL_CRATE};
 use rustc_hir::lang_items::LangItem;
 use rustc_hir::Mutability;
 use rustc_index::vec::IndexVec;
-use rustc_middle::middle::stability;
 use rustc_middle::ty::{AssocKind, TyCtxt};
 use rustc_span::hygiene::MacroKind;
 use rustc_span::source_map::DUMMY_SP;
-use rustc_span::symbol::{kw, sym, Ident, Symbol};
+use rustc_span::symbol::{kw, sym, Ident, Symbol, SymbolStr};
 use rustc_span::{self, FileName};
 use rustc_target::abi::VariantIdx;
 use rustc_target::spec::abi::Abi;
@@ -177,6 +178,7 @@ impl Item {
     pub fn is_stripped(&self) -> bool {
         match self.inner {
             StrippedItem(..) => true,
+            ImportItem(ref i) => !i.should_be_displayed,
             _ => false,
         }
     }
@@ -195,7 +197,7 @@ impl Item {
         self.stability.as_ref().and_then(|ref s| {
             let mut classes = Vec::with_capacity(2);
 
-            if s.level == stability::Unstable {
+            if s.level.is_unstable() {
                 classes.push("unstable");
             }
 
@@ -208,8 +210,11 @@ impl Item {
         })
     }
 
-    pub fn stable_since(&self) -> Option<&str> {
-        self.stability.as_ref().map(|s| &s.since[..])
+    pub fn stable_since(&self) -> Option<SymbolStr> {
+        match self.stability?.level {
+            StabilityLevel::Stable { since, .. } => Some(since.as_str()),
+            StabilityLevel::Unstable { .. } => None,
+        }
     }
 
     pub fn is_non_exhaustive(&self) -> bool {
@@ -391,24 +396,6 @@ pub enum DocFragmentKind {
     /// A doc fragment created from a `#[doc(include="filename")]` attribute. Contains both the
     /// given filename and the file contents.
     Include { filename: String },
-    /// A doc fragment used to distinguish between documentation in different modules.
-    ///
-    /// In particular, this prevents `collapse_docs` from turning all documentation comments
-    /// into a single giant attributes even when the item is re-exported with documentation on the re-export.
-    Divider,
-}
-
-impl DocFragment {
-    /// Creates a dummy doc-fragment which divides earlier and later fragments.
-    fn divider() -> Self {
-        DocFragment {
-            line: 0,
-            span: DUMMY_SP,
-            parent_module: None,
-            doc: String::new(),
-            kind: DocFragmentKind::Divider,
-        }
-    }
 }
 
 impl<'a> FromIterator<&'a DocFragment> for String {
@@ -549,7 +536,7 @@ impl Attributes {
         attrs: &[ast::Attribute],
         additional_attrs: Option<(&[ast::Attribute], DefId)>,
     ) -> Attributes {
-        let doc_strings = RefCell::new(vec![]);
+        let mut doc_strings = vec![];
         let mut sp = None;
         let mut cfg = Cfg::True;
         let mut doc_line = 0;
@@ -566,7 +553,7 @@ impl Attributes {
 
                 let line = doc_line;
                 doc_line += value.lines().count();
-                doc_strings.borrow_mut().push(DocFragment {
+                doc_strings.push(DocFragment {
                     line,
                     span: attr.span,
                     doc: value,
@@ -591,7 +578,7 @@ impl Attributes {
                         {
                             let line = doc_line;
                             doc_line += contents.lines().count();
-                            doc_strings.borrow_mut().push(DocFragment {
+                            doc_strings.push(DocFragment {
                                 line,
                                 span: attr.span,
                                 doc: contents,
@@ -608,10 +595,7 @@ impl Attributes {
         // Additional documentation should be shown before the original documentation
         let other_attrs = additional_attrs
             .into_iter()
-            .map(|(attrs, id)| {
-                doc_strings.borrow_mut().push(DocFragment::divider());
-                attrs.iter().map(move |attr| (attr, Some(id)))
-            })
+            .map(|(attrs, id)| attrs.iter().map(move |attr| (attr, Some(id))))
             .flatten()
             .chain(attrs.iter().map(|attr| (attr, None)))
             .filter_map(clean_attr)
@@ -640,7 +624,7 @@ impl Attributes {
             .map_or(true, |a| a.style == AttrStyle::Inner);
 
         Attributes {
-            doc_strings: doc_strings.into_inner(),
+            doc_strings,
             other_attrs,
             cfg: if cfg == Cfg::True { None } else { Some(Arc::new(cfg)) },
             span: sp,
@@ -696,9 +680,13 @@ impl Attributes {
                                     "../".repeat(depth)
                                 }
                                 Some(&(_, _, ExternalLocation::Remote(ref s))) => s.to_string(),
-                                Some(&(_, _, ExternalLocation::Unknown)) | None => {
-                                    String::from("https://doc.rust-lang.org/nightly")
-                                }
+                                Some(&(_, _, ExternalLocation::Unknown)) | None => String::from(
+                                    if UnstableFeatures::from_environment().is_nightly_build() {
+                                        "https://doc.rust-lang.org/nightly"
+                                    } else {
+                                        "https://doc.rust-lang.org"
+                                    },
+                                ),
                             };
                             // This is a primitive so the url is done "by hand".
                             let tail = fragment.find('#').unwrap_or_else(|| fragment.len());
@@ -1278,6 +1266,28 @@ impl GetDefId for Type {
 }
 
 impl PrimitiveType {
+    pub fn from_hir(prim: hir::PrimTy) -> PrimitiveType {
+        match prim {
+            hir::PrimTy::Int(IntTy::Isize) => PrimitiveType::Isize,
+            hir::PrimTy::Int(IntTy::I8) => PrimitiveType::I8,
+            hir::PrimTy::Int(IntTy::I16) => PrimitiveType::I16,
+            hir::PrimTy::Int(IntTy::I32) => PrimitiveType::I32,
+            hir::PrimTy::Int(IntTy::I64) => PrimitiveType::I64,
+            hir::PrimTy::Int(IntTy::I128) => PrimitiveType::I128,
+            hir::PrimTy::Uint(UintTy::Usize) => PrimitiveType::Usize,
+            hir::PrimTy::Uint(UintTy::U8) => PrimitiveType::U8,
+            hir::PrimTy::Uint(UintTy::U16) => PrimitiveType::U16,
+            hir::PrimTy::Uint(UintTy::U32) => PrimitiveType::U32,
+            hir::PrimTy::Uint(UintTy::U64) => PrimitiveType::U64,
+            hir::PrimTy::Uint(UintTy::U128) => PrimitiveType::U128,
+            hir::PrimTy::Float(FloatTy::F32) => PrimitiveType::F32,
+            hir::PrimTy::Float(FloatTy::F64) => PrimitiveType::F64,
+            hir::PrimTy::Str => PrimitiveType::Str,
+            hir::PrimTy::Bool => PrimitiveType::Bool,
+            hir::PrimTy::Char => PrimitiveType::Char,
+        }
+    }
+
     pub fn from_symbol(s: Symbol) -> Option<PrimitiveType> {
         match s {
             sym::isize => Some(PrimitiveType::Isize),
@@ -1653,11 +1663,28 @@ pub struct Impl {
 }
 
 #[derive(Clone, Debug)]
-pub enum Import {
+pub struct Import {
+    pub kind: ImportKind,
+    pub source: ImportSource,
+    pub should_be_displayed: bool,
+}
+
+impl Import {
+    pub fn new_simple(name: String, source: ImportSource, should_be_displayed: bool) -> Self {
+        Self { kind: ImportKind::Simple(name), source, should_be_displayed }
+    }
+
+    pub fn new_glob(source: ImportSource, should_be_displayed: bool) -> Self {
+        Self { kind: ImportKind::Glob, source, should_be_displayed }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum ImportKind {
     // use source as str;
-    Simple(String, ImportSource),
+    Simple(String),
     // use source::*;
-    Glob(ImportSource),
+    Glob,
 }
 
 #[derive(Clone, Debug)]
@@ -1676,15 +1703,6 @@ pub struct Macro {
 pub struct ProcMacro {
     pub kind: MacroKind,
     pub helpers: Vec<String>,
-}
-
-#[derive(Clone, Debug)]
-pub struct Stability {
-    pub level: stability::StabilityLevel,
-    pub feature: String,
-    pub since: String,
-    pub unstable_reason: Option<String>,
-    pub issue: Option<NonZeroU32>,
 }
 
 #[derive(Clone, Debug)]

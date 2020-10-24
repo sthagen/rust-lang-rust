@@ -24,7 +24,7 @@ pub use UnsafeSource::*;
 
 use crate::ptr::P;
 use crate::token::{self, CommentKind, DelimToken};
-use crate::tokenstream::{DelimSpan, TokenStream, TokenTree};
+use crate::tokenstream::{DelimSpan, LazyTokenStream, TokenStream, TokenTree};
 
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
 use rustc_data_structures::stack::ensure_sufficient_stack;
@@ -97,7 +97,7 @@ pub struct Path {
     /// The segments in the path: the things separated by `::`.
     /// Global paths begin with `kw::PathRoot`.
     pub segments: Vec<PathSegment>,
-    pub tokens: Option<TokenStream>,
+    pub tokens: Option<LazyTokenStream>,
 }
 
 impl PartialEq<Symbol> for Path {
@@ -167,13 +167,6 @@ pub enum GenericArgs {
 }
 
 impl GenericArgs {
-    pub fn is_parenthesized(&self) -> bool {
-        match *self {
-            Parenthesized(..) => true,
-            _ => false,
-        }
-    }
-
     pub fn is_angle_bracketed(&self) -> bool {
         match *self {
             AngleBracketed(..) => true,
@@ -542,7 +535,7 @@ pub struct Block {
     /// Distinguishes between `unsafe { ... }` and `{ ... }`.
     pub rules: BlockCheckMode,
     pub span: Span,
-    pub tokens: Option<TokenStream>,
+    pub tokens: Option<LazyTokenStream>,
 }
 
 /// A match pattern.
@@ -553,7 +546,7 @@ pub struct Pat {
     pub id: NodeId,
     pub kind: PatKind,
     pub span: Span,
-    pub tokens: Option<TokenStream>,
+    pub tokens: Option<LazyTokenStream>,
 }
 
 impl Pat {
@@ -857,13 +850,6 @@ impl BinOpKind {
         }
     }
 
-    pub fn is_shift(&self) -> bool {
-        match *self {
-            BinOpKind::Shl | BinOpKind::Shr => true,
-            _ => false,
-        }
-    }
-
     pub fn is_comparison(&self) -> bool {
         use BinOpKind::*;
         // Note for developers: please keep this as is;
@@ -872,11 +858,6 @@ impl BinOpKind {
             Eq | Lt | Le | Ne | Gt | Ge => true,
             And | Or | Add | Sub | Mul | Div | Rem | BitXor | BitAnd | BitOr | Shl | Shr => false,
         }
-    }
-
-    /// Returns `true` if the binary operator takes its arguments by value
-    pub fn is_by_value(&self) -> bool {
-        !self.is_comparison()
     }
 }
 
@@ -896,14 +877,6 @@ pub enum UnOp {
 }
 
 impl UnOp {
-    /// Returns `true` if the unary operator takes its argument by value
-    pub fn is_by_value(u: UnOp) -> bool {
-        match u {
-            UnOp::Neg | UnOp::Not => true,
-            _ => false,
-        }
-    }
-
     pub fn to_string(op: UnOp) -> &'static str {
         match op {
             UnOp::Deref => "*",
@@ -919,7 +892,7 @@ pub struct Stmt {
     pub id: NodeId,
     pub kind: StmtKind,
     pub span: Span,
-    pub tokens: Option<TokenStream>,
+    pub tokens: Option<LazyTokenStream>,
 }
 
 impl Stmt {
@@ -1067,7 +1040,7 @@ pub struct Expr {
     pub kind: ExprKind,
     pub span: Span,
     pub attrs: AttrVec,
-    pub tokens: Option<TokenStream>,
+    pub tokens: Option<LazyTokenStream>,
 }
 
 // `Expr` is used a lot. Make sure it doesn't unintentionally get bigger.
@@ -1179,6 +1152,7 @@ impl Expr {
         match self.kind {
             ExprKind::Box(_) => ExprPrecedence::Box,
             ExprKind::Array(_) => ExprPrecedence::Array,
+            ExprKind::ConstBlock(_) => ExprPrecedence::ConstBlock,
             ExprKind::Call(..) => ExprPrecedence::Call,
             ExprKind::MethodCall(..) => ExprPrecedence::MethodCall,
             ExprKind::Tup(_) => ExprPrecedence::Tup,
@@ -1234,6 +1208,8 @@ pub enum ExprKind {
     Box(P<Expr>),
     /// An array (`[a, b, c, d]`)
     Array(Vec<P<Expr>>),
+    /// Allow anonymous constants from an inline `const` block
+    ConstBlock(AnonConst),
     /// A function call
     ///
     /// The first field resolves to the function itself,
@@ -1753,13 +1729,6 @@ impl IntTy {
         }
     }
 
-    pub fn val_to_string(&self, val: i128) -> String {
-        // Cast to a `u128` so we can correctly print `INT128_MIN`. All integral types
-        // are parsed as `u128`, so we wouldn't want to print an extra negative
-        // sign.
-        format!("{}{}", val as u128, self.name_str())
-    }
-
     pub fn bit_width(&self) -> Option<u64> {
         Some(match *self {
             IntTy::Isize => return None,
@@ -1818,10 +1787,6 @@ impl UintTy {
         }
     }
 
-    pub fn val_to_string(&self, val: u128) -> String {
-        format!("{}{}", val, self.name_str())
-    }
-
     pub fn bit_width(&self) -> Option<u64> {
         Some(match *self {
             UintTy::Usize => return None,
@@ -1870,7 +1835,7 @@ pub struct Ty {
     pub id: NodeId,
     pub kind: TyKind,
     pub span: Span,
-    pub tokens: Option<TokenStream>,
+    pub tokens: Option<LazyTokenStream>,
 }
 
 impl Clone for Ty {
@@ -1881,6 +1846,16 @@ impl Clone for Ty {
             span: self.span,
             tokens: self.tokens.clone(),
         })
+    }
+}
+
+impl Ty {
+    pub fn peel_refs(&self) -> &Self {
+        let mut final_ty = self;
+        while let TyKind::Rptr(_, MutTy { ty, .. }) = &final_ty.kind {
+            final_ty = &ty;
+        }
+        final_ty
     }
 }
 
@@ -2433,7 +2408,7 @@ impl<D: Decoder> rustc_serialize::Decodable<D> for AttrId {
 pub struct AttrItem {
     pub path: Path,
     pub args: MacArgs,
-    pub tokens: Option<TokenStream>,
+    pub tokens: Option<LazyTokenStream>,
 }
 
 /// A list of attributes.
@@ -2507,7 +2482,7 @@ pub enum CrateSugar {
 pub struct Visibility {
     pub kind: VisibilityKind,
     pub span: Span,
-    pub tokens: Option<TokenStream>,
+    pub tokens: Option<LazyTokenStream>,
 }
 
 #[derive(Clone, Encodable, Decodable, Debug)]
@@ -2594,7 +2569,7 @@ pub struct Item<K = ItemKind> {
     ///
     /// Note that the tokens here do not include the outer attributes, but will
     /// include inner attributes.
-    pub tokens: Option<TokenStream>,
+    pub tokens: Option<LazyTokenStream>,
 }
 
 impl Item {

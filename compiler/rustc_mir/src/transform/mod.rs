@@ -22,7 +22,6 @@ pub mod check_packed_ref;
 pub mod check_unsafety;
 pub mod cleanup_post_borrowck;
 pub mod const_prop;
-pub mod copy_prop;
 pub mod deaggregator;
 pub mod dest_prop;
 pub mod dump_mir;
@@ -137,7 +136,7 @@ fn mir_keys(tcx: TyCtxt<'_>, krate: CrateNum) -> FxHashSet<LocalDefId> {
 /// Generates a default name for the pass based on the name of the
 /// type `T`.
 pub fn default_name<T: ?Sized>() -> Cow<'static, str> {
-    let name = ::std::any::type_name::<T>();
+    let name = std::any::type_name::<T>();
     if let Some(tail) = name.rfind(':') { Cow::from(&name[tail + 1..]) } else { Cow::from(name) }
 }
 
@@ -287,11 +286,7 @@ fn mir_promoted(
     // this point, before we steal the mir-const result.
     // Also this means promotion can rely on all const checks having been done.
     let _ = tcx.mir_const_qualif_opt_const_arg(def);
-    let _ = if let Some(param_did) = def.const_param_did {
-        tcx.mir_abstract_const_of_const_arg((def.did, param_did))
-    } else {
-        tcx.mir_abstract_const(def.did.to_def_id())
-    };
+    let _ = tcx.mir_abstract_const_opt_const_arg(def.to_global());
     let mut body = tcx.mir_const(def).steal();
 
     let mut required_consts = Vec::new();
@@ -405,8 +400,7 @@ fn run_optimization_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
         &simplify_try::SimplifyArmIdentity,
         &simplify_try::SimplifyBranchSame,
         &dest_prop::DestinationPropagation,
-        &copy_prop::CopyPropagation,
-        &simplify_branches::SimplifyBranches::new("after-copy-prop"),
+        &simplify_branches::SimplifyBranches::new("final"),
         &remove_noop_landing_pads::RemoveNoopLandingPads,
         &simplify::SimplifyCfg::new("final"),
         &nrvo::RenameReturnPlace,

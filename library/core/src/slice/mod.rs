@@ -29,7 +29,7 @@ pub mod memchr;
 
 mod ascii;
 mod cmp;
-mod index;
+pub(crate) mod index;
 mod iter;
 mod raw;
 mod rotate;
@@ -73,22 +73,9 @@ pub use sort::heapsort;
 #[stable(feature = "slice_get_slice", since = "1.28.0")]
 pub use index::SliceIndex;
 
-#[unstable(feature = "slice_check_range", issue = "76393")]
-pub use index::check_range;
-
 #[lang = "slice"]
 #[cfg(not(test))]
 impl<T> [T] {
-    /// The maximum, inclusive, length such that the slice is no larger than `isize::MAX` bytes.
-    /// This constant is used in `len` below.
-    const MAX_LEN_BOUND: usize = {
-        if mem::size_of::<T>() == 0 {
-            usize::MAX
-        } else {
-            isize::MAX as usize / mem::size_of::<T>()
-        }
-    };
-
     /// Returns the number of elements in the slice.
     ///
     /// # Examples
@@ -101,20 +88,11 @@ impl<T> [T] {
     #[rustc_const_stable(feature = "const_slice_len", since = "1.32.0")]
     #[inline]
     // SAFETY: const sound because we transmute out the length field as a usize (which it must be)
-    #[allow_internal_unstable(const_fn_union, const_assume)]
+    #[allow_internal_unstable(const_fn_union)]
     pub const fn len(&self) -> usize {
         // SAFETY: this is safe because `&[T]` and `FatPtr<T>` have the same layout.
         // Only `std` can make this guarantee.
-        let raw_len = unsafe { crate::ptr::Repr { rust: self }.raw.len };
-
-        // SAFETY: this assume asserts that `raw_len * size_of::<T>() <= isize::MAX`. All
-        // references must point to one allocation with size at most isize::MAX. Note that we the
-        // multiplication could appear to overflow until we have assumed the bound. This overflow
-        // would make additional values appear 'valid' and then `n > 1` the range of permissible
-        // length would no longer be the full or even a single range.
-        unsafe { crate::intrinsics::assume(raw_len <= Self::MAX_LEN_BOUND) };
-
-        raw_len
+        unsafe { crate::ptr::Repr { rust: self }.raw.len }
     }
 
     /// Returns `true` if the slice has a length of 0.
@@ -1967,10 +1945,10 @@ impl<T> [T] {
     ///
     /// The comparator function must define a total ordering for the elements in the slice. If
     /// the ordering is not total, the order of the elements is unspecified. An order is a
-    /// total order if it is (for all a, b and c):
+    /// total order if it is (for all `a`, `b` and `c`):
     ///
-    /// * total and antisymmetric: exactly one of a < b, a == b or a > b is true; and
-    /// * transitive, a < b and b < c implies a < c. The same must hold for both == and >.
+    /// * total and antisymmetric: exactly one of `a < b`, `a == b` or `a > b` is true, and
+    /// * transitive, `a < b` and `b < c` implies `a < c`. The same must hold for both `==` and `>`.
     ///
     /// For example, while [`f64`] doesn't implement [`Ord`] because `NaN != NaN`, we can use
     /// `partial_cmp` as our sort function when we know the slice doesn't contain a `NaN`.
@@ -2054,6 +2032,50 @@ impl<T> [T] {
     }
 
     /// Reorder the slice such that the element at `index` is at its final sorted position.
+    #[unstable(feature = "slice_partition_at_index", issue = "55300")]
+    #[rustc_deprecated(since = "1.49.0", reason = "use the select_nth_unstable() instead")]
+    #[inline]
+    pub fn partition_at_index(&mut self, index: usize) -> (&mut [T], &mut T, &mut [T])
+    where
+        T: Ord,
+    {
+        self.select_nth_unstable(index)
+    }
+
+    /// Reorder the slice with a comparator function such that the element at `index` is at its
+    /// final sorted position.
+    #[unstable(feature = "slice_partition_at_index", issue = "55300")]
+    #[rustc_deprecated(since = "1.49.0", reason = "use select_nth_unstable_by() instead")]
+    #[inline]
+    pub fn partition_at_index_by<F>(
+        &mut self,
+        index: usize,
+        compare: F,
+    ) -> (&mut [T], &mut T, &mut [T])
+    where
+        F: FnMut(&T, &T) -> Ordering,
+    {
+        self.select_nth_unstable_by(index, compare)
+    }
+
+    /// Reorder the slice with a key extraction function such that the element at `index` is at its
+    /// final sorted position.
+    #[unstable(feature = "slice_partition_at_index", issue = "55300")]
+    #[rustc_deprecated(since = "1.49.0", reason = "use the select_nth_unstable_by_key() instead")]
+    #[inline]
+    pub fn partition_at_index_by_key<K, F>(
+        &mut self,
+        index: usize,
+        f: F,
+    ) -> (&mut [T], &mut T, &mut [T])
+    where
+        F: FnMut(&T) -> K,
+        K: Ord,
+    {
+        self.select_nth_unstable_by_key(index, f)
+    }
+
+    /// Reorder the slice such that the element at `index` is at its final sorted position.
     ///
     /// This reordering has the additional property that any value at position `i < index` will be
     /// less than or equal to any value at a position `j > index`. Additionally, this reordering is
@@ -2077,12 +2099,10 @@ impl<T> [T] {
     /// # Examples
     ///
     /// ```
-    /// #![feature(slice_partition_at_index)]
-    ///
     /// let mut v = [-5i32, 4, 1, -3, 2];
     ///
     /// // Find the median
-    /// v.partition_at_index(2);
+    /// v.select_nth_unstable(2);
     ///
     /// // We are only guaranteed the slice will be one of the following, based on the way we sort
     /// // about the specified index.
@@ -2091,9 +2111,9 @@ impl<T> [T] {
     ///         v == [-3, -5, 1, 4, 2] ||
     ///         v == [-5, -3, 1, 4, 2]);
     /// ```
-    #[unstable(feature = "slice_partition_at_index", issue = "55300")]
+    #[stable(feature = "slice_select_nth_unstable", since = "1.49.0")]
     #[inline]
-    pub fn partition_at_index(&mut self, index: usize) -> (&mut [T], &mut T, &mut [T])
+    pub fn select_nth_unstable(&mut self, index: usize) -> (&mut [T], &mut T, &mut [T])
     where
         T: Ord,
     {
@@ -2127,12 +2147,10 @@ impl<T> [T] {
     /// # Examples
     ///
     /// ```
-    /// #![feature(slice_partition_at_index)]
-    ///
     /// let mut v = [-5i32, 4, 1, -3, 2];
     ///
     /// // Find the median as if the slice were sorted in descending order.
-    /// v.partition_at_index_by(2, |a, b| b.cmp(a));
+    /// v.select_nth_unstable_by(2, |a, b| b.cmp(a));
     ///
     /// // We are only guaranteed the slice will be one of the following, based on the way we sort
     /// // about the specified index.
@@ -2141,9 +2159,9 @@ impl<T> [T] {
     ///         v == [4, 2, 1, -5, -3] ||
     ///         v == [4, 2, 1, -3, -5]);
     /// ```
-    #[unstable(feature = "slice_partition_at_index", issue = "55300")]
+    #[stable(feature = "slice_select_nth_unstable", since = "1.49.0")]
     #[inline]
-    pub fn partition_at_index_by<F>(
+    pub fn select_nth_unstable_by<F>(
         &mut self,
         index: usize,
         mut compare: F,
@@ -2181,12 +2199,10 @@ impl<T> [T] {
     /// # Examples
     ///
     /// ```
-    /// #![feature(slice_partition_at_index)]
-    ///
     /// let mut v = [-5i32, 4, 1, -3, 2];
     ///
     /// // Return the median as if the array were sorted according to absolute value.
-    /// v.partition_at_index_by_key(2, |a| a.abs());
+    /// v.select_nth_unstable_by_key(2, |a| a.abs());
     ///
     /// // We are only guaranteed the slice will be one of the following, based on the way we sort
     /// // about the specified index.
@@ -2195,9 +2211,9 @@ impl<T> [T] {
     ///         v == [2, 1, -3, 4, -5] ||
     ///         v == [2, 1, -3, -5, 4]);
     /// ```
-    #[unstable(feature = "slice_partition_at_index", issue = "55300")]
+    #[stable(feature = "slice_select_nth_unstable", since = "1.49.0")]
     #[inline]
-    pub fn partition_at_index_by_key<K, F>(
+    pub fn select_nth_unstable_by_key<K, F>(
         &mut self,
         index: usize,
         mut f: F,
@@ -2695,7 +2711,7 @@ impl<T> [T] {
     where
         T: Copy,
     {
-        let Range { start: src_start, end: src_end } = check_range(self.len(), src);
+        let Range { start: src_start, end: src_end } = src.assert_len(self.len());
         let count = src_end - src_start;
         assert!(dest <= self.len() - count, "dest is out of bounds");
         // SAFETY: the conditions for `ptr::copy` have all been checked above,

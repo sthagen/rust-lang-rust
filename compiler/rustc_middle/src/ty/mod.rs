@@ -7,7 +7,6 @@ pub use self::Variance::*;
 
 use crate::hir::exports::ExportMap;
 use crate::ich::StableHashingContext;
-use crate::infer::canonical::Canonical;
 use crate::middle::cstore::CrateStoreDyn;
 use crate::middle::resolve_lifetime::ObjectLifetimeDefault;
 use crate::mir::interpret::ErrorHandled;
@@ -126,6 +125,7 @@ mod sty;
 pub struct ResolverOutputs {
     pub definitions: rustc_hir::definitions::Definitions,
     pub cstore: Box<CrateStoreDyn>,
+    pub visibilities: FxHashMap<LocalDefId, Visibility>,
     pub extern_crate_map: FxHashMap<LocalDefId, CrateNum>,
     pub maybe_unused_trait_imports: FxHashSet<LocalDefId>,
     pub maybe_unused_extern_crates: Vec<(LocalDefId, Span)>,
@@ -656,8 +656,6 @@ impl<'a, 'tcx> HashStable<StableHashingContext<'a>> for TyS<'tcx> {
 #[rustc_diagnostic_item = "Ty"]
 pub type Ty<'tcx> = &'tcx TyS<'tcx>;
 
-pub type CanonicalTy<'tcx> = Canonical<'tcx, Ty<'tcx>>;
-
 #[derive(Clone, Copy, PartialEq, Eq, Hash, TyEncodable, TyDecodable, HashStable)]
 pub struct UpvarPath {
     pub hir_id: hir::HirId,
@@ -767,10 +765,6 @@ pub enum IntVarValue {
 pub struct FloatVarValue(pub ast::FloatTy);
 
 impl ty::EarlyBoundRegion {
-    pub fn to_bound_region(&self) -> ty::BoundRegion {
-        ty::BoundRegion::BrNamed(self.def_id, self.name)
-    }
-
     /// Does this early bound region have a name? Early bound regions normally
     /// always have names except when using anonymous lifetimes (`'_`).
     pub fn has_name(&self) -> bool {
@@ -817,14 +811,6 @@ impl GenericParamDef {
     pub fn to_early_bound_region_data(&self) -> ty::EarlyBoundRegion {
         if let GenericParamDefKind::Lifetime = self.kind {
             ty::EarlyBoundRegion { def_id: self.def_id, index: self.index, name: self.name }
-        } else {
-            bug!("cannot convert a non-lifetime parameter def to an early bound region")
-        }
-    }
-
-    pub fn to_bound_region(&self) -> ty::BoundRegion {
-        if let GenericParamDefKind::Lifetime = self.kind {
-            self.to_early_bound_region_data().to_bound_region()
         } else {
             bug!("cannot convert a non-lifetime parameter def to an early bound region")
         }
@@ -1003,22 +989,6 @@ impl<'tcx> GenericPredicates<'tcx> {
         instantiated.predicates.extend(self.predicates.iter().map(|(p, _)| p));
         instantiated.spans.extend(self.predicates.iter().map(|(_, s)| s));
     }
-
-    pub fn instantiate_supertrait(
-        &self,
-        tcx: TyCtxt<'tcx>,
-        poly_trait_ref: &ty::PolyTraitRef<'tcx>,
-    ) -> InstantiatedPredicates<'tcx> {
-        assert_eq!(self.parent, None);
-        InstantiatedPredicates {
-            predicates: self
-                .predicates
-                .iter()
-                .map(|(pred, _)| pred.subst_supertrait(tcx, poly_trait_ref))
-                .collect(),
-            spans: self.predicates.iter().map(|(_, sp)| *sp).collect(),
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -1087,9 +1057,21 @@ impl<'tcx> Predicate<'tcx> {
         }
     }
 
+    /// Converts this to a `Binder<PredicateAtom<'tcx>>`. If the value was an
+    /// `Atom`, then it is not allowed to contain escaping bound vars.
+    pub fn bound_atom(self) -> Binder<PredicateAtom<'tcx>> {
+        match self.kind() {
+            &PredicateKind::ForAll(binder) => binder,
+            &PredicateKind::Atom(atom) => {
+                debug_assert!(!atom.has_escaping_bound_vars());
+                Binder::dummy(atom)
+            }
+        }
+    }
+
     /// Allows using a `Binder<PredicateAtom<'tcx>>` even if the given predicate previously
     /// contained unbound variables by shifting these variables outwards.
-    pub fn bound_atom(self, tcx: TyCtxt<'tcx>) -> Binder<PredicateAtom<'tcx>> {
+    pub fn bound_atom_with_opt_escaping(self, tcx: TyCtxt<'tcx>) -> Binder<PredicateAtom<'tcx>> {
         match self.kind() {
             &PredicateKind::ForAll(binder) => binder,
             &PredicateKind::Atom(atom) => Binder::wrap_nonbinding(tcx, atom),
@@ -1303,7 +1285,6 @@ impl<'tcx> PolyTraitPredicate<'tcx> {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, TyEncodable, TyDecodable)]
 #[derive(HashStable, TypeFoldable)]
 pub struct OutlivesPredicate<A, B>(pub A, pub B); // `A: B`
-pub type PolyOutlivesPredicate<A, B> = ty::Binder<OutlivesPredicate<A, B>>;
 pub type RegionOutlivesPredicate<'tcx> = OutlivesPredicate<ty::Region<'tcx>, ty::Region<'tcx>>;
 pub type TypeOutlivesPredicate<'tcx> = OutlivesPredicate<Ty<'tcx>, ty::Region<'tcx>>;
 pub type PolyRegionOutlivesPredicate<'tcx> = ty::Binder<RegionOutlivesPredicate<'tcx>>;
@@ -2468,8 +2449,10 @@ impl<'tcx> AdtDef {
         self.variants.iter().flat_map(|v| v.fields.iter())
     }
 
+    /// Whether the ADT lacks fields. Note that this includes uninhabited enums,
+    /// e.g., `enum Void {}` is considered payload free as well.
     pub fn is_payloadfree(&self) -> bool {
-        !self.variants.is_empty() && self.variants.iter().all(|v| v.fields.is_empty())
+        self.variants.iter().all(|v| v.fields.is_empty())
     }
 
     /// Return a `VariantDef` given a variant id.
@@ -2953,13 +2936,7 @@ impl<'tcx> TyCtxt<'tcx> {
     /// Returns the possibly-auto-generated MIR of a `(DefId, Subst)` pair.
     pub fn instance_mir(self, instance: ty::InstanceDef<'tcx>) -> &'tcx Body<'tcx> {
         match instance {
-            ty::InstanceDef::Item(def) => {
-                if let Some((did, param_did)) = def.as_const_arg() {
-                    self.optimized_mir_of_const_arg((did, param_did))
-                } else {
-                    self.optimized_mir(def.did)
-                }
-            }
+            ty::InstanceDef::Item(def) => self.optimized_mir_opt_const_arg(def),
             ty::InstanceDef::VtableShim(..)
             | ty::InstanceDef::ReifyShim(..)
             | ty::InstanceDef::Intrinsic(..)

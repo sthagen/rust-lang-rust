@@ -130,7 +130,7 @@ pub fn try_inline(
         attrs,
         inner,
         visibility: clean::Public,
-        stability: cx.tcx.lookup_stability(did).clean(cx),
+        stability: cx.tcx.lookup_stability(did).cloned(),
         deprecation: cx.tcx.lookup_deprecation(did).clean(cx),
         def_id: did,
     });
@@ -461,7 +461,7 @@ pub fn build_impl(
         name: None,
         attrs,
         visibility: clean::Inherited,
-        stability: tcx.lookup_stability(did).clean(cx),
+        stability: tcx.lookup_stability(did).cloned(),
         deprecation: tcx.lookup_deprecation(did).clean(cx),
         def_id: did,
     });
@@ -498,7 +498,7 @@ fn build_module(cx: &DocContext<'_>, did: DefId, visited: &mut FxHashSet<DefId>)
                         visibility: clean::Public,
                         stability: None,
                         deprecation: None,
-                        inner: clean::ImportItem(clean::Import::Simple(
+                        inner: clean::ImportItem(clean::Import::new_simple(
                             item.ident.to_string(),
                             clean::ImportSource {
                                 path: clean::Path {
@@ -514,6 +514,7 @@ fn build_module(cx: &DocContext<'_>, did: DefId, visited: &mut FxHashSet<DefId>)
                                 },
                                 did: None,
                             },
+                            true,
                         )),
                     });
                 } else if let Some(i) =

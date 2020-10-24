@@ -29,7 +29,7 @@ pub fn check_wf_new(tcx: TyCtxt<'_>) {
 }
 
 pub(super) fn check_abi(tcx: TyCtxt<'_>, span: Span, abi: Abi) {
-    if !tcx.sess.target.target.is_abi_supported(abi) {
+    if !tcx.sess.target.is_abi_supported(abi) {
         struct_span_err!(
             tcx.sess,
             span,
@@ -348,8 +348,7 @@ pub(super) fn check_union(tcx: TyCtxt<'_>, id: hir::HirId, span: Span) {
     check_packed(tcx, span, def);
 }
 
-/// When the `#![feature(untagged_unions)]` gate is active,
-/// check that the fields of the `union` does not contain fields that need dropping.
+/// Check that the fields of the `union` do not need dropping.
 pub(super) fn check_union_fields(tcx: TyCtxt<'_>, span: Span, item_def_id: LocalDefId) -> bool {
     let item_type = tcx.type_of(item_def_id);
     if let ty::Adt(def, substs) = item_type.kind() {
