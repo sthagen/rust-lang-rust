@@ -85,6 +85,12 @@ impl CheckAttrVisitor<'tcx> {
                 self.check_export_name(&attr, span, target)
             } else if self.tcx.sess.check_name(attr, sym::rustc_args_required_const) {
                 self.check_rustc_args_required_const(&attr, span, target, item)
+            } else if self.tcx.sess.check_name(attr, sym::allow_internal_unstable) {
+                self.check_allow_internal_unstable(&attr, span, target, &attrs)
+            } else if self.tcx.sess.check_name(attr, sym::rustc_allow_const_fn_unstable) {
+                self.check_rustc_allow_const_fn_unstable(hir_id, &attr, span, target)
+            } else if self.tcx.sess.check_name(attr, sym::naked) {
+                self.check_naked(attr, span, target)
             } else {
                 // lint-only checks
                 if self.tcx.sess.check_name(attr, sym::cold) {
@@ -158,6 +164,25 @@ impl CheckAttrVisitor<'tcx> {
         }
     }
 
+    /// Checks if `#[naked]` is applied to a function definition.
+    fn check_naked(&self, attr: &Attribute, span: &Span, target: Target) -> bool {
+        match target {
+            Target::Fn
+            | Target::Method(MethodKind::Trait { body: true } | MethodKind::Inherent) => true,
+            _ => {
+                self.tcx
+                    .sess
+                    .struct_span_err(
+                        attr.span,
+                        "attribute should be applied to a function definition",
+                    )
+                    .span_label(*span, "not a function definition")
+                    .emit();
+                false
+            }
+        }
+    }
+
     /// Checks if a `#[track_caller]` is applied to a non-naked function. Returns `true` if valid.
     fn check_track_caller(
         &self,
@@ -167,7 +192,7 @@ impl CheckAttrVisitor<'tcx> {
         target: Target,
     ) -> bool {
         match target {
-            _ if self.tcx.sess.contains_name(attrs, sym::naked) => {
+            _ if attrs.iter().any(|attr| attr.has_name(sym::naked)) => {
                 struct_span_err!(
                     self.tcx.sess,
                     *attr_span,
@@ -294,7 +319,7 @@ impl CheckAttrVisitor<'tcx> {
                             self.tcx
                                 .sess
                                 .struct_span_err(
-                                    meta.span(),
+                                    meta.name_value_literal_span().unwrap_or_else(|| meta.span()),
                                     &format!(
                                         "{:?} character isn't allowed in `#[doc(alias = \"...\")]`",
                                         c,
@@ -307,7 +332,7 @@ impl CheckAttrVisitor<'tcx> {
                             self.tcx
                                 .sess
                                 .struct_span_err(
-                                    meta.span(),
+                                    meta.name_value_literal_span().unwrap_or_else(|| meta.span()),
                                     "`#[doc(alias = \"...\")]` cannot start or end with ' '",
                                 )
                                 .emit();
@@ -718,6 +743,55 @@ impl CheckAttrVisitor<'tcx> {
                     .span_err(attr.span, "attribute must be applied to a `static` variable");
             }
         }
+    }
+
+    /// Outputs an error for `#[allow_internal_unstable]` which can only be applied to macros.
+    /// (Allows proc_macro functions)
+    fn check_allow_internal_unstable(
+        &self,
+        attr: &Attribute,
+        span: &Span,
+        target: Target,
+        attrs: &[Attribute],
+    ) -> bool {
+        debug!("Checking target: {:?}", target);
+        if target == Target::Fn {
+            for attr in attrs {
+                if self.tcx.sess.is_proc_macro_attr(attr) {
+                    debug!("Is proc macro attr");
+                    return true;
+                }
+            }
+            debug!("Is not proc macro attr");
+        }
+        self.tcx
+            .sess
+            .struct_span_err(attr.span, "attribute should be applied to a macro")
+            .span_label(*span, "not a macro")
+            .emit();
+        false
+    }
+
+    /// Outputs an error for `#[allow_internal_unstable]` which can only be applied to macros.
+    /// (Allows proc_macro functions)
+    fn check_rustc_allow_const_fn_unstable(
+        &self,
+        hir_id: HirId,
+        attr: &Attribute,
+        span: &Span,
+        target: Target,
+    ) -> bool {
+        if let Target::Fn | Target::Method(_) = target {
+            if self.tcx.is_const_fn_raw(self.tcx.hir().local_def_id(hir_id)) {
+                return true;
+            }
+        }
+        self.tcx
+            .sess
+            .struct_span_err(attr.span, "attribute should be applied to `const fn`")
+            .span_label(*span, "not a `const fn`")
+            .emit();
+        false
     }
 }
 

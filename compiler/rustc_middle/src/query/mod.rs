@@ -130,8 +130,8 @@ rustc_queries! {
             storage(ArenaCacheSelector<'tcx>)
             cache_on_disk_if { key.is_local() }
             load_cached(tcx, id) {
-                let generics: Option<ty::Generics> = tcx.queries.on_disk_cache
-                                                        .try_load_query_result(tcx, id);
+                let generics: Option<ty::Generics> = tcx.queries.on_disk_cache.as_ref()
+                                                        .and_then(|c| c.try_load_query_result(tcx, id));
                 generics
             }
         }
@@ -367,7 +367,7 @@ rustc_queries! {
 
     TypeChecking {
         /// Erases regions from `ty` to yield a new type.
-        /// Normally you would just use `tcx.erase_regions(&value)`,
+        /// Normally you would just use `tcx.erase_regions(value)`,
         /// however, which uses this query as a kind of cache.
         query erase_regions_ty(ty: Ty<'tcx>) -> Ty<'tcx> {
             // This query is not expected to have input -- as a result, it
@@ -635,6 +635,10 @@ rustc_queries! {
             desc { |tcx| "checking loops in {}", describe_as_module(key, tcx) }
         }
 
+        query check_mod_naked_functions(key: LocalDefId) -> () {
+            desc { |tcx| "checking naked functions in {}", describe_as_module(key, tcx) }
+        }
+
         query check_mod_item_types(key: LocalDefId) -> () {
             desc { |tcx| "checking item types in {}", describe_as_module(key, tcx) }
         }
@@ -688,8 +692,8 @@ rustc_queries! {
             cache_on_disk_if { true }
             load_cached(tcx, id) {
                 let typeck_results: Option<ty::TypeckResults<'tcx>> = tcx
-                    .queries.on_disk_cache
-                    .try_load_query_result(tcx, id);
+                    .queries.on_disk_cache.as_ref()
+                    .and_then(|c| c.try_load_query_result(tcx, id));
 
                 typeck_results.map(|x| &*tcx.arena.alloc(x))
             }
@@ -1168,7 +1172,7 @@ rustc_queries! {
     }
 
     Other {
-        query foreign_modules(_: CrateNum) -> &'tcx [ForeignModule] {
+        query foreign_modules(_: CrateNum) -> Lrc<FxHashMap<DefId, ForeignModule>> {
             desc { "looking up the foreign modules of a linked crate" }
         }
 

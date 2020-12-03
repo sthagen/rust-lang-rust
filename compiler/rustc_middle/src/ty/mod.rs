@@ -6,6 +6,7 @@ pub use self::IntVarValue::*;
 pub use self::Variance::*;
 
 use crate::hir::exports::ExportMap;
+use crate::hir::place::Place as HirPlace;
 use crate::ich::StableHashingContext;
 use crate::middle::cstore::CrateStoreDyn;
 use crate::middle::resolve_lifetime::ObjectLifetimeDefault;
@@ -46,7 +47,7 @@ use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::fmt;
 use std::hash::{Hash, Hasher};
-use std::ops::Range;
+use std::ops::{ControlFlow, Range};
 use std::ptr;
 use std::str;
 
@@ -87,7 +88,7 @@ pub use self::trait_def::TraitDef;
 
 pub use self::query::queries;
 
-pub use self::consts::{Const, ConstInt, ConstKind, InferConst};
+pub use self::consts::{Const, ConstInt, ConstKind, InferConst, ScalarInt};
 
 pub mod _match;
 pub mod adjustment;
@@ -106,7 +107,6 @@ pub mod outlives;
 pub mod print;
 pub mod query;
 pub mod relate;
-pub mod steal;
 pub mod subst;
 pub mod trait_def;
 pub mod util;
@@ -264,6 +264,10 @@ impl<'tcx> AssociatedItems<'tcx> {
     /// for a known trait, make that trait a lang item instead of indexing this array.
     pub fn in_definition_order(&self) -> impl '_ + Iterator<Item = &ty::AssocItem> {
         self.items.iter().map(|(_, v)| *v)
+    }
+
+    pub fn len(&self) -> usize {
+        self.items.len()
     }
 
     /// Returns an iterator over all associated items with the given name, ignoring hygiene.
@@ -607,6 +611,18 @@ pub struct TyS<'tcx> {
     outer_exclusive_binder: ty::DebruijnIndex,
 }
 
+impl<'tcx> TyS<'tcx> {
+    /// A constructor used only for internal testing.
+    #[allow(rustc::usage_of_ty_tykind)]
+    pub fn make_for_test(
+        kind: TyKind<'tcx>,
+        flags: TypeFlags,
+        outer_exclusive_binder: ty::DebruijnIndex,
+    ) -> TyS<'tcx> {
+        TyS { kind, flags, outer_exclusive_binder }
+    }
+}
+
 // `TyS` is used a lot. Make sure it doesn't unintentionally get bigger.
 #[cfg(target_arch = "x86_64")]
 static_assert_size!(TyS<'_>, 32);
@@ -668,6 +684,12 @@ pub struct UpvarPath {
 pub struct UpvarId {
     pub var_path: UpvarPath,
     pub closure_expr_id: LocalDefId,
+}
+
+impl UpvarId {
+    pub fn new(var_hir_id: hir::HirId, closure_def_id: LocalDefId) -> UpvarId {
+        UpvarId { var_path: UpvarPath { hir_id: var_hir_id }, closure_expr_id: closure_def_id }
+    }
 }
 
 #[derive(Clone, PartialEq, Debug, TyEncodable, TyDecodable, Copy, HashStable)]
@@ -750,6 +772,56 @@ pub struct UpvarBorrow<'tcx> {
 
     /// Region of the resulting reference.
     pub region: ty::Region<'tcx>,
+}
+
+/// Given the closure DefId this map provides a map of root variables to minimum
+/// set of `CapturedPlace`s that need to be tracked to support all captures of that closure.
+pub type MinCaptureInformationMap<'tcx> = FxHashMap<DefId, RootVariableMinCaptureList<'tcx>>;
+
+/// Part of `MinCaptureInformationMap`; Maps a root variable to the list of `CapturedPlace`.
+/// Used to track the minimum set of `Place`s that need to be captured to support all
+/// Places captured by the closure starting at a given root variable.
+///
+/// This provides a convenient and quick way of checking if a variable being used within
+/// a closure is a capture of a local variable.
+pub type RootVariableMinCaptureList<'tcx> = FxIndexMap<hir::HirId, MinCaptureList<'tcx>>;
+
+/// Part of `MinCaptureInformationMap`; List of `CapturePlace`s.
+pub type MinCaptureList<'tcx> = Vec<CapturedPlace<'tcx>>;
+
+/// A `Place` and the corresponding `CaptureInfo`.
+#[derive(PartialEq, Clone, Debug, TyEncodable, TyDecodable, HashStable)]
+pub struct CapturedPlace<'tcx> {
+    pub place: HirPlace<'tcx>,
+    pub info: CaptureInfo<'tcx>,
+}
+
+/// Part of `MinCaptureInformationMap`; describes the capture kind (&, &mut, move)
+/// for a particular capture as well as identifying the part of the source code
+/// that triggered this capture to occur.
+#[derive(PartialEq, Clone, Debug, Copy, TyEncodable, TyDecodable, HashStable)]
+pub struct CaptureInfo<'tcx> {
+    /// Expr Id pointing to use that resulted in selecting the current capture kind
+    ///
+    /// If the user doesn't enable feature `capture_disjoint_fields` (RFC 2229) then, it is
+    /// possible that we don't see the use of a particular place resulting in expr_id being
+    /// None. In such case we fallback on uvpars_mentioned for span.
+    ///
+    /// Eg:
+    /// ```rust,no_run
+    /// let x = 5;
+    ///
+    /// let c = || {
+    ///     let _ = x
+    /// };
+    /// ```
+    ///
+    /// In this example, if `capture_disjoint_fields` is **not** set, then x will be captured,
+    /// but we won't see it being used during capture analysis, since it's essentially a discard.
+    pub expr_id: Option<hir::HirId>,
+
+    /// Capture mode that was selected
+    pub capture_kind: UpvarCapture<'tcx>,
 }
 
 pub type UpvarListMap = FxHashMap<DefId, FxIndexMap<hir::HirId, UpvarId>>;
@@ -1431,9 +1503,11 @@ impl<'tcx> ToPredicate<'tcx> for PolyProjectionPredicate<'tcx> {
 }
 
 impl<'tcx> Predicate<'tcx> {
-    pub fn to_opt_poly_trait_ref(self) -> Option<PolyTraitRef<'tcx>> {
+    pub fn to_opt_poly_trait_ref(self) -> Option<ConstnessAnd<PolyTraitRef<'tcx>>> {
         match self.skip_binders() {
-            PredicateAtom::Trait(t, _) => Some(ty::Binder::bind(t.trait_ref)),
+            PredicateAtom::Trait(t, constness) => {
+                Some(ConstnessAnd { constness, value: ty::Binder::bind(t.trait_ref) })
+            }
             PredicateAtom::Projection(..)
             | PredicateAtom::Subtype(..)
             | PredicateAtom::RegionOutlives(..)
@@ -1576,11 +1650,9 @@ impl UniverseIndex {
     }
 }
 
-/// The "placeholder index" fully defines a placeholder region.
-/// Placeholder regions are identified by both a **universe** as well
-/// as a "bound-region" within that universe. The `bound_region` is
-/// basically a name -- distinct bound regions within the same
-/// universe are just two regions with an unknown relationship to one
+/// The "placeholder index" fully defines a placeholder region, type, or const. Placeholders are
+/// identified by both a universe, as well as a name residing within that universe. Distinct bound
+/// regions/types/consts within the same universe simply have an unknown relationship to one
 /// another.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, TyEncodable, TyDecodable, PartialOrd, Ord)]
 pub struct Placeholder<T> {
@@ -1602,7 +1674,14 @@ pub type PlaceholderRegion = Placeholder<BoundRegion>;
 
 pub type PlaceholderType = Placeholder<BoundVar>;
 
-pub type PlaceholderConst = Placeholder<BoundVar>;
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, HashStable)]
+#[derive(TyEncodable, TyDecodable, PartialOrd, Ord)]
+pub struct BoundConst<'tcx> {
+    pub var: BoundVar,
+    pub ty: Ty<'tcx>,
+}
+
+pub type PlaceholderConst<'tcx> = Placeholder<BoundConst<'tcx>>;
 
 /// A `DefId` which is potentially bundled with its corresponding generic parameter
 /// in case `did` is a const argument.
@@ -1637,7 +1716,7 @@ pub type PlaceholderConst = Placeholder<BoundVar>;
 #[derive(Hash, HashStable)]
 pub struct WithOptConstParam<T> {
     pub did: T,
-    /// The `DefId` of the corresponding generic paramter in case `did` is
+    /// The `DefId` of the corresponding generic parameter in case `did` is
     /// a const argument.
     ///
     /// Note that even if `did` is a const argument, this may still be `None`.
@@ -1768,12 +1847,13 @@ impl<'a, 'tcx> HashStable<StableHashingContext<'a>> for ParamEnv<'tcx> {
 }
 
 impl<'tcx> TypeFoldable<'tcx> for ParamEnv<'tcx> {
-    fn super_fold_with<F: ty::fold::TypeFolder<'tcx>>(&self, folder: &mut F) -> Self {
+    fn super_fold_with<F: ty::fold::TypeFolder<'tcx>>(self, folder: &mut F) -> Self {
         ParamEnv::new(self.caller_bounds().fold_with(folder), self.reveal().fold_with(folder))
     }
 
-    fn super_visit_with<V: TypeVisitor<'tcx>>(&self, visitor: &mut V) -> bool {
-        self.caller_bounds().visit_with(visitor) || self.reveal().visit_with(visitor)
+    fn super_visit_with<V: TypeVisitor<'tcx>>(&self, visitor: &mut V) -> ControlFlow<V::BreakTy> {
+        self.caller_bounds().visit_with(visitor)?;
+        self.reveal().visit_with(visitor)
     }
 }
 
@@ -1869,7 +1949,7 @@ impl<'tcx> ParamEnv<'tcx> {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, TypeFoldable)]
 pub struct ConstnessAnd<T> {
     pub constness: Constness,
     pub value: T,
@@ -2790,10 +2870,50 @@ impl<'tcx> TyCtxt<'tcx> {
             .filter(|item| item.kind == AssocKind::Fn && item.defaultness.has_value())
     }
 
+    fn item_name_from_hir(self, def_id: DefId) -> Option<Ident> {
+        self.hir().get_if_local(def_id).and_then(|node| node.ident())
+    }
+
+    fn item_name_from_def_id(self, def_id: DefId) -> Option<Symbol> {
+        if def_id.index == CRATE_DEF_INDEX {
+            Some(self.original_crate_name(def_id.krate))
+        } else {
+            let def_key = self.def_key(def_id);
+            match def_key.disambiguated_data.data {
+                // The name of a constructor is that of its parent.
+                rustc_hir::definitions::DefPathData::Ctor => self.item_name_from_def_id(DefId {
+                    krate: def_id.krate,
+                    index: def_key.parent.unwrap(),
+                }),
+                _ => def_key.disambiguated_data.data.get_opt_name(),
+            }
+        }
+    }
+
+    /// Look up the name of an item across crates. This does not look at HIR.
+    ///
+    /// When possible, this function should be used for cross-crate lookups over
+    /// [`opt_item_name`] to avoid invalidating the incremental cache. If you
+    /// need to handle items without a name, or HIR items that will not be
+    /// serialized cross-crate, or if you need the span of the item, use
+    /// [`opt_item_name`] instead.
+    ///
+    /// [`opt_item_name`]: Self::opt_item_name
+    pub fn item_name(self, id: DefId) -> Symbol {
+        // Look at cross-crate items first to avoid invalidating the incremental cache
+        // unless we have to.
+        self.item_name_from_def_id(id).unwrap_or_else(|| {
+            bug!("item_name: no name for {:?}", self.def_path(id));
+        })
+    }
+
+    /// Look up the name and span of an item or [`Node`].
+    ///
+    /// See [`item_name`][Self::item_name] for more information.
     pub fn opt_item_name(self, def_id: DefId) -> Option<Ident> {
-        def_id
-            .as_local()
-            .and_then(|def_id| self.hir().get(self.hir().local_def_id_to_hir_id(def_id)).ident())
+        // Look at the HIR first so the span will be correct if this is a local item.
+        self.item_name_from_hir(def_id)
+            .or_else(|| self.item_name_from_def_id(def_id).map(Ident::with_dummy_span))
     }
 
     pub fn opt_associated_item(self, def_id: DefId) -> Option<&'tcx AssocItem> {
@@ -2913,23 +3033,6 @@ impl<'tcx> TyCtxt<'tcx> {
                 self.adt_def(struct_did).non_enum_variant()
             }
             _ => bug!("expect_variant_res used with unexpected res {:?}", res),
-        }
-    }
-
-    pub fn item_name(self, id: DefId) -> Symbol {
-        if id.index == CRATE_DEF_INDEX {
-            self.original_crate_name(id.krate)
-        } else {
-            let def_key = self.def_key(id);
-            match def_key.disambiguated_data.data {
-                // The name of a constructor is that of its parent.
-                rustc_hir::definitions::DefPathData::Ctor => {
-                    self.item_name(DefId { krate: id.krate, index: def_key.parent.unwrap() })
-                }
-                _ => def_key.disambiguated_data.data.get_opt_name().unwrap_or_else(|| {
-                    bug!("item_name: no name for {:?}", self.def_path(id));
-                }),
-            }
         }
     }
 

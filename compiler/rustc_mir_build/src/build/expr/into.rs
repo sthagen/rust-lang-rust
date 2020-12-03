@@ -58,10 +58,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             }
             ExprKind::NeverToAny { source } => {
                 let source = this.hir.mirror(source);
-                let is_call = match source.kind {
-                    ExprKind::Call { .. } | ExprKind::InlineAsm { .. } => true,
-                    _ => false,
-                };
+                let is_call = matches!(source.kind, ExprKind::Call { .. } | ExprKind::InlineAsm { .. });
 
                 // (#66975) Source could be a const of type `!`, so has to
                 // exist in the generated MIR.
@@ -403,7 +400,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
 
             // Avoid creating a temporary
             ExprKind::VarRef { .. }
-            | ExprKind::SelfRef
+            | ExprKind::UpvarRef { .. }
             | ExprKind::PlaceTypeAscription { .. }
             | ExprKind::ValueTypeAscription { .. } => {
                 debug_assert!(Category::of(&expr.kind) == Some(Category::Place));

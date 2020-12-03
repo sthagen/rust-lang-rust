@@ -348,7 +348,7 @@ impl<T> MaybeUninit<T> {
     /// ```rust,no_run
     /// use std::mem::MaybeUninit;
     ///
-    /// enum NotZero { One = 1, Two = 2 };
+    /// enum NotZero { One = 1, Two = 2 }
     ///
     /// let x = MaybeUninit::<(u8, NotZero)>::zeroed();
     /// let x = unsafe { x.assume_init() };
@@ -392,7 +392,7 @@ impl<T> MaybeUninit<T> {
     /// use std::mem::MaybeUninit;
     ///
     /// let mut x = MaybeUninit::<Vec<u32>>::uninit();
-    /// unsafe { x.as_mut_ptr().write(vec![0,1,2]); }
+    /// unsafe { x.as_mut_ptr().write(vec![0, 1, 2]); }
     /// // Create a reference into the `MaybeUninit<T>`. This is okay because we initialized it.
     /// let x_vec = unsafe { &*x.as_ptr() };
     /// assert_eq!(x_vec.len(), 3);
@@ -429,7 +429,7 @@ impl<T> MaybeUninit<T> {
     /// use std::mem::MaybeUninit;
     ///
     /// let mut x = MaybeUninit::<Vec<u32>>::uninit();
-    /// unsafe { x.as_mut_ptr().write(vec![0,1,2]); }
+    /// unsafe { x.as_mut_ptr().write(vec![0, 1, 2]); }
     /// // Create a reference into the `MaybeUninit<Vec<u32>>`.
     /// // This is okay because we initialized it.
     /// let x_vec = unsafe { &mut *x.as_mut_ptr() };
@@ -565,7 +565,7 @@ impl<T> MaybeUninit<T> {
     /// use std::mem::MaybeUninit;
     ///
     /// let mut x = MaybeUninit::<Option<Vec<u32>>>::uninit();
-    /// x.write(Some(vec![0,1,2]));
+    /// x.write(Some(vec![0, 1, 2]));
     /// let x1 = unsafe { x.assume_init_read() };
     /// let x2 = unsafe { x.assume_init_read() };
     /// // We now created two copies of the same vector, leading to a double-free ⚠️ when
@@ -842,13 +842,13 @@ impl<T> MaybeUninit<T> {
     #[unstable(feature = "maybe_uninit_slice", issue = "63569")]
     #[inline(always)]
     pub fn slice_as_ptr(this: &[MaybeUninit<T>]) -> *const T {
-        this as *const [MaybeUninit<T>] as *const T
+        this.as_ptr() as *const T
     }
 
     /// Gets a mutable pointer to the first element of the array.
     #[unstable(feature = "maybe_uninit_slice", issue = "63569")]
     #[inline(always)]
     pub fn slice_as_mut_ptr(this: &mut [MaybeUninit<T>]) -> *mut T {
-        this as *mut [MaybeUninit<T>] as *mut T
+        this.as_mut_ptr() as *mut T
     }
 }

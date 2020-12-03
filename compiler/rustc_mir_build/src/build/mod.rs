@@ -24,7 +24,7 @@ use super::lints;
 crate fn mir_built<'tcx>(
     tcx: TyCtxt<'tcx>,
     def: ty::WithOptConstParam<LocalDefId>,
-) -> &'tcx ty::steal::Steal<Body<'tcx>> {
+) -> &'tcx rustc_data_structures::steal::Steal<Body<'tcx>> {
     if let Some(def) = def.try_upgrade(tcx) {
         return tcx.mir_built(def);
     }
@@ -240,7 +240,7 @@ fn liberated_closure_env_ty(
     };
 
     let closure_env_ty = tcx.closure_env_ty(closure_def_id, closure_substs).unwrap();
-    tcx.erase_late_bound_regions(&closure_env_ty)
+    tcx.erase_late_bound_regions(closure_env_ty)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -334,7 +334,7 @@ struct Builder<'a, 'tcx> {
 
     /// The vector of all scopes that we have created thus far;
     /// we track this for debuginfo later.
-    source_scopes: IndexVec<SourceScope, SourceScopeData>,
+    source_scopes: IndexVec<SourceScope, SourceScopeData<'tcx>>,
     source_scope: SourceScope,
 
     /// The guard-context: each time we build the guard expression for

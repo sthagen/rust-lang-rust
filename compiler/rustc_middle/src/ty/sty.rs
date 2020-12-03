@@ -388,9 +388,19 @@ impl<'tcx> ClosureSubsts<'tcx> {
         self.split().parent_substs
     }
 
+    /// Returns an iterator over the list of types of captured paths by the closure.
+    /// In case there was a type error in figuring out the types of the captured path, an
+    /// empty iterator is returned.
     #[inline]
     pub fn upvar_tys(self) -> impl Iterator<Item = Ty<'tcx>> + 'tcx {
-        self.tupled_upvars_ty().tuple_fields()
+        match self.tupled_upvars_ty().kind() {
+            TyKind::Error(_) => None,
+            TyKind::Tuple(..) => Some(self.tupled_upvars_ty().tuple_fields()),
+            TyKind::Infer(_) => bug!("upvar_tys called before capture types are inferred"),
+            ty => bug!("Unexpected representation of upvar types tuple {:?}", ty),
+        }
+        .into_iter()
+        .flatten()
     }
 
     /// Returns the tuple type representing the upvars for this closure.
@@ -515,9 +525,19 @@ impl<'tcx> GeneratorSubsts<'tcx> {
         self.split().witness.expect_ty()
     }
 
+    /// Returns an iterator over the list of types of captured paths by the generator.
+    /// In case there was a type error in figuring out the types of the captured path, an
+    /// empty iterator is returned.
     #[inline]
     pub fn upvar_tys(self) -> impl Iterator<Item = Ty<'tcx>> + 'tcx {
-        self.tupled_upvars_ty().tuple_fields()
+        match self.tupled_upvars_ty().kind() {
+            TyKind::Error(_) => None,
+            TyKind::Tuple(..) => Some(self.tupled_upvars_ty().tuple_fields()),
+            TyKind::Infer(_) => bug!("upvar_tys called before capture types are inferred"),
+            ty => bug!("Unexpected representation of upvar types tuple {:?}", ty),
+        }
+        .into_iter()
+        .flatten()
     }
 
     /// Returns the tuple type representing the upvars for this generator.
@@ -660,13 +680,24 @@ pub enum UpvarSubsts<'tcx> {
 }
 
 impl<'tcx> UpvarSubsts<'tcx> {
+    /// Returns an iterator over the list of types of captured paths by the closure/generator.
+    /// In case there was a type error in figuring out the types of the captured path, an
+    /// empty iterator is returned.
     #[inline]
     pub fn upvar_tys(self) -> impl Iterator<Item = Ty<'tcx>> + 'tcx {
-        let tupled_upvars_ty = match self {
-            UpvarSubsts::Closure(substs) => substs.as_closure().split().tupled_upvars_ty,
-            UpvarSubsts::Generator(substs) => substs.as_generator().split().tupled_upvars_ty,
+        let tupled_tys = match self {
+            UpvarSubsts::Closure(substs) => substs.as_closure().tupled_upvars_ty(),
+            UpvarSubsts::Generator(substs) => substs.as_generator().tupled_upvars_ty(),
         };
-        tupled_upvars_ty.expect_ty().tuple_fields()
+
+        match tupled_tys.kind() {
+            TyKind::Error(_) => None,
+            TyKind::Tuple(..) => Some(self.tupled_upvars_ty().tuple_fields()),
+            TyKind::Infer(_) => bug!("upvar_tys called before capture types are inferred"),
+            ty => bug!("Unexpected representation of upvar types tuple {:?}", ty),
+        }
+        .into_iter()
+        .flatten()
     }
 
     #[inline]
@@ -970,7 +1001,7 @@ impl<T> Binder<T> {
         T: TypeFoldable<'tcx>,
     {
         if value.has_escaping_bound_vars() {
-            Binder::bind(super::fold::shift_vars(tcx, &value, 1))
+            Binder::bind(super::fold::shift_vars(tcx, value, 1))
         } else {
             Binder::dummy(value)
         }
@@ -1075,10 +1106,7 @@ impl<T> Binder<T> {
 
 impl<T> Binder<Option<T>> {
     pub fn transpose(self) -> Option<Binder<T>> {
-        match self.0 {
-            Some(v) => Some(Binder(v)),
-            None => None,
-        }
+        self.0.map(Binder)
     }
 }
 
@@ -1834,10 +1862,10 @@ impl<'tcx> TyS<'tcx> {
             }
             ty::Array(ty, len) => {
                 match len.try_eval_usize(tcx, ParamEnv::empty()) {
+                    Some(0) | None => false,
                     // If the array is definitely non-empty, it's uninhabited if
                     // the type of its elements is uninhabited.
-                    Some(n) if n != 0 => ty.conservative_is_privately_uninhabited(tcx),
-                    _ => false,
+                    Some(1..) => ty.conservative_is_privately_uninhabited(tcx),
                 }
             }
             ty::Ref(..) => {
@@ -1928,27 +1956,22 @@ impl<'tcx> TyS<'tcx> {
         }
     }
 
-    pub fn simd_type(&self, tcx: TyCtxt<'tcx>) -> Ty<'tcx> {
-        match self.kind() {
-            Adt(def, substs) => def.non_enum_variant().fields[0].ty(tcx, substs),
-            _ => bug!("`simd_type` called on invalid type"),
-        }
-    }
-
-    pub fn simd_size(&self, _tcx: TyCtxt<'tcx>) -> u64 {
-        // Parameter currently unused, but probably needed in the future to
-        // allow `#[repr(simd)] struct Simd<T, const N: usize>([T; N]);`.
-        match self.kind() {
-            Adt(def, _) => def.non_enum_variant().fields.len() as u64,
-            _ => bug!("`simd_size` called on invalid type"),
-        }
-    }
-
     pub fn simd_size_and_type(&self, tcx: TyCtxt<'tcx>) -> (u64, Ty<'tcx>) {
         match self.kind() {
             Adt(def, substs) => {
                 let variant = def.non_enum_variant();
-                (variant.fields.len() as u64, variant.fields[0].ty(tcx, substs))
+                let f0_ty = variant.fields[0].ty(tcx, substs);
+
+                match f0_ty.kind() {
+                    Array(f0_elem_ty, f0_len) => {
+                        // FIXME(repr_simd): https://github.com/rust-lang/rust/pull/78863#discussion_r522784112
+                        // The way we evaluate the `N` in `[T; N]` here only works since we use
+                        // `simd_size_and_type` post-monomorphization. It will probably start to ICE
+                        // if we use it in generic code. See the `simd-array-trait` ui test.
+                        (f0_len.eval_usize(tcx, ParamEnv::empty()) as u64, f0_elem_ty)
+                    }
+                    _ => (variant.fields.len() as u64, f0_ty),
+                }
             }
             _ => bug!("`simd_size_and_type` called on invalid type"),
         }

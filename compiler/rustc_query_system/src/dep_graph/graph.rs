@@ -7,6 +7,7 @@ use rustc_data_structures::sync::{AtomicU32, AtomicU64, Lock, Lrc, Ordering};
 use rustc_data_structures::unlikely;
 use rustc_errors::Diagnostic;
 use rustc_index::vec::{Idx, IndexVec};
+use rustc_span::def_id::DefPathHash;
 
 use parking_lot::{Condvar, Mutex};
 use smallvec::{smallvec, SmallVec};
@@ -292,10 +293,8 @@ impl<K: DepKind> DepGraph<K> {
                 );
 
                 data.colors.insert(prev_index, color);
-            } else {
-                if print_status {
-                    eprintln!("[task::new] {:?}", key);
-                }
+            } else if print_status {
+                eprintln!("[task::new] {:?}", key);
             }
 
             (result, dep_node_index)
@@ -701,6 +700,18 @@ impl<K: DepKind> DepGraph<K> {
             data.current.intern_node(*dep_node, current_deps, fingerprint)
         };
 
+        // We have just loaded a deserialized `DepNode` from the previous
+        // compilation session into the current one. If this was a foreign `DefId`,
+        // then we stored additional information in the incr comp cache when we
+        // initially created its fingerprint (see `DepNodeParams::to_fingerprint`)
+        // We won't be calling `to_fingerprint` again for this `DepNode` (we no longer
+        // have the original value), so we need to copy over this additional information
+        // from the old incremental cache into the new cache that we serialize
+        // and the end of this compilation session.
+        if dep_node.kind.can_reconstruct_query_key() {
+            tcx.register_reused_dep_path_hash(DefPathHash(dep_node.hash.into()));
+        }
+
         // ... emitting any stored diagnostic ...
 
         // FIXME: Store the fact that a node has diagnostics in a bit in the dep graph somewhere
@@ -978,7 +989,7 @@ impl<K: DepKind> CurrentDepGraph<K> {
             // Fingerprint::combine() is faster than sending Fingerprint
             // through the StableHasher (at least as long as StableHasher
             // is so slow).
-            hash: self.anon_id_seed.combine(hasher.finish()),
+            hash: self.anon_id_seed.combine(hasher.finish()).into(),
         };
 
         self.intern_node(target_dep_node, task_deps.reads, Fingerprint::ZERO)
