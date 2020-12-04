@@ -13,7 +13,6 @@ use rustc_hir::{
 };
 use rustc_interface::interface;
 use rustc_middle::hir::map::Map;
-use rustc_middle::middle::cstore::CrateStore;
 use rustc_middle::middle::privacy::AccessLevels;
 use rustc_middle::ty::{ParamEnv, Ty, TyCtxt};
 use rustc_resolve as resolve;
@@ -371,6 +370,7 @@ crate fn run_core(
         error_format,
         edition,
         describe_lints,
+        crate_name,
         ..Options::default()
     };
 
@@ -384,7 +384,6 @@ crate fn run_core(
         file_loader: None,
         diagnostic_output: DiagnosticOutput::Default,
         stderr: None,
-        crate_name,
         lint_caps,
         register_lints: None,
         override_queries: Some(|_sess, providers, _external_providers| {
