@@ -44,6 +44,13 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
             // the match is non-exhaustive.
             _ => bug!("invalid generic parameter kind {}", kind),
         };
+
+        if let ParamKindOrd::Const { .. } = kind_ord {
+            if let GenericArg::Type(hir::Ty { kind: hir::TyKind::Infer, .. }) = arg {
+                err.help("const arguments cannot yet be inferred with `_`");
+            }
+        }
+
         let arg_ord = match arg {
             GenericArg::Lifetime(_) => ParamKindOrd::Lifetime,
             GenericArg::Type(_) => ParamKindOrd::Type,
@@ -519,18 +526,16 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         generics: &ty::Generics,
     ) -> bool {
         let explicit = !seg.infer_args;
-        let impl_trait =
-            generics.params.iter().any(|param| match param.kind {
-                ty::GenericParamDefKind::Type {
-                    synthetic:
-                        Some(
-                            hir::SyntheticTyParamKind::ImplTrait
-                            | hir::SyntheticTyParamKind::FromAttr,
-                        ),
-                    ..
-                } => true,
-                _ => false,
-            });
+        let impl_trait = generics.params.iter().any(|param| {
+            matches!(param.kind, ty::GenericParamDefKind::Type {
+                synthetic:
+                    Some(
+                        hir::SyntheticTyParamKind::ImplTrait
+                        | hir::SyntheticTyParamKind::FromAttr,
+                    ),
+                ..
+            })
+        });
 
         if explicit && impl_trait {
             let spans = seg

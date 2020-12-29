@@ -1191,7 +1191,7 @@ pub fn walk_expr<'v, V: Visitor<'v>>(visitor: &mut V, expression: &'v Expr<'v>) 
             walk_list!(visitor, visit_expr, optional_expression);
         }
         ExprKind::InlineAsm(ref asm) => {
-            for op in asm.operands {
+            for (op, _op_sp) in asm.operands {
                 match op {
                     InlineAsmOperand::In { expr, .. }
                     | InlineAsmOperand::InOut { expr, .. }
@@ -1228,6 +1228,10 @@ pub fn walk_arm<'v, V: Visitor<'v>>(visitor: &mut V, arm: &'v Arm<'v>) {
     if let Some(ref g) = arm.guard {
         match g {
             Guard::If(ref e) => visitor.visit_expr(e),
+            Guard::IfLet(ref pat, ref e) => {
+                visitor.visit_pat(pat);
+                visitor.visit_expr(e);
+            }
         }
     }
     visitor.visit_expr(&arm.body);

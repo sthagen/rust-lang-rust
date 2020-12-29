@@ -400,7 +400,7 @@ impl<'a> AstValidator<'a> {
         if let Defaultness::Default(def_span) = defaultness {
             let span = self.session.source_map().guess_head_span(span);
             self.err_handler()
-                .struct_span_err(span, "`default` is only allowed on items in `impl` definitions")
+                .struct_span_err(span, "`default` is only allowed on items in trait impls")
                 .span_label(def_span, "`default` because of this")
                 .emit();
         }
@@ -773,14 +773,12 @@ fn validate_generic_param_order<'a>(
         err.span_suggestion(
             span,
             &format!(
-                "reorder the parameters: lifetimes{}",
+                "reorder the parameters: lifetimes, {}",
                 if sess.features_untracked().const_generics {
-                    ", then consts and types"
-                } else if sess.features_untracked().min_const_generics {
-                    ", then types, then consts"
+                    "then consts and types"
                 } else {
-                    ", then types"
-                },
+                    "then types, then consts"
+                }
             ),
             ordered_params.clone(),
             Applicability::MachineApplicable,

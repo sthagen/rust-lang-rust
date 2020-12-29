@@ -138,6 +138,7 @@ impl str {
     /// assert_eq!("ƒoo".len(), 4); // fancy f!
     /// assert_eq!("ƒoo".chars().count(), 3);
     /// ```
+    #[doc(alias = "length")]
     #[stable(feature = "rust1", since = "1.0.0")]
     #[rustc_const_stable(feature = "const_str_len", since = "1.32.0")]
     #[inline]
@@ -1129,6 +1130,13 @@ impl str {
     ///
     /// let v: Vec<&str> = "lionXtigerXleopard".split(char::is_uppercase).collect();
     /// assert_eq!(v, ["lion", "tiger", "leopard"]);
+    /// ```
+    ///
+    /// If the pattern is a slice of chars, split on each occurrence of any of the characters:
+    ///
+    /// ```
+    /// let v: Vec<&str> = "2020-11-03 23:59".split(&['-', ' ', ':', '@'][..]).collect();
+    /// assert_eq!(v, ["2020", "11", "03", "23", "59"]);
     /// ```
     ///
     /// A more complex pattern, using a closure:

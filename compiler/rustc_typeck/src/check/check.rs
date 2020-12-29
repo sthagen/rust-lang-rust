@@ -462,39 +462,25 @@ pub(super) fn check_opaque<'tcx>(
 
 /// Checks that an opaque type does not use `Self` or `T::Foo` projections that would result
 /// in "inheriting lifetimes".
+#[instrument(skip(tcx, span))]
 pub(super) fn check_opaque_for_inheriting_lifetimes(
     tcx: TyCtxt<'tcx>,
     def_id: LocalDefId,
     span: Span,
 ) {
     let item = tcx.hir().expect_item(tcx.hir().local_def_id_to_hir_id(def_id));
-    debug!(
-        "check_opaque_for_inheriting_lifetimes: def_id={:?} span={:?} item={:?}",
-        def_id, span, item
-    );
+    debug!(?item, ?span);
 
-    #[derive(Debug)]
-    struct ProhibitOpaqueVisitor<'tcx> {
-        opaque_identity_ty: Ty<'tcx>,
-        generics: &'tcx ty::Generics,
-    }
-
-    impl<'tcx> ty::fold::TypeVisitor<'tcx> for ProhibitOpaqueVisitor<'tcx> {
-        type BreakTy = Option<Ty<'tcx>>;
-
-        fn visit_ty(&mut self, t: Ty<'tcx>) -> ControlFlow<Self::BreakTy> {
-            debug!("check_opaque_for_inheriting_lifetimes: (visit_ty) t={:?}", t);
-            if t != self.opaque_identity_ty && t.super_visit_with(self).is_break() {
-                return ControlFlow::Break(Some(t));
-            }
-            ControlFlow::CONTINUE
-        }
+    struct FoundParentLifetime;
+    struct FindParentLifetimeVisitor<'tcx>(&'tcx ty::Generics);
+    impl<'tcx> ty::fold::TypeVisitor<'tcx> for FindParentLifetimeVisitor<'tcx> {
+        type BreakTy = FoundParentLifetime;
 
         fn visit_region(&mut self, r: ty::Region<'tcx>) -> ControlFlow<Self::BreakTy> {
-            debug!("check_opaque_for_inheriting_lifetimes: (visit_region) r={:?}", r);
+            debug!("FindParentLifetimeVisitor: r={:?}", r);
             if let RegionKind::ReEarlyBound(ty::EarlyBoundRegion { index, .. }) = r {
-                if *index < self.generics.parent_count as u32 {
-                    return ControlFlow::Break(None);
+                if *index < self.0.parent_count as u32 {
+                    return ControlFlow::Break(FoundParentLifetime);
                 } else {
                     return ControlFlow::CONTINUE;
                 }
@@ -505,12 +491,32 @@ pub(super) fn check_opaque_for_inheriting_lifetimes(
 
         fn visit_const(&mut self, c: &'tcx ty::Const<'tcx>) -> ControlFlow<Self::BreakTy> {
             if let ty::ConstKind::Unevaluated(..) = c.val {
-                // FIXME(#72219) We currenctly don't detect lifetimes within substs
+                // FIXME(#72219) We currently don't detect lifetimes within substs
                 // which would violate this check. Even though the particular substitution is not used
                 // within the const, this should still be fixed.
                 return ControlFlow::CONTINUE;
             }
             c.super_visit_with(self)
+        }
+    }
+
+    #[derive(Debug)]
+    struct ProhibitOpaqueVisitor<'tcx> {
+        opaque_identity_ty: Ty<'tcx>,
+        generics: &'tcx ty::Generics,
+    }
+
+    impl<'tcx> ty::fold::TypeVisitor<'tcx> for ProhibitOpaqueVisitor<'tcx> {
+        type BreakTy = Ty<'tcx>;
+
+        fn visit_ty(&mut self, t: Ty<'tcx>) -> ControlFlow<Self::BreakTy> {
+            debug!("check_opaque_for_inheriting_lifetimes: (visit_ty) t={:?}", t);
+            if t == self.opaque_identity_ty {
+                ControlFlow::CONTINUE
+            } else {
+                t.super_visit_with(&mut FindParentLifetimeVisitor(self.generics))
+                    .map_break(|FoundParentLifetime| t)
+            }
         }
     }
 
@@ -537,10 +543,9 @@ pub(super) fn check_opaque_for_inheriting_lifetimes(
 
         if let Some(ty) = prohibit_opaque.break_value() {
             let is_async = match item.kind {
-                ItemKind::OpaqueTy(hir::OpaqueTy { origin, .. }) => match origin {
-                    hir::OpaqueTyOrigin::AsyncFn => true,
-                    _ => false,
-                },
+                ItemKind::OpaqueTy(hir::OpaqueTy { origin, .. }) => {
+                    matches!(origin, hir::OpaqueTyOrigin::AsyncFn)
+                }
                 _ => unreachable!(),
             };
 
@@ -555,14 +560,12 @@ pub(super) fn check_opaque_for_inheriting_lifetimes(
 
             if let Ok(snippet) = tcx.sess.source_map().span_to_snippet(span) {
                 if snippet == "Self" {
-                    if let Some(ty) = ty {
-                        err.span_suggestion(
-                            span,
-                            "consider spelling out the type instead",
-                            format!("{:?}", ty),
-                            Applicability::MaybeIncorrect,
-                        );
-                    }
+                    err.span_suggestion(
+                        span,
+                        "consider spelling out the type instead",
+                        format!("{:?}", ty),
+                        Applicability::MaybeIncorrect,
+                    );
                 }
             }
             err.emit();
@@ -1317,10 +1320,7 @@ pub fn check_enum<'tcx>(
     }
 
     if tcx.adt_def(def_id).repr.int.is_none() && tcx.features().arbitrary_enum_discriminant {
-        let is_unit = |var: &hir::Variant<'_>| match var.data {
-            hir::VariantData::Unit(..) => true,
-            _ => false,
-        };
+        let is_unit = |var: &hir::Variant<'_>| matches!(var.data, hir::VariantData::Unit(..));
 
         let has_disr = |var: &hir::Variant<'_>| var.disr_expr.is_some();
         let has_non_units = vs.iter().any(|var| !is_unit(var));

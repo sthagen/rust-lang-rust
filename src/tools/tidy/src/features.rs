@@ -112,6 +112,7 @@ pub fn check(
                 let gate_test_str = "gate-test-";
 
                 let feature_name = match line.find(gate_test_str) {
+                    // NB: the `splitn` always succeeds, even if the delimiter is not present.
                     Some(i) => line[i + gate_test_str.len()..].splitn(2, ' ').next().unwrap(),
                     None => continue,
                 };
@@ -329,7 +330,6 @@ fn collect_lang_features_in(base: &Path, file: &str, bad: &mut bool) -> Features
             let issue_str = parts.next().unwrap().trim();
             let tracking_issue = if issue_str.starts_with("None") {
                 if level == Status::Unstable && !next_feature_omits_tracking_issue {
-                    *bad = true;
                     tidy_error!(
                         bad,
                         "{}:{}: no tracking issue for feature {}",

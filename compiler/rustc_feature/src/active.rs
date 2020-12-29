@@ -578,9 +578,6 @@ declare_features! (
     /// Allows calling `transmute` in const fn
     (active, const_fn_transmute, "1.46.0", Some(53605), None),
 
-    /// The smallest useful subset of `const_generics`.
-    (active, min_const_generics, "1.47.0", Some(74878), None),
-
     /// Allows `if let` guard in match arms.
     (active, if_let_guard, "1.47.0", Some(51114), None),
 
@@ -620,6 +617,9 @@ declare_features! (
     /// Allows capturing disjoint fields in a closure/generator (RFC 2229).
     (active, capture_disjoint_fields, "1.49.0", Some(53488), None),
 
+    /// Allows arbitrary expressions in key-value attributes at parse time.
+    (active, extended_key_value_attributes, "1.50.0", Some(78835), None),
+
     // -------------------------------------------------------------------------
     // feature-group-end: actual feature gates
     // -------------------------------------------------------------------------
@@ -648,5 +648,7 @@ pub const INCOMPLETE_FEATURES: &[Symbol] = &[
 
 /// Some features are not allowed to be used together at the same time, if
 /// the two are present, produce an error.
-pub const INCOMPATIBLE_FEATURES: &[(Symbol, Symbol)] =
-    &[(sym::const_generics, sym::min_const_generics)];
+///
+/// Currently empty, but we will probably need this again in the future,
+/// so let's keep it in for now.
+pub const INCOMPATIBLE_FEATURES: &[(Symbol, Symbol)] = &[];

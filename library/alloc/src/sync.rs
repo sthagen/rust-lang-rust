@@ -14,7 +14,7 @@ use core::hint;
 use core::intrinsics::abort;
 use core::iter;
 use core::marker::{PhantomData, Unpin, Unsize};
-use core::mem::{self, align_of_val, size_of_val};
+use core::mem::{self, align_of_val_raw, size_of_val};
 use core::ops::{CoerceUnsized, Deref, DispatchFromDyn, Receiver};
 use core::pin::Pin;
 use core::ptr::{self, NonNull};
@@ -22,7 +22,7 @@ use core::slice::from_raw_parts_mut;
 use core::sync::atomic;
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release, SeqCst};
 
-use crate::alloc::{box_free, handle_alloc_error, AllocError, AllocRef, Global, Layout};
+use crate::alloc::{box_free, handle_alloc_error, AllocError, Allocator, Global, Layout};
 use crate::borrow::{Cow, ToOwned};
 use crate::boxed::Box;
 use crate::rc::is_dangling;
@@ -434,7 +434,7 @@ impl<T> Arc<T> {
         unsafe {
             Arc::from_ptr(Arc::allocate_for_layout(
                 Layout::new::<T>(),
-                |layout| Global.alloc(layout),
+                |layout| Global.allocate(layout),
                 |mem| mem as *mut ArcInner<mem::MaybeUninit<T>>,
             ))
         }
@@ -465,7 +465,7 @@ impl<T> Arc<T> {
         unsafe {
             Arc::from_ptr(Arc::allocate_for_layout(
                 Layout::new::<T>(),
-                |layout| Global.alloc_zeroed(layout),
+                |layout| Global.allocate_zeroed(layout),
                 |mem| mem as *mut ArcInner<mem::MaybeUninit<T>>,
             ))
         }
@@ -572,7 +572,7 @@ impl<T> Arc<[T]> {
         unsafe {
             Arc::from_ptr(Arc::allocate_for_layout(
                 Layout::array::<T>(len).unwrap(),
-                |layout| Global.alloc_zeroed(layout),
+                |layout| Global.allocate_zeroed(layout),
                 |mem| {
                     ptr::slice_from_raw_parts_mut(mem as *mut T, len)
                         as *mut ArcInner<[mem::MaybeUninit<T>]>
@@ -1015,7 +1015,7 @@ impl<T: ?Sized> Arc<T> {
         unsafe {
             Self::allocate_for_layout(
                 Layout::for_value(&*ptr),
-                |layout| Global.alloc(layout),
+                |layout| Global.allocate(layout),
                 |mem| set_data_ptr(ptr as *mut T, mem) as *mut ArcInner<T>,
             )
         }
@@ -1050,7 +1050,7 @@ impl<T> Arc<[T]> {
         unsafe {
             Self::allocate_for_layout(
                 Layout::array::<T>(len).unwrap(),
-                |layout| Global.alloc(layout),
+                |layout| Global.allocate(layout),
                 |mem| ptr::slice_from_raw_parts_mut(mem as *mut T, len) as *mut ArcInner<[T]>,
             )
         }
@@ -1102,7 +1102,7 @@ impl<T> Arc<[T]> {
                     let slice = from_raw_parts_mut(self.elems, self.n_elems);
                     ptr::drop_in_place(slice);
 
-                    Global.dealloc(self.mem, self.layout);
+                    Global.deallocate(self.mem, self.layout);
                 }
             }
         }
@@ -1535,7 +1535,7 @@ struct WeakInner<'a> {
     strong: &'a atomic::AtomicUsize,
 }
 
-impl<T: ?Sized> Weak<T> {
+impl<T> Weak<T> {
     /// Returns a raw pointer to the object `T` pointed to by this `Weak<T>`.
     ///
     /// The pointer is valid only if there are some strong references. The pointer may be dangling,
@@ -1668,7 +1668,9 @@ impl<T: ?Sized> Weak<T> {
         // SAFETY: we now have recovered the original Weak pointer, so can create the Weak.
         unsafe { Weak { ptr: NonNull::new_unchecked(ptr) } }
     }
+}
 
+impl<T: ?Sized> Weak<T> {
     /// Attempts to upgrade the `Weak` pointer to an [`Arc`], delaying
     /// dropping of the inner value if successful.
     ///
@@ -1925,7 +1927,7 @@ impl<T: ?Sized> Drop for Weak<T> {
 
         if inner.weak.fetch_sub(1, Release) == 1 {
             acquire!(inner.weak);
-            unsafe { Global.dealloc(self.ptr.cast(), Layout::for_value(self.ptr.as_ref())) }
+            unsafe { Global.deallocate(self.ptr.cast(), Layout::for_value(self.ptr.as_ref())) }
         }
     }
 }
@@ -2364,7 +2366,7 @@ unsafe fn data_offset<T: ?Sized>(ptr: *const T) -> isize {
     // Because it is `?Sized`, it will always be the last field in memory.
     // Note: This is a detail of the current implementation of the compiler,
     // and is not a guaranteed language detail. Do not rely on it outside of std.
-    unsafe { data_offset_align(align_of_val(&*ptr)) }
+    unsafe { data_offset_align(align_of_val_raw(ptr)) }
 }
 
 #[inline]

@@ -262,7 +262,7 @@ use core::pin::Pin;
 use core::ptr::{self, NonNull};
 use core::slice::from_raw_parts_mut;
 
-use crate::alloc::{box_free, handle_alloc_error, AllocError, AllocRef, Global, Layout};
+use crate::alloc::{box_free, handle_alloc_error, AllocError, Allocator, Global, Layout};
 use crate::borrow::{Cow, ToOwned};
 use crate::string::String;
 use crate::vec::Vec;
@@ -416,7 +416,7 @@ impl<T> Rc<T> {
         unsafe {
             Rc::from_ptr(Rc::allocate_for_layout(
                 Layout::new::<T>(),
-                |layout| Global.alloc(layout),
+                |layout| Global.allocate(layout),
                 |mem| mem as *mut RcBox<mem::MaybeUninit<T>>,
             ))
         }
@@ -447,7 +447,7 @@ impl<T> Rc<T> {
         unsafe {
             Rc::from_ptr(Rc::allocate_for_layout(
                 Layout::new::<T>(),
-                |layout| Global.alloc_zeroed(layout),
+                |layout| Global.allocate_zeroed(layout),
                 |mem| mem as *mut RcBox<mem::MaybeUninit<T>>,
             ))
         }
@@ -555,7 +555,7 @@ impl<T> Rc<[T]> {
         unsafe {
             Rc::from_ptr(Rc::allocate_for_layout(
                 Layout::array::<T>(len).unwrap(),
-                |layout| Global.alloc_zeroed(layout),
+                |layout| Global.allocate_zeroed(layout),
                 |mem| {
                     ptr::slice_from_raw_parts_mut(mem as *mut T, len)
                         as *mut RcBox<[mem::MaybeUninit<T>]>
@@ -1040,7 +1040,7 @@ impl<T: ?Sized> Rc<T> {
         unsafe {
             Self::allocate_for_layout(
                 Layout::for_value(&*ptr),
-                |layout| Global.alloc(layout),
+                |layout| Global.allocate(layout),
                 |mem| set_data_ptr(ptr as *mut T, mem) as *mut RcBox<T>,
             )
         }
@@ -1075,7 +1075,7 @@ impl<T> Rc<[T]> {
         unsafe {
             Self::allocate_for_layout(
                 Layout::array::<T>(len).unwrap(),
-                |layout| Global.alloc(layout),
+                |layout| Global.allocate(layout),
                 |mem| ptr::slice_from_raw_parts_mut(mem as *mut T, len) as *mut RcBox<[T]>,
             )
         }
@@ -1125,7 +1125,7 @@ impl<T> Rc<[T]> {
                     let slice = from_raw_parts_mut(self.elems, self.n_elems);
                     ptr::drop_in_place(slice);
 
-                    Global.dealloc(self.mem, self.layout);
+                    Global.deallocate(self.mem, self.layout);
                 }
             }
         }
@@ -1225,7 +1225,7 @@ unsafe impl<#[may_dangle] T: ?Sized> Drop for Rc<T> {
                 self.inner().dec_weak();
 
                 if self.inner().weak() == 0 {
-                    Global.dealloc(self.ptr.cast(), Layout::for_value(self.ptr.as_ref()));
+                    Global.deallocate(self.ptr.cast(), Layout::for_value(self.ptr.as_ref()));
                 }
             }
         }
@@ -1749,7 +1749,7 @@ struct WeakInner<'a> {
     strong: &'a Cell<usize>,
 }
 
-impl<T: ?Sized> Weak<T> {
+impl<T> Weak<T> {
     /// Returns a raw pointer to the object `T` pointed to by this `Weak<T>`.
     ///
     /// The pointer is valid only if there are some strong references. The pointer may be dangling,
@@ -1882,7 +1882,9 @@ impl<T: ?Sized> Weak<T> {
         // SAFETY: we now have recovered the original Weak pointer, so can create the Weak.
         Weak { ptr: unsafe { NonNull::new_unchecked(ptr) } }
     }
+}
 
+impl<T: ?Sized> Weak<T> {
     /// Attempts to upgrade the `Weak` pointer to an [`Rc`], delaying
     /// dropping of the inner value if successful.
     ///
@@ -2040,7 +2042,7 @@ impl<T: ?Sized> Drop for Weak<T> {
         // the strong pointers have disappeared.
         if inner.weak() == 0 {
             unsafe {
-                Global.dealloc(self.ptr.cast(), Layout::for_value(self.ptr.as_ref()));
+                Global.deallocate(self.ptr.cast(), Layout::for_value(self.ptr.as_ref()));
             }
         }
     }

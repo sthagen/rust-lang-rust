@@ -84,6 +84,7 @@ impl<T> [T] {
     /// let a = [1, 2, 3];
     /// assert_eq!(a.len(), 3);
     /// ```
+    #[doc(alias = "length")]
     #[stable(feature = "rust1", since = "1.0.0")]
     #[rustc_const_stable(feature = "const_slice_len", since = "1.32.0")]
     #[inline]
@@ -2581,14 +2582,12 @@ impl<T> [T] {
     /// # Examples
     ///
     /// ```
-    /// #![feature(slice_fill)]
-    ///
     /// let mut buf = vec![0; 10];
     /// buf.fill(1);
     /// assert_eq!(buf, vec![1; 10]);
     /// ```
     #[doc(alias = "memset")]
-    #[unstable(feature = "slice_fill", issue = "70758")]
+    #[stable(feature = "slice_fill", since = "1.50.0")]
     pub fn fill(&mut self, value: T)
     where
         T: Clone,

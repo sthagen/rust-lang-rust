@@ -92,6 +92,8 @@ $EndFeature, "
 "),
             #[stable(feature = "rust1", since = "1.0.0")]
             #[rustc_const_stable(feature = "const_int_methods", since = "1.32.0")]
+            #[doc(alias = "popcount")]
+            #[doc(alias = "popcnt")]
             #[inline]
             pub const fn count_ones(self) -> u32 { (self as $UnsignedT).count_ones() }
         }
@@ -1211,7 +1213,7 @@ any high-order bits of `rhs` that would cause the shift to exceed the bitwidth o
 
 Note that this is *not* the same as a rotate-left; the RHS of a wrapping shift-left is restricted to
 the range of the type, rather than the bits shifted out of the LHS being returned to the other end.
-The primitive integer types all implement a `[`rotate_left`](#method.rotate_left) function,
+The primitive integer types all implement a [`rotate_left`](#method.rotate_left) function,
 which may be what you want instead.
 
 # Examples

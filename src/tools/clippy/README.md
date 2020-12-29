@@ -82,6 +82,22 @@ Note that this is still experimental and only supported on the nightly channel:
 cargo clippy --fix -Z unstable-options
 ```
 
+#### Workspaces
+
+All the usual workspace options should work with Clippy. For example the following command
+will run Clippy on the `example` crate:
+
+```terminal
+cargo clippy -p example
+```
+
+As with `cargo check`, this includes dependencies that are members of the workspace, like path dependencies.
+If you want to run Clippy **only** on the given crate, use the `--no-deps` option like this:
+
+```terminal
+cargo clippy -p example -- --no-deps 
+```
+
 ### Running Clippy from the command line without installing it
 
 To have cargo compile your crate with Clippy without Clippy installation
@@ -182,7 +198,7 @@ cargo clippy -- -W clippy::lint_name
 ```
 
 This also works with lint groups. For example you
-can run Clippy with warnings for all lints enabled: 
+can run Clippy with warnings for all lints enabled:
 ```terminal
 cargo clippy -- -W clippy::pedantic
 ```
@@ -193,6 +209,33 @@ the lint(s) you are interested in:
 cargo clippy -- -A clippy::all -W clippy::useless_format -W clippy::...
 ```
 Note that if you've run clippy before, this may only take effect after you've modified a file or ran `cargo clean`.
+
+### Specifying the minimum supported Rust version
+
+Projects that intend to support old versions of Rust can disable lints pertaining to newer features by
+specifying the minimum supported Rust version (MSRV) in the clippy configuration file.
+
+```toml
+msrv = "1.30.0"
+```
+
+The MSRV can also be specified as an inner attribute, like below.
+
+```rust
+#![feature(custom_inner_attributes)]
+#![clippy::msrv = "1.30.0"]
+
+fn main() {
+  ...
+}
+```
+
+You can also omit the patch version when specifying the MSRV, so `msrv = 1.30`
+is equivalent to `msrv = 1.30.0`.
+
+Note: `custom_inner_attributes` is an unstable feature so it has to be enabled explicitly.
+
+Lints that recognize this configuration option can be found [here](https://rust-lang.github.io/rust-clippy/master/index.html#msrv)
 
 ## Contributing
 

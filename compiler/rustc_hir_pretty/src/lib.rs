@@ -1462,7 +1462,7 @@ impl<'a> State<'a> {
 
                 let mut args = vec![];
                 args.push(AsmArg::Template(ast::InlineAsmTemplatePiece::to_string(&a.template)));
-                args.extend(a.operands.iter().map(|o| AsmArg::Operand(o)));
+                args.extend(a.operands.iter().map(|(o, _)| AsmArg::Operand(o)));
                 if !a.options.is_empty() {
                     args.push(AsmArg::Options(a.options));
                 }
@@ -1999,6 +1999,15 @@ impl<'a> State<'a> {
             match g {
                 hir::Guard::If(e) => {
                     self.word_space("if");
+                    self.print_expr(&e);
+                    self.s.space();
+                }
+                hir::Guard::IfLet(pat, e) => {
+                    self.word_nbsp("if");
+                    self.word_nbsp("let");
+                    self.print_pat(&pat);
+                    self.s.space();
+                    self.word_space("=");
                     self.print_expr(&e);
                     self.s.space();
                 }

@@ -545,60 +545,68 @@ impl CheckAttrVisitor<'tcx> {
         target: Target,
         item: Option<ItemLike<'_>>,
     ) -> bool {
-        if let Target::Fn | Target::Method(..) | Target::ForeignFn = target {
-            let mut invalid_args = vec![];
-            for meta in attr.meta_item_list().expect("no meta item list") {
-                if let Some(LitKind::Int(val, _)) = meta.literal().map(|lit| &lit.kind) {
-                    if let Some(ItemLike::Item(Item {
-                        kind: ItemKind::Fn(FnSig { decl, .. }, ..),
-                        ..
-                    }))
-                    | Some(ItemLike::ForeignItem(ForeignItem {
-                        kind: ForeignItemKind::Fn(decl, ..),
-                        ..
-                    })) = item
-                    {
-                        let arg_count = decl.inputs.len() as u128;
-                        if *val >= arg_count {
-                            let span = meta.span();
-                            self.tcx
-                                .sess
-                                .struct_span_err(span, "index exceeds number of arguments")
-                                .span_label(
-                                    span,
-                                    format!(
-                                        "there {} only {} argument{}",
-                                        if arg_count != 1 { "are" } else { "is" },
-                                        arg_count,
-                                        pluralize!(arg_count)
-                                    ),
-                                )
-                                .emit();
-                            return false;
-                        }
-                    } else {
-                        bug!("should be a function item");
-                    }
-                } else {
-                    invalid_args.push(meta.span());
-                }
-            }
-            if !invalid_args.is_empty() {
-                self.tcx
-                    .sess
-                    .struct_span_err(invalid_args, "arguments should be non-negative integers")
-                    .emit();
-                false
-            } else {
-                true
-            }
-        } else {
+        let is_function = matches!(target, Target::Fn | Target::Method(..) | Target::ForeignFn);
+        if !is_function {
             self.tcx
                 .sess
                 .struct_span_err(attr.span, "attribute should be applied to a function")
                 .span_label(*span, "not a function")
                 .emit();
+            return false;
+        }
+
+        let list = match attr.meta_item_list() {
+            // The attribute form is validated on AST.
+            None => return false,
+            Some(it) => it,
+        };
+
+        let mut invalid_args = vec![];
+        for meta in list {
+            if let Some(LitKind::Int(val, _)) = meta.literal().map(|lit| &lit.kind) {
+                if let Some(ItemLike::Item(Item {
+                    kind: ItemKind::Fn(FnSig { decl, .. }, ..),
+                    ..
+                }))
+                | Some(ItemLike::ForeignItem(ForeignItem {
+                    kind: ForeignItemKind::Fn(decl, ..),
+                    ..
+                })) = item
+                {
+                    let arg_count = decl.inputs.len() as u128;
+                    if *val >= arg_count {
+                        let span = meta.span();
+                        self.tcx
+                            .sess
+                            .struct_span_err(span, "index exceeds number of arguments")
+                            .span_label(
+                                span,
+                                format!(
+                                    "there {} only {} argument{}",
+                                    if arg_count != 1 { "are" } else { "is" },
+                                    arg_count,
+                                    pluralize!(arg_count)
+                                ),
+                            )
+                            .emit();
+                        return false;
+                    }
+                } else {
+                    bug!("should be a function item");
+                }
+            } else {
+                invalid_args.push(meta.span());
+            }
+        }
+
+        if !invalid_args.is_empty() {
+            self.tcx
+                .sess
+                .struct_span_err(invalid_args, "arguments should be non-negative integers")
+                .emit();
             false
+        } else {
+            true
         }
     }
 
@@ -872,6 +880,18 @@ impl Visitor<'tcx> for CheckAttrVisitor<'tcx> {
             Some(ItemLike::Item(item)),
         );
         intravisit::walk_item(self, item)
+    }
+
+    fn visit_generic_param(&mut self, generic_param: &'tcx hir::GenericParam<'tcx>) {
+        let target = Target::from_generic_param(generic_param);
+        self.check_attributes(
+            generic_param.hir_id,
+            generic_param.attrs,
+            &generic_param.span,
+            target,
+            None,
+        );
+        intravisit::walk_generic_param(self, generic_param)
     }
 
     fn visit_trait_item(&mut self, trait_item: &'tcx TraitItem<'tcx>) {

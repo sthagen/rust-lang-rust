@@ -1,7 +1,7 @@
 use rustc_ast as ast;
 use rustc_ast::visit::{self, AssocCtxt, FnCtxt, FnKind, Visitor};
 use rustc_ast::{AssocTyConstraint, AssocTyConstraintKind, NodeId};
-use rustc_ast::{GenericParam, GenericParamKind, PatKind, RangeEnd, VariantData};
+use rustc_ast::{PatKind, RangeEnd, VariantData};
 use rustc_errors::struct_span_err;
 use rustc_feature::{AttributeGate, BUILTIN_ATTRIBUTE_MAP};
 use rustc_feature::{Features, GateIssue};
@@ -529,19 +529,6 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
         visit::walk_fn(self, fn_kind, span)
     }
 
-    fn visit_generic_param(&mut self, param: &'a GenericParam) {
-        if let GenericParamKind::Const { .. } = param.kind {
-            gate_feature_fn!(
-                &self,
-                |x: &Features| x.const_generics || x.min_const_generics,
-                param.ident.span,
-                sym::min_const_generics,
-                "const generics are unstable"
-            );
-        }
-        visit::walk_generic_param(self, param)
-    }
-
     fn visit_assoc_ty_constraint(&mut self, constraint: &'a AssocTyConstraint) {
         if let AssocTyConstraintKind::Bound { .. } = constraint.kind {
             gate_feature_post!(
@@ -620,7 +607,7 @@ pub fn check_crate(krate: &ast::Crate, sess: &Session) {
             }
         };
     }
-    gate_all!(if_let_guard, "`if let` guard is not implemented");
+    gate_all!(if_let_guard, "`if let` guards are experimental");
     gate_all!(let_chains, "`let` expressions in this position are experimental");
     gate_all!(async_closure, "async closures are unstable");
     gate_all!(generators, "yield syntax is experimental");
@@ -630,6 +617,10 @@ pub fn check_crate(krate: &ast::Crate, sess: &Session) {
     gate_all!(const_trait_impl, "const trait impls are experimental");
     gate_all!(half_open_range_patterns, "half-open range patterns are unstable");
     gate_all!(inline_const, "inline-const is experimental");
+    gate_all!(
+        extended_key_value_attributes,
+        "arbitrary expressions in key-value attributes are unstable"
+    );
     if sess.parse_sess.span_diagnostic.err_count() == 0 {
         // Errors for `destructuring_assignment` can get quite noisy, especially where `_` is
         // involved, so we only emit errors where there are no other parsing errors.

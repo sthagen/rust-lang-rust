@@ -1248,7 +1248,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             if no_accessible_remaining_fields {
                 self.report_no_accessible_fields(adt_ty, span);
             } else {
-                self.report_missing_field(adt_ty, span, remaining_fields);
+                self.report_missing_fields(adt_ty, span, remaining_fields);
             }
         }
 
@@ -1279,7 +1279,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     ///
     /// error: aborting due to previous error
     /// ```
-    fn report_missing_field(
+    fn report_missing_fields(
         &self,
         adt_ty: Ty<'tcx>,
         span: Span,
@@ -1929,7 +1929,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     }
 
     fn check_expr_asm(&self, asm: &'tcx hir::InlineAsm<'tcx>) -> Ty<'tcx> {
-        for op in asm.operands {
+        for (op, _op_sp) in asm.operands {
             match op {
                 hir::InlineAsmOperand::In { expr, .. } | hir::InlineAsmOperand::Const { expr } => {
                     self.check_expr_asm_operand(expr, true);

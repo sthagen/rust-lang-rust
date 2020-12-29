@@ -403,6 +403,7 @@ enum PathResult<'a> {
     },
 }
 
+#[derive(Debug)]
 enum ModuleKind {
     /// An anonymous module; e.g., just a block.
     ///
@@ -2415,7 +2416,10 @@ impl<'a> Resolver<'a> {
                     } else if i == 0 {
                         if ident
                             .name
-                            .with(|n| n.chars().next().map_or(false, |c| c.is_ascii_uppercase()))
+                            .as_str()
+                            .chars()
+                            .next()
+                            .map_or(false, |c| c.is_ascii_uppercase())
                         {
                             (format!("use of undeclared type `{}`", ident), None)
                         } else {
@@ -2623,8 +2627,12 @@ impl<'a> Resolver<'a> {
                             continue;
                         }
                         ConstantItemRibKind(trivial) => {
+                            let features = self.session.features_untracked();
                             // HACK(min_const_generics): We currently only allow `N` or `{ N }`.
-                            if !trivial && self.session.features_untracked().min_const_generics {
+                            if !(trivial
+                                || features.const_generics
+                                || features.lazy_normalization_consts)
+                            {
                                 // HACK(min_const_generics): If we encounter `Self` in an anonymous constant
                                 // we can't easily tell if it's generic at this stage, so we instead remember
                                 // this and then enforce the self type to be concrete later on.
@@ -2712,8 +2720,12 @@ impl<'a> Resolver<'a> {
                             continue;
                         }
                         ConstantItemRibKind(trivial) => {
+                            let features = self.session.features_untracked();
                             // HACK(min_const_generics): We currently only allow `N` or `{ N }`.
-                            if !trivial && self.session.features_untracked().min_const_generics {
+                            if !(trivial
+                                || features.const_generics
+                                || features.lazy_normalization_consts)
+                            {
                                 if record_used {
                                     self.report_error(
                                         span,
