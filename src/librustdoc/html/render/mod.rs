@@ -538,7 +538,7 @@ impl<'tcx> FormatRenderer<'tcx> for Context<'tcx> {
     fn after_krate(&mut self, krate: &clean::Crate, cache: &Cache) -> Result<(), Error> {
         let final_file = self.dst.join(&*krate.name.as_str()).join("all.html");
         let settings_file = self.dst.join("settings.html");
-        let crate_name = krate.name.clone();
+        let crate_name = krate.name;
 
         let mut root_path = self.dst.to_str().expect("invalid path").to_owned();
         if !root_path.ends_with('/') {
@@ -2086,8 +2086,8 @@ fn item_module(w: &mut Buffer, cx: &Context<'_>, item: &clean::Item, items: &[cl
                 (true, false) => return Ordering::Greater,
             }
         }
-        let lhs = i1.name.unwrap_or(kw::Invalid).as_str();
-        let rhs = i2.name.unwrap_or(kw::Invalid).as_str();
+        let lhs = i1.name.unwrap_or(kw::Empty).as_str();
+        let rhs = i2.name.unwrap_or(kw::Empty).as_str();
         compare_names(&lhs, &rhs)
     }
 
@@ -3483,7 +3483,7 @@ enum AssocItemLink<'a> {
 }
 
 impl<'a> AssocItemLink<'a> {
-    fn anchor(&self, id: &'a String) -> Self {
+    fn anchor(&self, id: &'a str) -> Self {
         match *self {
             AssocItemLink::Anchor(_) => AssocItemLink::Anchor(Some(&id)),
             ref other => *other,
@@ -3967,7 +3967,7 @@ fn render_impl(
         cache: &Cache,
     ) {
         for trait_item in &t.items {
-            let n = trait_item.name.clone();
+            let n = trait_item.name;
             if i.items.iter().any(|m| m.name == n) {
                 continue;
             }
@@ -4207,7 +4207,7 @@ fn print_sidebar(cx: &Context<'_>, it: &clean::Item, buffer: &mut Buffer, cache:
                 ty: \"{ty}\", \
                 relpath: \"{path}\"\
             }};</script>",
-        name = it.name.unwrap_or(kw::Invalid),
+        name = it.name.unwrap_or(kw::Empty),
         ty = it.type_(),
         path = relpath
     );

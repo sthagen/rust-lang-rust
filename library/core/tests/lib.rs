@@ -13,6 +13,8 @@
 #![feature(const_assume)]
 #![feature(const_cell_into_inner)]
 #![feature(const_maybe_uninit_assume_init)]
+#![feature(const_ptr_read)]
+#![feature(const_ptr_offset)]
 #![feature(core_intrinsics)]
 #![feature(core_private_bignum)]
 #![feature(core_private_diy_float)]
@@ -34,6 +36,7 @@
 #![feature(raw)]
 #![feature(sort_internals)]
 #![feature(slice_partition_at_index)]
+#![feature(maybe_uninit_extra)]
 #![feature(maybe_uninit_write_slice)]
 #![feature(min_specialization)]
 #![feature(step_trait)]
@@ -48,6 +51,7 @@
 #![feature(array_value_iter)]
 #![feature(iter_advance_by)]
 #![feature(iter_partition_in_place)]
+#![feature(iter_intersperse)]
 #![feature(iter_is_partitioned)]
 #![feature(iter_order_by)]
 #![feature(cmp_min_max_by)]
@@ -82,6 +86,10 @@ mod cell;
 mod char;
 mod clone;
 mod cmp;
+
+#[cfg(not(bootstrap))]
+mod const_ptr;
+
 mod fmt;
 mod hash;
 mod intrinsics;

@@ -134,7 +134,6 @@ fn test_discriminant_send_sync() {
 }
 
 #[test]
-#[cfg(not(bootstrap))]
 fn assume_init_good() {
     const TRUE: bool = unsafe { MaybeUninit::<bool>::new(true).assume_init() };
 
@@ -266,4 +265,11 @@ fn uninit_write_slice_cloned_no_drop() {
     MaybeUninit::write_slice_cloned(&mut dst, &src);
 
     forget(src);
+}
+
+#[test]
+#[cfg(not(bootstrap))]
+fn uninit_const_assume_init_read() {
+    const FOO: u32 = unsafe { MaybeUninit::new(42).assume_init_read() };
+    assert_eq!(FOO, 42);
 }

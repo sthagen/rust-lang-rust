@@ -8,7 +8,6 @@ use crate::clean::{
 };
 use crate::core::DocContext;
 
-use itertools::Itertools;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_hir as hir;
 use rustc_hir::def::{DefKind, Res};
@@ -74,7 +73,7 @@ crate fn krate(mut cx: &mut DocContext<'_>) -> Crate {
             )
         }));
         m.items.extend(keywords.into_iter().map(|(def_id, kw)| {
-            Item::from_def_id_and_parts(def_id, Some(kw.clone()), ItemKind::KeywordItem(kw), cx)
+            Item::from_def_id_and_parts(def_id, Some(kw), ItemKind::KeywordItem(kw), cx)
         }));
     }
 
@@ -307,7 +306,7 @@ crate fn strip_path(path: &Path) -> Path {
         .segments
         .iter()
         .map(|s| PathSegment {
-            name: s.name.clone(),
+            name: s.name,
             args: GenericArgs::AngleBracketed { args: vec![], bindings: vec![] },
         })
         .collect();

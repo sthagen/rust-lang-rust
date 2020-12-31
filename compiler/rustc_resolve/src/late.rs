@@ -1151,13 +1151,11 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
     /// When evaluating a `trait` use its associated types' idents for suggestions in E0412.
     fn with_trait_items<T>(
         &mut self,
-        trait_items: &'ast Vec<P<AssocItem>>,
+        trait_items: &'ast [P<AssocItem>],
         f: impl FnOnce(&mut Self) -> T,
     ) -> T {
-        let trait_assoc_items = replace(
-            &mut self.diagnostic_metadata.current_trait_assoc_items,
-            Some(&trait_items[..]),
-        );
+        let trait_assoc_items =
+            replace(&mut self.diagnostic_metadata.current_trait_assoc_items, Some(&trait_items));
         let result = f(self);
         self.diagnostic_metadata.current_trait_assoc_items = trait_assoc_items;
         result
@@ -1641,7 +1639,7 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
         }
 
         // Record as bound if it's valid:
-        let ident_valid = ident.name != kw::Invalid;
+        let ident_valid = ident.name != kw::Empty;
         if ident_valid {
             bindings.last_mut().unwrap().1.insert(ident);
         }

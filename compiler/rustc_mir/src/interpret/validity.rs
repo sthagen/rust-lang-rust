@@ -153,7 +153,7 @@ impl<T: Copy + Eq + Hash + std::fmt::Debug, PATH: Default> RefTracking<T, PATH> 
 }
 
 /// Format a path
-fn write_path(out: &mut String, path: &Vec<PathElem>) {
+fn write_path(out: &mut String, path: &[PathElem]) {
     use self::PathElem::*;
 
     for elem in path.iter() {
@@ -391,7 +391,7 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
         }
         // Make sure this is dereferenceable and all.
         let size_and_align = try_validation!(
-            self.ecx.size_and_align_of(place.meta, place.layout),
+            self.ecx.size_and_align_of_mplace(place),
             self.path,
             err_ub!(InvalidMeta(msg)) => { "invalid {} metadata: {}", kind, msg },
         );

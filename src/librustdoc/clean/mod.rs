@@ -831,7 +831,7 @@ impl<'a, 'tcx> Clean<Generics> for (&'a ty::Generics, ty::GenericPredicates<'tcx
         where_predicates.retain(|pred| match *pred {
             WP::BoundPredicate { ty: Generic(ref g), ref bounds } => {
                 if bounds.iter().any(|b| b.is_sized_bound(cx)) {
-                    sized_params.insert(g.clone());
+                    sized_params.insert(*g);
                     false
                 } else {
                     true
@@ -847,7 +847,7 @@ impl<'a, 'tcx> Clean<Generics> for (&'a ty::Generics, ty::GenericPredicates<'tcx
                 && !sized_params.contains(&tp.name)
             {
                 where_predicates.push(WP::BoundPredicate {
-                    ty: Type::Generic(tp.name.clone()),
+                    ty: Type::Generic(tp.name),
                     bounds: vec![GenericBound::maybe_sized(cx)],
                 })
             }
@@ -941,7 +941,7 @@ impl<'a> Clean<Arguments> for (&'a [hir::Ty<'a>], &'a [Ident]) {
                 .iter()
                 .enumerate()
                 .map(|(i, ty)| {
-                    let mut name = self.1.get(i).map(|ident| ident.name).unwrap_or(kw::Invalid);
+                    let mut name = self.1.get(i).map(|ident| ident.name).unwrap_or(kw::Empty);
                     if name.is_empty() {
                         name = kw::Underscore;
                     }
@@ -1000,7 +1000,7 @@ impl<'tcx> Clean<FnDecl> for (DefId, ty::PolyFnSig<'tcx>) {
                     .iter()
                     .map(|t| Argument {
                         type_: t.clean(cx),
-                        name: names.next().map(|i| i.name).unwrap_or(kw::Invalid),
+                        name: names.next().map(|i| i.name).unwrap_or(kw::Empty),
                     })
                     .collect(),
             },
