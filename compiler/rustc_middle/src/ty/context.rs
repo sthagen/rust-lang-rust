@@ -1,7 +1,7 @@
 //! Type context book-keeping.
 
 use crate::arena::Arena;
-use crate::dep_graph::{self, DepGraph, DepKind, DepNode, DepNodeExt};
+use crate::dep_graph::DepGraph;
 use crate::hir::exports::ExportMap;
 use crate::ich::{NodeIdHashingMode, StableHashingContext};
 use crate::infer::canonical::{Canonical, CanonicalVarInfo, CanonicalVarInfos};
@@ -37,8 +37,7 @@ use rustc_data_structures::sync::{self, Lock, Lrc, WorkerLocal};
 use rustc_errors::ErrorReported;
 use rustc_hir as hir;
 use rustc_hir::def::{DefKind, Res};
-use rustc_hir::def_id::{CrateNum, DefId, DefIdMap, LocalDefId};
-use rustc_hir::def_id::{CRATE_DEF_INDEX, LOCAL_CRATE};
+use rustc_hir::def_id::{CrateNum, DefId, DefIdMap, LocalDefId, LOCAL_CRATE};
 use rustc_hir::definitions::Definitions;
 use rustc_hir::intravisit::Visitor;
 use rustc_hir::lang_items::LangItem;
@@ -47,6 +46,7 @@ use rustc_hir::{
 };
 use rustc_index::vec::{Idx, IndexVec};
 use rustc_macros::HashStable;
+use rustc_serialize::opaque::{FileEncodeResult, FileEncoder};
 use rustc_session::config::{BorrowckMode, CrateType, OutputFilenames};
 use rustc_session::lint::{Level, Lint};
 use rustc_session::Session;
@@ -1314,33 +1314,8 @@ impl<'tcx> TyCtxt<'tcx> {
         StableHashingContext::ignore_spans(self.sess, krate, self.definitions, &*self.cstore)
     }
 
-    // This method makes sure that we have a DepNode and a Fingerprint for
-    // every upstream crate. It needs to be called once right after the tcx is
-    // created.
-    // With full-fledged red/green, the method will probably become unnecessary
-    // as this will be done on-demand.
-    pub fn allocate_metadata_dep_nodes(self) {
-        // We cannot use the query versions of crates() and crate_hash(), since
-        // those would need the DepNodes that we are allocating here.
-        for cnum in self.cstore.crates_untracked() {
-            let def_path_hash = self.def_path_hash(DefId { krate: cnum, index: CRATE_DEF_INDEX });
-            let dep_node = DepNode::from_def_path_hash(def_path_hash, DepKind::CrateMetadata);
-            let crate_hash = self.cstore.crate_hash_untracked(cnum);
-            self.dep_graph.with_task(
-                dep_node,
-                self,
-                crate_hash,
-                |_, x| x, // No transformation needed
-                dep_graph::hash_result,
-            );
-        }
-    }
-
-    pub fn serialize_query_result_cache<E>(self, encoder: &mut E) -> Result<(), E::Error>
-    where
-        E: ty::codec::OpaqueEncoder,
-    {
-        self.queries.on_disk_cache.as_ref().map(|c| c.serialize(self, encoder)).unwrap_or(Ok(()))
+    pub fn serialize_query_result_cache(self, encoder: &mut FileEncoder) -> FileEncodeResult {
+        self.queries.on_disk_cache.as_ref().map_or(Ok(()), |c| c.serialize(self, encoder))
     }
 
     /// If `true`, we should use the MIR-based borrowck, but also
@@ -2603,7 +2578,7 @@ impl<'tcx> TyCtxt<'tcx> {
     }
 
     pub fn is_late_bound(self, id: HirId) -> bool {
-        self.is_late_bound_map(id.owner).map(|set| set.contains(&id.local_id)).unwrap_or(false)
+        self.is_late_bound_map(id.owner).map_or(false, |set| set.contains(&id.local_id))
     }
 
     pub fn object_lifetime_defaults(self, id: HirId) -> Option<&'tcx [ObjectLifetimeDefault]> {

@@ -990,6 +990,9 @@ impl<T, A: Allocator> Vec<T, A> {
         //   such that no value will be dropped twice in case `drop_in_place`
         //   were to panic once (if it panics twice, the program aborts).
         unsafe {
+            // Note: It's intentional that this is `>` and not `>=`.
+            //       Changing it to `>=` has negative performance
+            //       implications in some cases. See #78884 for more.
             if len > self.len {
                 return;
             }
@@ -1947,27 +1950,6 @@ impl<T: PartialEq, A: Allocator> Vec<T, A> {
     #[inline]
     pub fn dedup(&mut self) {
         self.dedup_by(|a, b| a == b)
-    }
-}
-
-impl<T, A: Allocator> Vec<T, A> {
-    /// Removes the first instance of `item` from the vector if the item exists.
-    ///
-    /// This method will be removed soon.
-    #[unstable(feature = "vec_remove_item", reason = "recently added", issue = "40062")]
-    #[rustc_deprecated(
-        reason = "Removing the first item equal to a needle is already easily possible \
-            with iterators and the current Vec methods. Furthermore, having a method for \
-            one particular case of removal (linear search, only the first item, no swap remove) \
-            but not for others is inconsistent. This method will be removed soon.",
-        since = "1.46.0"
-    )]
-    pub fn remove_item<V>(&mut self, item: &V) -> Option<T>
-    where
-        T: PartialEq<V>,
-    {
-        let pos = self.iter().position(|x| *x == *item)?;
-        Some(self.remove(pos))
     }
 }
 

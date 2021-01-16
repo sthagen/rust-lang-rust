@@ -312,6 +312,20 @@ rustc_queries! {
             desc { |tcx| "elaborating drops for `{}`", tcx.def_path_str(key.did.to_def_id()) }
         }
 
+        query mir_for_ctfe(
+            key: DefId
+        ) -> &'tcx mir::Body<'tcx> {
+            desc { |tcx| "caching mir of `{}` for CTFE", tcx.def_path_str(key) }
+            cache_on_disk_if { key.is_local() }
+        }
+
+        query mir_for_ctfe_of_const_arg(key: (LocalDefId, DefId)) -> &'tcx mir::Body<'tcx> {
+            desc {
+                |tcx| "MIR for CTFE of the const argument `{}`",
+                tcx.def_path_str(key.0.to_def_id())
+            }
+        }
+
         query mir_promoted(key: ty::WithOptConstParam<LocalDefId>) ->
             (
                 &'tcx Steal<mir::Body<'tcx>>,
@@ -330,12 +344,6 @@ rustc_queries! {
         query optimized_mir(key: DefId) -> &'tcx mir::Body<'tcx> {
             desc { |tcx| "optimizing MIR for `{}`", tcx.def_path_str(key) }
             cache_on_disk_if { key.is_local() }
-        }
-        query optimized_mir_of_const_arg(key: (LocalDefId, DefId)) -> &'tcx mir::Body<'tcx> {
-            desc {
-                |tcx| "optimizing MIR for the const argument `{}`",
-                tcx.def_path_str(key.0.to_def_id())
-            }
         }
 
         /// Returns coverage summary info for a function, after executing the `InstrumentCoverage`
@@ -873,6 +881,7 @@ rustc_queries! {
         query def_kind(def_id: DefId) -> DefKind {
             desc { |tcx| "looking up definition kind of `{}`", tcx.def_path_str(def_id) }
         }
+
         query def_span(def_id: DefId) -> Span {
             desc { |tcx| "looking up span for `{}`", tcx.def_path_str(def_id) }
             // FIXME(mw): DefSpans are not really inputs since they are derived from
@@ -882,15 +891,23 @@ rustc_queries! {
             // regardless of HIR hashing.
             eval_always
         }
+
+        query def_ident_span(def_id: DefId) -> Option<Span> {
+            desc { |tcx| "looking up span for `{}`'s identifier", tcx.def_path_str(def_id) }
+        }
+
         query lookup_stability(def_id: DefId) -> Option<&'tcx attr::Stability> {
             desc { |tcx| "looking up stability of `{}`", tcx.def_path_str(def_id) }
         }
+
         query lookup_const_stability(def_id: DefId) -> Option<&'tcx attr::ConstStability> {
             desc { |tcx| "looking up const stability of `{}`", tcx.def_path_str(def_id) }
         }
+
         query lookup_deprecation_entry(def_id: DefId) -> Option<DeprecationEntry> {
             desc { |tcx| "checking whether `{}` is deprecated", tcx.def_path_str(def_id) }
         }
+
         query item_attrs(def_id: DefId) -> &'tcx [ast::Attribute] {
             desc { |tcx| "collecting attributes of `{}`", tcx.def_path_str(def_id) }
         }
@@ -927,6 +944,9 @@ rustc_queries! {
     }
 
     Codegen {
+        query is_ctfe_mir_available(key: DefId) -> bool {
+            desc { |tcx| "checking if item has ctfe mir available: `{}`", tcx.def_path_str(key) }
+        }
         query is_mir_available(key: DefId) -> bool {
             desc { |tcx| "checking if item has mir available: `{}`", tcx.def_path_str(key) }
         }
@@ -1220,6 +1240,8 @@ rustc_queries! {
             eval_always
             desc { "looking up the disambiguator a crate" }
         }
+        // The macro which defines `rustc_metadata::provide_extern` depends on this query's name.
+        // Changing the name should cause a compiler error, but in case that changes, be aware.
         query crate_hash(_: CrateNum) -> Svh {
             eval_always
             desc { "looking up the hash a crate" }
@@ -1307,6 +1329,15 @@ rustc_queries! {
         query visibility(def_id: DefId) -> ty::Visibility {
             eval_always
             desc { |tcx| "computing visibility of `{}`", tcx.def_path_str(def_id) }
+        }
+
+        /// Computes the set of modules from which this type is visibly uninhabited.
+        /// To check whether a type is uninhabited at all (not just from a given module), you could
+        /// check whether the forest is empty.
+        query type_uninhabited_from(
+            key: ty::ParamEnvAnd<'tcx, Ty<'tcx>>
+        ) -> ty::inhabitedness::DefIdForest {
+            desc { "computing the inhabitedness of `{:?}`", key }
         }
     }
 

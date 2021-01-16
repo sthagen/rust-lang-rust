@@ -236,7 +236,7 @@ fn configure_and_expand_inner<'a>(
     pre_expansion_lint(sess, lint_store, &krate);
 
     let mut resolver = Resolver::new(sess, &krate, crate_name, metadata_loader, &resolver_arenas);
-    rustc_builtin_macros::register_builtin_macros(&mut resolver, sess.edition());
+    rustc_builtin_macros::register_builtin_macros(&mut resolver);
 
     krate = sess.time("crate_injection", || {
         let alt_std_name = sess.opts.alt_std_name.as_ref().map(|s| Symbol::intern(s));
@@ -795,12 +795,6 @@ pub fn create_global_ctxt<'tcx>(
                 &outputs,
             )
         })
-    });
-
-    // Do some initialization of the DepGraph that can only be done with the tcx available.
-    let icx = ty::tls::ImplicitCtxt::new(&gcx);
-    ty::tls::enter_context(&icx, |_| {
-        icx.tcx.sess.time("dep_graph_tcx_init", || rustc_incremental::dep_graph_tcx_init(icx.tcx));
     });
 
     QueryContext(gcx)

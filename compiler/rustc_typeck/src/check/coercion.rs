@@ -926,11 +926,11 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     false
                 }
             };
-            if is_capturing_closure(&prev_ty.kind()) || is_capturing_closure(&new_ty.kind()) {
+            if is_capturing_closure(prev_ty.kind()) || is_capturing_closure(new_ty.kind()) {
                 (None, None)
             } else {
-                match (&prev_ty.kind(), &new_ty.kind()) {
-                    (&ty::FnDef(..), &ty::FnDef(..)) => {
+                match (prev_ty.kind(), new_ty.kind()) {
+                    (ty::FnDef(..), ty::FnDef(..)) => {
                         // Don't reify if the function types have a LUB, i.e., they
                         // are the same function and their parameters have a LUB.
                         match self
@@ -943,21 +943,21 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                             }
                         }
                     }
-                    (&ty::Closure(_, substs), &ty::FnDef(..)) => {
+                    (ty::Closure(_, substs), ty::FnDef(..)) => {
                         let b_sig = new_ty.fn_sig(self.tcx);
                         let a_sig = self
                             .tcx
                             .signature_unclosure(substs.as_closure().sig(), b_sig.unsafety());
                         (Some(a_sig), Some(b_sig))
                     }
-                    (&ty::FnDef(..), &ty::Closure(_, substs)) => {
+                    (ty::FnDef(..), ty::Closure(_, substs)) => {
                         let a_sig = prev_ty.fn_sig(self.tcx);
                         let b_sig = self
                             .tcx
                             .signature_unclosure(substs.as_closure().sig(), a_sig.unsafety());
                         (Some(a_sig), Some(b_sig))
                     }
-                    (&ty::Closure(_, substs_a), &ty::Closure(_, substs_b)) => (
+                    (ty::Closure(_, substs_a), ty::Closure(_, substs_b)) => (
                         Some(self.tcx.signature_unclosure(
                             substs_a.as_closure().sig(),
                             hir::Unsafety::Normal,
@@ -1443,14 +1443,14 @@ impl<'tcx, 'exprs, E: AsCoercionSite> CoerceMany<'tcx, 'exprs, E> {
                 &mut err, expr, expected, found, cause.span, blk_id,
             );
             let parent = fcx.tcx.hir().get(parent_id);
-            if let (Some(match_expr), true, false) = (
-                fcx.tcx.hir().get_match_if_cause(expr.hir_id),
+            if let (Some(cond_expr), true, false) = (
+                fcx.tcx.hir().get_if_cause(expr.hir_id),
                 expected.is_unit(),
                 pointing_at_return_type,
             ) {
-                if match_expr.span.desugaring_kind().is_none() {
-                    err.span_label(match_expr.span, "expected this to be `()`");
-                    fcx.suggest_semicolon_at_end(match_expr.span, &mut err);
+                if cond_expr.span.desugaring_kind().is_none() {
+                    err.span_label(cond_expr.span, "expected this to be `()`");
+                    fcx.suggest_semicolon_at_end(cond_expr.span, &mut err);
                 }
             }
             fcx.get_node_fn_decl(parent).map(|(fn_decl, _, is_main)| (fn_decl, is_main))

@@ -125,19 +125,7 @@ impl<'a> Parser<'a> {
             item
         };
 
-        let (mut item, tokens) = if needs_tokens {
-            let (item, tokens) = self.collect_tokens(parse_item)?;
-            (item, tokens)
-        } else {
-            (parse_item(self)?, None)
-        };
-        if let Some(item) = &mut item {
-            // If we captured tokens during parsing (due to encountering an `NtItem`),
-            // use those instead
-            if item.tokens.is_none() {
-                item.tokens = tokens;
-            }
-        }
+        let item = if needs_tokens { self.collect_tokens(parse_item) } else { parse_item(self) }?;
 
         self.unclosed_delims.append(&mut unclosed_delims);
         Ok(item)
@@ -220,7 +208,22 @@ impl<'a> Parser<'a> {
         let info = if self.eat_keyword(kw::Use) {
             // USE ITEM
             let tree = self.parse_use_tree()?;
-            self.expect_semi()?;
+
+            // If wildcard or glob-like brace syntax doesn't have `;`,
+            // the user may not know `*` or `{}` should be the last.
+            if let Err(mut e) = self.expect_semi() {
+                match tree.kind {
+                    UseTreeKind::Glob => {
+                        e.note("the wildcard token must be last on the path").emit();
+                    }
+                    UseTreeKind::Nested(..) => {
+                        e.note("glob-like brace syntax must be last on the path").emit();
+                    }
+                    _ => (),
+                }
+                return Err(e);
+            }
+
             (Ident::invalid(), ItemKind::Use(P(tree)))
         } else if self.check_fn_front_matter() {
             // FUNCTION ITEM

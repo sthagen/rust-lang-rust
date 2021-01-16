@@ -166,7 +166,7 @@ fn get_linker(
         _ => match flavor {
             LinkerFlavor::Lld(f) => Command::lld(linker, f),
             LinkerFlavor::Msvc if sess.opts.cg.linker.is_none() && sess.target.linker.is_none() => {
-                Command::new(msvc_tool.as_ref().map(|t| t.path()).unwrap_or(linker))
+                Command::new(msvc_tool.as_ref().map_or(linker, |t| t.path()))
             }
             _ => Command::new(linker),
         },
@@ -895,7 +895,7 @@ fn link_sanitizer_runtime(sess: &Session, linker: &mut dyn Linker, name: &str) {
         .unwrap_or_default();
 
     match sess.opts.target_triple.triple() {
-        "x86_64-apple-darwin" => {
+        "aarch64-apple-darwin" | "x86_64-apple-darwin" => {
             // On Apple platforms, the sanitizer is always built as a dylib, and
             // LLVM will link to `@rpath/*.dylib`, so we need to specify an
             // rpath to the library as well (the rpath should be absolute, see
@@ -1276,6 +1276,7 @@ fn exec_linker(
 
 fn link_output_kind(sess: &Session, crate_type: CrateType) -> LinkOutputKind {
     let kind = match (crate_type, sess.crt_static(Some(crate_type)), sess.relocation_model()) {
+        (CrateType::Executable, _, _) if sess.is_wasi_reactor() => LinkOutputKind::WasiReactorExe,
         (CrateType::Executable, false, RelocModel::Pic) => LinkOutputKind::DynamicPicExe,
         (CrateType::Executable, false, _) => LinkOutputKind::DynamicNoPicExe,
         (CrateType::Executable, true, RelocModel::Pic) => LinkOutputKind::StaticPicExe,

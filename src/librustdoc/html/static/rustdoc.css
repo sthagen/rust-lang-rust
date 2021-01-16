@@ -1412,6 +1412,7 @@ h4 > .notable-traits {
 	.sidebar > .block.version {
 		border-bottom: none;
 		margin-top: 12px;
+		margin-bottom: 0;
 	}
 
 	nav.sub {
@@ -1582,7 +1583,10 @@ h4 > .notable-traits {
 		height: 73px;
 	}
 
-	#main {
+	/* This is to prevent the search bar from being underneath the <section>
+	 * element following it.
+	 */
+	#main, #search {
 		margin-top: 100px;
 	}
 

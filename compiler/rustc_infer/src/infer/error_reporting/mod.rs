@@ -69,7 +69,7 @@ use rustc_middle::ty::{
     subst::{Subst, SubstsRef},
     Region, Ty, TyCtxt, TypeFoldable,
 };
-use rustc_span::{BytePos, DesugaringKind, Pos, Span};
+use rustc_span::{sym, BytePos, DesugaringKind, Pos, Span};
 use rustc_target::spec::abi;
 use std::ops::ControlFlow;
 use std::{cmp, fmt};
@@ -98,7 +98,7 @@ pub(super) fn note_and_explain_region(
         // uh oh, hope no user ever sees THIS
         ty::ReEmpty(ui) => (format!("the empty lifetime in universe {:?}", ui), None),
 
-        ty::RePlaceholder(_) => ("any other region".to_string(), None),
+        ty::RePlaceholder(_) => return,
 
         // FIXME(#13998) RePlaceholder should probably print like
         // ReFree rather than dumping Debug output on the user.
@@ -915,7 +915,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                 self.highlight_outer(&mut t1_out, &mut t2_out, path, sub, i, &other_ty);
                 return Some(());
             }
-            if let &ty::Adt(def, _) = ta.kind() {
+            if let ty::Adt(def, _) = ta.kind() {
                 let path_ = self.tcx.def_path_str(def.did);
                 if path_ == other_path {
                     self.highlight_outer(&mut t1_out, &mut t2_out, path, sub, i, &other_ty);
@@ -958,7 +958,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                 ty::GenericParamDefKind::Type { has_default, .. } => {
                     Some((param.def_id, has_default))
                 }
-                ty::GenericParamDefKind::Const => None, // FIXME(const_generics:defaults)
+                ty::GenericParamDefKind::Const => None, // FIXME(const_generics_defaults)
             })
             .peekable();
         let has_default = {
@@ -1675,6 +1675,16 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         self.check_and_note_conflicting_crates(diag, terr);
         self.tcx.note_and_explain_type_err(diag, terr, cause, span, body_owner_def_id.to_def_id());
 
+        if let Some(ValuePairs::PolyTraitRefs(exp_found)) = values {
+            if let ty::Closure(def_id, _) = exp_found.expected.skip_binder().self_ty().kind() {
+                if let Some(def_id) = def_id.as_local() {
+                    let hir_id = self.tcx.hir().local_def_id_to_hir_id(def_id);
+                    let span = self.tcx.hir().span(hir_id);
+                    diag.span_note(span, "this closure does not fulfill the lifetime requirements");
+                }
+            }
+        }
+
         // It reads better to have the error origin as the final
         // thing.
         self.note_error_origin(diag, cause, exp_found);
@@ -2108,7 +2118,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                 let consider = format!(
                     "{} {}...",
                     msg,
-                    if type_param_span.map(|(_, _, is_impl_trait)| is_impl_trait).unwrap_or(false) {
+                    if type_param_span.map_or(false, |(_, _, is_impl_trait)| is_impl_trait) {
                         format!(" `{}` to `{}`", sub, bound_kind)
                     } else {
                         format!("`{}: {}`", bound_kind, sub)
@@ -2281,6 +2291,14 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
 
         self.note_region_origin(&mut err, &sub_origin);
         err.emit();
+    }
+
+    /// Determine whether an error associated with the given span and definition
+    /// should be treated as being caused by the implicit `From` conversion
+    /// within `?` desugaring.
+    pub fn is_try_conversion(&self, span: Span, trait_def_id: DefId) -> bool {
+        span.is_desugaring(DesugaringKind::QuestionMark)
+            && self.tcx.is_diagnostic_item(sym::from_trait, trait_def_id)
     }
 }
 

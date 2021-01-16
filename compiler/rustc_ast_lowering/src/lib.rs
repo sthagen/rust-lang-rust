@@ -53,13 +53,15 @@ use rustc_hir::definitions::{DefKey, DefPathData, Definitions};
 use rustc_hir::intravisit;
 use rustc_hir::{ConstArg, GenericArg, ParamName};
 use rustc_index::vec::{Idx, IndexVec};
-use rustc_session::lint::{builtin::BARE_TRAIT_OBJECTS, BuiltinLintDiagnostics, LintBuffer};
+use rustc_session::lint::builtin::{BARE_TRAIT_OBJECTS, MISSING_ABI};
+use rustc_session::lint::{BuiltinLintDiagnostics, LintBuffer};
 use rustc_session::parse::ParseSess;
 use rustc_session::Session;
 use rustc_span::hygiene::ExpnId;
-use rustc_span::source_map::{respan, DesugaringKind, ExpnData, ExpnKind};
+use rustc_span::source_map::{respan, DesugaringKind};
 use rustc_span::symbol::{kw, sym, Ident, Symbol};
 use rustc_span::Span;
+use rustc_target::spec::abi::Abi;
 
 use smallvec::{smallvec, SmallVec};
 use std::collections::BTreeMap;
@@ -206,8 +208,7 @@ pub trait ResolverAstLowering {
     ) -> LocalDefId;
 }
 
-type NtToTokenstream =
-    fn(&Nonterminal, &ParseSess, Span, CanSynthesizeMissingTokens) -> TokenStream;
+type NtToTokenstream = fn(&Nonterminal, &ParseSess, CanSynthesizeMissingTokens) -> TokenStream;
 
 /// Context of `impl Trait` in code, which determines whether it is allowed in an HIR subtree,
 /// and if so, what meaning it has.
@@ -417,12 +418,7 @@ impl<'a> TokenStreamLowering<'a> {
     fn lower_token(&mut self, token: Token) -> TokenStream {
         match token.kind {
             token::Interpolated(nt) => {
-                let tts = (self.nt_to_tokenstream)(
-                    &nt,
-                    self.parse_sess,
-                    token.span,
-                    self.synthesize_tokens,
-                );
+                let tts = (self.nt_to_tokenstream)(&nt, self.parse_sess, self.synthesize_tokens);
                 TokenTree::Delimited(
                     DelimSpan::from_single(token.span),
                     DelimToken::NoDelim,
@@ -743,10 +739,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         span: Span,
         allow_internal_unstable: Option<Lrc<[Symbol]>>,
     ) -> Span {
-        span.fresh_expansion(ExpnData {
-            allow_internal_unstable,
-            ..ExpnData::default(ExpnKind::Desugaring(reason), span, self.sess.edition(), None)
-        })
+        span.mark_with_reason(allow_internal_unstable, reason, self.sess.edition())
     }
 
     fn with_anonymous_lifetime_mode<R>(
@@ -1022,10 +1015,36 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
             // This is an inert key-value attribute - it will never be visible to macros
             // after it gets lowered to HIR. Therefore, we can synthesize tokens with fake
             // spans to handle nonterminals in `#[doc]` (e.g. `#[doc = $e]`).
-            MacArgs::Eq(eq_span, ref tokens) => MacArgs::Eq(
-                eq_span,
-                self.lower_token_stream(tokens.clone(), CanSynthesizeMissingTokens::Yes),
-            ),
+            MacArgs::Eq(eq_span, ref token) => {
+                // In valid code the value is always representable as a single literal token.
+                fn unwrap_single_token(sess: &Session, tokens: TokenStream, span: Span) -> Token {
+                    if tokens.len() != 1 {
+                        sess.diagnostic()
+                            .delay_span_bug(span, "multiple tokens in key-value attribute's value");
+                    }
+                    match tokens.into_trees().next() {
+                        Some(TokenTree::Token(token)) => token,
+                        Some(TokenTree::Delimited(_, delim, tokens)) => {
+                            if delim != token::NoDelim {
+                                sess.diagnostic().delay_span_bug(
+                                    span,
+                                    "unexpected delimiter in key-value attribute's value",
+                                )
+                            }
+                            unwrap_single_token(sess, tokens, span)
+                        }
+                        None => Token::dummy(),
+                    }
+                }
+
+                let tokens = TokenStreamLowering {
+                    parse_sess: &self.sess.parse_sess,
+                    synthesize_tokens: CanSynthesizeMissingTokens::Yes,
+                    nt_to_tokenstream: self.nt_to_tokenstream,
+                }
+                .lower_token(token.clone());
+                MacArgs::Eq(eq_span, unwrap_single_token(self.sess, tokens, token.span))
+            }
         }
     }
 
@@ -1271,6 +1290,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
             }
             TyKind::BareFn(ref f) => self.with_in_scope_lifetime_defs(&f.generic_params, |this| {
                 this.with_anonymous_lifetime_mode(AnonymousLifetimeMode::PassThrough, |this| {
+                    let span = this.sess.source_map().next_point(t.span.shrink_to_lo());
                     hir::TyKind::BareFn(this.arena.alloc(hir::BareFnTy {
                         generic_params: this.lower_generic_params(
                             &f.generic_params,
@@ -1278,7 +1298,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                             ImplTraitContext::disallowed(),
                         ),
                         unsafety: this.lower_unsafety(f.unsafety),
-                        abi: this.lower_extern(f.ext),
+                        abi: this.lower_extern(f.ext, span, t.id),
                         decl: this.lower_fn_decl(&f.decl, None, false, None),
                         param_names: this.lower_fn_params_to_names(&f.decl),
                     }))
@@ -2242,13 +2262,14 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
 
                 (hir::ParamName::Plain(param.ident), kind)
             }
-            GenericParamKind::Const { ref ty, kw_span: _ } => {
+            GenericParamKind::Const { ref ty, kw_span: _, ref default } => {
                 let ty = self
                     .with_anonymous_lifetime_mode(AnonymousLifetimeMode::ReportError, |this| {
                         this.lower_ty(&ty, ImplTraitContext::disallowed())
                     });
+                let default = default.as_ref().map(|def| self.lower_anon_const(def));
 
-                (hir::ParamName::Plain(param.ident), hir::GenericParamKind::Const { ty })
+                (hir::ParamName::Plain(param.ident), hir::GenericParamKind::Const { ty, default })
             }
         };
 
@@ -2756,6 +2777,26 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                 span,
                 "trait objects without an explicit `dyn` are deprecated",
                 BuiltinLintDiagnostics::BareTraitObject(span, is_global),
+            )
+        }
+    }
+
+    fn maybe_lint_missing_abi(&mut self, span: Span, id: NodeId, default: Abi) {
+        // FIXME(davidtwco): This is a hack to detect macros which produce spans of the
+        // call site which do not have a macro backtrace. See #61963.
+        let is_macro_callsite = self
+            .sess
+            .source_map()
+            .span_to_snippet(span)
+            .map(|snippet| snippet.starts_with("#["))
+            .unwrap_or(true);
+        if !is_macro_callsite {
+            self.resolver.lint_buffer().buffer_lint_with_diagnostic(
+                MISSING_ABI,
+                id,
+                span,
+                "extern declarations without an explicit ABI are deprecated",
+                BuiltinLintDiagnostics::MissingAbi(span, default),
             )
         }
     }

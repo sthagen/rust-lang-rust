@@ -403,7 +403,7 @@ fn report_arm_reachability<'p, 'tcx>(
         match is_useful {
             NotUseful => {
                 match source {
-                    hir::MatchSource::IfDesugar { .. } | hir::MatchSource::WhileDesugar => bug!(),
+                    hir::MatchSource::WhileDesugar => bug!(),
 
                     hir::MatchSource::IfLetDesugar { .. } | hir::MatchSource::WhileLetDesugar => {
                         // Check which arm we're on.
@@ -501,6 +501,11 @@ fn non_exhaustive_match<'p, 'tcx>(
                     to the crate attributes to enable precise `{}` matching",
                 scrut_ty,
             ));
+        }
+    }
+    if let ty::Ref(_, sub_ty, _) = scrut_ty.kind() {
+        if cx.tcx.is_ty_uninhabited_from(cx.module, sub_ty, cx.param_env) {
+            err.note("references are always considered inhabited");
         }
     }
     err.emit();

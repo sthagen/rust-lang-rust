@@ -301,6 +301,10 @@ pub struct SpanData {
 
 impl SpanData {
     #[inline]
+    pub fn span(&self) -> Span {
+        Span::new(self.lo, self.hi, self.ctxt)
+    }
+    #[inline]
     pub fn with_lo(&self, lo: BytePos) -> Span {
         Span::new(lo, self.hi, self.ctxt)
     }
@@ -468,7 +472,7 @@ impl Span {
 
     /// Edition of the crate from which this span came.
     pub fn edition(self) -> edition::Edition {
-        self.ctxt().outer_expn_data().edition
+        self.ctxt().edition()
     }
 
     #[inline]
@@ -1867,6 +1871,10 @@ pub trait HashStableContext {
         &mut self,
         byte: BytePos,
     ) -> Option<(Lrc<SourceFile>, usize, BytePos)>;
+    fn span_data_to_lines_and_cols(
+        &mut self,
+        span: &SpanData,
+    ) -> Option<(Lrc<SourceFile>, usize, BytePos, usize, BytePos)>;
 }
 
 impl<CTX> HashStable<CTX> for Span
@@ -1891,8 +1899,9 @@ where
             return;
         }
 
-        if *self == DUMMY_SP {
+        if self.is_dummy() {
             Hash::hash(&TAG_INVALID_SPAN, hasher);
+            self.ctxt().hash_stable(ctx, hasher);
             return;
         }
 
@@ -1900,22 +1909,8 @@ where
         // position that belongs to it, as opposed to hashing the first
         // position past it.
         let span = self.data();
-        let (file_lo, line_lo, col_lo) = match ctx.byte_pos_to_line_and_col(span.lo) {
-            Some(pos) => pos,
-            None => {
-                Hash::hash(&TAG_INVALID_SPAN, hasher);
-                span.ctxt.hash_stable(ctx, hasher);
-                return;
-            }
-        };
-
-        if !file_lo.contains(span.hi) {
-            Hash::hash(&TAG_INVALID_SPAN, hasher);
-            span.ctxt.hash_stable(ctx, hasher);
-            return;
-        }
-
-        let (_, line_hi, col_hi) = match ctx.byte_pos_to_line_and_col(span.hi) {
+        let (file, line_lo, col_lo, line_hi, col_hi) = match ctx.span_data_to_lines_and_cols(&span)
+        {
             Some(pos) => pos,
             None => {
                 Hash::hash(&TAG_INVALID_SPAN, hasher);
@@ -1927,7 +1922,7 @@ where
         Hash::hash(&TAG_VALID_SPAN, hasher);
         // We truncate the stable ID hash and line and column numbers. The chances
         // of causing a collision this way should be minimal.
-        Hash::hash(&(file_lo.name_hash as u64), hasher);
+        Hash::hash(&(file.name_hash as u64), hasher);
 
         // Hash both the length and the end location (line/column) of a span. If we
         // hash only the length, for example, then two otherwise equal spans with

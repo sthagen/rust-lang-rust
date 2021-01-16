@@ -188,14 +188,16 @@ fn copy_self_contained_objects(
         }
     } else if target.ends_with("-wasi") {
         let srcdir = builder.wasi_root(target).unwrap().join("lib/wasm32-wasi");
-        copy_and_stamp(
-            builder,
-            &libdir_self_contained,
-            &srcdir,
-            "crt1.o",
-            &mut target_deps,
-            DependencyType::TargetSelfContained,
-        );
+        for &obj in &["crt1.o", "crt1-reactor.o"] {
+            copy_and_stamp(
+                builder,
+                &libdir_self_contained,
+                &srcdir,
+                obj,
+                &mut target_deps,
+                DependencyType::TargetSelfContained,
+            );
+        }
     } else if target.contains("windows-gnu") {
         for obj in ["crt2.o", "dllcrt2.o"].iter() {
             let src = compiler_file(builder, builder.cc(target), target, obj);
@@ -356,21 +358,39 @@ fn copy_sanitizers(
         let dst = libdir.join(&runtime.name);
         builder.copy(&runtime.path, &dst);
 
-        if target == "x86_64-apple-darwin" {
-            // Update the library install name reflect the fact it has been renamed.
-            let status = Command::new("install_name_tool")
-                .arg("-id")
-                .arg(format!("@rpath/{}", runtime.name))
-                .arg(&dst)
-                .status()
-                .expect("failed to execute `install_name_tool`");
-            assert!(status.success());
+        if target == "x86_64-apple-darwin" || target == "aarch64-apple-darwin" {
+            // Update the library’s install name to reflect that it has has been renamed.
+            apple_darwin_update_library_name(&dst, &format!("@rpath/{}", &runtime.name));
+            // Upon renaming the install name, the code signature of the file will invalidate,
+            // so we will sign it again.
+            apple_darwin_sign_file(&dst);
         }
 
         target_deps.push(dst);
     }
 
     target_deps
+}
+
+fn apple_darwin_update_library_name(library_path: &Path, new_name: &str) {
+    let status = Command::new("install_name_tool")
+        .arg("-id")
+        .arg(new_name)
+        .arg(library_path)
+        .status()
+        .expect("failed to execute `install_name_tool`");
+    assert!(status.success());
+}
+
+fn apple_darwin_sign_file(file_path: &Path) {
+    let status = Command::new("codesign")
+        .arg("-f") // Force to rewrite the existing signature
+        .arg("-s")
+        .arg("-")
+        .arg(file_path)
+        .status()
+        .expect("failed to execute `codesign`");
+    assert!(status.success());
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]

@@ -1,6 +1,6 @@
 use crate::astconv::{
     AstConv, CreateSubstsForGenericArgsCtxt, ExplicitLateBound, GenericArgCountMismatch,
-    GenericArgCountResult, PathSeg,
+    GenericArgCountResult, IsMethodCall, PathSeg,
 };
 use crate::check::callee::{self, DeferredCallResolution};
 use crate::check::method::{self, MethodCallee, SelfSource};
@@ -904,8 +904,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         {
             // Return directly on cache hit. This is useful to avoid doubly reporting
             // errors with default match binding modes. See #44614.
-            let def =
-                cached_result.map(|(kind, def_id)| Res::Def(kind, def_id)).unwrap_or(Res::Err);
+            let def = cached_result.map_or(Res::Err, |(kind, def_id)| Res::Def(kind, def_id));
             return (def, Some(ty), slice::from_ref(&**item_segment));
         }
         let item_name = item_segment.ident;
@@ -932,7 +931,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         // Write back the new resolution.
         self.write_resolution(hir_id, result);
         (
-            result.map(|(kind, def_id)| Res::Def(kind, def_id)).unwrap_or(Res::Err),
+            result.map_or(Res::Err, |(kind, def_id)| Res::Def(kind, def_id)),
             Some(ty),
             slice::from_ref(&**item_segment),
         )
@@ -1219,18 +1218,25 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         // a problem.
 
         let mut infer_args_for_err = FxHashSet::default();
+
         for &PathSeg(def_id, index) in &path_segs {
             let seg = &segments[index];
             let generics = tcx.generics_of(def_id);
+
             // Argument-position `impl Trait` is treated as a normal generic
             // parameter internally, but we don't allow users to specify the
             // parameter's value explicitly, so we have to do some error-
             // checking here.
             if let GenericArgCountResult {
-                correct: Err(GenericArgCountMismatch { reported: Some(ErrorReported), .. }),
+                correct: Err(GenericArgCountMismatch { reported: Some(_), .. }),
                 ..
             } = AstConv::check_generic_arg_count_for_call(
-                tcx, span, &generics, &seg, false, // `is_method_call`
+                tcx,
+                span,
+                def_id,
+                &generics,
+                seg,
+                IsMethodCall::No,
             ) {
                 infer_args_for_err.insert(index);
                 self.set_tainted_by_errors(); // See issue #53251.
@@ -1376,7 +1382,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         }
                     }
                     GenericParamDefKind::Const => {
-                        // FIXME(const_generics:defaults)
+                        // FIXME(const_generics_defaults)
                         // No const parameters were provided, we have to infer them.
                         self.fcx.var_for_def(self.span, param)
                     }

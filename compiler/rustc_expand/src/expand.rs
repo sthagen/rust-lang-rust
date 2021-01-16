@@ -743,7 +743,6 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
                         AttrStyle::Inner => rustc_parse::fake_token_stream(
                             &self.cx.sess.parse_sess,
                             &item.into_nonterminal(),
-                            span,
                         ),
                     };
                     let attr_item = attr.unwrap_normal_item();
@@ -1020,15 +1019,16 @@ impl<'a, 'b> InvocationCollector<'a, 'b> {
         // with exception of the derive container case which is not resolved and can get
         // its expansion data immediately.
         let expn_data = match &kind {
-            InvocationKind::DeriveContainer { item, .. } => Some(ExpnData {
-                parent: self.cx.current_expansion.id,
-                ..ExpnData::default(
+            InvocationKind::DeriveContainer { item, .. } => {
+                let mut expn_data = ExpnData::default(
                     ExpnKind::Macro(MacroKind::Attr, sym::derive),
                     item.span(),
                     self.cx.sess.parse_sess.edition,
                     None,
-                )
-            }),
+                );
+                expn_data.parent = self.cx.current_expansion.id;
+                Some(expn_data)
+            }
             _ => None,
         };
         let expn_id = ExpnId::fresh(expn_data);
@@ -1543,13 +1543,8 @@ impl<'a, 'b> MutVisitor for InvocationCollector<'a, 'b> {
     }
 
     fn visit_item_kind(&mut self, item: &mut ast::ItemKind) {
-        match item {
-            ast::ItemKind::MacroDef(..) => {}
-            _ => {
-                self.cfg.configure_item_kind(item);
-                noop_visit_item_kind(item, self);
-            }
-        }
+        self.cfg.configure_item_kind(item);
+        noop_visit_item_kind(item, self);
     }
 
     fn flat_map_generic_param(

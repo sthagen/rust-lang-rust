@@ -529,8 +529,8 @@ trait UnusedDelimLint {
             pprust::expr_to_string(value)
         };
         let keep_space = (
-            left_pos.map(|s| s >= value.span.lo()).unwrap_or(false),
-            right_pos.map(|s| s <= value.span.hi()).unwrap_or(false),
+            left_pos.map_or(false, |s| s >= value.span.lo()),
+            right_pos.map_or(false, |s| s <= value.span.hi()),
         );
         self.emit_unused_delims(cx, value.span, &expr_text, ctx.into(), keep_space);
     }
@@ -862,11 +862,11 @@ impl EarlyLintPass for UnusedParens {
     }
 
     fn check_ty(&mut self, cx: &EarlyContext<'_>, ty: &ast::Ty) {
-        if let &ast::TyKind::Paren(ref r) = &ty.kind {
+        if let ast::TyKind::Paren(r) = &ty.kind {
             match &r.kind {
-                &ast::TyKind::TraitObject(..) => {}
-                &ast::TyKind::ImplTrait(_, ref bounds) if bounds.len() > 1 => {}
-                &ast::TyKind::Array(_, ref len) => {
+                ast::TyKind::TraitObject(..) => {}
+                ast::TyKind::ImplTrait(_, bounds) if bounds.len() > 1 => {}
+                ast::TyKind::Array(_, len) => {
                     self.check_unused_delims_expr(
                         cx,
                         &len.value,

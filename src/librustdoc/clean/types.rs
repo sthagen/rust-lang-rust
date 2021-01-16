@@ -82,7 +82,7 @@ crate struct Item {
     crate source: Span,
     /// Not everything has a name. E.g., impls
     crate name: Option<Symbol>,
-    crate attrs: Attributes,
+    crate attrs: Box<Attributes>,
     crate visibility: Visibility,
     crate kind: Box<ItemKind>,
     crate def_id: DefId,
@@ -90,7 +90,7 @@ crate struct Item {
 
 // `Item` is used a lot. Make sure it doesn't unintentionally get bigger.
 #[cfg(target_arch = "x86_64")]
-rustc_data_structures::static_assert_size!(Item, 136);
+rustc_data_structures::static_assert_size!(Item, 48);
 
 impl fmt::Debug for Item {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -122,7 +122,7 @@ impl Item {
 
     /// Finds the `doc` attribute as a NameValue and returns the corresponding
     /// value found.
-    crate fn doc_value(&self) -> Option<&str> {
+    crate fn doc_value(&self) -> Option<String> {
         self.attrs.doc_value()
     }
 
@@ -159,7 +159,7 @@ impl Item {
             kind: box kind,
             name,
             source: source.clean(cx),
-            attrs: cx.tcx.get_attrs(def_id).clean(cx),
+            attrs: box cx.tcx.get_attrs(def_id).clean(cx),
             visibility: cx.tcx.visibility(def_id).clean(cx),
         }
     }
@@ -175,11 +175,11 @@ impl Item {
     }
 
     crate fn is_crate(&self) -> bool {
-        match *self.kind {
+        matches!(
+            *self.kind,
             StrippedItem(box ModuleItem(Module { is_crate: true, .. }))
-            | ModuleItem(Module { is_crate: true, .. }) => true,
-            _ => false,
-        }
+                | ModuleItem(Module { is_crate: true, .. })
+        )
     }
     crate fn is_mod(&self) -> bool {
         self.type_() == ItemType::Module
@@ -237,9 +237,7 @@ impl Item {
         match *self.kind {
             StructItem(ref _struct) => Some(_struct.fields_stripped),
             UnionItem(ref union) => Some(union.fields_stripped),
-            VariantItem(Variant { kind: VariantKind::Struct(ref vstruct) }) => {
-                Some(vstruct.fields_stripped)
-            }
+            VariantItem(Variant::Struct(ref vstruct)) => Some(vstruct.fields_stripped),
             _ => None,
         }
     }
@@ -293,7 +291,9 @@ impl Item {
         }
     }
 
-    /// See comments on next_def_id
+    /// See the documentation for [`next_def_id()`].
+    ///
+    /// [`next_def_id()`]: DocContext::next_def_id()
     crate fn is_fake(&self) -> bool {
         MAX_DEF_ID.with(|m| {
             m.borrow().get(&self.def_id.krate).map(|id| self.def_id >= *id).unwrap_or(false)
@@ -334,6 +334,10 @@ crate enum ItemKind {
     ProcMacroItem(ProcMacro),
     PrimitiveItem(PrimitiveType),
     AssocConstItem(Type, Option<String>),
+    /// An associated item in a trait or trait impl.
+    ///
+    /// The bounds may be non-empty if there is a `where` clause.
+    /// The `Option<Type>` is the default concrete type (e.g. `trait Trait { type Target = usize; }`)
     AssocTypeItem(Vec<GenericBound>, Option<Type>),
     /// An item that has been stripped by a rustdoc pass
     StrippedItem(Box<ItemKind>),
@@ -347,7 +351,7 @@ impl ItemKind {
         match self {
             StructItem(s) => s.fields.iter(),
             UnionItem(u) => u.fields.iter(),
-            VariantItem(Variant { kind: VariantKind::Struct(v) }) => v.fields.iter(),
+            VariantItem(Variant::Struct(v)) => v.fields.iter(),
             EnumItem(e) => e.variants.iter(),
             TraitItem(t) => t.items.iter(),
             ImplItem(i) => i.items.iter(),
@@ -378,10 +382,7 @@ impl ItemKind {
     }
 
     crate fn is_type_alias(&self) -> bool {
-        match *self {
-            ItemKind::TypedefItem(_, _) | ItemKind::AssocTypeItem(_, _) => true,
-            _ => false,
-        }
+        matches!(self, ItemKind::TypedefItem(..) | ItemKind::AssocTypeItem(..))
     }
 }
 
@@ -474,11 +475,13 @@ crate struct DocFragment {
     /// This allows distinguishing between the original documentation and a pub re-export.
     /// If it is `None`, the item was not re-exported.
     crate parent_module: Option<DefId>,
-    crate doc: String,
+    crate doc: Symbol,
     crate kind: DocFragmentKind,
+    crate need_backline: bool,
+    crate indent: usize,
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 crate enum DocFragmentKind {
     /// A doc fragment created from a `///` or `//!` doc comment.
     SugaredDoc,
@@ -486,7 +489,33 @@ crate enum DocFragmentKind {
     RawDoc,
     /// A doc fragment created from a `#[doc(include="filename")]` attribute. Contains both the
     /// given filename and the file contents.
-    Include { filename: String },
+    Include { filename: Symbol },
+}
+
+// The goal of this function is to apply the `DocFragment` transformations that are required when
+// transforming into the final markdown. So the transformations in here are:
+//
+// * Applying the computed indent to each lines in each doc fragment (a `DocFragment` can contain
+//   multiple lines in case of `#[doc = ""]`).
+// * Adding backlines between `DocFragment`s and adding an extra one if required (stored in the
+//   `need_backline` field).
+fn add_doc_fragment(out: &mut String, frag: &DocFragment) {
+    let s = frag.doc.as_str();
+    let mut iter = s.lines().peekable();
+    while let Some(line) = iter.next() {
+        if line.chars().any(|c| !c.is_whitespace()) {
+            assert!(line.len() >= frag.indent);
+            out.push_str(&line[frag.indent..]);
+        } else {
+            out.push_str(line);
+        }
+        if iter.peek().is_some() {
+            out.push('\n');
+        }
+    }
+    if frag.need_backline {
+        out.push('\n');
+    }
 }
 
 impl<'a> FromIterator<&'a DocFragment> for String {
@@ -494,11 +523,18 @@ impl<'a> FromIterator<&'a DocFragment> for String {
     where
         T: IntoIterator<Item = &'a DocFragment>,
     {
+        let mut prev_kind: Option<DocFragmentKind> = None;
         iter.into_iter().fold(String::new(), |mut acc, frag| {
-            if !acc.is_empty() {
+            if !acc.is_empty()
+                && prev_kind
+                    .take()
+                    .map(|p| matches!(p, DocFragmentKind::Include { .. }) && p != frag.kind)
+                    .unwrap_or(false)
+            {
                 acc.push('\n');
             }
-            acc.push_str(&frag.doc);
+            add_doc_fragment(&mut acc, &frag);
+            prev_kind = Some(frag.kind);
             acc
         })
     }
@@ -570,7 +606,7 @@ impl Attributes {
     /// Reads a `MetaItem` from within an attribute, looks for whether it is a
     /// `#[doc(include="file")]`, and returns the filename and contents of the file as loaded from
     /// its expansion.
-    crate fn extract_include(mi: &ast::MetaItem) -> Option<(String, String)> {
+    crate fn extract_include(mi: &ast::MetaItem) -> Option<(Symbol, Symbol)> {
         mi.meta_item_list().and_then(|list| {
             for meta in list {
                 if meta.has_name(sym::include) {
@@ -578,17 +614,17 @@ impl Attributes {
                     // `#[doc(include(file="filename", contents="file contents")]` so we need to
                     // look for that instead
                     return meta.meta_item_list().and_then(|list| {
-                        let mut filename: Option<String> = None;
-                        let mut contents: Option<String> = None;
+                        let mut filename: Option<Symbol> = None;
+                        let mut contents: Option<Symbol> = None;
 
                         for it in list {
                             if it.has_name(sym::file) {
                                 if let Some(name) = it.value_str() {
-                                    filename = Some(name.to_string());
+                                    filename = Some(name);
                                 }
                             } else if it.has_name(sym::contents) {
                                 if let Some(docs) = it.value_str() {
-                                    contents = Some(docs.to_string());
+                                    contents = Some(docs);
                                 }
                             }
                         }
@@ -627,15 +663,30 @@ impl Attributes {
         attrs: &[ast::Attribute],
         additional_attrs: Option<(&[ast::Attribute], DefId)>,
     ) -> Attributes {
-        let mut doc_strings = vec![];
+        let mut doc_strings: Vec<DocFragment> = vec![];
         let mut sp = None;
         let mut cfg = Cfg::True;
         let mut doc_line = 0;
 
+        fn update_need_backline(doc_strings: &mut Vec<DocFragment>, frag: &DocFragment) {
+            if let Some(prev) = doc_strings.last_mut() {
+                if matches!(prev.kind, DocFragmentKind::Include { .. })
+                    || prev.kind != frag.kind
+                    || prev.parent_module != frag.parent_module
+                {
+                    // add a newline for extra padding between segments
+                    prev.need_backline = prev.kind == DocFragmentKind::SugaredDoc
+                        || prev.kind == DocFragmentKind::RawDoc
+                } else {
+                    prev.need_backline = true;
+                }
+            }
+        }
+
         let clean_attr = |(attr, parent_module): (&ast::Attribute, _)| {
             if let Some(value) = attr.doc_str() {
                 trace!("got doc_str={:?}", value);
-                let value = beautify_doc_string(value).to_string();
+                let value = beautify_doc_string(value);
                 let kind = if attr.is_doc_comment() {
                     DocFragmentKind::SugaredDoc
                 } else {
@@ -643,14 +694,20 @@ impl Attributes {
                 };
 
                 let line = doc_line;
-                doc_line += value.lines().count();
-                doc_strings.push(DocFragment {
+                doc_line += value.as_str().lines().count();
+                let frag = DocFragment {
                     line,
                     span: attr.span,
                     doc: value,
                     kind,
                     parent_module,
-                });
+                    need_backline: false,
+                    indent: 0,
+                };
+
+                update_need_backline(&mut doc_strings, &frag);
+
+                doc_strings.push(frag);
 
                 if sp.is_none() {
                     sp = Some(attr.span);
@@ -668,14 +725,18 @@ impl Attributes {
                         } else if let Some((filename, contents)) = Attributes::extract_include(&mi)
                         {
                             let line = doc_line;
-                            doc_line += contents.lines().count();
-                            doc_strings.push(DocFragment {
+                            doc_line += contents.as_str().lines().count();
+                            let frag = DocFragment {
                                 line,
                                 span: attr.span,
                                 doc: contents,
                                 kind: DocFragmentKind::Include { filename },
-                                parent_module: parent_module,
-                            });
+                                parent_module,
+                                need_backline: false,
+                                indent: 0,
+                            };
+                            update_need_backline(&mut doc_strings, &frag);
+                            doc_strings.push(frag);
                         }
                     }
                 }
@@ -726,14 +787,41 @@ impl Attributes {
 
     /// Finds the `doc` attribute as a NameValue and returns the corresponding
     /// value found.
-    crate fn doc_value(&self) -> Option<&str> {
-        self.doc_strings.first().map(|s| s.doc.as_str())
+    crate fn doc_value(&self) -> Option<String> {
+        let mut iter = self.doc_strings.iter();
+
+        let ori = iter.next()?;
+        let mut out = String::new();
+        add_doc_fragment(&mut out, &ori);
+        while let Some(new_frag) = iter.next() {
+            if matches!(ori.kind, DocFragmentKind::Include { .. })
+                || new_frag.kind != ori.kind
+                || new_frag.parent_module != ori.parent_module
+            {
+                break;
+            }
+            add_doc_fragment(&mut out, &new_frag);
+        }
+        if out.is_empty() { None } else { Some(out) }
+    }
+
+    /// Return the doc-comments on this item, grouped by the module they came from.
+    ///
+    /// The module can be different if this is a re-export with added documentation.
+    crate fn collapsed_doc_value_by_module_level(&self) -> FxHashMap<Option<DefId>, String> {
+        let mut ret = FxHashMap::default();
+
+        for new_frag in self.doc_strings.iter() {
+            let out = ret.entry(new_frag.parent_module).or_default();
+            add_doc_fragment(out, &new_frag);
+        }
+        ret
     }
 
     /// Finds all `doc` attributes as NameValues and returns their corresponding values, joined
     /// with newlines.
     crate fn collapsed_doc_value(&self) -> Option<String> {
-        if !self.doc_strings.is_empty() { Some(self.doc_strings.iter().collect()) } else { None }
+        if self.doc_strings.is_empty() { None } else { Some(self.doc_strings.iter().collect()) }
     }
 
     /// Gets links as a vector
@@ -750,7 +838,7 @@ impl Attributes {
                     Some(did) => {
                         if let Some((mut href, ..)) = href(did) {
                             if let Some(ref fragment) = *fragment {
-                                href.push_str("#");
+                                href.push('#');
                                 href.push_str(fragment);
                             }
                             Some(RenderedLink {
@@ -945,10 +1033,7 @@ crate enum GenericParamDefKind {
 
 impl GenericParamDefKind {
     crate fn is_type(&self) -> bool {
-        match *self {
-            GenericParamDefKind::Type { .. } => true,
-            _ => false,
-        }
+        matches!(self, GenericParamDefKind::Type { .. })
     }
 
     // FIXME(eddyb) this either returns the default of a type parameter, or the
@@ -1141,6 +1226,7 @@ crate enum Type {
     BareFunction(Box<BareFunctionDecl>),
     Tuple(Vec<Type>),
     Slice(Box<Type>),
+    /// The `String` field is about the size or the constant representing the array's length.
     Array(Box<Type>, String),
     Never,
     RawPointer(Mutability, Box<Type>),
@@ -1292,15 +1378,12 @@ impl Type {
     }
 
     crate fn is_full_generic(&self) -> bool {
-        match *self {
-            Type::Generic(_) => true,
-            _ => false,
-        }
+        matches!(self, Type::Generic(_))
     }
 
     crate fn projection(&self) -> Option<(&Type, DefId, Symbol)> {
         let (self_, trait_, name) = match self {
-            QPath { ref self_type, ref trait_, name } => (self_type, trait_, name),
+            QPath { self_type, trait_, name } => (self_type, trait_, name),
             _ => return None,
         };
         let trait_did = match **trait_ {
@@ -1634,12 +1717,7 @@ crate struct Enum {
 }
 
 #[derive(Clone, Debug)]
-crate struct Variant {
-    crate kind: VariantKind,
-}
-
-#[derive(Clone, Debug)]
-crate enum VariantKind {
+crate enum Variant {
     CLike,
     Tuple(Vec<Type>),
     Struct(VariantStruct),
@@ -1728,7 +1806,12 @@ crate struct PathSegment {
 crate struct Typedef {
     crate type_: Type,
     crate generics: Generics,
-    // Type of target item.
+    /// `type_` can come from either the HIR or from metadata. If it comes from HIR, it may be a type
+    /// alias instead of the final type. This will always have the final type, regardless of whether
+    /// `type_` came from HIR or from metadata.
+    ///
+    /// If `item_type.is_none()`, `type_` is guarenteed to come from metadata (and therefore hold the
+    /// final type).
     crate item_type: Option<Type>,
 }
 
@@ -1770,12 +1853,6 @@ crate struct Constant {
     crate is_literal: bool,
 }
 
-#[derive(Clone, PartialEq, Debug)]
-crate enum ImplPolarity {
-    Positive,
-    Negative,
-}
-
 #[derive(Clone, Debug)]
 crate struct Impl {
     crate unsafety: hir::Unsafety,
@@ -1784,7 +1861,7 @@ crate struct Impl {
     crate trait_: Option<Type>,
     crate for_: Type,
     crate items: Vec<Item>,
-    crate polarity: Option<ImplPolarity>,
+    crate negative_polarity: bool,
     crate synthetic: bool,
     crate blanket_impl: Option<Type>,
 }

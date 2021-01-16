@@ -31,7 +31,7 @@ pub struct Entry<'hir> {
 impl<'hir> Entry<'hir> {
     fn parent_node(self) -> Option<HirId> {
         match self.node {
-            Node::Crate(_) | Node::MacroDef(_) => None,
+            Node::Crate(_) => None,
             _ => Some(self.parent),
         }
     }
@@ -505,7 +505,7 @@ impl<'hir> Map<'hir> {
                     | ItemKind::Union(_, generics)
                     | ItemKind::Trait(_, _, generics, ..)
                     | ItemKind::TraitAlias(generics, _)
-                    | ItemKind::Impl { generics, .. },
+                    | ItemKind::Impl(Impl { generics, .. }),
                 ..
             }) => Some(generics),
             _ => None,
@@ -658,12 +658,12 @@ impl<'hir> Map<'hir> {
         CRATE_HIR_ID
     }
 
-    /// When on a match arm tail expression or on a match arm, give back the enclosing `match`
-    /// expression.
+    /// When on an if expression, a match arm tail expression or a match arm, give back
+    /// the enclosing `if` or `match` expression.
     ///
-    /// Used by error reporting when there's a type error in a match arm caused by the `match`
+    /// Used by error reporting when there's a type error in an if or match arm caused by the
     /// expression needing to be unit.
-    pub fn get_match_if_cause(&self, hir_id: HirId) -> Option<&'hir Expr<'hir>> {
+    pub fn get_if_cause(&self, hir_id: HirId) -> Option<&'hir Expr<'hir>> {
         for (_, node) in self.parent_iter(hir_id) {
             match node {
                 Node::Item(_)
@@ -671,7 +671,9 @@ impl<'hir> Map<'hir> {
                 | Node::TraitItem(_)
                 | Node::ImplItem(_)
                 | Node::Stmt(Stmt { kind: StmtKind::Local(_), .. }) => break,
-                Node::Expr(expr @ Expr { kind: ExprKind::Match(..), .. }) => return Some(expr),
+                Node::Expr(expr @ Expr { kind: ExprKind::If(..) | ExprKind::Match(..), .. }) => {
+                    return Some(expr);
+                }
                 _ => {}
             }
         }
@@ -710,15 +712,10 @@ impl<'hir> Map<'hir> {
         let mut scope = id;
         loop {
             scope = self.get_enclosing_scope(scope).unwrap_or(CRATE_HIR_ID);
-            if scope == CRATE_HIR_ID {
-                return CRATE_HIR_ID;
-            }
-            match self.get(scope) {
-                Node::Block(_) => {}
-                _ => break,
+            if scope == CRATE_HIR_ID || !matches!(self.get(scope), Node::Block(_)) {
+                return scope;
             }
         }
-        scope
     }
 
     pub fn get_parent_did(&self, id: HirId) -> LocalDefId {
@@ -818,7 +815,7 @@ impl<'hir> Map<'hir> {
     /// Given a node ID, gets a list of attributes associated with the AST
     /// corresponding to the node-ID.
     pub fn attrs(&self, id: HirId) -> &'hir [ast::Attribute] {
-        let attrs = self.find_entry(id).map(|entry| match entry.node {
+        self.find_entry(id).map_or(&[], |entry| match entry.node {
             Node::Param(a) => &a.attrs[..],
             Node::Local(l) => &l.attrs[..],
             Node::Item(i) => &i.attrs[..],
@@ -845,8 +842,7 @@ impl<'hir> Map<'hir> {
             | Node::Block(..)
             | Node::Lifetime(..)
             | Node::Visibility(..) => &[],
-        });
-        attrs.unwrap_or(&[])
+        })
     }
 
     /// Gets the span of the definition of the specified HIR node.

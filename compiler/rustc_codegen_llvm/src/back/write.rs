@@ -164,7 +164,8 @@ pub fn target_machine_factory(
 
     let code_model = to_llvm_code_model(sess.code_model());
 
-    let features = attributes::llvm_target_features(sess).collect::<Vec<_>>();
+    let mut features = llvm_util::handle_native_features(sess);
+    features.extend(attributes::llvm_target_features(sess).map(|s| s.to_owned()));
     let mut singlethread = sess.target.singlethread;
 
     // On the wasm target once the `atomics` feature is enabled that means that
@@ -1001,8 +1002,7 @@ pub unsafe fn with_llvm_pmb(
     // reasonable defaults and prepare it to actually populate the pass
     // manager.
     let builder = llvm::LLVMPassManagerBuilderCreate();
-    let opt_size =
-        config.opt_size.map(|x| to_llvm_opt_settings(x).1).unwrap_or(llvm::CodeGenOptSizeNone);
+    let opt_size = config.opt_size.map_or(llvm::CodeGenOptSizeNone, |x| to_llvm_opt_settings(x).1);
     let inline_threshold = config.inline_threshold;
     let pgo_gen_path = get_pgo_gen_path(config);
     let pgo_use_path = get_pgo_use_path(config);

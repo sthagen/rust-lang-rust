@@ -796,6 +796,14 @@ impl Session {
         self.opts.debugging_opts.tls_model.unwrap_or(self.target.tls_model)
     }
 
+    pub fn is_wasi_reactor(&self) -> bool {
+        self.target.options.os == "wasi"
+            && matches!(
+                self.opts.debugging_opts.wasi_exec_model,
+                Some(config::WasiExecModel::Reactor)
+            )
+    }
+
     pub fn must_not_eliminate_frame_pointers(&self) -> bool {
         // "mcount" function relies on stack pointer.
         // See <https://sourceware.org/binutils/docs/gprof/Implementation.html>.
@@ -1350,7 +1358,7 @@ pub fn build_session(
 
     let optimization_fuel_crate = sopts.debugging_opts.fuel.as_ref().map(|i| i.0.clone());
     let optimization_fuel = Lock::new(OptimizationFuel {
-        remaining: sopts.debugging_opts.fuel.as_ref().map(|i| i.1).unwrap_or(0),
+        remaining: sopts.debugging_opts.fuel.as_ref().map_or(0, |i| i.1),
         out_of_fuel: false,
     });
     let print_fuel_crate = sopts.debugging_opts.print_fuel.clone();
@@ -1522,6 +1530,7 @@ fn validate_commandline_args_with_session_available(sess: &Session) {
     }
 
     const ASAN_SUPPORTED_TARGETS: &[&str] = &[
+        "aarch64-apple-darwin",
         "aarch64-fuchsia",
         "aarch64-unknown-linux-gnu",
         "x86_64-apple-darwin",
@@ -1529,11 +1538,16 @@ fn validate_commandline_args_with_session_available(sess: &Session) {
         "x86_64-unknown-freebsd",
         "x86_64-unknown-linux-gnu",
     ];
-    const LSAN_SUPPORTED_TARGETS: &[&str] =
-        &["aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu"];
+    const LSAN_SUPPORTED_TARGETS: &[&str] = &[
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-apple-darwin",
+        "x86_64-unknown-linux-gnu",
+    ];
     const MSAN_SUPPORTED_TARGETS: &[&str] =
         &["aarch64-unknown-linux-gnu", "x86_64-unknown-freebsd", "x86_64-unknown-linux-gnu"];
     const TSAN_SUPPORTED_TARGETS: &[&str] = &[
+        "aarch64-apple-darwin",
         "aarch64-unknown-linux-gnu",
         "x86_64-apple-darwin",
         "x86_64-unknown-freebsd",

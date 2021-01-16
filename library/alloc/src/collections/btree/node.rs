@@ -712,13 +712,6 @@ impl<'a, K: 'a, V: 'a> NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal> {
             (key, val, edge)
         }
     }
-
-    fn into_kv_pointers_mut(mut self) -> (*mut K, *mut V) {
-        let leaf = self.as_leaf_mut();
-        let keys = MaybeUninit::slice_as_mut_ptr(&mut leaf.keys);
-        let vals = MaybeUninit::slice_as_mut_ptr(&mut leaf.vals);
-        (keys, vals)
-    }
 }
 
 impl<BorrowType, K, V> NodeRef<BorrowType, K, V, marker::LeafOrInternal> {
@@ -1124,21 +1117,20 @@ impl<'a, K: 'a, V: 'a, NodeType> Handle<NodeRef<marker::Mut<'a>, K, V, NodeType>
     /// by taking care of leaf data.
     fn split_leaf_data(&mut self, new_node: &mut LeafNode<K, V>) -> (K, V) {
         debug_assert!(self.idx < self.node.len());
-        let new_len = self.node.len() - self.idx - 1;
+        let old_len = self.node.len();
+        let new_len = old_len - self.idx - 1;
         new_node.len = new_len as u16;
         unsafe {
             let k = self.node.key_area_mut(self.idx).assume_init_read();
             let v = self.node.val_area_mut(self.idx).assume_init_read();
 
-            ptr::copy_nonoverlapping(
-                self.node.key_area_mut(self.idx + 1..).as_ptr(),
-                new_node.keys.as_mut_ptr(),
-                new_len,
+            move_to_slice(
+                self.node.key_area_mut(self.idx + 1..old_len),
+                &mut new_node.keys[..new_len],
             );
-            ptr::copy_nonoverlapping(
-                self.node.val_area_mut(self.idx + 1..).as_ptr(),
-                new_node.vals.as_mut_ptr(),
-                new_len,
+            move_to_slice(
+                self.node.val_area_mut(self.idx + 1..old_len),
+                &mut new_node.vals[..new_len],
             );
 
             *self.node.len_mut() = self.idx as u16;
@@ -1190,20 +1182,20 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, 
     /// - All the edges and key-value pairs to the right of this handle are put into
     ///   a newly allocated node.
     pub fn split(mut self) -> SplitResult<'a, K, V, marker::Internal> {
+        let old_len = self.node.len();
         unsafe {
             let mut new_node = Box::new(InternalNode::new());
             let kv = self.split_leaf_data(&mut new_node.data);
             let new_len = usize::from(new_node.data.len);
-            ptr::copy_nonoverlapping(
-                self.node.edge_area_mut(self.idx + 1..).as_ptr(),
-                new_node.edges.as_mut_ptr(),
-                new_len + 1,
+            move_to_slice(
+                self.node.edge_area_mut(self.idx + 1..old_len + 1),
+                &mut new_node.edges[..new_len + 1],
             );
 
             let height = self.node.height;
             let mut right = NodeRef::from_new_internal(new_node, height);
 
-            right.borrow_mut().correct_childrens_parent_links(0..=new_len);
+            right.borrow_mut().correct_childrens_parent_links(0..new_len + 1);
 
             SplitResult { left: self.node, kv, right }
         }
@@ -1323,18 +1315,16 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
 
             let parent_key = slice_remove(parent_node.key_area_mut(..old_parent_len), parent_idx);
             left_node.key_area_mut(old_left_len).write(parent_key);
-            ptr::copy_nonoverlapping(
-                right_node.key_area_mut(..).as_ptr(),
-                left_node.key_area_mut(old_left_len + 1..).as_mut_ptr(),
-                right_len,
+            move_to_slice(
+                right_node.key_area_mut(..right_len),
+                left_node.key_area_mut(old_left_len + 1..new_left_len),
             );
 
             let parent_val = slice_remove(parent_node.val_area_mut(..old_parent_len), parent_idx);
             left_node.val_area_mut(old_left_len).write(parent_val);
-            ptr::copy_nonoverlapping(
-                right_node.val_area_mut(..).as_ptr(),
-                left_node.val_area_mut(old_left_len + 1..).as_mut_ptr(),
-                right_len,
+            move_to_slice(
+                right_node.val_area_mut(..right_len),
+                left_node.val_area_mut(old_left_len + 1..new_left_len),
             );
 
             slice_remove(&mut parent_node.edge_area_mut(..old_parent_len + 1), parent_idx + 1);
@@ -1346,10 +1336,9 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
                 // of the node of this edge, thus above zero, so they are internal.
                 let mut left_node = left_node.reborrow_mut().cast_to_internal_unchecked();
                 let mut right_node = right_node.cast_to_internal_unchecked();
-                ptr::copy_nonoverlapping(
-                    right_node.edge_area_mut(..).as_ptr(),
-                    left_node.edge_area_mut(old_left_len + 1..).as_mut_ptr(),
-                    right_len + 1,
+                move_to_slice(
+                    right_node.edge_area_mut(..right_len + 1),
+                    left_node.edge_area_mut(old_left_len + 1..new_left_len + 1),
                 );
 
                 left_node.correct_childrens_parent_links(old_left_len + 1..new_left_len + 1);
@@ -1432,36 +1421,42 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
 
             // Move leaf data.
             {
-                let left_kv = left_node.reborrow_mut().into_kv_pointers_mut();
-                let right_kv = right_node.reborrow_mut().into_kv_pointers_mut();
-                let parent_kv = {
-                    let kv = self.parent.kv_mut();
-                    (kv.0 as *mut K, kv.1 as *mut V)
-                };
-
                 // Make room for stolen elements in the right child.
-                ptr::copy(right_kv.0, right_kv.0.add(count), old_right_len);
-                ptr::copy(right_kv.1, right_kv.1.add(count), old_right_len);
+                slice_shr(right_node.key_area_mut(..new_right_len), count);
+                slice_shr(right_node.val_area_mut(..new_right_len), count);
 
                 // Move elements from the left child to the right one.
-                move_kv(left_kv, new_left_len + 1, right_kv, 0, count - 1);
-
-                // Move parent's key-value pair to the right child.
-                move_kv(parent_kv, 0, right_kv, count - 1, 1);
+                move_to_slice(
+                    left_node.key_area_mut(new_left_len + 1..old_left_len),
+                    right_node.key_area_mut(..count - 1),
+                );
+                move_to_slice(
+                    left_node.val_area_mut(new_left_len + 1..old_left_len),
+                    right_node.val_area_mut(..count - 1),
+                );
 
                 // Move the left-most stolen pair to the parent.
-                move_kv(left_kv, new_left_len, parent_kv, 0, 1);
+                let k = left_node.key_area_mut(new_left_len).assume_init_read();
+                let v = left_node.val_area_mut(new_left_len).assume_init_read();
+                let (k, v) = self.parent.replace_kv(k, v);
+
+                // Move parent's key-value pair to the right child.
+                right_node.key_area_mut(count - 1).write(k);
+                right_node.val_area_mut(count - 1).write(v);
             }
 
             match (left_node.reborrow_mut().force(), right_node.reborrow_mut().force()) {
-                (ForceResult::Internal(left), ForceResult::Internal(mut right)) => {
+                (ForceResult::Internal(mut left), ForceResult::Internal(mut right)) => {
                     // Make room for stolen edges.
-                    let right_edges = right.edge_area_mut(..).as_mut_ptr();
-                    ptr::copy(right_edges, right_edges.add(count), old_right_len + 1);
-                    right.correct_childrens_parent_links(count..new_right_len + 1);
+                    slice_shr(right.edge_area_mut(..new_right_len + 1), count);
 
                     // Steal edges.
-                    move_edges(left, new_left_len + 1, right, 0, count);
+                    move_to_slice(
+                        left.edge_area_mut(new_left_len + 1..old_left_len + 1),
+                        right.edge_area_mut(..count),
+                    );
+
+                    right.correct_childrens_parent_links(0..new_right_len + 1);
                 }
                 (ForceResult::Leaf(_), ForceResult::Leaf(_)) => {}
                 _ => unreachable!(),
@@ -1489,70 +1484,48 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
 
             // Move leaf data.
             {
-                let left_kv = left_node.reborrow_mut().into_kv_pointers_mut();
-                let right_kv = right_node.reborrow_mut().into_kv_pointers_mut();
-                let parent_kv = {
-                    let kv = self.parent.kv_mut();
-                    (kv.0 as *mut K, kv.1 as *mut V)
-                };
+                // Move the right-most stolen pair to the parent.
+                let k = right_node.key_area_mut(count - 1).assume_init_read();
+                let v = right_node.val_area_mut(count - 1).assume_init_read();
+                let (k, v) = self.parent.replace_kv(k, v);
 
                 // Move parent's key-value pair to the left child.
-                move_kv(parent_kv, 0, left_kv, old_left_len, 1);
+                left_node.key_area_mut(old_left_len).write(k);
+                left_node.val_area_mut(old_left_len).write(v);
 
                 // Move elements from the right child to the left one.
-                move_kv(right_kv, 0, left_kv, old_left_len + 1, count - 1);
-
-                // Move the right-most stolen pair to the parent.
-                move_kv(right_kv, count - 1, parent_kv, 0, 1);
+                move_to_slice(
+                    right_node.key_area_mut(..count - 1),
+                    left_node.key_area_mut(old_left_len + 1..new_left_len),
+                );
+                move_to_slice(
+                    right_node.val_area_mut(..count - 1),
+                    left_node.val_area_mut(old_left_len + 1..new_left_len),
+                );
 
                 // Fill gap where stolen elements used to be.
-                ptr::copy(right_kv.0.add(count), right_kv.0, new_right_len);
-                ptr::copy(right_kv.1.add(count), right_kv.1, new_right_len);
+                slice_shl(right_node.key_area_mut(..old_right_len), count);
+                slice_shl(right_node.val_area_mut(..old_right_len), count);
             }
 
             match (left_node.reborrow_mut().force(), right_node.reborrow_mut().force()) {
-                (ForceResult::Internal(left), ForceResult::Internal(mut right)) => {
+                (ForceResult::Internal(mut left), ForceResult::Internal(mut right)) => {
                     // Steal edges.
-                    move_edges(right.reborrow_mut(), 0, left, old_left_len + 1, count);
+                    move_to_slice(
+                        right.edge_area_mut(..count),
+                        left.edge_area_mut(old_left_len + 1..new_left_len + 1),
+                    );
 
                     // Fill gap where stolen edges used to be.
-                    let right_edges = right.edge_area_mut(..).as_mut_ptr();
-                    ptr::copy(right_edges.add(count), right_edges, new_right_len + 1);
-                    right.correct_childrens_parent_links(0..=new_right_len);
+                    slice_shl(right.edge_area_mut(..old_right_len + 1), count);
+
+                    left.correct_childrens_parent_links(old_left_len + 1..new_left_len + 1);
+                    right.correct_childrens_parent_links(0..new_right_len + 1);
                 }
                 (ForceResult::Leaf(_), ForceResult::Leaf(_)) => {}
                 _ => unreachable!(),
             }
         }
-    }
-}
-
-unsafe fn move_kv<K, V>(
-    source: (*mut K, *mut V),
-    source_offset: usize,
-    dest: (*mut K, *mut V),
-    dest_offset: usize,
-    count: usize,
-) {
-    unsafe {
-        ptr::copy_nonoverlapping(source.0.add(source_offset), dest.0.add(dest_offset), count);
-        ptr::copy_nonoverlapping(source.1.add(source_offset), dest.1.add(dest_offset), count);
-    }
-}
-
-// Source and destination must have the same height.
-unsafe fn move_edges<'a, K: 'a, V: 'a>(
-    mut source: NodeRef<marker::Mut<'a>, K, V, marker::Internal>,
-    source_offset: usize,
-    mut dest: NodeRef<marker::Mut<'a>, K, V, marker::Internal>,
-    dest_offset: usize,
-    count: usize,
-) {
-    unsafe {
-        let source_ptr = source.edge_area_mut(..).as_ptr();
-        let dest_ptr = dest.edge_area_mut(dest_offset..).as_mut_ptr();
-        ptr::copy_nonoverlapping(source_ptr.add(source_offset), dest_ptr, count);
-        dest.correct_childrens_parent_links(dest_offset..dest_offset + count);
     }
 }
 
@@ -1633,25 +1606,33 @@ impl<'a, K, V> Handle<NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>, ma
         unsafe {
             let new_left_len = self.idx;
             let mut left_node = self.reborrow_mut().into_node();
+            let old_left_len = left_node.len();
 
-            let new_right_len = left_node.len() - new_left_len;
+            let new_right_len = old_left_len - new_left_len;
             let mut right_node = right.reborrow_mut();
 
             assert!(right_node.len() == 0);
             assert!(left_node.height == right_node.height);
 
             if new_right_len > 0 {
-                let left_kv = left_node.reborrow_mut().into_kv_pointers_mut();
-                let right_kv = right_node.reborrow_mut().into_kv_pointers_mut();
-
-                move_kv(left_kv, new_left_len, right_kv, 0, new_right_len);
-
                 *left_node.len_mut() = new_left_len as u16;
                 *right_node.len_mut() = new_right_len as u16;
 
+                move_to_slice(
+                    left_node.key_area_mut(new_left_len..old_left_len),
+                    right_node.key_area_mut(..new_right_len),
+                );
+                move_to_slice(
+                    left_node.val_area_mut(new_left_len..old_left_len),
+                    right_node.val_area_mut(..new_right_len),
+                );
                 match (left_node.force(), right_node.force()) {
-                    (ForceResult::Internal(left), ForceResult::Internal(right)) => {
-                        move_edges(left, new_left_len + 1, right, 1, new_right_len);
+                    (ForceResult::Internal(mut left), ForceResult::Internal(mut right)) => {
+                        move_to_slice(
+                            left.edge_area_mut(new_left_len + 1..old_left_len + 1),
+                            right.edge_area_mut(1..new_right_len + 1),
+                        );
+                        right.correct_childrens_parent_links(1..new_right_len + 1);
                     }
                     (ForceResult::Leaf(_), ForceResult::Leaf(_)) => {}
                     _ => unreachable!(),
@@ -1738,6 +1719,38 @@ unsafe fn slice_remove<T>(slice: &mut [MaybeUninit<T>], idx: usize) -> T {
         let ret = (*slice_ptr.add(idx)).assume_init_read();
         ptr::copy(slice_ptr.add(idx + 1), slice_ptr.add(idx), len - idx - 1);
         ret
+    }
+}
+
+/// Shifts the elements in a slice `distance` positions to the left.
+///
+/// # Safety
+/// The slice has at least `distance` elements.
+unsafe fn slice_shl<T>(slice: &mut [MaybeUninit<T>], distance: usize) {
+    unsafe {
+        let slice_ptr = slice.as_mut_ptr();
+        ptr::copy(slice_ptr.add(distance), slice_ptr, slice.len() - distance);
+    }
+}
+
+/// Shifts the elements in a slice `distance` positions to the right.
+///
+/// # Safety
+/// The slice has at least `distance` elements.
+unsafe fn slice_shr<T>(slice: &mut [MaybeUninit<T>], distance: usize) {
+    unsafe {
+        let slice_ptr = slice.as_mut_ptr();
+        ptr::copy(slice_ptr, slice_ptr.add(distance), slice.len() - distance);
+    }
+}
+
+/// Moves all values from a slice of initialized elements to a slice
+/// of uninitialized elements, leaving behind `src` as all uninitialized.
+/// Works like `dst.copy_from_slice(src)` but does not require `T` to be `Copy`.
+fn move_to_slice<T>(src: &mut [MaybeUninit<T>], dst: &mut [MaybeUninit<T>]) {
+    assert!(src.len() == dst.len());
+    unsafe {
+        ptr::copy_nonoverlapping(src.as_ptr(), dst.as_mut_ptr(), src.len());
     }
 }
 

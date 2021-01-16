@@ -636,15 +636,15 @@ fn partition_source(s: &str) -> (String, String, String) {
         match state {
             PartitionState::Attrs => {
                 before.push_str(line);
-                before.push_str("\n");
+                before.push('\n');
             }
             PartitionState::Crates => {
                 crates.push_str(line);
-                crates.push_str("\n");
+                crates.push('\n');
             }
             PartitionState::Other => {
                 after.push_str(line);
-                after.push_str("\n");
+                after.push('\n');
             }
         }
     }
@@ -987,7 +987,6 @@ impl<'a, 'hir, 'tcx> HirCollector<'a, 'hir, 'tcx> {
             self.collector.names.push(name);
         }
 
-        attrs.collapse_doc_comments();
         attrs.unindent_doc_comments();
         // The collapse-docs pass won't combine sugared/raw doc attributes, or included files with
         // anything else, this will combine them for us.
@@ -1027,8 +1026,8 @@ impl<'a, 'hir, 'tcx> intravisit::Visitor<'hir> for HirCollector<'a, 'hir, 'tcx> 
     }
 
     fn visit_item(&mut self, item: &'hir hir::Item<'_>) {
-        let name = if let hir::ItemKind::Impl { ref self_ty, .. } = item.kind {
-            rustc_hir_pretty::id_to_string(&self.map, self_ty.hir_id)
+        let name = if let hir::ItemKind::Impl(impl_) = &item.kind {
+            rustc_hir_pretty::id_to_string(&self.map, impl_.self_ty.hir_id)
         } else {
             item.ident.to_string()
         };

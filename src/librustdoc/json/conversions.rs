@@ -422,7 +422,7 @@ impl From<clean::Impl> for Impl {
             trait_,
             for_,
             items,
-            polarity,
+            negative_polarity,
             synthetic,
             blanket_impl,
         } = impl_;
@@ -436,7 +436,7 @@ impl From<clean::Impl> for Impl {
             trait_: trait_.map(Into::into),
             for_: for_.into(),
             items: ids(items),
-            negative: polarity == Some(clean::ImplPolarity::Negative),
+            negative: negative_polarity,
             synthetic,
             blanket_impl: blanket_impl.map(Into::into),
         }
@@ -482,8 +482,8 @@ impl From<clean::VariantStruct> for Struct {
 
 impl From<clean::Variant> for Variant {
     fn from(variant: clean::Variant) -> Self {
-        use clean::VariantKind::*;
-        match variant.kind {
+        use clean::Variant::*;
+        match variant {
             CLike => Variant::Plain,
             Tuple(t) => Variant::Tuple(t.into_iter().map(Into::into).collect()),
             Struct(s) => Variant::Struct(ids(s.fields)),
