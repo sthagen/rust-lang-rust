@@ -311,8 +311,7 @@ impl<'s> LintLevelsBuilder<'s> {
                                     |lint| {
                                         let msg = format!(
                                             "lint name `{}` is deprecated \
-                                             and may not have an effect in the future. \
-                                             Also `cfg_attr(cargo-clippy)` won't be necessary anymore",
+                                             and may not have an effect in the future.",
                                             name
                                         );
                                         lint.build(&msg)
@@ -381,6 +380,11 @@ impl<'s> LintLevelsBuilder<'s> {
                             src,
                             Some(li.span().into()),
                             |lint| {
+                                let name = if let Some(tool_name) = tool_name {
+                                    format!("{}::{}", tool_name, name)
+                                } else {
+                                    name.to_string()
+                                };
                                 let mut db = lint.build(&format!("unknown lint: `{}`", name));
                                 if let Some(suggestion) = suggestion {
                                     db.span_suggestion(

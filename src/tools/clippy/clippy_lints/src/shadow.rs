@@ -325,7 +325,7 @@ fn check_expr<'tcx>(cx: &LateContext<'tcx>, expr: &'tcx Expr<'_>, bindings: &mut
         | ExprKind::Field(ref e, _)
         | ExprKind::AddrOf(_, _, ref e)
         | ExprKind::Box(ref e) => check_expr(cx, e, bindings),
-        ExprKind::Block(ref block, _) | ExprKind::Loop(ref block, _, _) => check_block(cx, block, bindings),
+        ExprKind::Block(ref block, _) | ExprKind::Loop(ref block, ..) => check_block(cx, block, bindings),
         // ExprKind::Call
         // ExprKind::MethodCall
         ExprKind::Array(v) | ExprKind::Tup(v) => {
@@ -396,5 +396,5 @@ fn is_self_shadow(name: Symbol, expr: &Expr<'_>) -> bool {
 }
 
 fn path_eq_name(name: Symbol, path: &Path<'_>) -> bool {
-    !path.is_global() && path.segments.len() == 1 && path.segments[0].ident.as_str() == name.as_str()
+    !path.is_global() && path.segments.len() == 1 && path.segments[0].ident.name == name
 }

@@ -3,6 +3,7 @@
 use crate::arena::Arena;
 use crate::dep_graph::DepGraph;
 use crate::hir::exports::ExportMap;
+use crate::hir::place::Place as HirPlace;
 use crate::ich::{NodeIdHashingMode, StableHashingContext};
 use crate::infer::canonical::{Canonical, CanonicalVarInfo, CanonicalVarInfos};
 use crate::lint::{struct_lint_level, LintDiagnosticBuilder, LintLevelSource};
@@ -17,11 +18,11 @@ use crate::ty::query::{self, TyCtxtAt};
 use crate::ty::subst::{GenericArg, GenericArgKind, InternalSubsts, Subst, SubstsRef, UserSubsts};
 use crate::ty::TyKind::*;
 use crate::ty::{
-    self, AdtDef, AdtKind, BindingMode, BoundVar, CanonicalPolyFnSig, Const, ConstVid, DefIdTree,
-    ExistentialPredicate, FloatVar, FloatVid, GenericParamDefKind, InferConst, InferTy, IntVar,
-    IntVid, List, ParamConst, ParamTy, PolyFnSig, Predicate, PredicateInner, PredicateKind,
-    ProjectionTy, Region, RegionKind, ReprOptions, TraitObjectVisitor, Ty, TyKind, TyS, TyVar,
-    TyVid, TypeAndMut, Visibility,
+    self, AdtDef, AdtKind, Binder, BindingMode, BoundVar, CanonicalPolyFnSig, Const, ConstVid,
+    DefIdTree, ExistentialPredicate, FloatTy, FloatVar, FloatVid, GenericParamDefKind, InferConst,
+    InferTy, IntTy, IntVar, IntVid, List, ParamConst, ParamTy, PolyFnSig, Predicate,
+    PredicateInner, PredicateKind, ProjectionTy, Region, RegionKind, ReprOptions,
+    TraitObjectVisitor, Ty, TyKind, TyS, TyVar, TyVid, TypeAndMut, UintTy, Visibility,
 };
 use rustc_ast as ast;
 use rustc_ast::expand::allocator::AllocatorKind;
@@ -133,7 +134,7 @@ impl<'tcx> CtxtInterners<'tcx> {
     }
 
     #[inline(never)]
-    fn intern_predicate(&self, kind: PredicateKind<'tcx>) -> &'tcx PredicateInner<'tcx> {
+    fn intern_predicate(&self, kind: Binder<PredicateKind<'tcx>>) -> &'tcx PredicateInner<'tcx> {
         self.predicate
             .intern(kind, |kind| {
                 let flags = super::flags::FlagComputation::for_predicate(kind);
@@ -379,7 +380,7 @@ pub struct TypeckResults<'tcx> {
 
     /// Records the reasons that we picked the kind of each closure;
     /// not all closures are present in the map.
-    closure_kind_origins: ItemLocalMap<(Span, Symbol)>,
+    closure_kind_origins: ItemLocalMap<(Span, HirPlace<'tcx>)>,
 
     /// For each fn, records the "liberated" types of its arguments
     /// and return type. Liberated means that all bound regions
@@ -642,11 +643,13 @@ impl<'tcx> TypeckResults<'tcx> {
         self.upvar_capture_map[&upvar_id]
     }
 
-    pub fn closure_kind_origins(&self) -> LocalTableInContext<'_, (Span, Symbol)> {
+    pub fn closure_kind_origins(&self) -> LocalTableInContext<'_, (Span, HirPlace<'tcx>)> {
         LocalTableInContext { hir_owner: self.hir_owner, data: &self.closure_kind_origins }
     }
 
-    pub fn closure_kind_origins_mut(&mut self) -> LocalTableInContextMut<'_, (Span, Symbol)> {
+    pub fn closure_kind_origins_mut(
+        &mut self,
+    ) -> LocalTableInContextMut<'_, (Span, HirPlace<'tcx>)> {
         LocalTableInContextMut { hir_owner: self.hir_owner, data: &mut self.closure_kind_origins }
     }
 
@@ -836,20 +839,20 @@ impl<'tcx> CommonTypes<'tcx> {
             bool: mk(Bool),
             char: mk(Char),
             never: mk(Never),
-            isize: mk(Int(ast::IntTy::Isize)),
-            i8: mk(Int(ast::IntTy::I8)),
-            i16: mk(Int(ast::IntTy::I16)),
-            i32: mk(Int(ast::IntTy::I32)),
-            i64: mk(Int(ast::IntTy::I64)),
-            i128: mk(Int(ast::IntTy::I128)),
-            usize: mk(Uint(ast::UintTy::Usize)),
-            u8: mk(Uint(ast::UintTy::U8)),
-            u16: mk(Uint(ast::UintTy::U16)),
-            u32: mk(Uint(ast::UintTy::U32)),
-            u64: mk(Uint(ast::UintTy::U64)),
-            u128: mk(Uint(ast::UintTy::U128)),
-            f32: mk(Float(ast::FloatTy::F32)),
-            f64: mk(Float(ast::FloatTy::F64)),
+            isize: mk(Int(ty::IntTy::Isize)),
+            i8: mk(Int(ty::IntTy::I8)),
+            i16: mk(Int(ty::IntTy::I16)),
+            i32: mk(Int(ty::IntTy::I32)),
+            i64: mk(Int(ty::IntTy::I64)),
+            i128: mk(Int(ty::IntTy::I128)),
+            usize: mk(Uint(ty::UintTy::Usize)),
+            u8: mk(Uint(ty::UintTy::U8)),
+            u16: mk(Uint(ty::UintTy::U16)),
+            u32: mk(Uint(ty::UintTy::U32)),
+            u64: mk(Uint(ty::UintTy::U64)),
+            u128: mk(Uint(ty::UintTy::U128)),
+            f32: mk(Float(ty::FloatTy::F32)),
+            f64: mk(Float(ty::FloatTy::F64)),
             str_: mk(Str),
             self_param: mk(ty::Param(ty::ParamTy { index: 0, name: kw::SelfUpper })),
 
@@ -1948,8 +1951,8 @@ impl<'tcx> Hash for Interned<'tcx, PredicateInner<'tcx>> {
     }
 }
 
-impl<'tcx> Borrow<PredicateKind<'tcx>> for Interned<'tcx, PredicateInner<'tcx>> {
-    fn borrow<'a>(&'a self) -> &'a PredicateKind<'tcx> {
+impl<'tcx> Borrow<Binder<PredicateKind<'tcx>>> for Interned<'tcx, PredicateInner<'tcx>> {
+    fn borrow<'a>(&'a self) -> &'a Binder<PredicateKind<'tcx>> {
         &self.0.kind
     }
 }
@@ -1983,12 +1986,6 @@ impl<'tcx> Borrow<RegionKind> for Interned<'tcx, RegionKind> {
 
 impl<'tcx> Borrow<Const<'tcx>> for Interned<'tcx, Const<'tcx>> {
     fn borrow<'a>(&'a self) -> &'a Const<'tcx> {
-        &self.0
-    }
-}
-
-impl<'tcx> Borrow<PredicateKind<'tcx>> for Interned<'tcx, PredicateKind<'tcx>> {
-    fn borrow<'a>(&'a self) -> &'a PredicateKind<'tcx> {
         &self.0
     }
 }
@@ -2091,8 +2088,8 @@ impl<'tcx> TyCtxt<'tcx> {
     }
 
     #[inline]
-    pub fn mk_predicate(self, kind: PredicateKind<'tcx>) -> Predicate<'tcx> {
-        let inner = self.interners.intern_predicate(kind);
+    pub fn mk_predicate(self, binder: Binder<PredicateKind<'tcx>>) -> Predicate<'tcx> {
+        let inner = self.interners.intern_predicate(binder);
         Predicate { inner }
     }
 
@@ -2100,37 +2097,37 @@ impl<'tcx> TyCtxt<'tcx> {
     pub fn reuse_or_mk_predicate(
         self,
         pred: Predicate<'tcx>,
-        kind: PredicateKind<'tcx>,
+        binder: Binder<PredicateKind<'tcx>>,
     ) -> Predicate<'tcx> {
-        if *pred.kind() != kind { self.mk_predicate(kind) } else { pred }
+        if pred.kind() != binder { self.mk_predicate(binder) } else { pred }
     }
 
-    pub fn mk_mach_int(self, tm: ast::IntTy) -> Ty<'tcx> {
+    pub fn mk_mach_int(self, tm: IntTy) -> Ty<'tcx> {
         match tm {
-            ast::IntTy::Isize => self.types.isize,
-            ast::IntTy::I8 => self.types.i8,
-            ast::IntTy::I16 => self.types.i16,
-            ast::IntTy::I32 => self.types.i32,
-            ast::IntTy::I64 => self.types.i64,
-            ast::IntTy::I128 => self.types.i128,
+            IntTy::Isize => self.types.isize,
+            IntTy::I8 => self.types.i8,
+            IntTy::I16 => self.types.i16,
+            IntTy::I32 => self.types.i32,
+            IntTy::I64 => self.types.i64,
+            IntTy::I128 => self.types.i128,
         }
     }
 
-    pub fn mk_mach_uint(self, tm: ast::UintTy) -> Ty<'tcx> {
+    pub fn mk_mach_uint(self, tm: UintTy) -> Ty<'tcx> {
         match tm {
-            ast::UintTy::Usize => self.types.usize,
-            ast::UintTy::U8 => self.types.u8,
-            ast::UintTy::U16 => self.types.u16,
-            ast::UintTy::U32 => self.types.u32,
-            ast::UintTy::U64 => self.types.u64,
-            ast::UintTy::U128 => self.types.u128,
+            UintTy::Usize => self.types.usize,
+            UintTy::U8 => self.types.u8,
+            UintTy::U16 => self.types.u16,
+            UintTy::U32 => self.types.u32,
+            UintTy::U64 => self.types.u64,
+            UintTy::U128 => self.types.u128,
         }
     }
 
-    pub fn mk_mach_float(self, tm: ast::FloatTy) -> Ty<'tcx> {
+    pub fn mk_mach_float(self, tm: FloatTy) -> Ty<'tcx> {
         match tm {
-            ast::FloatTy::F32 => self.types.f32,
-            ast::FloatTy::F64 => self.types.f64,
+            FloatTy::F32 => self.types.f32,
+            FloatTy::F64 => self.types.f64,
         }
     }
 
@@ -2578,7 +2575,8 @@ impl<'tcx> TyCtxt<'tcx> {
     }
 
     pub fn is_late_bound(self, id: HirId) -> bool {
-        self.is_late_bound_map(id.owner).map_or(false, |set| set.contains(&id.local_id))
+        self.is_late_bound_map(id.owner)
+            .map_or(false, |(owner, set)| owner == id.owner && set.contains(&id.local_id))
     }
 
     pub fn object_lifetime_defaults(self, id: HirId) -> Option<&'tcx [ObjectLifetimeDefault]> {

@@ -4,6 +4,7 @@ members = [
   "compiler/rustc",
   "library/std",
   "library/test",
+  "src/rustdoc-json-types",
   "src/tools/cargotest",
   "src/tools/clippy",
   "src/tools/compiletest",
@@ -31,6 +32,7 @@ members = [
   "src/tools/rustdoc-themes",
   "src/tools/unicode-table-generator",
   "src/tools/expand-yaml-anchors",
+  "src/tools/jsondocck",
 ]
 
 exclude = [

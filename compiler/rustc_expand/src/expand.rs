@@ -20,7 +20,7 @@ use rustc_data_structures::map_in_place::MapInPlace;
 use rustc_data_structures::stack::ensure_sufficient_stack;
 use rustc_errors::{struct_span_err, Applicability, PResult};
 use rustc_feature::Features;
-use rustc_parse::parser::{AttemptLocalParseRecovery, Parser};
+use rustc_parse::parser::{AttemptLocalParseRecovery, ForceCollect, Parser};
 use rustc_parse::validate_attr;
 use rustc_session::lint::builtin::UNUSED_DOC_COMMENTS;
 use rustc_session::lint::BuiltinLintDiagnostics;
@@ -896,7 +896,9 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
                 fragment
             }
             Err(mut err) => {
-                err.set_span(span);
+                if err.span.is_dummy() {
+                    err.set_span(span);
+                }
                 annotate_err_with_kind(&mut err, kind, span);
                 err.emit();
                 self.cx.trace_macros_diag();
@@ -913,7 +915,7 @@ pub fn parse_ast_fragment<'a>(
     Ok(match kind {
         AstFragmentKind::Items => {
             let mut items = SmallVec::new();
-            while let Some(item) = this.parse_item()? {
+            while let Some(item) = this.parse_item(ForceCollect::No)? {
                 items.push(item);
             }
             AstFragment::Items(items)
@@ -1407,7 +1409,7 @@ impl<'a, 'b> MutVisitor for InvocationCollector<'a, 'b> {
                         proc_macros: vec![],
                     };
                     if let Some(extern_mod_loaded) = self.cx.extern_mod_loaded {
-                        extern_mod_loaded(&krate);
+                        extern_mod_loaded(&krate, ident);
                     }
 
                     *old_mod = krate.module;

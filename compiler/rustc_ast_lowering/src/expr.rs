@@ -10,9 +10,9 @@ use rustc_errors::struct_span_err;
 use rustc_hir as hir;
 use rustc_hir::def::Res;
 use rustc_session::parse::feature_err;
-use rustc_span::hygiene::ForLoopLoc;
 use rustc_span::source_map::{respan, DesugaringKind, Span, Spanned};
 use rustc_span::symbol::{sym, Ident, Symbol};
+use rustc_span::{hygiene::ForLoopLoc, DUMMY_SP};
 use rustc_target::asm;
 use std::collections::hash_map::Entry;
 use std::fmt::Write;
@@ -102,6 +102,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                         this.lower_block(body, false),
                         opt_label,
                         hir::LoopSource::Loop,
+                        DUMMY_SP,
                     )
                 }),
                 ExprKind::TryBlock(ref body) => self.lower_expr_try_block(body),
@@ -453,7 +454,12 @@ impl<'hir> LoweringContext<'_, 'hir> {
             self.expr_match(span, scrutinee, arena_vec![self; then_arm, else_arm], desugar);
 
         // `[opt_ident]: loop { ... }`
-        hir::ExprKind::Loop(self.block_expr(self.arena.alloc(match_expr)), opt_label, source)
+        hir::ExprKind::Loop(
+            self.block_expr(self.arena.alloc(match_expr)),
+            opt_label,
+            source,
+            span.with_hi(cond.span.hi()),
+        )
     }
 
     /// Desugar `try { <stmts>; <expr> }` into `{ <stmts>; ::std::ops::Try::from_ok(<expr>) }`,
@@ -748,7 +754,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
         // loop { .. }
         let loop_expr = self.arena.alloc(hir::Expr {
             hir_id: loop_hir_id,
-            kind: hir::ExprKind::Loop(loop_block, None, hir::LoopSource::Loop),
+            kind: hir::ExprKind::Loop(loop_block, None, hir::LoopSource::Loop, span),
             span,
             attrs: ThinVec::new(),
         });
@@ -770,10 +776,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
         body: &Expr,
         fn_decl_span: Span,
     ) -> hir::ExprKind<'hir> {
-        // Lower outside new scope to preserve `is_in_loop_condition`.
-        let fn_decl = self.lower_fn_decl(decl, None, false, None);
-
-        self.with_new_scopes(move |this| {
+        let (body_id, generator_option) = self.with_new_scopes(move |this| {
             let prev = this.current_item;
             this.current_item = Some(fn_decl_span);
             let mut generator_kind = None;
@@ -785,8 +788,13 @@ impl<'hir> LoweringContext<'_, 'hir> {
             let generator_option =
                 this.generator_movability_for_fn(&decl, fn_decl_span, generator_kind, movability);
             this.current_item = prev;
-            hir::ExprKind::Closure(capture_clause, fn_decl, body_id, fn_decl_span, generator_option)
-        })
+            (body_id, generator_option)
+        });
+
+        // Lower outside new scope to preserve `is_in_loop_condition`.
+        let fn_decl = self.lower_fn_decl(decl, None, false, None);
+
+        hir::ExprKind::Closure(capture_clause, fn_decl, body_id, fn_decl_span, generator_option)
     }
 
     fn generator_movability_for_fn(
@@ -832,12 +840,8 @@ impl<'hir> LoweringContext<'_, 'hir> {
     ) -> hir::ExprKind<'hir> {
         let outer_decl =
             FnDecl { inputs: decl.inputs.clone(), output: FnRetTy::Default(fn_decl_span) };
-        // We need to lower the declaration outside the new scope, because we
-        // have to conserve the state of being inside a loop condition for the
-        // closure argument types.
-        let fn_decl = self.lower_fn_decl(&outer_decl, None, false, None);
 
-        self.with_new_scopes(move |this| {
+        let body_id = self.with_new_scopes(|this| {
             // FIXME(cramertj): allow `async` non-`move` closures with arguments.
             if capture_clause == CaptureBy::Ref && !decl.inputs.is_empty() {
                 struct_span_err!(
@@ -868,8 +872,15 @@ impl<'hir> LoweringContext<'_, 'hir> {
                 );
                 this.expr(fn_decl_span, async_body, ThinVec::new())
             });
-            hir::ExprKind::Closure(capture_clause, fn_decl, body_id, fn_decl_span, None)
-        })
+            body_id
+        });
+
+        // We need to lower the declaration outside the new scope, because we
+        // have to conserve the state of being inside a loop condition for the
+        // closure argument types.
+        let fn_decl = self.lower_fn_decl(&outer_decl, None, false, None);
+
+        hir::ExprKind::Closure(capture_clause, fn_decl, body_id, fn_decl_span, None)
     }
 
     /// Destructure the LHS of complex assignments.
@@ -1709,7 +1720,12 @@ impl<'hir> LoweringContext<'_, 'hir> {
         );
 
         // `[opt_ident]: loop { ... }`
-        let kind = hir::ExprKind::Loop(loop_block, opt_label, hir::LoopSource::ForLoop);
+        let kind = hir::ExprKind::Loop(
+            loop_block,
+            opt_label,
+            hir::LoopSource::ForLoop,
+            e.span.with_hi(orig_head_span.hi()),
+        );
         let loop_expr = self.arena.alloc(hir::Expr {
             hir_id: self.lower_node_id(e.id),
             kind,

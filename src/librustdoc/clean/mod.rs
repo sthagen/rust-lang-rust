@@ -219,7 +219,6 @@ impl Clean<ExternalCrate> for CrateNum {
 impl Clean<Item> for doctree::Module<'_> {
     fn clean(&self, cx: &DocContext<'_>) -> Item {
         let mut items: Vec<Item> = vec![];
-        items.extend(self.imports.iter().flat_map(|x| x.clean(cx)));
         items.extend(self.foreigns.iter().map(|x| x.clean(cx)));
         items.extend(self.mods.iter().map(|x| x.clean(cx)));
         items.extend(self.items.iter().map(|x| x.clean(cx)).flatten());
@@ -466,20 +465,20 @@ impl Clean<WherePredicate> for hir::WherePredicate<'_> {
 
 impl<'a> Clean<Option<WherePredicate>> for ty::Predicate<'a> {
     fn clean(&self, cx: &DocContext<'_>) -> Option<WherePredicate> {
-        let bound_predicate = self.bound_atom();
+        let bound_predicate = self.kind();
         match bound_predicate.skip_binder() {
-            ty::PredicateAtom::Trait(pred, _) => Some(bound_predicate.rebind(pred).clean(cx)),
-            ty::PredicateAtom::RegionOutlives(pred) => pred.clean(cx),
-            ty::PredicateAtom::TypeOutlives(pred) => pred.clean(cx),
-            ty::PredicateAtom::Projection(pred) => Some(pred.clean(cx)),
+            ty::PredicateKind::Trait(pred, _) => Some(bound_predicate.rebind(pred).clean(cx)),
+            ty::PredicateKind::RegionOutlives(pred) => pred.clean(cx),
+            ty::PredicateKind::TypeOutlives(pred) => pred.clean(cx),
+            ty::PredicateKind::Projection(pred) => Some(pred.clean(cx)),
 
-            ty::PredicateAtom::Subtype(..)
-            | ty::PredicateAtom::WellFormed(..)
-            | ty::PredicateAtom::ObjectSafe(..)
-            | ty::PredicateAtom::ClosureKind(..)
-            | ty::PredicateAtom::ConstEvaluatable(..)
-            | ty::PredicateAtom::ConstEquate(..)
-            | ty::PredicateAtom::TypeWellFormedFromEnv(..) => panic!("not user writable"),
+            ty::PredicateKind::Subtype(..)
+            | ty::PredicateKind::WellFormed(..)
+            | ty::PredicateKind::ObjectSafe(..)
+            | ty::PredicateKind::ClosureKind(..)
+            | ty::PredicateKind::ConstEvaluatable(..)
+            | ty::PredicateKind::ConstEquate(..)
+            | ty::PredicateKind::TypeWellFormedFromEnv(..) => panic!("not user writable"),
         }
     }
 }
@@ -744,19 +743,19 @@ impl<'a, 'tcx> Clean<Generics> for (&'a ty::Generics, ty::GenericPredicates<'tcx
             .flat_map(|(p, _)| {
                 let mut projection = None;
                 let param_idx = (|| {
-                    let bound_p = p.bound_atom();
+                    let bound_p = p.kind();
                     match bound_p.skip_binder() {
-                        ty::PredicateAtom::Trait(pred, _constness) => {
+                        ty::PredicateKind::Trait(pred, _constness) => {
                             if let ty::Param(param) = pred.self_ty().kind() {
                                 return Some(param.index);
                             }
                         }
-                        ty::PredicateAtom::TypeOutlives(ty::OutlivesPredicate(ty, _reg)) => {
+                        ty::PredicateKind::TypeOutlives(ty::OutlivesPredicate(ty, _reg)) => {
                             if let ty::Param(param) = ty.kind() {
                                 return Some(param.index);
                             }
                         }
-                        ty::PredicateAtom::Projection(p) => {
+                        ty::PredicateKind::Projection(p) => {
                             if let ty::Param(param) = p.projection_ty.self_ty().kind() {
                                 projection = Some(bound_p.rebind(p));
                                 return Some(param.index);
@@ -1097,7 +1096,10 @@ impl Clean<Item> for hir::TraitItem<'_> {
                     AssocTypeItem(bounds.clean(cx), default.clean(cx))
                 }
             };
-            Item::from_def_id_and_parts(local_did, Some(self.ident.name), inner, cx)
+            let what_rustc_thinks =
+                Item::from_def_id_and_parts(local_did, Some(self.ident.name), inner, cx);
+            // Trait items always inherit the trait's visibility -- we don't want to show `pub`.
+            Item { visibility: Inherited, ..what_rustc_thinks }
         })
     }
 }
@@ -1132,7 +1134,21 @@ impl Clean<Item> for hir::ImplItem<'_> {
                     )
                 }
             };
-            Item::from_def_id_and_parts(local_did, Some(self.ident.name), inner, cx)
+
+            let what_rustc_thinks =
+                Item::from_def_id_and_parts(local_did, Some(self.ident.name), inner, cx);
+            let parent_item = cx.tcx.hir().expect_item(cx.tcx.hir().get_parent_item(self.hir_id));
+            if let hir::ItemKind::Impl(impl_) = &parent_item.kind {
+                if impl_.of_trait.is_some() {
+                    // Trait impl items always inherit the impl's visibility --
+                    // we don't want to show `pub`.
+                    Item { visibility: Inherited, ..what_rustc_thinks }
+                } else {
+                    what_rustc_thinks
+                }
+            } else {
+                panic!("found impl item with non-impl parent {:?}", parent_item);
+            }
         })
     }
 }
@@ -1685,14 +1701,12 @@ impl<'tcx> Clean<Type> for Ty<'tcx> {
                 let mut bounds = bounds
                     .iter()
                     .filter_map(|bound| {
-                        // Note: The substs of opaque types can contain unbound variables,
-                        // meaning that we have to use `ignore_quantifiers_with_unbound_vars` here.
-                        let bound_predicate = bound.bound_atom_with_opt_escaping(cx.tcx);
+                        let bound_predicate = bound.kind();
                         let trait_ref = match bound_predicate.skip_binder() {
-                            ty::PredicateAtom::Trait(tr, _constness) => {
+                            ty::PredicateKind::Trait(tr, _constness) => {
                                 bound_predicate.rebind(tr.trait_ref)
                             }
-                            ty::PredicateAtom::TypeOutlives(ty::OutlivesPredicate(_ty, reg)) => {
+                            ty::PredicateKind::TypeOutlives(ty::OutlivesPredicate(_ty, reg)) => {
                                 if let Some(r) = reg.clean(cx) {
                                     regions.push(GenericBound::Outlives(r));
                                 }
@@ -1711,8 +1725,8 @@ impl<'tcx> Clean<Type> for Ty<'tcx> {
                         let bounds: Vec<_> = bounds
                             .iter()
                             .filter_map(|bound| {
-                                if let ty::PredicateAtom::Projection(proj) =
-                                    bound.bound_atom_with_opt_escaping(cx.tcx).skip_binder()
+                                if let ty::PredicateKind::Projection(proj) =
+                                    bound.kind().skip_binder()
                                 {
                                     if proj.projection_ty.trait_ref(cx.tcx)
                                         == trait_ref.skip_binder()
@@ -1830,7 +1844,7 @@ impl Clean<Visibility> for ty::Visibility {
 impl Clean<VariantStruct> for rustc_hir::VariantData<'_> {
     fn clean(&self, cx: &DocContext<'_>) -> VariantStruct {
         VariantStruct {
-            struct_type: doctree::struct_type_from_def(self),
+            struct_type: CtorKind::from_hir(self),
             fields: self.fields().iter().map(|x| x.clean(cx)).collect(),
             fields_stripped: false,
         }
@@ -1845,7 +1859,7 @@ impl Clean<Item> for ty::VariantDef {
                 self.fields.iter().map(|f| cx.tcx.type_of(f.did).clean(cx)).collect(),
             ),
             CtorKind::Fictive => Variant::Struct(VariantStruct {
-                struct_type: doctree::Plain,
+                struct_type: CtorKind::Fictive,
                 fields_stripped: false,
                 fields: self
                     .fields
@@ -1999,13 +2013,12 @@ impl Clean<Vec<Item>> for (&hir::Item<'_>, Option<Symbol>) {
                     bounds: bounds.clean(cx),
                 }),
                 ItemKind::Union(ref variant_data, ref generics) => UnionItem(Union {
-                    struct_type: doctree::struct_type_from_def(&variant_data),
                     generics: generics.clean(cx),
                     fields: variant_data.fields().clean(cx),
                     fields_stripped: false,
                 }),
                 ItemKind::Struct(ref variant_data, ref generics) => StructItem(Struct {
-                    struct_type: doctree::struct_type_from_def(&variant_data),
+                    struct_type: CtorKind::from_hir(variant_data),
                     generics: generics.clean(cx),
                     fields: variant_data.fields().clean(cx),
                     fields_stripped: false,
@@ -2015,7 +2028,7 @@ impl Clean<Vec<Item>> for (&hir::Item<'_>, Option<Symbol>) {
                 ItemKind::Fn(ref sig, ref generics, body_id) => {
                     clean_fn_or_proc_macro(item, sig, generics, body_id, &mut name, cx)
                 }
-                hir::ItemKind::Trait(is_auto, unsafety, ref generics, ref bounds, ref item_ids) => {
+                ItemKind::Trait(is_auto, unsafety, ref generics, ref bounds, ref item_ids) => {
                     let items = item_ids
                         .iter()
                         .map(|ti| cx.tcx.hir().trait_item(ti.id).clean(cx))
@@ -2033,6 +2046,9 @@ impl Clean<Vec<Item>> for (&hir::Item<'_>, Option<Symbol>) {
                 }
                 ItemKind::ExternCrate(orig_name) => {
                     return clean_extern_crate(item, name, orig_name, cx);
+                }
+                ItemKind::Use(path, kind) => {
+                    return clean_use_statement(item, name, path, kind, cx);
                 }
                 _ => unreachable!("not yet converted"),
             };
@@ -2155,105 +2171,97 @@ fn clean_extern_crate(
     }]
 }
 
-impl Clean<Vec<Item>> for doctree::Import<'_> {
-    fn clean(&self, cx: &DocContext<'_>) -> Vec<Item> {
-        // We need this comparison because some imports (for std types for example)
-        // are "inserted" as well but directly by the compiler and they should not be
-        // taken into account.
-        if self.span.ctxt().outer_expn_data().kind == ExpnKind::AstPass(AstPass::StdImports) {
-            return Vec::new();
-        }
-
-        let (doc_meta_item, please_inline) = self.attrs.lists(sym::doc).get_word_attr(sym::inline);
-        let pub_underscore = self.vis.node.is_pub() && self.name == kw::Underscore;
-
-        if pub_underscore && please_inline {
-            rustc_errors::struct_span_err!(
-                cx.tcx.sess,
-                doc_meta_item.unwrap().span(),
-                E0780,
-                "anonymous imports cannot be inlined"
-            )
-            .span_label(self.span, "anonymous import")
-            .emit();
-        }
-
-        // We consider inlining the documentation of `pub use` statements, but we
-        // forcefully don't inline if this is not public or if the
-        // #[doc(no_inline)] attribute is present.
-        // Don't inline doc(hidden) imports so they can be stripped at a later stage.
-        let mut denied = !self.vis.node.is_pub()
-            || pub_underscore
-            || self.attrs.iter().any(|a| {
-                a.has_name(sym::doc)
-                    && match a.meta_item_list() {
-                        Some(l) => {
-                            attr::list_contains_name(&l, sym::no_inline)
-                                || attr::list_contains_name(&l, sym::hidden)
-                        }
-                        None => false,
-                    }
-            });
-        // Also check whether imports were asked to be inlined, in case we're trying to re-export a
-        // crate in Rust 2018+
-        let path = self.path.clean(cx);
-        let inner = if self.glob {
-            if !denied {
-                let mut visited = FxHashSet::default();
-                if let Some(items) = inline::try_inline_glob(cx, path.res, &mut visited) {
-                    return items;
-                }
-            }
-            Import::new_glob(resolve_use_source(cx, path), true)
-        } else {
-            let name = self.name;
-            if !please_inline {
-                if let Res::Def(DefKind::Mod, did) = path.res {
-                    if !did.is_local() && did.index == CRATE_DEF_INDEX {
-                        // if we're `pub use`ing an extern crate root, don't inline it unless we
-                        // were specifically asked for it
-                        denied = true;
-                    }
-                }
-            }
-            if !denied {
-                let mut visited = FxHashSet::default();
-
-                if let Some(mut items) = inline::try_inline(
-                    cx,
-                    cx.tcx.parent_module(self.id).to_def_id(),
-                    path.res,
-                    name,
-                    Some(self.attrs),
-                    &mut visited,
-                ) {
-                    items.push(Item {
-                        name: None,
-                        attrs: box self.attrs.clean(cx),
-                        source: self.span.clean(cx),
-                        def_id: cx.tcx.hir().local_def_id(self.id).to_def_id(),
-                        visibility: self.vis.clean(cx),
-                        kind: box ImportItem(Import::new_simple(
-                            self.name,
-                            resolve_use_source(cx, path),
-                            false,
-                        )),
-                    });
-                    return items;
-                }
-            }
-            Import::new_simple(name, resolve_use_source(cx, path), true)
-        };
-
-        vec![Item {
-            name: None,
-            attrs: box self.attrs.clean(cx),
-            source: self.span.clean(cx),
-            def_id: cx.tcx.hir().local_def_id(self.id).to_def_id(),
-            visibility: self.vis.clean(cx),
-            kind: box ImportItem(inner),
-        }]
+fn clean_use_statement(
+    import: &hir::Item<'_>,
+    name: Symbol,
+    path: &hir::Path<'_>,
+    kind: hir::UseKind,
+    cx: &DocContext<'_>,
+) -> Vec<Item> {
+    // We need this comparison because some imports (for std types for example)
+    // are "inserted" as well but directly by the compiler and they should not be
+    // taken into account.
+    if import.span.ctxt().outer_expn_data().kind == ExpnKind::AstPass(AstPass::StdImports) {
+        return Vec::new();
     }
+
+    let (doc_meta_item, please_inline) = import.attrs.lists(sym::doc).get_word_attr(sym::inline);
+    let pub_underscore = import.vis.node.is_pub() && name == kw::Underscore;
+
+    if pub_underscore && please_inline {
+        rustc_errors::struct_span_err!(
+            cx.tcx.sess,
+            doc_meta_item.unwrap().span(),
+            E0780,
+            "anonymous imports cannot be inlined"
+        )
+        .span_label(import.span, "anonymous import")
+        .emit();
+    }
+
+    // We consider inlining the documentation of `pub use` statements, but we
+    // forcefully don't inline if this is not public or if the
+    // #[doc(no_inline)] attribute is present.
+    // Don't inline doc(hidden) imports so they can be stripped at a later stage.
+    let mut denied = !import.vis.node.is_pub()
+        || pub_underscore
+        || import.attrs.iter().any(|a| {
+            a.has_name(sym::doc)
+                && match a.meta_item_list() {
+                    Some(l) => {
+                        attr::list_contains_name(&l, sym::no_inline)
+                            || attr::list_contains_name(&l, sym::hidden)
+                    }
+                    None => false,
+                }
+        });
+
+    // Also check whether imports were asked to be inlined, in case we're trying to re-export a
+    // crate in Rust 2018+
+    let def_id = cx.tcx.hir().local_def_id(import.hir_id).to_def_id();
+    let path = path.clean(cx);
+    let inner = if kind == hir::UseKind::Glob {
+        if !denied {
+            let mut visited = FxHashSet::default();
+            if let Some(items) = inline::try_inline_glob(cx, path.res, &mut visited) {
+                return items;
+            }
+        }
+        Import::new_glob(resolve_use_source(cx, path), true)
+    } else {
+        if !please_inline {
+            if let Res::Def(DefKind::Mod, did) = path.res {
+                if !did.is_local() && did.index == CRATE_DEF_INDEX {
+                    // if we're `pub use`ing an extern crate root, don't inline it unless we
+                    // were specifically asked for it
+                    denied = true;
+                }
+            }
+        }
+        if !denied {
+            let mut visited = FxHashSet::default();
+
+            if let Some(mut items) = inline::try_inline(
+                cx,
+                cx.tcx.parent_module(import.hir_id).to_def_id(),
+                path.res,
+                name,
+                Some(import.attrs),
+                &mut visited,
+            ) {
+                items.push(Item::from_def_id_and_parts(
+                    def_id,
+                    None,
+                    ImportItem(Import::new_simple(name, resolve_use_source(cx, path), false)),
+                    cx,
+                ));
+                return items;
+            }
+        }
+        Import::new_simple(name, resolve_use_source(cx, path), true)
+    };
+
+    vec![Item::from_def_id_and_parts(def_id, None, ImportItem(inner), cx)]
 }
 
 impl Clean<Item> for (&hir::ForeignItem<'_>, Option<Symbol>) {
@@ -2321,14 +2329,14 @@ impl Clean<Item> for (&hir::MacroDef<'_>, Option<Symbol>) {
             if matchers.len() <= 1 {
                 format!(
                     "{}macro {}{} {{\n    ...\n}}",
-                    vis.print_with_space(cx.tcx, def_id),
+                    vis.print_with_space(cx.tcx, def_id, &cx.cache),
                     name,
                     matchers.iter().map(|span| span.to_src(cx)).collect::<String>(),
                 )
             } else {
                 format!(
                     "{}macro {} {{\n{}}}",
-                    vis.print_with_space(cx.tcx, def_id),
+                    vis.print_with_space(cx.tcx, def_id, &cx.cache),
                     name,
                     matchers
                         .iter()

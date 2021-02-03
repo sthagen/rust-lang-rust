@@ -1,10 +1,11 @@
+// ignore-tidy-filelength
 //! Some lints that are built in to the compiler.
 //!
 //! These are the built-in lints that are emitted direct in the main
 //! compiler code, rather than using their own custom pass. Those
 //! lints are all available in `rustc_lint::builtin`.
 
-use crate::{declare_lint, declare_lint_pass, declare_tool_lint};
+use crate::{declare_lint, declare_lint_pass};
 use rustc_span::edition::Edition;
 use rustc_span::symbol::sym;
 
@@ -238,41 +239,26 @@ declare_lint! {
     ///
     /// ```rust,compile_fail
     /// #![allow(unconditional_panic)]
-    /// let x: &'static i32 = &(1 / 0);
+    /// const C: i32 = 1/0;
     /// ```
     ///
     /// {{produces}}
     ///
     /// ### Explanation
     ///
-    /// This lint detects code that is very likely incorrect. If this lint is
-    /// allowed, then the code will not be evaluated at compile-time, and
-    /// instead continue to generate code to evaluate at runtime, which may
-    /// panic during runtime.
+    /// This lint detects constants that fail to evaluate. Allowing the lint will accept the
+    /// constant declaration, but any use of this constant will still lead to a hard error. This is
+    /// a future incompatibility lint; the plan is to eventually entirely forbid even declaring
+    /// constants that cannot be evaluated.  See [issue #71800] for more details.
     ///
-    /// Note that this lint may trigger in either inside or outside of a
-    /// [const context]. Outside of a [const context], the compiler can
-    /// sometimes evaluate an expression at compile-time in order to generate
-    /// more efficient code. As the compiler becomes better at doing this, it
-    /// needs to decide what to do when it encounters code that it knows for
-    /// certain will panic or is otherwise incorrect. Making this a hard error
-    /// would prevent existing code that exhibited this behavior from
-    /// compiling, breaking backwards-compatibility. However, this is almost
-    /// certainly incorrect code, so this is a deny-by-default lint. For more
-    /// details, see [RFC 1229] and [issue #28238].
-    ///
-    /// Note that there are several other more specific lints associated with
-    /// compile-time evaluation, such as [`arithmetic_overflow`],
-    /// [`unconditional_panic`].
-    ///
-    /// [const context]: https://doc.rust-lang.org/reference/const_eval.html#const-context
-    /// [RFC 1229]: https://github.com/rust-lang/rfcs/blob/master/text/1229-compile-time-asserts.md
-    /// [issue #28238]: https://github.com/rust-lang/rust/issues/28238
-    /// [`arithmetic_overflow`]: deny-by-default.html#arithmetic-overflow
-    /// [`unconditional_panic`]: deny-by-default.html#unconditional-panic
+    /// [issue #71800]: https://github.com/rust-lang/rust/issues/71800
     pub CONST_ERR,
     Deny,
-    "constant evaluation detected erroneous expression",
+    "constant evaluation encountered erroneous expression",
+    @future_incompatible = FutureIncompatibleInfo {
+        reference: "issue #71800 <https://github.com/rust-lang/rust/issues/71800>",
+        edition: None,
+    };
     report_in_external_macro
 }
 
@@ -2825,10 +2811,77 @@ declare_lint! {
     };
 }
 
-declare_tool_lint! {
-    pub rustc::INEFFECTIVE_UNSTABLE_TRAIT_IMPL,
+declare_lint! {
+    /// The `ineffective_unstable_trait_impl` lint detects `#[unstable]` attributes which are not used.
+    ///
+    /// ### Example
+    ///
+    /// ```compile_fail
+    /// #![feature(staged_api)]
+    ///
+    /// #[derive(Clone)]
+    /// #[stable(feature = "x", since = "1")]
+    /// struct S {}
+    ///
+    /// #[unstable(feature = "y", issue = "none")]
+    /// impl Copy for S {}
+    /// ```
+    ///
+    /// {{produces}}
+    ///
+    /// ### Explanation
+    ///
+    /// `staged_api` does not currently support using a stability attribute on `impl` blocks.
+    /// `impl`s are always stable if both the type and trait are stable, and always unstable otherwise.
+    pub INEFFECTIVE_UNSTABLE_TRAIT_IMPL,
     Deny,
     "detects `#[unstable]` on stable trait implementations for stable types"
+}
+
+declare_lint! {
+    /// The `semicolon_in_expressions_from_macros` lint detects trailing semicolons
+    /// in macro bodies when the macro is invoked in expression position.
+    /// This was previous accepted, but is being phased out.
+    ///
+    /// ### Example
+    ///
+    /// ```rust,compile_fail
+    /// #![deny(semicolon_in_expressions_from_macros)]
+    /// macro_rules! foo {
+    ///     () => { true; }
+    /// }
+    ///
+    /// fn main() {
+    ///     let val = match true {
+    ///         true => false,
+    ///         _ => foo!()
+    ///     };
+    /// }
+    /// ```
+    ///
+    /// {{produces}}
+    ///
+    /// ### Explanation
+    ///
+    /// Previous, Rust ignored trailing semicolon in a macro
+    /// body when a macro was invoked in expression position.
+    /// However, this makes the treatment of semicolons in the language
+    /// inconsistent, and could lead to unexpected runtime behavior
+    /// in some circumstances (e.g. if the macro author expects
+    /// a value to be dropped).
+    ///
+    /// This is a [future-incompatible] lint to transition this
+    /// to a hard error in the future. See [issue #79813] for more details.
+    ///
+    /// [issue #79813]: https://github.com/rust-lang/rust/issues/79813
+    /// [future-incompatible]: ../index.md#future-incompatible-lints
+    pub SEMICOLON_IN_EXPRESSIONS_FROM_MACROS,
+    Allow,
+    "trailing semicolon in macro body used as expression",
+    @future_incompatible = FutureIncompatibleInfo {
+        reference: "issue #79813 <https://github.com/rust-lang/rust/issues/79813>",
+        edition: None,
+    };
 }
 
 declare_lint_pass! {
@@ -2918,6 +2971,8 @@ declare_lint_pass! {
         USELESS_DEPRECATED,
         UNSUPPORTED_NAKED_FUNCTIONS,
         MISSING_ABI,
+        SEMICOLON_IN_EXPRESSIONS_FROM_MACROS,
+        DISJOINT_CAPTURE_DROP_REORDER,
     ]
 }
 
@@ -2942,6 +2997,51 @@ declare_lint! {
     pub UNUSED_DOC_COMMENTS,
     Warn,
     "detects doc comments that aren't used by rustdoc"
+}
+
+declare_lint! {
+    /// The `disjoint_capture_drop_reorder` lint detects variables that aren't completely
+    /// captured when the feature `capture_disjoint_fields` is enabled and it affects the Drop
+    /// order of at least one path starting at this variable.
+    ///
+    /// ### Example
+    ///
+    /// ```rust,compile_fail
+    /// # #![deny(disjoint_capture_drop_reorder)]
+    /// # #![allow(unused)]
+    /// struct FancyInteger(i32);
+    ///
+    /// impl Drop for FancyInteger {
+    ///     fn drop(&mut self) {
+    ///         println!("Just dropped {}", self.0);
+    ///     }
+    /// }
+    ///
+    /// struct Point { x: FancyInteger, y: FancyInteger }
+    ///
+    /// fn main() {
+    ///   let p = Point { x: FancyInteger(10), y: FancyInteger(20) };
+    ///
+    ///   let c = || {
+    ///      let x = p.x;
+    ///   };
+    ///
+    ///   c();
+    ///
+    ///   // ... More code ...
+    /// }
+    /// ```
+    ///
+    /// {{produces}}
+    ///
+    /// ### Explanation
+    ///
+    /// In the above example `p.y` will be dropped at the end of `f` instead of with `c` if
+    /// the feature `capture_disjoint_fields` is enabled.
+    pub DISJOINT_CAPTURE_DROP_REORDER,
+    Allow,
+    "Drop reorder because of `capture_disjoint_fields`"
+
 }
 
 declare_lint_pass!(UnusedDocComment => [UNUSED_DOC_COMMENTS]);

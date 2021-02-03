@@ -344,6 +344,8 @@ impl<'a> ResolverExpand for Resolver<'a> {
     }
 
     fn lint_node_id(&mut self, expn_id: ExpnId) -> NodeId {
+        // FIXME - make this more precise. This currently returns the NodeId of the
+        // nearest closing item - we should try to return the closest parent of the ExpnId
         self.invocation_parents
             .get(&expn_id)
             .map_or(ast::CRATE_NODE_ID, |id| self.def_id_to_node_id[*id])
@@ -757,7 +759,11 @@ impl<'a> Resolver<'a> {
                     }
                     Scope::BuiltinAttrs => {
                         if is_builtin_attr_name(ident.name) {
-                            ok(Res::NonMacroAttr(NonMacroAttrKind::Builtin), DUMMY_SP, this.arenas)
+                            ok(
+                                Res::NonMacroAttr(NonMacroAttrKind::Builtin(ident.name)),
+                                DUMMY_SP,
+                                this.arenas,
+                            )
                         } else {
                             Err(Determinacy::Determined)
                         }
@@ -810,13 +816,15 @@ impl<'a> Resolver<'a> {
                             // Found another solution, if the first one was "weak", report an error.
                             let (res, innermost_res) = (binding.res(), innermost_binding.res());
                             if res != innermost_res {
-                                let builtin = Res::NonMacroAttr(NonMacroAttrKind::Builtin);
+                                let is_builtin = |res| {
+                                    matches!(res, Res::NonMacroAttr(NonMacroAttrKind::Builtin(..)))
+                                };
                                 let derive_helper_compat =
                                     Res::NonMacroAttr(NonMacroAttrKind::DeriveHelperCompat);
 
                                 let ambiguity_error_kind = if is_import {
                                     Some(AmbiguityKind::Import)
-                                } else if innermost_res == builtin || res == builtin {
+                                } else if is_builtin(innermost_res) || is_builtin(res) {
                                     Some(AmbiguityKind::BuiltinAttr)
                                 } else if innermost_res == derive_helper_compat
                                     || res == derive_helper_compat

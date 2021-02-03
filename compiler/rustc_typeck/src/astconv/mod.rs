@@ -1177,9 +1177,9 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                     obligation.predicate
                 );
 
-                let bound_predicate = obligation.predicate.bound_atom();
+                let bound_predicate = obligation.predicate.kind();
                 match bound_predicate.skip_binder() {
-                    ty::PredicateAtom::Trait(pred, _) => {
+                    ty::PredicateKind::Trait(pred, _) => {
                         let pred = bound_predicate.rebind(pred);
                         associated_types.entry(span).or_default().extend(
                             tcx.associated_items(pred.def_id())
@@ -1188,7 +1188,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                                 .map(|item| item.def_id),
                         );
                     }
-                    ty::PredicateAtom::Projection(pred) => {
+                    ty::PredicateKind::Projection(pred) => {
                         let pred = bound_predicate.rebind(pred);
                         // A `Self` within the original bound will be substituted with a
                         // `trait_object_dummy_self`, so check for that.
@@ -2059,9 +2059,9 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                 match prim_ty {
                     hir::PrimTy::Bool => tcx.types.bool,
                     hir::PrimTy::Char => tcx.types.char,
-                    hir::PrimTy::Int(it) => tcx.mk_mach_int(it),
-                    hir::PrimTy::Uint(uit) => tcx.mk_mach_uint(uit),
-                    hir::PrimTy::Float(ft) => tcx.mk_mach_float(ft),
+                    hir::PrimTy::Int(it) => tcx.mk_mach_int(ty::int_ty(it)),
+                    hir::PrimTy::Uint(uit) => tcx.mk_mach_uint(ty::uint_ty(uit)),
+                    hir::PrimTy::Float(ft) => tcx.mk_mach_float(ty::float_ty(ft)),
                     hir::PrimTy::Str => tcx.types.str_,
                 }
             }

@@ -16,8 +16,8 @@ use crate::{
 use crate::{Module, ModuleData, ModuleKind, NameBinding, NameBindingKind, Segment, ToNameBinding};
 
 use rustc_ast::visit::{self, AssocCtxt, Visitor};
-use rustc_ast::{self as ast, Block, ForeignItem, ForeignItemKind, Item, ItemKind, NodeId};
-use rustc_ast::{AssocItem, AssocItemKind, MetaItemKind, StmtKind};
+use rustc_ast::{self as ast, AssocItem, AssocItemKind, MetaItemKind, StmtKind};
+use rustc_ast::{Block, FnKind, ForeignItem, ForeignItemKind, ImplKind, Item, ItemKind, NodeId};
 use rustc_ast_lowering::ResolverAstLowering;
 use rustc_attr as attr;
 use rustc_data_structures::sync::Lrc;
@@ -115,7 +115,7 @@ impl<'a> Resolver<'a> {
         self.get_module(parent_id)
     }
 
-    crate fn get_module(&mut self, def_id: DefId) -> Module<'a> {
+    pub fn get_module(&mut self, def_id: DefId) -> Module<'a> {
         // If this is a local module, it will be in `module_map`, no need to recalculate it.
         if let Some(def_id) = def_id.as_local() {
             return self.module_map[&def_id];
@@ -887,7 +887,7 @@ impl<'a, 'b> BuildReducedGraphVisitor<'a, 'b> {
             }
 
             // These items do not add names to modules.
-            ItemKind::Impl { of_trait: Some(..), .. } => {
+            ItemKind::Impl(box ImplKind { of_trait: Some(..), .. }) => {
                 self.r.trait_impl_items.insert(local_def_id);
             }
             ItemKind::Impl { .. } | ItemKind::ForeignMod(..) | ItemKind::GlobalAsm(..) => {}
@@ -1371,7 +1371,7 @@ impl<'a, 'b> Visitor<'b> for BuildReducedGraphVisitor<'a, 'b> {
             AssocCtxt::Trait => {
                 let (def_kind, ns) = match item.kind {
                     AssocItemKind::Const(..) => (DefKind::AssocConst, ValueNS),
-                    AssocItemKind::Fn(_, ref sig, _, _) => {
+                    AssocItemKind::Fn(box FnKind(_, ref sig, _, _)) => {
                         if sig.decl.has_self() {
                             self.r.has_self.insert(def_id);
                         }
