@@ -358,7 +358,7 @@ impl GenericArgs<'_> {
             .iter()
             .filter(|arg| !arg.is_synthetic())
             .map(|arg| arg.span())
-            .fold_first(|span1, span2| span1.to(span2))
+            .reduce(|span1, span2| span1.to(span2))
     }
 
     /// Returns span encompassing arguments and their surrounding `<>` or `()`
@@ -1112,25 +1112,25 @@ pub type BinOp = Spanned<BinOpKind>;
 #[derive(Copy, Clone, PartialEq, Encodable, Debug, HashStable_Generic)]
 pub enum UnOp {
     /// The `*` operator (deferencing).
-    UnDeref,
+    Deref,
     /// The `!` operator (logical negation).
-    UnNot,
+    Not,
     /// The `-` operator (negation).
-    UnNeg,
+    Neg,
 }
 
 impl UnOp {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::UnDeref => "*",
-            Self::UnNot => "!",
-            Self::UnNeg => "-",
+            Self::Deref => "*",
+            Self::Not => "!",
+            Self::Neg => "-",
         }
     }
 
     /// Returns `true` if the unary operator takes its argument by value.
     pub fn is_by_value(self) -> bool {
-        matches!(self, Self::UnNeg | Self::UnNot)
+        matches!(self, Self::Neg | Self::Not)
     }
 }
 
@@ -1477,7 +1477,7 @@ impl Expr<'_> {
             // https://github.com/rust-lang/rfcs/blob/master/text/0803-type-ascription.md#type-ascription-and-temporaries
             ExprKind::Type(ref e, _) => e.is_place_expr(allow_projections_from),
 
-            ExprKind::Unary(UnOp::UnDeref, _) => true,
+            ExprKind::Unary(UnOp::Deref, _) => true,
 
             ExprKind::Field(ref base, _) | ExprKind::Index(ref base, _) => {
                 allow_projections_from(base) || base.is_place_expr(allow_projections_from)
@@ -2015,6 +2015,7 @@ pub struct TypeBinding<'hir> {
     pub hir_id: HirId,
     #[stable_hasher(project(name))]
     pub ident: Ident,
+    pub gen_args: &'hir GenericArgs<'hir>,
     pub kind: TypeBindingKind<'hir>,
     pub span: Span,
 }
@@ -2057,6 +2058,28 @@ pub enum PrimTy {
 }
 
 impl PrimTy {
+    /// All of the primitive types
+    pub const ALL: [Self; 17] = [
+        // any changes here should also be reflected in `PrimTy::from_name`
+        Self::Int(IntTy::I8),
+        Self::Int(IntTy::I16),
+        Self::Int(IntTy::I32),
+        Self::Int(IntTy::I64),
+        Self::Int(IntTy::I128),
+        Self::Int(IntTy::Isize),
+        Self::Uint(UintTy::U8),
+        Self::Uint(UintTy::U16),
+        Self::Uint(UintTy::U32),
+        Self::Uint(UintTy::U64),
+        Self::Uint(UintTy::U128),
+        Self::Uint(UintTy::Usize),
+        Self::Float(FloatTy::F32),
+        Self::Float(FloatTy::F64),
+        Self::Bool,
+        Self::Char,
+        Self::Str,
+    ];
+
     pub fn name_str(self) -> &'static str {
         match self {
             PrimTy::Int(i) => i.name_str(),
@@ -2077,6 +2100,33 @@ impl PrimTy {
             PrimTy::Bool => sym::bool,
             PrimTy::Char => sym::char,
         }
+    }
+
+    /// Returns the matching `PrimTy` for a `Symbol` such as "str" or "i32".
+    /// Returns `None` if no matching type is found.
+    pub fn from_name(name: Symbol) -> Option<Self> {
+        let ty = match name {
+            // any changes here should also be reflected in `PrimTy::ALL`
+            sym::i8 => Self::Int(IntTy::I8),
+            sym::i16 => Self::Int(IntTy::I16),
+            sym::i32 => Self::Int(IntTy::I32),
+            sym::i64 => Self::Int(IntTy::I64),
+            sym::i128 => Self::Int(IntTy::I128),
+            sym::isize => Self::Int(IntTy::Isize),
+            sym::u8 => Self::Uint(UintTy::U8),
+            sym::u16 => Self::Uint(UintTy::U16),
+            sym::u32 => Self::Uint(UintTy::U32),
+            sym::u64 => Self::Uint(UintTy::U64),
+            sym::u128 => Self::Uint(UintTy::U128),
+            sym::usize => Self::Uint(UintTy::Usize),
+            sym::f32 => Self::Float(FloatTy::F32),
+            sym::f64 => Self::Float(FloatTy::F64),
+            sym::bool => Self::Bool,
+            sym::char => Self::Char,
+            sym::str => Self::Str,
+            _ => return None,
+        };
+        Some(ty)
     }
 }
 
