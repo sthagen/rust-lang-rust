@@ -64,8 +64,8 @@ pub fn parse<'a>(sess: &'a Session, input: &Input) -> PResult<'a, ast::Crate> {
     }
 
     if sess.opts.debugging_opts.input_stats {
-        println!("Lines of code:             {}", sess.source_map().count_lines());
-        println!("Pre-expansion node count:  {}", count_nodes(&krate));
+        eprintln!("Lines of code:             {}", sess.source_map().count_lines());
+        eprintln!("Pre-expansion node count:  {}", count_nodes(&krate));
     }
 
     if let Some(ref s) = sess.opts.debugging_opts.show_span {
@@ -394,7 +394,7 @@ fn configure_and_expand_inner<'a>(
     // Done with macro expansion!
 
     if sess.opts.debugging_opts.input_stats {
-        println!("Post-expansion node count: {}", count_nodes(&krate));
+        eprintln!("Post-expansion node count: {}", count_nodes(&krate));
     }
 
     if sess.opts.debugging_opts.hir_stats {
@@ -831,12 +831,11 @@ fn analysis(tcx: TyCtxt<'_>, cnum: CrateNum) -> Result<()> {
             },
             {
                 par_iter(&tcx.hir().krate().modules).for_each(|(&module, _)| {
-                    let local_def_id = tcx.hir().local_def_id(module);
-                    tcx.ensure().check_mod_loops(local_def_id);
-                    tcx.ensure().check_mod_attrs(local_def_id);
-                    tcx.ensure().check_mod_naked_functions(local_def_id);
-                    tcx.ensure().check_mod_unstable_api_usage(local_def_id);
-                    tcx.ensure().check_mod_const_bodies(local_def_id);
+                    tcx.ensure().check_mod_loops(module);
+                    tcx.ensure().check_mod_attrs(module);
+                    tcx.ensure().check_mod_naked_functions(module);
+                    tcx.ensure().check_mod_unstable_api_usage(module);
+                    tcx.ensure().check_mod_const_bodies(module);
                 });
             }
         );
@@ -861,10 +860,8 @@ fn analysis(tcx: TyCtxt<'_>, cnum: CrateNum) -> Result<()> {
                         // "not all control paths return a value" is reported here.
                         //
                         // maybe move the check to a MIR pass?
-                        let local_def_id = tcx.hir().local_def_id(module);
-
-                        tcx.ensure().check_mod_liveness(local_def_id);
-                        tcx.ensure().check_mod_intrinsics(local_def_id);
+                        tcx.ensure().check_mod_liveness(module);
+                        tcx.ensure().check_mod_intrinsics(module);
                     });
                 });
             }
@@ -926,7 +923,7 @@ fn analysis(tcx: TyCtxt<'_>, cnum: CrateNum) -> Result<()> {
             {
                 sess.time("privacy_checking_modules", || {
                     par_iter(&tcx.hir().krate().modules).for_each(|(&module, _)| {
-                        tcx.ensure().check_mod_privacy(tcx.hir().local_def_id(module));
+                        tcx.ensure().check_mod_privacy(module);
                     });
                 });
             }

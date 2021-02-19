@@ -83,13 +83,13 @@ crate struct DocContext<'tcx> {
 }
 
 impl<'tcx> DocContext<'tcx> {
-    crate fn sess(&self) -> &Session {
+    crate fn sess(&self) -> &'tcx Session {
         &self.tcx.sess
     }
 
-    crate fn with_param_env<T, F: FnOnce() -> T>(&self, def_id: DefId, f: F) -> T {
+    crate fn with_param_env<T, F: FnOnce(&mut Self) -> T>(&mut self, def_id: DefId, f: F) -> T {
         let old_param_env = self.param_env.replace(self.tcx.param_env(def_id));
-        let ret = f();
+        let ret = f(self);
         self.param_env.set(old_param_env);
         ret
     }
@@ -104,24 +104,24 @@ impl<'tcx> DocContext<'tcx> {
     /// Call the closure with the given parameters set as
     /// the substitutions for a type alias' RHS.
     crate fn enter_alias<F, R>(
-        &self,
+        &mut self,
         ty_substs: FxHashMap<DefId, clean::Type>,
         lt_substs: FxHashMap<DefId, clean::Lifetime>,
         ct_substs: FxHashMap<DefId, clean::Constant>,
         f: F,
     ) -> R
     where
-        F: FnOnce() -> R,
+        F: FnOnce(&mut Self) -> R,
     {
         let (old_tys, old_lts, old_cts) = (
-            mem::replace(&mut *self.ty_substs.borrow_mut(), ty_substs),
-            mem::replace(&mut *self.lt_substs.borrow_mut(), lt_substs),
-            mem::replace(&mut *self.ct_substs.borrow_mut(), ct_substs),
+            mem::replace(&mut *self.ty_substs.get_mut(), ty_substs),
+            mem::replace(&mut *self.lt_substs.get_mut(), lt_substs),
+            mem::replace(&mut *self.ct_substs.get_mut(), ct_substs),
         );
-        let r = f();
-        *self.ty_substs.borrow_mut() = old_tys;
-        *self.lt_substs.borrow_mut() = old_lts;
-        *self.ct_substs.borrow_mut() = old_cts;
+        let r = f(self);
+        *self.ty_substs.get_mut() = old_tys;
+        *self.lt_substs.get_mut() = old_lts;
+        *self.ct_substs.get_mut() = old_cts;
         r
     }
 
@@ -161,7 +161,7 @@ impl<'tcx> DocContext<'tcx> {
             }
             Entry::Occupied(e) => e.into_mut(),
         };
-        *def_index = DefIndex::from(*def_index + 1);
+        *def_index = *def_index + 1;
 
         DefId { krate: crate_num, index: *def_index }
     }
@@ -479,7 +479,7 @@ crate fn run_global_ctxt(
     // NOTE: This is copy/pasted from typeck/lib.rs and should be kept in sync with those changes.
     tcx.sess.time("item_types_checking", || {
         for &module in tcx.hir().krate().modules.keys() {
-            tcx.ensure().check_mod_item_types(tcx.hir().local_def_id(module));
+            tcx.ensure().check_mod_item_types(module);
         }
     });
     tcx.sess.abort_if_errors();
@@ -488,8 +488,7 @@ crate fn run_global_ctxt(
     });
     tcx.sess.time("check_mod_attrs", || {
         for &module in tcx.hir().krate().modules.keys() {
-            let local_def_id = tcx.hir().local_def_id(module);
-            tcx.ensure().check_mod_attrs(local_def_id);
+            tcx.ensure().check_mod_attrs(module);
         }
     });
 
@@ -628,7 +627,7 @@ crate fn run_global_ctxt(
         };
         if run {
             debug!("running pass {}", p.pass.name);
-            krate = ctxt.tcx.sess.time(p.pass.name, || (p.pass.run)(krate, &ctxt));
+            krate = ctxt.tcx.sess.time(p.pass.name, || (p.pass.run)(krate, &mut ctxt));
         }
     }
 

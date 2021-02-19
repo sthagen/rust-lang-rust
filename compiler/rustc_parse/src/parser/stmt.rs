@@ -97,7 +97,7 @@ impl<'a> Parser<'a> {
             self.mk_stmt(lo, StmtKind::Empty)
         } else if self.token != token::CloseDelim(token::Brace) {
             // Remainder are line-expr stmts.
-            let e = self.parse_expr_res(Restrictions::STMT_EXPR, Some(attrs.into()))?;
+            let e = self.parse_expr_res(Restrictions::STMT_EXPR, Some(attrs))?;
             self.mk_stmt(lo.to(e.span), StmtKind::Expr(e))
         } else {
             self.error_outer_attrs(&attrs.take_for_recovery());
@@ -131,7 +131,7 @@ impl<'a> Parser<'a> {
             };
 
             let expr = this.with_res(Restrictions::STMT_EXPR, |this| {
-                let expr = this.parse_dot_or_call_expr_with(expr, lo, attrs.into())?;
+                let expr = this.parse_dot_or_call_expr_with(expr, lo, attrs)?;
                 this.parse_assoc_expr_with(0, LhsExpr::AlreadyParsed(expr))
             })?;
             Ok((
@@ -213,14 +213,14 @@ impl<'a> Parser<'a> {
     }
 
     fn recover_local_after_let(&mut self, lo: Span, attrs: AttrVec) -> PResult<'a, Stmt> {
-        let local = self.parse_local(attrs.into())?;
+        let local = self.parse_local(attrs)?;
         Ok(self.mk_stmt(lo.to(self.prev_token.span), StmtKind::Local(local)))
     }
 
     /// Parses a local variable declaration.
     fn parse_local(&mut self, attrs: AttrVec) -> PResult<'a, P<Local>> {
         let lo = self.prev_token.span;
-        let pat = self.parse_top_pat(GateOr::Yes, RecoverComma::Yes)?;
+        let pat = self.parse_pat_allow_top_alt(None, GateOr::Yes, RecoverComma::Yes)?;
 
         let (err, ty) = if self.eat(&token::Colon) {
             // Save the state of the parser before parsing type normally, in case there is a `:`

@@ -607,7 +607,7 @@ pub trait PrettyPrinter<'tcx>:
                     return Ok(self);
                 }
 
-                return Ok(with_no_queries(|| {
+                return with_no_queries(|| {
                     let def_key = self.tcx().def_key(def_id);
                     if let Some(name) = def_key.disambiguated_data.data.get_opt_name() {
                         p!(write("{}", name));
@@ -649,7 +649,7 @@ pub trait PrettyPrinter<'tcx>:
                         p!(" Sized");
                     }
                     Ok(self)
-                })?);
+                });
             }
             ty::Str => p!("str"),
             ty::Generator(did, substs, movability) => {
@@ -2107,11 +2107,9 @@ fn for_each_def(tcx: TyCtxt<'_>, mut collect_fn: impl for<'b> FnMut(&'b Ident, N
             continue;
         }
 
-        if let Some(local_def_id) = hir.definitions().opt_hir_id_to_local_def_id(item.hir_id) {
-            let def_id = local_def_id.to_def_id();
-            let ns = tcx.def_kind(def_id).ns().unwrap_or(Namespace::TypeNS);
-            collect_fn(&item.ident, ns, def_id);
-        }
+        let def_id = item.def_id.to_def_id();
+        let ns = tcx.def_kind(def_id).ns().unwrap_or(Namespace::TypeNS);
+        collect_fn(&item.ident, ns, def_id);
     }
 
     // Now take care of extern crate items.

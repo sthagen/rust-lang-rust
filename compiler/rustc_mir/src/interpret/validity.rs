@@ -11,7 +11,7 @@ use std::ops::RangeInclusive;
 
 use rustc_data_structures::fx::FxHashSet;
 use rustc_hir as hir;
-use rustc_middle::mir::interpret::{InterpError, InterpErrorInfo};
+use rustc_middle::mir::interpret::InterpError;
 use rustc_middle::ty;
 use rustc_middle::ty::layout::TyAndLayout;
 use rustc_span::symbol::{sym, Symbol};
@@ -21,7 +21,7 @@ use std::hash::Hash;
 
 use super::{
     CheckInAllocMsg, GlobalAlloc, InterpCx, InterpResult, MPlaceTy, Machine, MemPlaceMeta, OpTy,
-    ValueVisitor,
+    ScalarMaybeUninit, ValueVisitor,
 };
 
 macro_rules! throw_validation_failure {
@@ -83,14 +83,17 @@ macro_rules! try_validation {
             Ok(x) => x,
             // We catch the error and turn it into a validation failure. We are okay with
             // allocation here as this can only slow down builds that fail anyway.
-            $( $( Err(InterpErrorInfo { kind: $p, .. }) )|+ =>
-                throw_validation_failure!(
-                    $where,
-                    { $( $what_fmt ),+ } $( expected { $( $expected_fmt ),+ } )?
-                ),
-            )+
-            #[allow(unreachable_patterns)]
-            Err(e) => Err::<!, _>(e)?,
+            Err(e) => match e.kind() {
+                $(
+                    $($p)|+ =>
+                       throw_validation_failure!(
+                            $where,
+                            { $( $what_fmt ),+ } $( expected { $( $expected_fmt ),+ } )?
+                        )
+                ),+,
+                #[allow(unreachable_patterns)]
+                _ => Err::<!, _>(e)?,
+            }
         }
     }};
 }
@@ -378,7 +381,11 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
         value: OpTy<'tcx, M::PointerTag>,
         kind: &str,
     ) -> InterpResult<'tcx> {
-        let value = self.ecx.read_immediate(value)?;
+        let value = try_validation!(
+            self.ecx.read_immediate(value),
+            self.path,
+            err_unsup!(ReadPointerAsBytes) => { "part of a pointer" } expected { "a proper pointer or integer value" },
+        );
         // Handle wide pointers.
         // Check metadata early, for better diagnostics
         let place = try_validation!(
@@ -485,6 +492,17 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
         Ok(())
     }
 
+    fn read_scalar(
+        &self,
+        op: OpTy<'tcx, M::PointerTag>,
+    ) -> InterpResult<'tcx, ScalarMaybeUninit<M::PointerTag>> {
+        Ok(try_validation!(
+            self.ecx.read_scalar(op),
+            self.path,
+            err_unsup!(ReadPointerAsBytes) => { "(potentially part of) a pointer" } expected { "plain (non-pointer) bytes" },
+        ))
+    }
+
     /// Check if this is a value of primitive type, and if yes check the validity of the value
     /// at that type.  Return `true` if the type is indeed primitive.
     fn try_visit_primitive(
@@ -495,7 +513,7 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
         let ty = value.layout.ty;
         match ty.kind() {
             ty::Bool => {
-                let value = self.ecx.read_scalar(value)?;
+                let value = self.read_scalar(value)?;
                 try_validation!(
                     value.to_bool(),
                     self.path,
@@ -505,7 +523,7 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
                 Ok(true)
             }
             ty::Char => {
-                let value = self.ecx.read_scalar(value)?;
+                let value = self.read_scalar(value)?;
                 try_validation!(
                     value.to_char(),
                     self.path,
@@ -515,11 +533,7 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
                 Ok(true)
             }
             ty::Float(_) | ty::Int(_) | ty::Uint(_) => {
-                let value = try_validation!(
-                    self.ecx.read_scalar(value),
-                    self.path,
-                    err_unsup!(ReadPointerAsBytes) => { "read of part of a pointer" },
-                );
+                let value = self.read_scalar(value)?;
                 // NOTE: Keep this in sync with the array optimization for int/float
                 // types below!
                 if self.ctfe_mode.is_some() {
@@ -541,9 +555,10 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
                 // actually enforce the strict rules for raw pointers (mostly because
                 // that lets us re-use `ref_to_mplace`).
                 let place = try_validation!(
-                    self.ecx.ref_to_mplace(self.ecx.read_immediate(value)?),
+                    self.ecx.read_immediate(value).and_then(|i| self.ecx.ref_to_mplace(i)),
                     self.path,
                     err_ub!(InvalidUninitBytes(None)) => { "uninitialized raw pointer" },
+                    err_unsup!(ReadPointerAsBytes) => { "part of a pointer" } expected { "a proper pointer or integer value" },
                 );
                 if place.layout.is_unsized() {
                     self.check_wide_ptr_meta(place.meta, place.layout)?;
@@ -569,7 +584,14 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
                 Ok(true)
             }
             ty::FnPtr(_sig) => {
-                let value = self.ecx.read_scalar(value)?;
+                let value = try_validation!(
+                    self.ecx.read_immediate(value),
+                    self.path,
+                    err_unsup!(ReadPointerAsBytes) => { "part of a pointer" } expected { "a proper pointer or integer value" },
+                );
+                // Make sure we print a `ScalarMaybeUninit` (and not an `ImmTy`) in the error
+                // message below.
+                let value = value.to_scalar_or_uninit();
                 let _fn = try_validation!(
                     value.check_init().and_then(|ptr| self.ecx.memory.get_fn(ptr)),
                     self.path,
@@ -615,7 +637,7 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
         op: OpTy<'tcx, M::PointerTag>,
         scalar_layout: &Scalar,
     ) -> InterpResult<'tcx> {
-        let value = self.ecx.read_scalar(op)?;
+        let value = self.read_scalar(op)?;
         let valid_range = &scalar_layout.valid_range;
         let (lo, hi) = valid_range.clone().into_inner();
         // Determine the allowed range
@@ -858,7 +880,7 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValueVisitor<'mir, 'tcx, M>
                     Err(err) => {
                         // For some errors we might be able to provide extra information.
                         // (This custom logic does not fit the `try_validation!` macro.)
-                        match err.kind {
+                        match err.kind() {
                             err_ub!(InvalidUninitBytes(Some(access))) => {
                                 // Some byte was uninitialized, determine which
                                 // element that byte belongs to so we can
@@ -916,10 +938,10 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         match visitor.visit_value(op) {
             Ok(()) => Ok(()),
             // Pass through validation failures.
-            Err(err) if matches!(err.kind, err_ub!(ValidationFailure { .. })) => Err(err),
+            Err(err) if matches!(err.kind(), err_ub!(ValidationFailure { .. })) => Err(err),
             // Also pass through InvalidProgram, those just indicate that we could not
             // validate and each caller will know best what to do with them.
-            Err(err) if matches!(err.kind, InterpError::InvalidProgram(_)) => Err(err),
+            Err(err) if matches!(err.kind(), InterpError::InvalidProgram(_)) => Err(err),
             // Avoid other errors as those do not show *where* in the value the issue lies.
             Err(err) => {
                 err.print_backtrace();

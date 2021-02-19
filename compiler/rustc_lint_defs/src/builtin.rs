@@ -1814,14 +1814,12 @@ declare_lint! {
 }
 
 declare_lint! {
-    /// The `irrefutable_let_patterns` lint detects detects [irrefutable
-    /// patterns] in [if-let] and [while-let] statements.
-    ///
-    ///
+    /// The `irrefutable_let_patterns` lint detects [irrefutable patterns]
+    /// in [`if let`]s, [`while let`]s, and `if let` guards.
     ///
     /// ### Example
     ///
-    /// ```rust
+    /// ```
     /// if let _ = 123 {
     ///     println!("always runs!");
     /// }
@@ -1832,7 +1830,7 @@ declare_lint! {
     /// ### Explanation
     ///
     /// There usually isn't a reason to have an irrefutable pattern in an
-    /// if-let or while-let statement, because the pattern will always match
+    /// `if let` or `while let` statement, because the pattern will always match
     /// successfully. A [`let`] or [`loop`] statement will suffice. However,
     /// when generating code with a macro, forbidding irrefutable patterns
     /// would require awkward workarounds in situations where the macro
@@ -1843,14 +1841,14 @@ declare_lint! {
     /// See [RFC 2086] for more details.
     ///
     /// [irrefutable patterns]: https://doc.rust-lang.org/reference/patterns.html#refutability
-    /// [if-let]: https://doc.rust-lang.org/reference/expressions/if-expr.html#if-let-expressions
-    /// [while-let]: https://doc.rust-lang.org/reference/expressions/loop-expr.html#predicate-pattern-loops
+    /// [`if let`]: https://doc.rust-lang.org/reference/expressions/if-expr.html#if-let-expressions
+    /// [`while let`]: https://doc.rust-lang.org/reference/expressions/loop-expr.html#predicate-pattern-loops
     /// [`let`]: https://doc.rust-lang.org/reference/statements.html#let-statements
     /// [`loop`]: https://doc.rust-lang.org/reference/expressions/loop-expr.html#infinite-loops
     /// [RFC 2086]: https://github.com/rust-lang/rfcs/blob/master/text/2086-allow-if-let-irrefutables.md
     pub IRREFUTABLE_LET_PATTERNS,
     Warn,
-    "detects irrefutable patterns in if-let and while-let statements"
+    "detects irrefutable patterns in `if let` and `while let` statements"
 }
 
 declare_lint! {

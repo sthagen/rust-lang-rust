@@ -264,7 +264,6 @@
 #![feature(exhaustive_patterns)]
 #![feature(extend_one)]
 #![feature(external_doc)]
-#![feature(fmt_as_str)]
 #![feature(fn_traits)]
 #![feature(format_args_nl)]
 #![feature(gen_future)]
@@ -276,6 +275,7 @@
 #![feature(int_error_matching)]
 #![feature(integer_atomics)]
 #![feature(into_future)]
+#![cfg_attr(not(bootstrap), feature(intra_doc_pointers))]
 #![feature(lang_items)]
 #![feature(link_args)]
 #![feature(linkage)]
@@ -582,3 +582,11 @@ include!("keyword_docs.rs");
 // is unconditional, so the unstable feature needs to be defined somewhere.
 #[unstable(feature = "restricted_std", issue = "none")]
 mod __restricted_std_workaround {}
+
+mod sealed {
+    /// This trait being unreachable from outside the crate
+    /// prevents outside implementations of our extension traits.
+    /// This allows adding more trait methods in the future.
+    #[unstable(feature = "sealed", issue = "none")]
+    pub trait Sealed {}
+}

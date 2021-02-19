@@ -816,6 +816,7 @@ pub(crate) mod builtin {
     #[macro_export]
     macro_rules! env {
         ($name:expr $(,)?) => {{ /* compiler built-in */ }};
+        ($name:expr, $error_msg:expr $(,)?) => {{ /* compiler built-in */ }};
     }
 
     /// Optionally inspects an environment variable at compile time.
@@ -1208,7 +1209,8 @@ pub(crate) mod builtin {
     ///
     /// This macro has a second form, where a custom panic message can
     /// be provided with or without arguments for formatting. See [`std::fmt`]
-    /// for syntax for this form.
+    /// for syntax for this form. Expressions used as format arguments will only
+    /// be evaluated if the assertion fails.
     ///
     /// [`std::fmt`]: ../std/fmt/index.html
     ///

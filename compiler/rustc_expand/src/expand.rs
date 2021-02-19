@@ -12,8 +12,8 @@ use rustc_ast::ptr::P;
 use rustc_ast::token;
 use rustc_ast::tokenstream::TokenStream;
 use rustc_ast::visit::{self, AssocCtxt, Visitor};
-use rustc_ast::{AttrItem, AttrStyle, Block, ItemKind, LitKind, MacArgs};
-use rustc_ast::{MacCallStmt, MacStmtStyle, MetaItemKind, NestedMetaItem};
+use rustc_ast::{AttrItem, AttrStyle, Block, Inline, ItemKind, LitKind, MacArgs};
+use rustc_ast::{MacCallStmt, MacStmtStyle, MetaItemKind, ModKind, NestedMetaItem};
 use rustc_ast::{NodeId, PatKind, Path, StmtKind, Unsafe};
 use rustc_ast_pretty::pprust;
 use rustc_attr::{self as attr, is_builtin_attr, HasAttrs};
@@ -22,7 +22,7 @@ use rustc_data_structures::stack::ensure_sufficient_stack;
 use rustc_data_structures::sync::Lrc;
 use rustc_errors::{Applicability, PResult};
 use rustc_feature::Features;
-use rustc_parse::parser::{AttemptLocalParseRecovery, ForceCollect, Parser};
+use rustc_parse::parser::{AttemptLocalParseRecovery, ForceCollect, GateOr, Parser, RecoverComma};
 use rustc_parse::validate_attr;
 use rustc_session::lint::builtin::UNUSED_DOC_COMMENTS;
 use rustc_session::lint::BuiltinLintDiagnostics;
@@ -350,6 +350,8 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
         MacroExpander { cx, monotonic }
     }
 
+    // FIXME: Avoid visiting the crate as a `Mod` item,
+    // make crate a first class expansion target instead.
     pub fn expand_crate(&mut self, mut krate: ast::Crate) -> ast::Crate {
         let mut module = ModuleData {
             mod_path: vec![Ident::from_str(&self.cx.ecfg.crate_name)],
@@ -362,12 +364,13 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
         self.cx.root_path = module.directory.clone();
         self.cx.current_expansion.module = Rc::new(module);
 
-        let orig_mod_span = krate.module.inner;
-
         let krate_item = AstFragment::Items(smallvec![P(ast::Item {
             attrs: krate.attrs,
             span: krate.span,
-            kind: ast::ItemKind::Mod(krate.module),
+            kind: ast::ItemKind::Mod(
+                Unsafe::No,
+                ModKind::Loaded(krate.items, Inline::Yes, krate.span)
+            ),
             ident: Ident::invalid(),
             id: ast::DUMMY_NODE_ID,
             vis: ast::Visibility {
@@ -379,28 +382,22 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
         })]);
 
         match self.fully_expand_fragment(krate_item).make_items().pop().map(P::into_inner) {
-            Some(ast::Item { attrs, kind: ast::ItemKind::Mod(module), .. }) => {
+            Some(ast::Item {
+                attrs,
+                kind: ast::ItemKind::Mod(_, ModKind::Loaded(items, ..)),
+                ..
+            }) => {
                 krate.attrs = attrs;
-                krate.module = module;
+                krate.items = items;
             }
             None => {
                 // Resolution failed so we return an empty expansion
                 krate.attrs = vec![];
-                krate.module = ast::Mod {
-                    inner: orig_mod_span,
-                    unsafety: Unsafe::No,
-                    items: vec![],
-                    inline: true,
-                };
+                krate.items = vec![];
             }
             Some(ast::Item { span, kind, .. }) => {
                 krate.attrs = vec![];
-                krate.module = ast::Mod {
-                    inner: orig_mod_span,
-                    unsafety: Unsafe::No,
-                    items: vec![],
-                    inline: true,
-                };
+                krate.items = vec![];
                 self.cx.span_err(
                     span,
                     &format!(
@@ -814,7 +811,9 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
         impl<'ast, 'a> Visitor<'ast> for GateProcMacroInput<'a> {
             fn visit_item(&mut self, item: &'ast ast::Item) {
                 match &item.kind {
-                    ast::ItemKind::Mod(module) if !module.inline => {
+                    ast::ItemKind::Mod(_, mod_kind)
+                        if !matches!(mod_kind, ModKind::Loaded(_, Inline::Yes, _)) =>
+                    {
                         feature_err(
                             self.parse_sess,
                             sym::proc_macro_hygiene,
@@ -914,7 +913,9 @@ pub fn parse_ast_fragment<'a>(
             }
         }
         AstFragmentKind::Ty => AstFragment::Ty(this.parse_ty()?),
-        AstFragmentKind::Pat => AstFragment::Pat(this.parse_pat(None)?),
+        AstFragmentKind::Pat => {
+            AstFragment::Pat(this.parse_pat_allow_top_alt(None, GateOr::Yes, RecoverComma::No)?)
+        }
         AstFragmentKind::Arms
         | AstFragmentKind::Fields
         | AstFragmentKind::FieldPats
@@ -1067,8 +1068,6 @@ impl<'a, 'b> MutVisitor for InvocationCollector<'a, 'b> {
     fn visit_expr(&mut self, expr: &mut P<ast::Expr>) {
         self.cfg.configure_expr(expr);
         visit_clobber(expr.deref_mut(), |mut expr| {
-            self.cfg.configure_expr_kind(&mut expr.kind);
-
             if let Some(attr) = self.take_first_attr(&mut expr) {
                 // Collect the invoc regardless of whether or not attributes are permitted here
                 // expansion will eat the attribute so it won't error later.
@@ -1166,8 +1165,6 @@ impl<'a, 'b> MutVisitor for InvocationCollector<'a, 'b> {
     fn filter_map_expr(&mut self, expr: P<ast::Expr>) -> Option<P<ast::Expr>> {
         let expr = configure!(self, expr);
         expr.filter_map(|mut expr| {
-            self.cfg.configure_expr_kind(&mut expr.kind);
-
             if let Some(attr) = self.take_first_attr(&mut expr) {
                 self.cfg.maybe_emit_expr_attr_err(&attr.0);
 
@@ -1192,7 +1189,6 @@ impl<'a, 'b> MutVisitor for InvocationCollector<'a, 'b> {
     }
 
     fn visit_pat(&mut self, pat: &mut P<ast::Pat>) {
-        self.cfg.configure_pat(pat);
         match pat.kind {
             PatKind::MacCall(_) => {}
             _ => return noop_visit_pat(pat, self),
@@ -1274,52 +1270,47 @@ impl<'a, 'b> MutVisitor for InvocationCollector<'a, 'b> {
                     _ => unreachable!(),
                 })
             }
-            ast::ItemKind::Mod(ref mut old_mod @ ast::Mod { .. }) if ident != Ident::invalid() => {
+            ast::ItemKind::Mod(_, ref mut mod_kind) if ident != Ident::invalid() => {
                 let sess = &self.cx.sess.parse_sess;
                 let orig_ownership = self.cx.current_expansion.directory_ownership;
                 let mut module = (*self.cx.current_expansion.module).clone();
 
                 let pushed = &mut false; // Record `parse_external_mod` pushing so we can pop.
                 let dir = Directory { ownership: orig_ownership, path: module.directory };
-                let Directory { ownership, path } = if old_mod.inline {
-                    // Inline `mod foo { ... }`, but we still need to push directories.
-                    item.attrs = attrs;
-                    push_directory(&self.cx.sess, ident, &item.attrs, dir)
-                } else {
-                    // We have an outline `mod foo;` so we need to parse the file.
-                    let (new_mod, dir) = parse_external_mod(
-                        &self.cx.sess,
-                        ident,
-                        span,
-                        old_mod.unsafety,
-                        dir,
-                        &mut attrs,
-                        pushed,
-                    );
-
-                    let krate = ast::Crate {
-                        span: new_mod.inner,
-                        module: new_mod,
-                        attrs,
-                        proc_macros: vec![],
-                    };
-                    if let Some(extern_mod_loaded) = self.cx.extern_mod_loaded {
-                        extern_mod_loaded(&krate, ident);
+                let Directory { ownership, path } = match mod_kind {
+                    ModKind::Loaded(_, Inline::Yes, _) => {
+                        // Inline `mod foo { ... }`, but we still need to push directories.
+                        item.attrs = attrs;
+                        push_directory(&self.cx.sess, ident, &item.attrs, dir)
                     }
+                    ModKind::Loaded(_, Inline::No, _) => {
+                        panic!("`mod` item is loaded from a file for the second time")
+                    }
+                    ModKind::Unloaded => {
+                        // We have an outline `mod foo;` so we need to parse the file.
+                        let (items, inner_span, dir) =
+                            parse_external_mod(&self.cx.sess, ident, span, dir, &mut attrs, pushed);
 
-                    *old_mod = krate.module;
-                    item.attrs = krate.attrs;
-                    // File can have inline attributes, e.g., `#![cfg(...)]` & co. => Reconfigure.
-                    item = match self.configure(item) {
-                        Some(node) => node,
-                        None => {
-                            if *pushed {
-                                sess.included_mod_stack.borrow_mut().pop();
-                            }
-                            return Default::default();
+                        let krate =
+                            ast::Crate { attrs, items, span: inner_span, proc_macros: vec![] };
+                        if let Some(extern_mod_loaded) = self.cx.extern_mod_loaded {
+                            extern_mod_loaded(&krate, ident);
                         }
-                    };
-                    dir
+
+                        *mod_kind = ModKind::Loaded(krate.items, Inline::No, inner_span);
+                        item.attrs = krate.attrs;
+                        // File can have inline attributes, e.g., `#![cfg(...)]` & co. => Reconfigure.
+                        item = match self.configure(item) {
+                            Some(node) => node,
+                            None => {
+                                if *pushed {
+                                    sess.included_mod_stack.borrow_mut().pop();
+                                }
+                                return Default::default();
+                            }
+                        };
+                        dir
+                    }
                 };
 
                 // Set the module info before we flat map.
@@ -1406,15 +1397,12 @@ impl<'a, 'b> MutVisitor for InvocationCollector<'a, 'b> {
         });
     }
 
-    fn visit_foreign_mod(&mut self, foreign_mod: &mut ast::ForeignMod) {
-        self.cfg.configure_foreign_mod(foreign_mod);
-        noop_visit_foreign_mod(foreign_mod, self);
-    }
-
     fn flat_map_foreign_item(
         &mut self,
-        mut foreign_item: P<ast::ForeignItem>,
+        foreign_item: P<ast::ForeignItem>,
     ) -> SmallVec<[P<ast::ForeignItem>; 1]> {
+        let mut foreign_item = configure!(self, foreign_item);
+
         if let Some(attr) = self.take_first_attr(&mut foreign_item) {
             return self
                 .collect_attr(
@@ -1437,11 +1425,6 @@ impl<'a, 'b> MutVisitor for InvocationCollector<'a, 'b> {
             }
             _ => noop_flat_map_foreign_item(foreign_item, self),
         }
-    }
-
-    fn visit_item_kind(&mut self, item: &mut ast::ItemKind) {
-        self.cfg.configure_item_kind(item);
-        noop_visit_item_kind(item, self);
     }
 
     fn flat_map_generic_param(
@@ -1602,11 +1585,6 @@ impl<'a, 'b> MutVisitor for InvocationCollector<'a, 'b> {
             *id = self.cx.resolver.next_node_id()
         }
     }
-
-    fn visit_fn_decl(&mut self, mut fn_decl: &mut P<ast::FnDecl>) {
-        self.cfg.configure_fn_decl(&mut fn_decl);
-        noop_visit_fn_decl(fn_decl, self);
-    }
 }
 
 pub struct ExpansionConfig<'feat> {
@@ -1614,9 +1592,8 @@ pub struct ExpansionConfig<'feat> {
     pub features: Option<&'feat Features>,
     pub recursion_limit: Limit,
     pub trace_mac: bool,
-    pub should_test: bool, // If false, strip `#[test]` nodes
-    pub keep_macs: bool,
-    pub span_debug: bool, // If true, use verbose debugging for `proc_macro::Span`
+    pub should_test: bool,          // If false, strip `#[test]` nodes
+    pub span_debug: bool,           // If true, use verbose debugging for `proc_macro::Span`
     pub proc_macro_backtrace: bool, // If true, show backtraces for proc-macro panics
 }
 
@@ -1628,7 +1605,6 @@ impl<'feat> ExpansionConfig<'feat> {
             recursion_limit: Limit::new(1024),
             trace_mac: false,
             should_test: false,
-            keep_macs: false,
             span_debug: false,
             proc_macro_backtrace: false,
         }

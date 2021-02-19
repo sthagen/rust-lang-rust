@@ -225,7 +225,7 @@ fn report_bin_hex_error(
                 (t.name_str(), actually.to_string())
             }
         };
-        let mut err = lint.build(&format!("literal out of range for {}", t));
+        let mut err = lint.build(&format!("literal out of range for `{}`", t));
         err.note(&format!(
             "the literal `{}` (decimal `{}`) does not fit into \
              the type `{}` and will become `{}{}`",
@@ -238,12 +238,12 @@ fn report_bin_hex_error(
                 let (sans_suffix, _) = repr_str.split_at(pos);
                 err.span_suggestion(
                     expr.span,
-                    &format!("consider using `{}` instead", sugg_ty),
+                    &format!("consider using the type `{}` instead", sugg_ty),
                     format!("{}{}", sans_suffix, sugg_ty),
                     Applicability::MachineApplicable,
                 );
             } else {
-                err.help(&format!("consider using `{}` instead", sugg_ty));
+                err.help(&format!("consider using the type `{}` instead", sugg_ty));
             }
         }
         err.emit();
@@ -338,18 +338,23 @@ fn lint_int_literal<'tcx>(
         }
 
         cx.struct_span_lint(OVERFLOWING_LITERALS, e.span, |lint| {
-            lint.build(&format!("literal out of range for `{}`", t.name_str()))
-                .note(&format!(
-                    "the literal `{}` does not fit into the type `{}` whose range is `{}..={}`",
-                    cx.sess()
-                        .source_map()
-                        .span_to_snippet(lit.span)
-                        .expect("must get snippet from literal"),
-                    t.name_str(),
-                    min,
-                    max,
-                ))
-                .emit();
+            let mut err = lint.build(&format!("literal out of range for `{}`", t.name_str()));
+            err.note(&format!(
+                "the literal `{}` does not fit into the type `{}` whose range is `{}..={}`",
+                cx.sess()
+                    .source_map()
+                    .span_to_snippet(lit.span)
+                    .expect("must get snippet from literal"),
+                t.name_str(),
+                min,
+                max,
+            ));
+            if let Some(sugg_ty) =
+                get_type_suggestion(&cx.typeck_results().node_type(e.hir_id), v, negative)
+            {
+                err.help(&format!("consider using the type `{}` instead", sugg_ty));
+            }
+            err.emit();
         });
     }
 }
@@ -1262,15 +1267,15 @@ impl<'a, 'tcx> ImproperCTypesVisitor<'a, 'tcx> {
 impl<'tcx> LateLintPass<'tcx> for ImproperCTypesDeclarations {
     fn check_foreign_item(&mut self, cx: &LateContext<'_>, it: &hir::ForeignItem<'_>) {
         let mut vis = ImproperCTypesVisitor { cx, mode: CItemKind::Declaration };
-        let abi = cx.tcx.hir().get_foreign_abi(it.hir_id);
+        let abi = cx.tcx.hir().get_foreign_abi(it.hir_id());
 
         if !vis.is_internal_abi(abi) {
             match it.kind {
                 hir::ForeignItemKind::Fn(ref decl, _, _) => {
-                    vis.check_foreign_fn(it.hir_id, decl);
+                    vis.check_foreign_fn(it.hir_id(), decl);
                 }
                 hir::ForeignItemKind::Static(ref ty, _) => {
-                    vis.check_foreign_static(it.hir_id, ty.span);
+                    vis.check_foreign_static(it.hir_id(), ty.span);
                 }
                 hir::ForeignItemKind::Type => (),
             }
@@ -1308,8 +1313,7 @@ declare_lint_pass!(VariantSizeDifferences => [VARIANT_SIZE_DIFFERENCES]);
 impl<'tcx> LateLintPass<'tcx> for VariantSizeDifferences {
     fn check_item(&mut self, cx: &LateContext<'_>, it: &hir::Item<'_>) {
         if let hir::ItemKind::Enum(ref enum_definition, _) = it.kind {
-            let item_def_id = cx.tcx.hir().local_def_id(it.hir_id);
-            let t = cx.tcx.type_of(item_def_id);
+            let t = cx.tcx.type_of(it.def_id);
             let ty = cx.tcx.erase_regions(t);
             let layout = match cx.layout_of(ty) {
                 Ok(layout) => layout,

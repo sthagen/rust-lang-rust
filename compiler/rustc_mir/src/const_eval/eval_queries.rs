@@ -208,7 +208,7 @@ pub fn eval_to_const_value_raw_provider<'tcx>(
     tcx: TyCtxt<'tcx>,
     key: ty::ParamEnvAnd<'tcx, GlobalId<'tcx>>,
 ) -> ::rustc_middle::mir::interpret::EvalToConstValueResult<'tcx> {
-    // see comment in const_eval_raw_provider for what we're doing here
+    // see comment in eval_to_allocation_raw_provider for what we're doing here
     if key.param_env.reveal() == Reveal::All {
         let mut key = key;
         key.param_env = key.param_env.with_user_facing();
@@ -230,7 +230,7 @@ pub fn eval_to_const_value_raw_provider<'tcx>(
         };
         return eval_nullary_intrinsic(tcx, key.param_env, def_id, substs).map_err(|error| {
             let span = tcx.def_span(def_id);
-            let error = ConstEvalErr { error: error.kind, stacktrace: vec![], span };
+            let error = ConstEvalErr { error: error.into_kind(), stacktrace: vec![], span };
             error.report_as_error(tcx.at(span), "could not evaluate nullary intrinsic")
         });
     }
