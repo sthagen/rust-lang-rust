@@ -667,17 +667,6 @@ impl OutputFilenames {
         path
     }
 
-    /// Returns the name of the Split DWARF file - this can differ depending on which Split DWARF
-    /// mode is being used, which is the logic that this function is intended to encapsulate.
-    pub fn split_dwarf_filename(
-        &self,
-        split_debuginfo_kind: SplitDebuginfo,
-        cgu_name: Option<&str>,
-    ) -> Option<PathBuf> {
-        self.split_dwarf_path(split_debuginfo_kind, cgu_name)
-            .map(|path| path.strip_prefix(&self.out_directory).unwrap_or(&path).to_path_buf())
-    }
-
     /// Returns the path for the Split DWARF file - this can differ depending on which Split DWARF
     /// mode is being used, which is the logic that this function is intended to encapsulate.
     pub fn split_dwarf_path(
@@ -2313,6 +2302,7 @@ crate mod dep_tracking {
     use std::collections::hash_map::DefaultHasher;
     use std::collections::BTreeMap;
     use std::hash::Hash;
+    use std::num::NonZeroUsize;
     use std::path::PathBuf;
 
     pub trait DepTrackingHash {
@@ -2353,6 +2343,7 @@ crate mod dep_tracking {
     impl_dep_tracking_hash_via_hash!(lint::Level);
     impl_dep_tracking_hash_via_hash!(Option<bool>);
     impl_dep_tracking_hash_via_hash!(Option<usize>);
+    impl_dep_tracking_hash_via_hash!(Option<NonZeroUsize>);
     impl_dep_tracking_hash_via_hash!(Option<String>);
     impl_dep_tracking_hash_via_hash!(Option<(String, u64)>);
     impl_dep_tracking_hash_via_hash!(Option<Vec<String>>);
