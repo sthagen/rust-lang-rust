@@ -18,8 +18,8 @@ use crate::llvm::debuginfo::{
 };
 use crate::value::Value;
 
+use cstr::cstr;
 use rustc_codegen_ssa::traits::*;
-use rustc_data_structures::const_cstr;
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
@@ -1075,7 +1075,7 @@ pub fn compile_unit_metadata(
                 gcov_cu_info.len() as c_uint,
             );
 
-            let llvm_gcov_ident = const_cstr!("llvm.gcov");
+            let llvm_gcov_ident = cstr!("llvm.gcov");
             llvm::LLVMAddNamedMetadataOperand(
                 debug_context.llmod,
                 llvm_gcov_ident.as_ptr(),
@@ -1093,7 +1093,7 @@ pub fn compile_unit_metadata(
             );
             llvm::LLVMAddNamedMetadataOperand(
                 debug_context.llmod,
-                const_cstr!("llvm.ident").as_ptr(),
+                cstr!("llvm.ident").as_ptr(),
                 llvm::LLVMMDNodeInContext(debug_context.llcontext, &name_metadata, 1),
             );
         }
@@ -2372,7 +2372,7 @@ fn compute_type_parameters(cx: &CodegenCx<'ll, 'tcx>, ty: Ty<'tcx>) -> &'ll DIAr
     fn get_parameter_names(cx: &CodegenCx<'_, '_>, generics: &ty::Generics) -> Vec<Symbol> {
         let mut names = generics
             .parent
-            .map_or(vec![], |def_id| get_parameter_names(cx, cx.tcx.generics_of(def_id)));
+            .map_or_else(Vec::new, |def_id| get_parameter_names(cx, cx.tcx.generics_of(def_id)));
         names.extend(generics.params.iter().map(|param| param.name));
         names
     }
