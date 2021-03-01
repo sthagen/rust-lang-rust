@@ -31,7 +31,6 @@
 //   since leaf edges are empty and need no data representation. In an internal node,
 //   an edge both identifies a position and contains a pointer to a child node.
 
-use core::cmp::Ordering;
 use core::marker::PhantomData;
 use core::mem::{self, MaybeUninit};
 use core::ptr::{self, NonNull};
@@ -461,7 +460,7 @@ impl<K, V> NodeRef<marker::Dying, K, V, marker::LeafOrInternal> {
     }
 }
 
-impl<'a, K, V, Type> NodeRef<marker::Mut<'a>, K, V, Type> {
+impl<'a, K, V> NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal> {
     /// Unsafely asserts to the compiler the static information that this node is a `Leaf`.
     unsafe fn cast_to_leaf_unchecked(self) -> NodeRef<marker::Mut<'a>, K, V, marker::Leaf> {
         debug_assert!(self.height == 0);
@@ -473,7 +472,9 @@ impl<'a, K, V, Type> NodeRef<marker::Mut<'a>, K, V, Type> {
         debug_assert!(self.height > 0);
         NodeRef { height: self.height, node: self.node, _marker: PhantomData }
     }
+}
 
+impl<'a, K, V, Type> NodeRef<marker::Mut<'a>, K, V, Type> {
     /// Temporarily takes out another, mutable reference to the same node. Beware, as
     /// this method is very dangerous, doubly so since it may not immediately appear
     /// dangerous.
@@ -742,15 +743,6 @@ impl<BorrowType, K, V, NodeType, HandleType> PartialEq
     }
 }
 
-impl<BorrowType, K, V, NodeType, HandleType> PartialOrd
-    for Handle<NodeRef<BorrowType, K, V, NodeType>, HandleType>
-{
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        let Self { node, idx, _marker } = self;
-        if node.eq(&other.node) { Some(idx.cmp(&other.idx)) } else { None }
-    }
-}
-
 impl<BorrowType, K, V, NodeType, HandleType>
     Handle<NodeRef<BorrowType, K, V, NodeType>, HandleType>
 {
@@ -761,15 +753,17 @@ impl<BorrowType, K, V, NodeType, HandleType>
     }
 }
 
-impl<'a, K, V, NodeType, HandleType> Handle<NodeRef<marker::Mut<'a>, K, V, NodeType>, HandleType> {
+impl<'a, K, V, Type> Handle<NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>, Type> {
     /// Unsafely asserts to the compiler the static information that the handle's node is a `Leaf`.
     pub unsafe fn cast_to_leaf_unchecked(
         self,
-    ) -> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, HandleType> {
+    ) -> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, Type> {
         let node = unsafe { self.node.cast_to_leaf_unchecked() };
         Handle { node, idx: self.idx, _marker: PhantomData }
     }
+}
 
+impl<'a, K, V, NodeType, HandleType> Handle<NodeRef<marker::Mut<'a>, K, V, NodeType>, HandleType> {
     /// Temporarily takes out another, mutable handle on the same location. Beware, as
     /// this method is very dangerous, doubly so since it may not immediately appear
     /// dangerous.
@@ -1519,15 +1513,13 @@ impl<BorrowType, K, V> Handle<NodeRef<BorrowType, K, V, marker::Internal>, marke
     }
 }
 
-impl<BorrowType, K, V, HandleType>
-    Handle<NodeRef<BorrowType, K, V, marker::LeafOrInternal>, HandleType>
-{
+impl<BorrowType, K, V, Type> Handle<NodeRef<BorrowType, K, V, marker::LeafOrInternal>, Type> {
     /// Checks whether the underlying node is an `Internal` node or a `Leaf` node.
     pub fn force(
         self,
     ) -> ForceResult<
-        Handle<NodeRef<BorrowType, K, V, marker::Leaf>, HandleType>,
-        Handle<NodeRef<BorrowType, K, V, marker::Internal>, HandleType>,
+        Handle<NodeRef<BorrowType, K, V, marker::Leaf>, Type>,
+        Handle<NodeRef<BorrowType, K, V, marker::Internal>, Type>,
     > {
         match self.node.force() {
             ForceResult::Leaf(node) => {
