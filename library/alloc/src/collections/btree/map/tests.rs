@@ -136,8 +136,9 @@ impl<'a, K: 'a, V: 'a> NodeRef<marker::Immut<'a>, K, V, marker::LeafOrInternal> 
     }
 }
 
-// Tests our value of MIN_INSERTS_HEIGHT_2. It may change according to the
-// implementation of insertion, but it's best to be aware of when it does.
+// Tests our value of MIN_INSERTS_HEIGHT_2. Failure may mean you just need to
+// adapt that value to match a change in node::CAPACITY or the choices made
+// during insertion, otherwise other test cases may fail or be less useful.
 #[test]
 fn test_levels() {
     let mut map = BTreeMap::new();
@@ -1800,11 +1801,11 @@ fn test_occupied_entry_key() {
     let key = "hello there";
     let value = "value goes here";
     assert!(a.is_empty());
-    a.insert(key.clone(), value.clone());
+    a.insert(key, value);
     assert_eq!(a.len(), 1);
     assert_eq!(a[key], value);
 
-    match a.entry(key.clone()) {
+    match a.entry(key) {
         Vacant(_) => panic!(),
         Occupied(e) => assert_eq!(key, *e.key()),
     }
@@ -1820,11 +1821,11 @@ fn test_vacant_entry_key() {
     let value = "value goes here";
 
     assert!(a.is_empty());
-    match a.entry(key.clone()) {
+    match a.entry(key) {
         Occupied(_) => panic!(),
         Vacant(e) => {
             assert_eq!(key, *e.key());
-            e.insert(value.clone());
+            e.insert(value);
         }
     }
     assert_eq!(a.len(), 1);

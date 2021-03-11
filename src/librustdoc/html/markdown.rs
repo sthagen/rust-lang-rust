@@ -21,7 +21,6 @@ use rustc_data_structures::fx::FxHashMap;
 use rustc_hir::def_id::DefId;
 use rustc_hir::HirId;
 use rustc_middle::ty::TyCtxt;
-use rustc_session::lint;
 use rustc_span::edition::Edition;
 use rustc_span::Span;
 use std::borrow::Cow;
@@ -721,7 +720,7 @@ impl<'tcx> ExtraInfo<'tcx> {
             (None, None) => return,
         };
         self.tcx.struct_span_lint_hir(
-            lint::builtin::INVALID_CODEBLOCK_ATTRIBUTES,
+            crate::lint::INVALID_CODEBLOCK_ATTRIBUTES,
             hir_id,
             self.sp,
             |lint| {
@@ -1094,6 +1093,7 @@ fn markdown_summary_with_limit(md: &str, length_limit: usize) -> (String, bool) 
                 Tag::Emphasis => s.push_str("</em>"),
                 Tag::Strong => s.push_str("</strong>"),
                 Tag::Paragraph => break,
+                Tag::Heading(..) => break,
                 _ => {}
             },
             Event::HardBreak | Event::SoftBreak => {
@@ -1372,10 +1372,6 @@ impl IdMap {
         for id in ids {
             let _ = self.derive(id);
         }
-    }
-
-    crate fn reset(&mut self) {
-        self.map = init_id_map();
     }
 
     crate fn derive<S: AsRef<str> + ToString>(&mut self, candidate: S) -> String {

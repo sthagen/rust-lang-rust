@@ -40,7 +40,7 @@ pub struct MatchBranchSimplification;
 
 impl<'tcx> MirPass<'tcx> for MatchBranchSimplification {
     fn run_pass(&self, tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
-        if tcx.sess.opts.debugging_opts.mir_opt_level <= 1 {
+        if tcx.sess.mir_opt_level() < 3 {
             return;
         }
 
@@ -139,8 +139,7 @@ impl<'tcx> MirPass<'tcx> for MatchBranchSimplification {
                             let op = if f_b { BinOp::Eq } else { BinOp::Ne };
                             let rhs = Rvalue::BinaryOp(
                                 op,
-                                Operand::Copy(Place::from(discr_local)),
-                                const_cmp,
+                                box (Operand::Copy(Place::from(discr_local)), const_cmp),
                             );
                             Statement {
                                 source_info: f.source_info,

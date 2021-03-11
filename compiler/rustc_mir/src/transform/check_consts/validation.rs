@@ -222,7 +222,7 @@ impl Validator<'mir, 'tcx> {
 
         // `async` functions cannot be `const fn`. This is checked during AST lowering, so there's
         // no need to emit duplicate errors here.
-        if is_async_fn(self.ccx) || body.generator_kind.is_some() {
+        if is_async_fn(self.ccx) || body.generator.is_some() {
             tcx.sess.delay_span_bug(body.span, "`async` functions cannot be `const fn`");
             return;
         }
@@ -684,8 +684,8 @@ impl Visitor<'tcx> for Validator<'mir, 'tcx> {
                 }
             }
 
-            Rvalue::BinaryOp(op, ref lhs, ref rhs)
-            | Rvalue::CheckedBinaryOp(op, ref lhs, ref rhs) => {
+            Rvalue::BinaryOp(op, box (ref lhs, ref rhs))
+            | Rvalue::CheckedBinaryOp(op, box (ref lhs, ref rhs)) => {
                 let lhs_ty = lhs.ty(self.body, self.tcx);
                 let rhs_ty = rhs.ty(self.body, self.tcx);
 
@@ -808,6 +808,7 @@ impl Visitor<'tcx> for Validator<'mir, 'tcx> {
             | StatementKind::Retag { .. }
             | StatementKind::AscribeUserType(..)
             | StatementKind::Coverage(..)
+            | StatementKind::CopyNonOverlapping(..)
             | StatementKind::Nop => {}
         }
     }
@@ -819,7 +820,7 @@ impl Visitor<'tcx> for Validator<'mir, 'tcx> {
         self.super_terminator(terminator, location);
 
         match &terminator.kind {
-            TerminatorKind::Call { func, .. } => {
+            TerminatorKind::Call { func, args, .. } => {
                 let ConstCx { tcx, body, param_env, .. } = *self.ccx;
                 let caller = self.def_id().to_def_id();
 
@@ -881,9 +882,17 @@ impl Visitor<'tcx> for Validator<'mir, 'tcx> {
                 }
 
                 // At this point, we are calling a function, `callee`, whose `DefId` is known...
-
                 if is_lang_panic_fn(tcx, callee) {
                     self.check_op(ops::Panic);
+
+                    // const-eval of the `begin_panic` fn assumes the argument is `&str`
+                    if Some(callee) == tcx.lang_items().begin_panic_fn() {
+                        match args[0].ty(&self.ccx.body.local_decls, tcx).kind() {
+                            ty::Ref(_, ty, _) if ty.is_str() => (),
+                            _ => self.check_op(ops::PanicNonStr),
+                        }
+                    }
+
                     return;
                 }
 

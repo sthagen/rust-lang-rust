@@ -1536,7 +1536,7 @@ fn parse_target_triple(matches: &getopts::Matches, error_format: ErrorOutputType
                 early_error(error_format, &format!("target file {:?} does not exist", path))
             })
         }
-        Some(target) => TargetTriple::from_alias(target),
+        Some(target) => TargetTriple::TargetTriple(target),
         _ => TargetTriple::from_triple(host_triple()),
     }
 }
@@ -1938,21 +1938,23 @@ pub fn build_session_options(matches: &getopts::Matches) -> Options {
             Some(SymbolManglingVersion::V0) => {}
         }
 
-        if debugging_opts.mir_opt_level > 1 {
-            // Functions inlined during MIR transform can, at best, make it impossible to
-            // effectively cover inlined functions, and, at worst, break coverage map generation
-            // during LLVM codegen. For example, function counter IDs are only unique within a
-            // function. Inlining after these counters are injected can produce duplicate counters,
-            // resulting in an invalid coverage map (and ICE); so this option combination is not
-            // allowed.
-            early_warn(
-                error_format,
-                &format!(
-                    "`-Z mir-opt-level={}` (or any level > 1) enables function inlining, which \
+        if let Some(mir_opt_level) = debugging_opts.mir_opt_level {
+            if mir_opt_level > 1 {
+                // Functions inlined during MIR transform can, at best, make it impossible to
+                // effectively cover inlined functions, and, at worst, break coverage map generation
+                // during LLVM codegen. For example, function counter IDs are only unique within a
+                // function. Inlining after these counters are injected can produce duplicate counters,
+                // resulting in an invalid coverage map (and ICE); so this option combination is not
+                // allowed.
+                early_warn(
+                    error_format,
+                    &format!(
+                        "`-Z mir-opt-level={}` (or any level > 1) enables function inlining, which \
                     is incompatible with `-Z instrument-coverage`. Inlining will be disabled.",
-                    debugging_opts.mir_opt_level,
-                ),
-            );
+                        mir_opt_level,
+                    ),
+                );
+            }
         }
     }
 
@@ -2066,6 +2068,8 @@ fn parse_pretty(
             ("expanded", _) => Source(PpSourceMode::Expanded),
             ("expanded,identified", _) => Source(PpSourceMode::ExpandedIdentified),
             ("expanded,hygiene", _) => Source(PpSourceMode::ExpandedHygiene),
+            ("ast-tree", true) => AstTree(PpAstTreeMode::Normal),
+            ("ast-tree,expanded", true) => AstTree(PpAstTreeMode::Expanded),
             ("hir", true) => Hir(PpHirMode::Normal),
             ("hir,identified", true) => Hir(PpHirMode::Identified),
             ("hir,typed", true) => Hir(PpHirMode::Typed),
@@ -2080,8 +2084,8 @@ fn parse_pretty(
                             "argument to `unpretty` must be one of `normal`, \
                                         `expanded`, `identified`, `expanded,identified`, \
                                         `expanded,hygiene`, `everybody_loops`, \
-                                        `hir`, `hir,identified`, `hir,typed`, `hir-tree`, \
-                                        `mir` or `mir-cfg`; got {}",
+                                        `ast-tree`, `ast-tree,expanded`, `hir`, `hir,identified`, \
+                                        `hir,typed`, `hir-tree`, `mir` or `mir-cfg`; got {}",
                             name
                         ),
                     );
@@ -2234,6 +2238,14 @@ pub enum PpSourceMode {
 }
 
 #[derive(Copy, Clone, PartialEq, Debug)]
+pub enum PpAstTreeMode {
+    /// `-Zunpretty=ast`
+    Normal,
+    /// `-Zunpretty=ast,expanded`
+    Expanded,
+}
+
+#[derive(Copy, Clone, PartialEq, Debug)]
 pub enum PpHirMode {
     /// `-Zunpretty=hir`
     Normal,
@@ -2248,6 +2260,7 @@ pub enum PpMode {
     /// Options that print the source code, i.e.
     /// `--pretty` and `-Zunpretty=everybody_loops`
     Source(PpSourceMode),
+    AstTree(PpAstTreeMode),
     /// Options that print the HIR, i.e. `-Zunpretty=hir`
     Hir(PpHirMode),
     /// `-Zunpretty=hir-tree`
@@ -2263,9 +2276,10 @@ impl PpMode {
         use PpMode::*;
         use PpSourceMode::*;
         match *self {
-            Source(Normal | Identified) => false,
+            Source(Normal | Identified) | AstTree(PpAstTreeMode::Normal) => false,
 
             Source(Expanded | EveryBodyLoops | ExpandedIdentified | ExpandedHygiene)
+            | AstTree(PpAstTreeMode::Expanded)
             | Hir(_)
             | HirTree
             | Mir

@@ -8,7 +8,6 @@ use crate::parse::ParseSess;
 use crate::search_paths::{PathKind, SearchPath};
 
 pub use rustc_ast::attr::MarkedAttrs;
-pub use rustc_ast::crate_disambiguator::CrateDisambiguator;
 pub use rustc_ast::Attribute;
 use rustc_data_structures::flock;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
@@ -23,6 +22,7 @@ use rustc_errors::json::JsonEmitter;
 use rustc_errors::registry::Registry;
 use rustc_errors::{Applicability, Diagnostic, DiagnosticBuilder, DiagnosticId, ErrorReported};
 use rustc_lint_defs::FutureBreakage;
+pub use rustc_span::crate_disambiguator::CrateDisambiguator;
 use rustc_span::edition::Edition;
 use rustc_span::source_map::{FileLoader, MultiSpan, RealFileLoader, SourceMap, Span};
 use rustc_span::{sym, SourceFileHashAlgorithm, Symbol};
@@ -639,6 +639,12 @@ impl Session {
     }
     pub fn binary_dep_depinfo(&self) -> bool {
         self.opts.debugging_opts.binary_dep_depinfo
+    }
+    pub fn mir_opt_level(&self) -> usize {
+        self.opts
+            .debugging_opts
+            .mir_opt_level
+            .unwrap_or_else(|| if self.opts.optimize != config::OptLevel::No { 2 } else { 1 })
     }
 
     /// Gets the features enabled for the current compilation session.

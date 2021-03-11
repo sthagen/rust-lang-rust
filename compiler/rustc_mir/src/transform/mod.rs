@@ -430,8 +430,7 @@ fn mir_drops_elaborated_and_const_checked<'tcx>(
         let def = ty::WithOptConstParam::unknown(did);
 
         // Do not compute the mir call graph without said call graph actually being used.
-        // Keep this in sync with the mir inliner's optimization level.
-        if tcx.sess.opts.debugging_opts.mir_opt_level >= 2 {
+        if inline::is_enabled(tcx) {
             let _ = tcx.mir_inliner_callees(ty::InstanceDef::Item(def));
         }
     }
@@ -476,7 +475,7 @@ fn run_post_borrowck_cleanup_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tc
 }
 
 fn run_optimization_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
-    let mir_opt_level = tcx.sess.opts.debugging_opts.mir_opt_level;
+    let mir_opt_level = tcx.sess.mir_opt_level();
 
     // Lowering generator control-flow and variables has to happen before we do anything else
     // to them. We run some optimizations before that, because they may be harder to do on the state

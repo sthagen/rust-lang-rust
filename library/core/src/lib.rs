@@ -114,7 +114,7 @@
 #![feature(extended_key_value_attributes)]
 #![feature(extern_types)]
 #![feature(fundamental)]
-#![cfg_attr(not(bootstrap), feature(intra_doc_pointers))]
+#![feature(intra_doc_pointers)]
 #![feature(intrinsics)]
 #![feature(lang_items)]
 #![feature(link_llvm_intrinsics)]
@@ -164,8 +164,8 @@
 #![feature(const_caller_location)]
 #![feature(slice_ptr_get)]
 #![feature(no_niche)] // rust-lang/rust#68303
-#![feature(unsafe_block_in_unsafe_fn)]
 #![feature(int_error_matching)]
+#![cfg_attr(bootstrap, feature(unsafe_block_in_unsafe_fn))]
 #![deny(unsafe_op_in_unsafe_fn)]
 
 #[prelude_import]
@@ -297,7 +297,8 @@ pub mod primitive;
     unused_imports,
     unsafe_op_in_unsafe_fn
 )]
-#[allow(non_autolinks)]
+#[cfg_attr(bootstrap, allow(non_autolinks))]
+#[cfg_attr(not(bootstrap), allow(rustdoc::non_autolinks))]
 // FIXME: This annotation should be moved into rust-lang/stdarch after clashing_extern_declarations is
 // merged. It currently cannot because bootstrap fails as the lint hasn't been defined yet.
 #[allow(clashing_extern_declarations)]

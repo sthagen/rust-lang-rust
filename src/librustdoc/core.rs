@@ -22,23 +22,21 @@ use rustc_session::DiagnosticOutput;
 use rustc_session::Session;
 use rustc_span::source_map;
 use rustc_span::symbol::sym;
-use rustc_span::DUMMY_SP;
+use rustc_span::{Span, DUMMY_SP};
 
+use std::cell::RefCell;
+use std::collections::hash_map::Entry;
 use std::mem;
 use std::rc::Rc;
-use std::{cell::RefCell, collections::hash_map::Entry};
 
 use crate::clean;
 use crate::clean::inline::build_external_trait;
 use crate::clean::{AttributesExt, TraitWithExtraInfo, MAX_DEF_IDX};
-use crate::config::{Options as RustdocOptions, RenderOptions};
-use crate::config::{OutputFormat, RenderInfo};
+use crate::config::{Options as RustdocOptions, OutputFormat, RenderOptions};
 use crate::formats::cache::Cache;
 use crate::passes::{self, Condition::*, ConditionalPass};
 
 crate use rustc_session::config::{DebuggingOptions, Input, Options};
-
-crate type ExternalPaths = FxHashMap<DefId, (Vec<String>, clean::TypeKind)>;
 
 crate struct DocContext<'tcx> {
     crate tcx: TyCtxt<'tcx>,
@@ -52,8 +50,6 @@ crate struct DocContext<'tcx> {
     ///
     /// Most of this logic is copied from rustc_lint::late.
     crate param_env: ParamEnv<'tcx>,
-    /// Later on moved into `cache`
-    crate renderinfo: RenderInfo,
     /// Later on moved through `clean::Crate` into `cache`
     crate external_traits: Rc<RefCell<FxHashMap<DefId, clean::TraitWithExtraInfo>>>,
     /// Used while populating `external_traits` to ensure we don't process the same trait twice at
@@ -80,9 +76,13 @@ crate struct DocContext<'tcx> {
     ///
     /// See `collect_intra_doc_links::traits_implemented_by` for more details.
     /// `map<module, set<trait>>`
-    crate module_trait_cache: RefCell<FxHashMap<DefId, FxHashSet<DefId>>>,
-    /// Fake empty cache used when cache is required as parameter.
+    crate module_trait_cache: FxHashMap<DefId, FxHashSet<DefId>>,
+    /// This same cache is used throughout rustdoc, including in [`crate::html::render`].
     crate cache: Cache,
+    /// Used by [`clean::inline`] to tell if an item has already been inlined.
+    crate inlined: FxHashSet<DefId>,
+    /// Used by `calculate_doc_coverage`.
+    crate output_format: OutputFormat,
 }
 
 impl<'tcx> DocContext<'tcx> {
@@ -169,13 +169,13 @@ impl<'tcx> DocContext<'tcx> {
 
     /// Like `hir().local_def_id_to_hir_id()`, but skips calling it on fake DefIds.
     /// (This avoids a slice-index-out-of-bounds panic.)
-    crate fn as_local_hir_id(&self, def_id: DefId) -> Option<HirId> {
+    crate fn as_local_hir_id(tcx: TyCtxt<'_>, def_id: DefId) -> Option<HirId> {
         if MAX_DEF_IDX.with(|m| {
             m.borrow().get(&def_id.krate).map(|&idx| idx <= def_id.index).unwrap_or(false)
         }) {
             None
         } else {
-            def_id.as_local().map(|def_id| self.tcx.hir().local_def_id_to_hir_id(def_id))
+            def_id.as_local().map(|def_id| tcx.hir().local_def_id_to_hir_id(def_id))
         }
     }
 }
@@ -228,64 +228,6 @@ crate fn new_handler(
     )
 }
 
-/// This function is used to setup the lint initialization. By default, in rustdoc, everything
-/// is "allowed". Depending if we run in test mode or not, we want some of them to be at their
-/// default level. For example, the "INVALID_CODEBLOCK_ATTRIBUTES" lint is activated in both
-/// modes.
-///
-/// A little detail easy to forget is that there is a way to set the lint level for all lints
-/// through the "WARNINGS" lint. To prevent this to happen, we set it back to its "normal" level
-/// inside this function.
-///
-/// It returns a tuple containing:
-///  * Vector of tuples of lints' name and their associated "max" level
-///  * HashMap of lint id with their associated "max" level
-pub(crate) fn init_lints<F>(
-    mut allowed_lints: Vec<String>,
-    lint_opts: Vec<(String, lint::Level)>,
-    filter_call: F,
-) -> (Vec<(String, lint::Level)>, FxHashMap<lint::LintId, lint::Level>)
-where
-    F: Fn(&lint::Lint) -> Option<(String, lint::Level)>,
-{
-    let warnings_lint_name = lint::builtin::WARNINGS.name;
-
-    allowed_lints.push(warnings_lint_name.to_owned());
-    allowed_lints.extend(lint_opts.iter().map(|(lint, _)| lint).cloned());
-
-    let lints = || {
-        lint::builtin::HardwiredLints::get_lints()
-            .into_iter()
-            .chain(rustc_lint::SoftLints::get_lints().into_iter())
-    };
-
-    let lint_opts = lints()
-        .filter_map(|lint| {
-            // Permit feature-gated lints to avoid feature errors when trying to
-            // allow all lints.
-            if lint.feature_gate.is_some() || allowed_lints.iter().any(|l| lint.name == l) {
-                None
-            } else {
-                filter_call(lint)
-            }
-        })
-        .chain(lint_opts.into_iter())
-        .collect::<Vec<_>>();
-
-    let lint_caps = lints()
-        .filter_map(|lint| {
-            // We don't want to allow *all* lints so let's ignore
-            // those ones.
-            if allowed_lints.iter().any(|l| lint.name == l) {
-                None
-            } else {
-                Some((lint::LintId::of(lint), lint::Allow))
-            }
-        })
-        .collect();
-    (lint_opts, lint_caps)
-}
-
 /// Parse, resolve, and typecheck the given crate.
 crate fn create_config(
     RustdocOptions {
@@ -314,37 +256,22 @@ crate fn create_config(
     let cpath = Some(input.clone());
     let input = Input::File(input);
 
-    let broken_intra_doc_links = lint::builtin::BROKEN_INTRA_DOC_LINKS.name;
-    let private_intra_doc_links = lint::builtin::PRIVATE_INTRA_DOC_LINKS.name;
-    let missing_docs = rustc_lint::builtin::MISSING_DOCS.name;
-    let missing_doc_example = rustc_lint::builtin::MISSING_DOC_CODE_EXAMPLES.name;
-    let private_doc_tests = rustc_lint::builtin::PRIVATE_DOC_TESTS.name;
-    let no_crate_level_docs = rustc_lint::builtin::MISSING_CRATE_LEVEL_DOCS.name;
-    let invalid_codeblock_attributes_name = rustc_lint::builtin::INVALID_CODEBLOCK_ATTRIBUTES.name;
-    let invalid_html_tags = rustc_lint::builtin::INVALID_HTML_TAGS.name;
-    let renamed_and_removed_lints = rustc_lint::builtin::RENAMED_AND_REMOVED_LINTS.name;
-    let non_autolinks = rustc_lint::builtin::NON_AUTOLINKS.name;
-    let unknown_lints = rustc_lint::builtin::UNKNOWN_LINTS.name;
-
-    // In addition to those specific lints, we also need to allow those given through
-    // command line, otherwise they'll get ignored and we don't want that.
-    let lints_to_show = vec![
-        broken_intra_doc_links.to_owned(),
-        private_intra_doc_links.to_owned(),
-        missing_docs.to_owned(),
-        missing_doc_example.to_owned(),
-        private_doc_tests.to_owned(),
-        no_crate_level_docs.to_owned(),
-        invalid_codeblock_attributes_name.to_owned(),
-        invalid_html_tags.to_owned(),
-        renamed_and_removed_lints.to_owned(),
-        unknown_lints.to_owned(),
-        non_autolinks.to_owned(),
+    // By default, rustdoc ignores all lints.
+    // Specifically unblock lints relevant to documentation or the lint machinery itself.
+    let mut lints_to_show = vec![
+        // it's unclear whether this should be part of rustdoc directly (#77364)
+        rustc_lint::builtin::MISSING_DOCS.name.to_string(),
+        // these are definitely not part of rustdoc, but we want to warn on them anyway.
+        rustc_lint::builtin::RENAMED_AND_REMOVED_LINTS.name.to_string(),
+        rustc_lint::builtin::UNKNOWN_LINTS.name.to_string(),
     ];
+    lints_to_show.extend(crate::lint::RUSTDOC_LINTS.iter().map(|lint| lint.name.to_string()));
 
-    let (lint_opts, lint_caps) = init_lints(lints_to_show, lint_opts, |lint| {
+    let (lint_opts, lint_caps) = crate::lint::init_lints(lints_to_show, lint_opts, |lint| {
         // FIXME: why is this necessary?
-        if lint.name == broken_intra_doc_links || lint.name == invalid_codeblock_attributes_name {
+        if lint.name == crate::lint::BROKEN_INTRA_DOC_LINKS.name
+            || lint.name == crate::lint::INVALID_CODEBLOCK_ATTRIBUTES.name
+        {
             None
         } else {
             Some((lint.name_lower(), lint::Allow))
@@ -384,7 +311,7 @@ crate fn create_config(
         diagnostic_output: DiagnosticOutput::Default,
         stderr: None,
         lint_caps,
-        register_lints: None,
+        register_lints: Some(box crate::lint::register_lints),
         override_queries: Some(|_sess, providers, _external_providers| {
             // Most lints will require typechecking, so just don't run them.
             providers.lint_mod = |_, _| {};
@@ -462,10 +389,10 @@ crate fn run_global_ctxt(
     tcx: TyCtxt<'_>,
     resolver: Rc<RefCell<interface::BoxedResolver>>,
     mut default_passes: passes::DefaultPassOption,
-    mut manual_passes: Vec<String>,
+    manual_passes: Vec<String>,
     render_options: RenderOptions,
     output_format: OutputFormat,
-) -> (clean::Crate, RenderInfo, RenderOptions) {
+) -> (clean::Crate, RenderOptions, Cache) {
     // Certain queries assume that some checks were run elsewhere
     // (see https://github.com/rust-lang/rust/pull/73566#issuecomment-656954425),
     // so type-check everything other than function bodies in this crate before running lints.
@@ -492,6 +419,7 @@ crate fn run_global_ctxt(
             tcx.ensure().check_mod_attrs(module);
         }
     });
+    rustc_passes::stability::check_unused_or_stable_features(tcx);
 
     let access_levels = tcx.privacy_access_levels(LOCAL_CRATE);
     // Convert from a HirId set to a DefId set since we don't always have easy access
@@ -504,17 +432,12 @@ crate fn run_global_ctxt(
             .collect(),
     };
 
-    let mut renderinfo = RenderInfo::default();
-    renderinfo.access_levels = access_levels;
-    renderinfo.output_format = output_format;
-
     let mut ctxt = DocContext {
         tcx,
         resolver,
         param_env: ParamEnv::empty(),
         external_traits: Default::default(),
         active_extern_traits: Default::default(),
-        renderinfo,
         ty_substs: Default::default(),
         lt_substs: Default::default(),
         ct_substs: Default::default(),
@@ -527,9 +450,11 @@ crate fn run_global_ctxt(
             .cloned()
             .filter(|trait_def_id| tcx.trait_is_auto(*trait_def_id))
             .collect(),
+        module_trait_cache: FxHashMap::default(),
+        cache: Cache::new(access_levels, render_options.document_private),
+        inlined: FxHashSet::default(),
+        output_format,
         render_options,
-        module_trait_cache: RefCell::new(FxHashMap::default()),
-        cache: Cache::default(),
     };
 
     // Small hack to force the Sized trait to be present.
@@ -553,8 +478,8 @@ crate fn run_global_ctxt(
             let help = "The following guide may be of use:\n\
                 https://doc.rust-lang.org/nightly/rustdoc/how-to-write-documentation.html";
             tcx.struct_lint_node(
-                rustc_lint::builtin::MISSING_CRATE_LEVEL_DOCS,
-                ctxt.as_local_hir_id(m.def_id).unwrap(),
+                crate::lint::MISSING_CRATE_LEVEL_DOCS,
+                DocContext::as_local_hir_id(tcx, m.def_id).unwrap(),
                 |lint| {
                     let mut diag =
                         lint.build("no documentation found for this crate's top-level module");
@@ -565,20 +490,43 @@ crate fn run_global_ctxt(
         }
     }
 
-    fn report_deprecated_attr(name: &str, diag: &rustc_errors::Handler) {
-        let mut msg = diag
-            .struct_warn(&format!("the `#![doc({})]` attribute is considered deprecated", name));
-        msg.warn(
+    fn report_deprecated_attr(name: &str, diag: &rustc_errors::Handler, sp: Span) {
+        let mut msg =
+            diag.struct_span_warn(sp, &format!("the `#![doc({})]` attribute is deprecated", name));
+        msg.note(
             "see issue #44136 <https://github.com/rust-lang/rust/issues/44136> \
              for more information",
         );
 
         if name == "no_default_passes" {
             msg.help("you may want to use `#![doc(document_private_items)]`");
+        } else if name.starts_with("plugins") {
+            msg.warn("`#![doc(plugins = \"...\")]` no longer functions; see CVE-2018-1000622 <https://nvd.nist.gov/vuln/detail/CVE-2018-1000622>");
         }
 
         msg.emit();
     }
+
+    let parse_pass = |name: &str, sp: Option<Span>| {
+        if let Some(pass) = passes::find_pass(name) {
+            Some(ConditionalPass::always(pass))
+        } else {
+            let msg = &format!("ignoring unknown pass `{}`", name);
+            let mut warning = if let Some(sp) = sp {
+                tcx.sess.struct_span_warn(sp, msg)
+            } else {
+                tcx.sess.struct_warn(msg)
+            };
+            if name == "collapse-docs" {
+                warning.note("the `collapse-docs` pass was removed in #80261 <https://github.com/rust-lang/rust/pull/80261>");
+            }
+            warning.emit();
+            None
+        }
+    };
+
+    let mut manual_passes: Vec<_> =
+        manual_passes.into_iter().flat_map(|name| parse_pass(&name, None)).collect();
 
     // Process all of the crate attributes, extracting plugin metadata along
     // with the passes which we are supposed to run.
@@ -588,29 +536,25 @@ crate fn run_global_ctxt(
         let name = attr.name_or_empty();
         if attr.is_word() {
             if name == sym::no_default_passes {
-                report_deprecated_attr("no_default_passes", diag);
+                report_deprecated_attr("no_default_passes", diag, attr.span());
                 if default_passes == passes::DefaultPassOption::Default {
                     default_passes = passes::DefaultPassOption::None;
                 }
             }
         } else if let Some(value) = attr.value_str() {
-            let sink = match name {
+            match name {
                 sym::passes => {
-                    report_deprecated_attr("passes = \"...\"", diag);
-                    &mut manual_passes
+                    report_deprecated_attr("passes = \"...\"", diag, attr.span());
                 }
                 sym::plugins => {
-                    report_deprecated_attr("plugins = \"...\"", diag);
-                    eprintln!(
-                        "WARNING: `#![doc(plugins = \"...\")]` \
-                         no longer functions; see CVE-2018-1000622"
-                    );
+                    report_deprecated_attr("plugins = \"...\"", diag, attr.span());
                     continue;
                 }
                 _ => continue,
             };
             for name in value.as_str().split_whitespace() {
-                sink.push(name.to_string());
+                let span = attr.name_value_literal_span().unwrap_or(attr.span());
+                manual_passes.extend(parse_pass(name, Some(span)));
             }
         }
 
@@ -619,17 +563,7 @@ crate fn run_global_ctxt(
         }
     }
 
-    let passes = passes::defaults(default_passes).iter().copied().chain(
-        manual_passes.into_iter().flat_map(|name| {
-            if let Some(pass) = passes::find_pass(&name) {
-                Some(ConditionalPass::always(pass))
-            } else {
-                error!("unknown pass {}, skipping", name);
-                None
-            }
-        }),
-    );
-
+    let passes = passes::defaults(default_passes).iter().copied().chain(manual_passes);
     info!("Executing passes");
 
     for p in passes {
@@ -647,10 +581,16 @@ crate fn run_global_ctxt(
 
     ctxt.sess().abort_if_errors();
 
+    let render_options = ctxt.render_options;
+    let mut cache = ctxt.cache;
+    krate = tcx.sess.time("create_format_cache", || {
+        cache.populate(krate, tcx, &render_options.extern_html_root_urls, &render_options.output)
+    });
+
     // The main crate doc comments are always collapsed.
     krate.collapsed = true;
 
-    (krate, ctxt.renderinfo, ctxt.render_options)
+    (krate, render_options, cache)
 }
 
 /// Due to <https://github.com/rust-lang/rust/pull/73566>,

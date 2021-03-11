@@ -915,16 +915,6 @@ impl Stmt {
         }
     }
 
-    pub fn tokens_mut(&mut self) -> Option<&mut LazyTokenStream> {
-        match self.kind {
-            StmtKind::Local(ref mut local) => local.tokens.as_mut(),
-            StmtKind::Item(ref mut item) => item.tokens.as_mut(),
-            StmtKind::Expr(ref mut expr) | StmtKind::Semi(ref mut expr) => expr.tokens.as_mut(),
-            StmtKind::Empty => None,
-            StmtKind::MacCall(ref mut mac) => mac.tokens.as_mut(),
-        }
-    }
-
     pub fn has_trailing_semicolon(&self) -> bool {
         match &self.kind {
             StmtKind::Semi(_) => true,
@@ -1083,7 +1073,7 @@ pub struct Expr {
 }
 
 // `Expr` is used a lot. Make sure it doesn't unintentionally get bigger.
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
 rustc_data_structures::static_assert_size!(Expr, 120);
 
 impl Expr {
@@ -1137,6 +1127,14 @@ impl Expr {
             )),
             _ => None,
         }
+    }
+
+    pub fn peel_parens(&self) -> &Expr {
+        let mut expr = self;
+        while let ExprKind::Paren(inner) = &expr.kind {
+            expr = &inner;
+        }
+        expr
     }
 
     /// Attempts to reparse as `Ty` (for diagnostic purposes).
@@ -2757,7 +2755,7 @@ pub enum ItemKind {
     MacroDef(MacroDef),
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
 rustc_data_structures::static_assert_size!(ItemKind, 112);
 
 impl ItemKind {
@@ -2831,7 +2829,7 @@ pub enum AssocItemKind {
     MacCall(MacCall),
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
 rustc_data_structures::static_assert_size!(AssocItemKind, 72);
 
 impl AssocItemKind {
@@ -2883,7 +2881,7 @@ pub enum ForeignItemKind {
     MacCall(MacCall),
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
 rustc_data_structures::static_assert_size!(ForeignItemKind, 72);
 
 impl From<ForeignItemKind> for ItemKind {

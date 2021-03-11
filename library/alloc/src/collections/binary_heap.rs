@@ -247,6 +247,7 @@ use super::SpecExtend;
 /// [peek]: BinaryHeap::peek
 /// [peek\_mut]: BinaryHeap::peek_mut
 #[stable(feature = "rust1", since = "1.0.0")]
+#[cfg_attr(not(test), rustc_diagnostic_item = "BinaryHeap")]
 pub struct BinaryHeap<T> {
     data: Vec<T>,
 }
@@ -565,7 +566,7 @@ impl<T: Ord> BinaryHeap<T> {
         let mut child = 2 * hole.pos() + 1;
 
         // Loop invariant: child == 2 * hole.pos() + 1.
-        while child < end - 1 {
+        while child <= end.saturating_sub(2) {
             // compare with the greater of the two children
             // SAFETY: child < end - 1 < self.len() and
             //  child + 1 < end <= self.len(), so they're valid indexes.
@@ -624,7 +625,7 @@ impl<T: Ord> BinaryHeap<T> {
         let mut child = 2 * hole.pos() + 1;
 
         // Loop invariant: child == 2 * hole.pos() + 1.
-        while child < end - 1 {
+        while child <= end.saturating_sub(2) {
             // SAFETY: child < end - 1 < self.len() and
             //  child + 1 < end <= self.len(), so they're valid indexes.
             //  child == 2 * hole.pos() + 1 != hole.pos() and

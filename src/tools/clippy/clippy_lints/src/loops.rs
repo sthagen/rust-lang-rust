@@ -578,7 +578,7 @@ impl<'tcx> LateLintPass<'tcx> for Loops {
             // also check for empty `loop {}` statements, skipping those in #[panic_handler]
             if block.stmts.is_empty() && block.expr.is_none() && !is_in_panic_handler(cx, expr) {
                 let msg = "empty `loop {}` wastes CPU cycles";
-                let help = if is_no_std_crate(cx.tcx.hir().krate()) {
+                let help = if is_no_std_crate(cx) {
                     "you should either use `panic!()` or add a call pausing or sleeping the thread to the loop body"
                 } else {
                     "you should either use `panic!()` or add `std::thread::sleep(..);` to the loop body"
@@ -885,7 +885,9 @@ struct MinifyingSugg<'a>(Sugg<'a>);
 
 impl<'a> MinifyingSugg<'a> {
     fn as_str(&self) -> &str {
-        let Sugg::NonParen(s) | Sugg::MaybeParen(s) | Sugg::BinOp(_, s) = &self.0;
+        let s = match &self.0 {
+            Sugg::NonParen(s) | Sugg::MaybeParen(s) | Sugg::BinOp(_, s) => s,
+        };
         s.as_ref()
     }
 
@@ -1010,7 +1012,7 @@ fn is_slice_like<'tcx>(cx: &LateContext<'tcx>, ty: Ty<'_>) -> bool {
         _ => false,
     };
 
-    is_slice || is_type_diagnostic_item(cx, ty, sym::vec_type) || is_type_diagnostic_item(cx, ty, sym!(vecdeque_type))
+    is_slice || is_type_diagnostic_item(cx, ty, sym::vec_type) || is_type_diagnostic_item(cx, ty, sym::vecdeque_type)
 }
 
 fn fetch_cloned_expr<'tcx>(expr: &'tcx Expr<'tcx>) -> &'tcx Expr<'tcx> {
@@ -1908,7 +1910,7 @@ fn check_for_loop_over_map_kv<'tcx>(
                 _ => arg,
             };
 
-            if is_type_diagnostic_item(cx, ty, sym!(hashmap_type)) || match_type(cx, ty, &paths::BTREEMAP) {
+            if is_type_diagnostic_item(cx, ty, sym::hashmap_type) || match_type(cx, ty, &paths::BTREEMAP) {
                 span_lint_and_then(
                     cx,
                     FOR_KV_MAP,
@@ -2386,9 +2388,9 @@ fn is_ref_iterable_type(cx: &LateContext<'_>, e: &Expr<'_>) -> bool {
     is_iterable_array(ty, cx) ||
     is_type_diagnostic_item(cx, ty, sym::vec_type) ||
     match_type(cx, ty, &paths::LINKED_LIST) ||
-    is_type_diagnostic_item(cx, ty, sym!(hashmap_type)) ||
-    is_type_diagnostic_item(cx, ty, sym!(hashset_type)) ||
-    is_type_diagnostic_item(cx, ty, sym!(vecdeque_type)) ||
+    is_type_diagnostic_item(cx, ty, sym::hashmap_type) ||
+    is_type_diagnostic_item(cx, ty, sym::hashset_type) ||
+    is_type_diagnostic_item(cx, ty, sym::vecdeque_type) ||
     match_type(cx, ty, &paths::BINARY_HEAP) ||
     match_type(cx, ty, &paths::BTREEMAP) ||
     match_type(cx, ty, &paths::BTREESET)
@@ -2922,9 +2924,9 @@ fn check_needless_collect_direct_usage<'tcx>(expr: &'tcx Expr<'_>, cx: &LateCont
         then {
             let ty = cx.typeck_results().node_type(ty.hir_id);
             if is_type_diagnostic_item(cx, ty, sym::vec_type) ||
-                is_type_diagnostic_item(cx, ty, sym!(vecdeque_type)) ||
+                is_type_diagnostic_item(cx, ty, sym::vecdeque_type) ||
                 match_type(cx, ty, &paths::BTREEMAP) ||
-                is_type_diagnostic_item(cx, ty, sym!(hashmap_type)) {
+                is_type_diagnostic_item(cx, ty, sym::hashmap_type) {
                 if method.ident.name == sym!(len) {
                     let span = shorten_needless_collect_span(expr);
                     span_lint_and_sugg(
@@ -2992,7 +2994,7 @@ fn check_needless_collect_indirect_usage<'tcx>(expr: &'tcx Expr<'_>, cx: &LateCo
                 if let Some(GenericArg::Type(ref ty)) = generic_args.args.get(0);
                 if let ty = cx.typeck_results().node_type(ty.hir_id);
                 if is_type_diagnostic_item(cx, ty, sym::vec_type) ||
-                    is_type_diagnostic_item(cx, ty, sym!(vecdeque_type)) ||
+                    is_type_diagnostic_item(cx, ty, sym::vecdeque_type) ||
                     match_type(cx, ty, &paths::LINKED_LIST);
                 if let Some(iter_calls) = detect_iter_and_into_iters(block, *ident);
                 if iter_calls.len() == 1;

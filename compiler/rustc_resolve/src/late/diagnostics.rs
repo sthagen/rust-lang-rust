@@ -16,6 +16,7 @@ use rustc_hir::def::{self, CtorKind, CtorOf, DefKind};
 use rustc_hir::def_id::{DefId, CRATE_DEF_INDEX, LOCAL_CRATE};
 use rustc_hir::PrimTy;
 use rustc_session::parse::feature_err;
+use rustc_span::edition::Edition;
 use rustc_span::hygiene::MacroKind;
 use rustc_span::lev_distance::find_best_match_for_name;
 use rustc_span::symbol::{kw, sym, Ident, Symbol};
@@ -133,7 +134,7 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
         let is_enum_variant = &|res| matches!(res, Res::Def(DefKind::Variant, _));
 
         // Make the base error.
-        let expected = source.descr_expected();
+        let mut expected = source.descr_expected();
         let path_str = Segment::names_to_string(path);
         let item_str = path.last().unwrap().ident;
         let (base_msg, fallback_label, base_span, could_be_expr) = if let Some(res) = res {
@@ -166,6 +167,15 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
             let (mod_prefix, mod_str) = if path.len() == 1 {
                 (String::new(), "this scope".to_string())
             } else if path.len() == 2 && path[0].ident.name == kw::PathRoot {
+                if self.r.session.edition() > Edition::Edition2015 {
+                    // In edition 2018 onwards, the `::foo` syntax may only pull from the extern prelude
+                    // which overrides all other expectations of item type
+                    expected = "crate";
+                    (String::new(), "the list of imported crates".to_string())
+                } else {
+                    (String::new(), "the crate root".to_string())
+                }
+            } else if path.len() == 2 && path[0].ident.name == kw::Crate {
                 (String::new(), "the crate root".to_string())
             } else {
                 let mod_path = &path[..path.len() - 1];
@@ -324,7 +334,7 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
                 .lookup_import_candidates(ident, ns, &self.parent_scope, is_enum_variant)
                 .into_iter()
                 .map(|suggestion| import_candidate_to_enum_paths(&suggestion))
-                .filter(|(_, enum_ty_path)| enum_ty_path != "std::prelude::v1")
+                .filter(|(_, enum_ty_path)| !enum_ty_path.starts_with("std::prelude::"))
                 .collect();
             if !enum_candidates.is_empty() {
                 if let (PathSource::Type, Some(span)) =
@@ -1645,6 +1655,7 @@ impl<'tcx> LifetimeContext<'_, 'tcx> {
         );
         err.span_label(lifetime_ref.span, "undeclared lifetime");
         let mut suggests_in_band = false;
+        let mut suggest_note = true;
         for missing in &self.missing_named_lifetime_spots {
             match missing {
                 MissingLifetimeSpot::Generics(generics) => {
@@ -1664,12 +1675,24 @@ impl<'tcx> LifetimeContext<'_, 'tcx> {
                         suggests_in_band = true;
                         (generics.span, format!("<{}>", lifetime_ref))
                     };
-                    err.span_suggestion(
-                        span,
-                        &format!("consider introducing lifetime `{}` here", lifetime_ref),
-                        sugg,
-                        Applicability::MaybeIncorrect,
-                    );
+                    if !span.from_expansion() {
+                        err.span_suggestion(
+                            span,
+                            &format!("consider introducing lifetime `{}` here", lifetime_ref),
+                            sugg,
+                            Applicability::MaybeIncorrect,
+                        );
+                    } else if suggest_note {
+                        suggest_note = false; // Avoid displaying the same help multiple times.
+                        err.span_label(
+                            span,
+                            &format!(
+                                "lifetime `{}` is missing in item created through this procedural \
+                                 macro",
+                                lifetime_ref,
+                            ),
+                        );
+                    }
                 }
                 MissingLifetimeSpot::HigherRanked { span, span_type } => {
                     err.span_suggestion(
@@ -1684,7 +1707,7 @@ impl<'tcx> LifetimeContext<'_, 'tcx> {
                     );
                     err.note(
                         "for more information on higher-ranked polymorphism, visit \
-                            https://doc.rust-lang.org/nomicon/hrtb.html",
+                         https://doc.rust-lang.org/nomicon/hrtb.html",
                     );
                 }
                 _ => {}
@@ -1696,7 +1719,7 @@ impl<'tcx> LifetimeContext<'_, 'tcx> {
         {
             err.help(
                 "if you want to experiment with in-band lifetime bindings, \
-                    add `#![feature(in_band_lifetimes)]` to the crate attributes",
+                 add `#![feature(in_band_lifetimes)]` to the crate attributes",
             );
         }
         err.emit();

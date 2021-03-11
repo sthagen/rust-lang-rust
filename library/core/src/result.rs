@@ -1233,7 +1233,8 @@ impl<T, E> Result<Option<T>, E> {
     /// ```
     #[inline]
     #[stable(feature = "transpose_result", since = "1.33.0")]
-    pub fn transpose(self) -> Option<Result<T, E>> {
+    #[rustc_const_unstable(feature = "const_result", issue = "82814")]
+    pub const fn transpose(self) -> Option<Result<T, E>> {
         match self {
             Ok(Some(x)) => Some(Ok(x)),
             Ok(None) => None,
@@ -1285,11 +1286,10 @@ impl<T> Result<T, T> {
     /// `Err`.
     ///
     /// This can be useful in conjunction with APIs such as
-    /// [`Atomic*::compare_exchange`], or [`slice::binary_search`][binary_search], but only in
+    /// [`Atomic*::compare_exchange`], or [`slice::binary_search`], but only in
     /// cases where you don't care if the result was `Ok` or not.
     ///
     /// [`Atomic*::compare_exchange`]: crate::sync::atomic::AtomicBool::compare_exchange
-    /// [binary_search]: ../../std/primitive.slice.html#method.binary_search
     ///
     /// # Examples
     ///
