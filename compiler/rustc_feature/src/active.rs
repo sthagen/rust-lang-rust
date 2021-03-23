@@ -488,9 +488,6 @@ declare_features! (
     /// Allows `impl Trait` to be used inside type aliases (RFC 2515).
     (active, type_alias_impl_trait, "1.38.0", Some(63063), None),
 
-    /// Allows the use of or-patterns (e.g., `0 | 1`).
-    (active, or_patterns, "1.38.0", Some(54883), None),
-
     /// Allows the definition of `const extern fn` and `const unsafe extern fn`.
     (active, const_extern_fn, "1.40.0", Some(64926), None),
 
@@ -614,7 +611,7 @@ declare_features! (
     /// Allows arbitrary expressions in key-value attributes at parse time.
     (active, extended_key_value_attributes, "1.50.0", Some(78835), None),
 
-    /// `:pat2018` and `:pat2021` macro matchers.
+    /// `:pat2015` and `:pat2021` macro matchers.
     (active, edition_macro_pats, "1.51.0", Some(54883), None),
 
     /// Allows const generics to have default values (e.g. `struct Foo<const N: usize = 3>(...);`).
