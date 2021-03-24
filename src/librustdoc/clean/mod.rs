@@ -231,11 +231,11 @@ impl Clean<Item> for doctree::Module<'_> {
 
         let what_rustc_thinks = Item::from_hir_id_and_parts(
             self.id,
-            self.name,
+            Some(self.name),
             ModuleItem(Module { is_crate: self.is_crate, items }),
             cx,
         );
-        Item { source: span.clean(cx), ..what_rustc_thinks }
+        Item { span: span.clean(cx), ..what_rustc_thinks }
     }
 }
 
@@ -2132,7 +2132,7 @@ fn clean_extern_crate(
     vec![Item {
         name: Some(name),
         attrs: box attrs.clean(cx),
-        source: krate.span.clean(cx),
+        span: krate.span.clean(cx),
         def_id: crate_def_id,
         visibility: krate.vis.clean(cx),
         kind: box ExternCrateItem { src: orig_name },

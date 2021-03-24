@@ -14,7 +14,7 @@ use std::rc::Rc;
 use rustc_data_structures::fx::FxHashMap;
 use rustc_middle::ty::TyCtxt;
 use rustc_session::Session;
-use rustc_span::edition::Edition;
+use rustc_span::{edition::Edition, Symbol};
 
 use rustdoc_json_types as types;
 
@@ -109,7 +109,7 @@ impl JsonRenderer<'tcx> {
                                 .map(Clone::clone),
                             visibility: types::Visibility::Public,
                             inner: types::ItemEnum::Trait(trait_item.clone().into()),
-                            source: None,
+                            span: None,
                             docs: Default::default(),
                             links: Default::default(),
                             attrs: Default::default(),
@@ -202,7 +202,7 @@ impl<'tcx> FormatRenderer<'tcx> for JsonRenderer<'tcx> {
 
     fn after_krate(
         &mut self,
-        _krate: &clean::Crate,
+        _crate_name: Symbol,
         _diag: &rustc_errors::Handler,
     ) -> Result<(), Error> {
         debug!("Done with crate");
@@ -246,7 +246,7 @@ impl<'tcx> FormatRenderer<'tcx> for JsonRenderer<'tcx> {
                     )
                 })
                 .collect(),
-            format_version: 4,
+            format_version: 5,
         };
         let mut p = self.out_path.clone();
         p.push(output.index.get(&output.root).unwrap().name.clone().unwrap());

@@ -11,7 +11,7 @@ use rustc_middle::ty::TyCtxt;
 use rustc_session::Session;
 use rustc_span::edition::Edition;
 use rustc_span::source_map::FileName;
-use rustc_span::symbol::sym;
+use rustc_span::{symbol::sym, Symbol};
 
 use super::cache::{build_index, ExternalLocation};
 use super::print_item::{full_path, item_path, print_item};
@@ -228,15 +228,15 @@ impl<'tcx> Context<'tcx> {
     /// may happen, for example, with externally inlined items where the source
     /// of their crate documentation isn't known.
     pub(super) fn src_href(&self, item: &clean::Item) -> Option<String> {
-        if item.source.is_dummy() {
+        if item.span.is_dummy() {
             return None;
         }
         let mut root = self.root_path();
         let mut path = String::new();
-        let cnum = item.source.cnum(self.sess());
+        let cnum = item.span.cnum(self.sess());
 
         // We can safely ignore synthetic `SourceFile`s.
-        let file = match item.source.filename(self.sess()) {
+        let file = match item.span.filename(self.sess()) {
             FileName::Real(ref path) => path.local_path().to_path_buf(),
             _ => return None,
         };
@@ -270,8 +270,8 @@ impl<'tcx> Context<'tcx> {
             (&*symbol, &path)
         };
 
-        let loline = item.source.lo(self.sess()).line;
-        let hiline = item.source.hi(self.sess()).line;
+        let loline = item.span.lo(self.sess()).line;
+        let hiline = item.span.hi(self.sess()).line;
         let lines =
             if loline == hiline { loline.to_string() } else { format!("{}-{}", loline, hiline) };
         Some(format!(
@@ -343,29 +343,27 @@ impl<'tcx> FormatRenderer<'tcx> for Context<'tcx> {
 
         // Crawl the crate attributes looking for attributes which control how we're
         // going to emit HTML
-        if let Some(attrs) = krate.module.as_ref().map(|m| &m.attrs) {
-            for attr in attrs.lists(sym::doc) {
-                match (attr.name_or_empty(), attr.value_str()) {
-                    (sym::html_favicon_url, Some(s)) => {
-                        layout.favicon = s.to_string();
-                    }
-                    (sym::html_logo_url, Some(s)) => {
-                        layout.logo = s.to_string();
-                    }
-                    (sym::html_playground_url, Some(s)) => {
-                        playground = Some(markdown::Playground {
-                            crate_name: Some(krate.name.to_string()),
-                            url: s.to_string(),
-                        });
-                    }
-                    (sym::issue_tracker_base_url, Some(s)) => {
-                        issue_tracker_base_url = Some(s.to_string());
-                    }
-                    (sym::html_no_source, None) if attr.is_word() => {
-                        include_sources = false;
-                    }
-                    _ => {}
+        for attr in krate.module.attrs.lists(sym::doc) {
+            match (attr.name_or_empty(), attr.value_str()) {
+                (sym::html_favicon_url, Some(s)) => {
+                    layout.favicon = s.to_string();
                 }
+                (sym::html_logo_url, Some(s)) => {
+                    layout.logo = s.to_string();
+                }
+                (sym::html_playground_url, Some(s)) => {
+                    playground = Some(markdown::Playground {
+                        crate_name: Some(krate.name.to_string()),
+                        url: s.to_string(),
+                    });
+                }
+                (sym::issue_tracker_base_url, Some(s)) => {
+                    issue_tracker_base_url = Some(s.to_string());
+                }
+                (sym::html_no_source, None) if attr.is_word() => {
+                    include_sources = false;
+                }
+                _ => {}
             }
         }
         let (sender, receiver) = channel();
@@ -447,12 +445,11 @@ impl<'tcx> FormatRenderer<'tcx> for Context<'tcx> {
 
     fn after_krate(
         &mut self,
-        krate: &clean::Crate,
+        crate_name: Symbol,
         diag: &rustc_errors::Handler,
     ) -> Result<(), Error> {
-        let final_file = self.dst.join(&*krate.name.as_str()).join("all.html");
+        let final_file = self.dst.join(&*crate_name.as_str()).join("all.html");
         let settings_file = self.dst.join("settings.html");
-        let crate_name = krate.name;
 
         let mut root_path = self.dst.to_str().expect("invalid path").to_owned();
         if !root_path.ends_with('/') {
@@ -515,9 +512,9 @@ impl<'tcx> FormatRenderer<'tcx> for Context<'tcx> {
         if let Some(ref redirections) = self.shared.redirections {
             if !redirections.borrow().is_empty() {
                 let redirect_map_path =
-                    self.dst.join(&*krate.name.as_str()).join("redirect-map.json");
+                    self.dst.join(&*crate_name.as_str()).join("redirect-map.json");
                 let paths = serde_json::to_string(&*redirections.borrow()).unwrap();
-                self.shared.ensure_dir(&self.dst.join(&*krate.name.as_str()))?;
+                self.shared.ensure_dir(&self.dst.join(&*crate_name.as_str()))?;
                 self.shared.fs.write(&redirect_map_path, paths.as_bytes())?;
             }
         }
