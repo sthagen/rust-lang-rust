@@ -24,7 +24,7 @@ use crate::error::Error;
 use crate::formats::cache::Cache;
 use crate::formats::FormatRenderer;
 use crate::html::render::cache::ExternalLocation;
-use crate::json::conversions::from_def_id;
+use crate::json::conversions::{from_def_id, IntoWithTcx};
 
 #[derive(Clone)]
 crate struct JsonRenderer<'tcx> {
@@ -108,7 +108,7 @@ impl JsonRenderer<'tcx> {
                                 .last()
                                 .map(Clone::clone),
                             visibility: types::Visibility::Public,
-                            inner: types::ItemEnum::Trait(trait_item.clone().into()),
+                            inner: types::ItemEnum::Trait(trait_item.clone().into_tcx(self.tcx)),
                             span: None,
                             docs: Default::default(),
                             links: Default::default(),
@@ -128,6 +128,8 @@ impl<'tcx> FormatRenderer<'tcx> for JsonRenderer<'tcx> {
     fn descr() -> &'static str {
         "json"
     }
+
+    const RUN_ON_MODULE: bool = false;
 
     fn init(
         krate: clean::Crate,
@@ -169,8 +171,10 @@ impl<'tcx> FormatRenderer<'tcx> for JsonRenderer<'tcx> {
                 e.impls = self.get_impls(id)
             }
             let removed = self.index.borrow_mut().insert(from_def_id(id), new_item.clone());
+
             // FIXME(adotinthevoid): Currently, the index is duplicated. This is a sanity check
-            // to make sure the items are unique.
+            // to make sure the items are unique. The main place this happens is when an item, is
+            // reexported in more than one place. See `rustdoc-json/reexport/in_root_and_mod`
             if let Some(old_item) = removed {
                 assert_eq!(old_item, new_item);
             }
@@ -225,7 +229,11 @@ impl<'tcx> FormatRenderer<'tcx> for JsonRenderer<'tcx> {
                 .map(|(k, (path, kind))| {
                     (
                         from_def_id(k),
-                        types::ItemSummary { crate_id: k.krate.as_u32(), path, kind: kind.into() },
+                        types::ItemSummary {
+                            crate_id: k.krate.as_u32(),
+                            path,
+                            kind: kind.into_tcx(self.tcx),
+                        },
                     )
                 })
                 .collect(),
