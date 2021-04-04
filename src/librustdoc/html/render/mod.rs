@@ -283,24 +283,6 @@ crate struct StylePath {
 
 thread_local!(crate static CURRENT_DEPTH: Cell<usize> = Cell::new(0));
 
-crate const INITIAL_IDS: [&'static str; 15] = [
-    "main",
-    "search",
-    "help",
-    "TOC",
-    "render-detail",
-    "associated-types",
-    "associated-const",
-    "required-methods",
-    "provided-methods",
-    "implementors",
-    "synthetic-implementors",
-    "implementors-list",
-    "synthetic-implementors-list",
-    "methods",
-    "implementations",
-];
-
 fn write_srclink(cx: &Context<'_>, item: &clean::Item, buf: &mut Buffer) {
     if let Some(l) = cx.src_href(item) {
         write!(buf, "<a class=\"srclink\" href=\"{}\" title=\"goto source code\">[src]</a>", l)
@@ -1045,7 +1027,7 @@ fn render_assoc_item(
         write!(
             w,
             "{}{}{}{}{}{}{}fn <a href=\"{href}\" class=\"fnname\">{name}</a>\
-             {generics}{decl}{spotlight}{where_clause}",
+             {generics}{decl}{notable_traits}{where_clause}",
             if parent == ItemType::Trait { "    " } else { "" },
             vis,
             constness,
@@ -1057,7 +1039,7 @@ fn render_assoc_item(
             name = name,
             generics = g.print(cache, tcx),
             decl = d.full_print(cache, tcx, header_len, indent, header.asyncness),
-            spotlight = spotlight_decl(&d, cache, tcx),
+            notable_traits = notable_traits_decl(&d, cache, tcx),
             where_clause = print_where_clause(g, cache, tcx, indent, end_newline),
         )
     }
@@ -1341,7 +1323,7 @@ fn should_render_item(item: &clean::Item, deref_mut_: bool, cache: &Cache) -> bo
     }
 }
 
-fn spotlight_decl(decl: &clean::FnDecl, cache: &Cache, tcx: TyCtxt<'_>) -> String {
+fn notable_traits_decl(decl: &clean::FnDecl, cache: &Cache, tcx: TyCtxt<'_>) -> String {
     let mut out = Buffer::html();
     let mut trait_ = String::new();
 
@@ -1349,9 +1331,11 @@ fn spotlight_decl(decl: &clean::FnDecl, cache: &Cache, tcx: TyCtxt<'_>) -> Strin
         if let Some(impls) = cache.impls.get(&did) {
             for i in impls {
                 let impl_ = i.inner_impl();
-                if impl_.trait_.def_id().map_or(false, |d| {
-                    cache.traits.get(&d).map(|t| t.is_spotlight).unwrap_or(false)
-                }) {
+                if impl_
+                    .trait_
+                    .def_id()
+                    .map_or(false, |d| cache.traits.get(&d).map(|t| t.is_notable).unwrap_or(false))
+                {
                     if out.is_empty() {
                         write!(
                             &mut out,
