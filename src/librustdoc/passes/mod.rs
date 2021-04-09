@@ -12,8 +12,8 @@ use crate::core::DocContext;
 mod stripper;
 crate use stripper::*;
 
-mod non_autolinks;
-crate use self::non_autolinks::CHECK_NON_AUTOLINKS;
+mod bare_urls;
+crate use self::bare_urls::CHECK_BARE_URLS;
 
 mod strip_hidden;
 crate use self::strip_hidden::STRIP_HIDDEN;
@@ -90,7 +90,7 @@ crate const PASSES: &[Pass] = &[
     COLLECT_TRAIT_IMPLS,
     CALCULATE_DOC_COVERAGE,
     CHECK_INVALID_HTML_TAGS,
-    CHECK_NON_AUTOLINKS,
+    CHECK_BARE_URLS,
 ];
 
 /// The list of passes run by default.
@@ -105,12 +105,11 @@ crate const DEFAULT_PASSES: &[ConditionalPass] = &[
     ConditionalPass::always(CHECK_CODE_BLOCK_SYNTAX),
     ConditionalPass::always(CHECK_INVALID_HTML_TAGS),
     ConditionalPass::always(PROPAGATE_DOC_CFG),
-    ConditionalPass::always(CHECK_NON_AUTOLINKS),
+    ConditionalPass::always(CHECK_BARE_URLS),
 ];
 
 /// The list of default passes run when `--doc-coverage` is passed to rustdoc.
 crate const COVERAGE_PASSES: &[ConditionalPass] = &[
-    ConditionalPass::always(COLLECT_TRAIT_IMPLS),
     ConditionalPass::new(STRIP_HIDDEN, WhenNotDocumentHidden),
     ConditionalPass::new(STRIP_PRIVATE, WhenNotDocumentPrivate),
     ConditionalPass::always(CALCULATE_DOC_COVERAGE),
