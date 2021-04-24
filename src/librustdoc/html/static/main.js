@@ -455,6 +455,15 @@ function hideThemeButtonState() {
         handleHashes(ev);
     }
 
+    function openParentDetails(elem) {
+        while (elem) {
+            if (elem.tagName === "DETAILS") {
+                elem.open = true;
+            }
+            elem = elem.parentNode;
+        }
+    }
+
     function expandSection(id) {
         var elem = document.getElementById(id);
         if (elem && isHidden(elem)) {
@@ -469,6 +478,8 @@ function hideThemeButtonState() {
                     // The element is not visible, we need to make it appear!
                     collapseDocs(collapses[0], "show");
                 }
+                // Open all ancestor <details> to make this element visible.
+                openParentDetails(h3.parentNode);
             }
         }
     }
@@ -1009,7 +1020,7 @@ function hideThemeButtonState() {
             if (hasClass(relatedDoc, "item-info")) {
                 relatedDoc = relatedDoc.nextElementSibling;
             }
-            if (hasClass(relatedDoc, "docblock") || hasClass(relatedDoc, "sub-variant")) {
+            if (hasClass(relatedDoc, "docblock")) {
                 if (mode === "toggle") {
                     if (hasClass(relatedDoc, "hidden-by-usual-hider")) {
                         action = "show";
@@ -1196,31 +1207,18 @@ function hideThemeButtonState() {
             if (!next) {
                 return;
             }
-            if (hasClass(e, "impl") &&
-                (next.getElementsByClassName("method").length > 0 ||
-                 next.getElementsByClassName("associatedconstant").length > 0)) {
-                var newToggle = toggle.cloneNode(true);
-                insertAfter(newToggle, e.childNodes[e.childNodes.length - 1]);
-                // In case the option "auto-collapse implementors" is not set to false, we collapse
-                // all implementors.
-                if (hideImplementors === true && e.parentNode.id === "implementors-list") {
-                    collapseDocs(newToggle, "hide");
-                }
-            }
         };
 
         onEachLazy(document.getElementsByClassName("method"), func);
         onEachLazy(document.getElementsByClassName("associatedconstant"), func);
-        onEachLazy(document.getElementsByClassName("impl"), funcImpl);
         var impl_call = function() {};
-        // Large items are hidden by default in the HTML. If the setting overrides that, show 'em.
-        if (!hideLargeItemContents) {
-            onEachLazy(document.getElementsByTagName("details"), function (e) {
-                if (hasClass(e, "type-contents-toggle")) {
-                    e.open = true;
-                }
-            });
-        }
+        onEachLazy(document.getElementsByTagName("details"), function (e) {
+            var showLargeItem = !hideLargeItemContents && hasClass(e, "type-contents-toggle");
+            var showImplementor = !hideImplementors && hasClass(e, "implementors-toggle");
+            if (showLargeItem || showImplementor) {
+                e.open = true;
+            }
+        });
         if (hideMethodDocs === true) {
             impl_call = function(e, newToggle) {
                 if (e.id.match(/^impl(?:-\d+)?$/) === null) {
@@ -1318,8 +1316,6 @@ function hideThemeButtonState() {
                 if (hasClass(e, "type-decl")) {
                     // We do something special for these
                     return;
-                } else if (hasClass(e, "sub-variant")) {
-                    otherMessage = "&nbsp;Show&nbsp;fields";
                 } else if (hasClass(e, "non-exhaustive")) {
                     otherMessage = "&nbsp;This&nbsp;";
                     if (hasClass(e, "non-exhaustive-struct")) {
@@ -1351,7 +1347,6 @@ function hideThemeButtonState() {
         }
 
         onEachLazy(document.getElementsByClassName("docblock"), buildToggleWrapper);
-        onEachLazy(document.getElementsByClassName("sub-variant"), buildToggleWrapper);
 
         autoCollapse(getSettingValue("collapse") === "true");
 
