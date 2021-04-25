@@ -2,25 +2,19 @@
 
 use crate::ffi::{CStr, OsStr, OsString};
 use crate::fmt;
-use crate::marker::PhantomData;
 use crate::os::wasi::ffi::OsStrExt;
 use crate::vec;
 
-pub unsafe fn init(_argc: isize, _argv: *const *const u8) {}
-
-pub unsafe fn cleanup() {}
-
 pub struct Args {
     iter: vec::IntoIter<OsString>,
-    _dont_send_or_sync_me: PhantomData<*mut ()>,
 }
+
+impl !Send for Args {}
+impl !Sync for Args {}
 
 /// Returns the command line arguments
 pub fn args() -> Args {
-    Args {
-        iter: maybe_args().unwrap_or(Vec::new()).into_iter(),
-        _dont_send_or_sync_me: PhantomData,
-    }
+    Args { iter: maybe_args().unwrap_or(Vec::new()).into_iter() }
 }
 
 fn maybe_args() -> Option<Vec<OsString>> {
