@@ -274,6 +274,8 @@ pub trait Eq: PartialEq<Self> {
     //
     // This should never be implemented by hand.
     #[doc(hidden)]
+    #[cfg_attr(not(bootstrap), feature(no_coverage))]
+    #[cfg_attr(not(bootstrap), no_coverage)]
     #[inline]
     #[stable(feature = "rust1", since = "1.0.0")]
     fn assert_receiver_is_total_eq(&self) {}
@@ -334,7 +336,6 @@ impl Ordering {
     /// # Examples
     ///
     /// ```
-    /// #![feature(ordering_helpers)]
     /// use std::cmp::Ordering;
     ///
     /// assert_eq!(Ordering::Less.is_eq(), false);
@@ -343,7 +344,8 @@ impl Ordering {
     /// ```
     #[inline]
     #[must_use]
-    #[unstable(feature = "ordering_helpers", issue = "79885")]
+    #[rustc_const_stable(feature = "ordering_helpers", since = "1.53.0")]
+    #[stable(feature = "ordering_helpers", since = "1.53.0")]
     pub const fn is_eq(self) -> bool {
         matches!(self, Equal)
     }
@@ -353,7 +355,6 @@ impl Ordering {
     /// # Examples
     ///
     /// ```
-    /// #![feature(ordering_helpers)]
     /// use std::cmp::Ordering;
     ///
     /// assert_eq!(Ordering::Less.is_ne(), true);
@@ -362,7 +363,8 @@ impl Ordering {
     /// ```
     #[inline]
     #[must_use]
-    #[unstable(feature = "ordering_helpers", issue = "79885")]
+    #[rustc_const_stable(feature = "ordering_helpers", since = "1.53.0")]
+    #[stable(feature = "ordering_helpers", since = "1.53.0")]
     pub const fn is_ne(self) -> bool {
         !matches!(self, Equal)
     }
@@ -372,7 +374,6 @@ impl Ordering {
     /// # Examples
     ///
     /// ```
-    /// #![feature(ordering_helpers)]
     /// use std::cmp::Ordering;
     ///
     /// assert_eq!(Ordering::Less.is_lt(), true);
@@ -381,7 +382,8 @@ impl Ordering {
     /// ```
     #[inline]
     #[must_use]
-    #[unstable(feature = "ordering_helpers", issue = "79885")]
+    #[rustc_const_stable(feature = "ordering_helpers", since = "1.53.0")]
+    #[stable(feature = "ordering_helpers", since = "1.53.0")]
     pub const fn is_lt(self) -> bool {
         matches!(self, Less)
     }
@@ -391,7 +393,6 @@ impl Ordering {
     /// # Examples
     ///
     /// ```
-    /// #![feature(ordering_helpers)]
     /// use std::cmp::Ordering;
     ///
     /// assert_eq!(Ordering::Less.is_gt(), false);
@@ -400,7 +401,8 @@ impl Ordering {
     /// ```
     #[inline]
     #[must_use]
-    #[unstable(feature = "ordering_helpers", issue = "79885")]
+    #[rustc_const_stable(feature = "ordering_helpers", since = "1.53.0")]
+    #[stable(feature = "ordering_helpers", since = "1.53.0")]
     pub const fn is_gt(self) -> bool {
         matches!(self, Greater)
     }
@@ -410,7 +412,6 @@ impl Ordering {
     /// # Examples
     ///
     /// ```
-    /// #![feature(ordering_helpers)]
     /// use std::cmp::Ordering;
     ///
     /// assert_eq!(Ordering::Less.is_le(), true);
@@ -419,7 +420,8 @@ impl Ordering {
     /// ```
     #[inline]
     #[must_use]
-    #[unstable(feature = "ordering_helpers", issue = "79885")]
+    #[rustc_const_stable(feature = "ordering_helpers", since = "1.53.0")]
+    #[stable(feature = "ordering_helpers", since = "1.53.0")]
     pub const fn is_le(self) -> bool {
         !matches!(self, Greater)
     }
@@ -429,7 +431,6 @@ impl Ordering {
     /// # Examples
     ///
     /// ```
-    /// #![feature(ordering_helpers)]
     /// use std::cmp::Ordering;
     ///
     /// assert_eq!(Ordering::Less.is_ge(), false);
@@ -438,7 +439,8 @@ impl Ordering {
     /// ```
     #[inline]
     #[must_use]
-    #[unstable(feature = "ordering_helpers", issue = "79885")]
+    #[rustc_const_stable(feature = "ordering_helpers", since = "1.53.0")]
+    #[stable(feature = "ordering_helpers", since = "1.53.0")]
     pub const fn is_ge(self) -> bool {
         !matches!(self, Less)
     }

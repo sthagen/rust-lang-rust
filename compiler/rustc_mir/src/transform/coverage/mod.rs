@@ -23,6 +23,7 @@ use rustc_index::vec::IndexVec;
 use rustc_middle::hir;
 use rustc_middle::hir::map::blocks::FnLikeNode;
 use rustc_middle::ich::StableHashingContext;
+use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use rustc_middle::mir::coverage::*;
 use rustc_middle::mir::{
     self, BasicBlock, BasicBlockData, Coverage, SourceInfo, Statement, StatementKind, Terminator,
@@ -87,6 +88,11 @@ impl<'tcx> MirPass<'tcx> for InstrumentCoverage {
             _ => {}
         }
 
+        let codegen_fn_attrs = tcx.codegen_fn_attrs(mir_source.def_id());
+        if codegen_fn_attrs.flags.contains(CodegenFnAttrFlags::NO_COVERAGE) {
+            return;
+        }
+
         trace!("InstrumentCoverage starting for {:?}", mir_source.def_id());
         Instrumentor::new(&self.name(), tcx, mir_body).inject_counters();
         trace!("InstrumentCoverage starting for {:?}", mir_source.def_id());
@@ -112,7 +118,7 @@ impl<'a, 'tcx> Instrumentor<'a, 'tcx> {
         let source_file = source_map.lookup_source_file(body_span.lo());
         let fn_sig_span = match some_fn_sig.filter(|fn_sig| {
             fn_sig.span.ctxt() == body_span.ctxt()
-                && Lrc::ptr_eq(&source_file, &source_map.lookup_source_file(fn_sig.span.hi()))
+                && Lrc::ptr_eq(&source_file, &source_map.lookup_source_file(fn_sig.span.lo()))
         }) {
             Some(fn_sig) => fn_sig.span.with_hi(body_span.lo()),
             None => body_span.shrink_to_lo(),
