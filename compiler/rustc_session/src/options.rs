@@ -3,7 +3,7 @@ use crate::config::*;
 use crate::early_error;
 use crate::lint;
 use crate::search_paths::SearchPath;
-use crate::utils::NativeLibKind;
+use crate::utils::NativeLib;
 
 use rustc_target::spec::{CodeModel, LinkerFlavor, MergeFunctions, PanicStrategy, SanitizerSet};
 use rustc_target::spec::{RelocModel, RelroLevel, SplitDebuginfo, TargetTriple, TlsModel};
@@ -133,7 +133,7 @@ top_level_options!(
         describe_lints: bool [UNTRACKED],
         output_types: OutputTypes [TRACKED],
         search_paths: Vec<SearchPath> [UNTRACKED],
-        libs: Vec<(String, Option<String>, NativeLibKind)> [TRACKED],
+        libs: Vec<NativeLib> [TRACKED],
         maybe_sysroot: Option<PathBuf> [UNTRACKED],
 
         target_triple: TargetTriple [TRACKED],
@@ -1080,12 +1080,12 @@ options! {DebuggingOptions, DebuggingSetter, basic_debugging_options,
         "gather statistics about the input (default: no)"),
     instrument_coverage: Option<InstrumentCoverage> = (None, parse_instrument_coverage, [TRACKED],
         "instrument the generated code to support LLVM source-based code coverage \
-        reports (note, the compiler build config must include `profiler = true`, \
-        and is mutually exclusive with `-C profile-generate`/`-C profile-use`); \
-        implies `-Z symbol-mangling-version=v0`; disables/overrides some Rust \
-        optimizations. Optional values are: `=all` (default coverage), \
-        `=except-unused-generics`, `=except-unused-functions`, or `=off` \
-        (default: instrument-coverage=off)"),
+        reports (note, the compiler build config must include `profiler = true`); \
+        implies `-Z symbol-mangling-version=v0`. Optional values are:
+        `=all` (implicit value)
+        `=except-unused-generics`
+        `=except-unused-functions`
+        `=off` (default)"),
     instrument_mcount: bool = (false, parse_bool, [TRACKED],
         "insert function instrument code for mcount-based tracing (default: no)"),
     keep_hygiene_data: bool = (false, parse_bool, [UNTRACKED],
