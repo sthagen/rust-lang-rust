@@ -421,7 +421,7 @@ impl Session {
     }
 
     pub fn span_fatal<S: Into<MultiSpan>>(&self, sp: S, msg: &str) -> ! {
-        self.diagnostic().span_fatal(sp, msg).raise()
+        self.diagnostic().span_fatal(sp, msg)
     }
     pub fn span_fatal_with_code<S: Into<MultiSpan>>(
         &self,
@@ -429,7 +429,7 @@ impl Session {
         msg: &str,
         code: DiagnosticId,
     ) -> ! {
-        self.diagnostic().span_fatal_with_code(sp, msg, code).raise()
+        self.diagnostic().span_fatal_with_code(sp, msg, code)
     }
     pub fn fatal(&self, msg: &str) -> ! {
         self.diagnostic().fatal(msg).raise()
@@ -491,12 +491,6 @@ impl Session {
     }
     pub fn warn(&self, msg: &str) {
         self.diagnostic().warn(msg)
-    }
-    pub fn opt_span_warn<S: Into<MultiSpan>>(&self, opt_sp: Option<S>, msg: &str) {
-        match opt_sp {
-            Some(sp) => self.span_warn(sp, msg),
-            None => self.warn(msg),
-        }
     }
     /// Delay a span_bug() call until abort_if_errors()
     #[track_caller]
@@ -1282,9 +1276,14 @@ pub fn build_session(
         DiagnosticOutput::Raw(write) => Some(write),
     };
 
-    let target_cfg = config::build_target_config(&sopts, target_override);
+    let sysroot = match &sopts.maybe_sysroot {
+        Some(sysroot) => sysroot.clone(),
+        None => filesearch::get_or_default_sysroot(),
+    };
+
+    let target_cfg = config::build_target_config(&sopts, target_override, &sysroot);
     let host_triple = TargetTriple::from_triple(config::host_triple());
-    let host = Target::search(&host_triple).unwrap_or_else(|e| {
+    let host = Target::search(&host_triple, &sysroot).unwrap_or_else(|e| {
         early_error(sopts.error_format, &format!("Error loading host specification: {}", e))
     });
 
@@ -1331,10 +1330,6 @@ pub fn build_session(
 
     let mut parse_sess = ParseSess::with_span_handler(span_diagnostic, source_map);
     parse_sess.assume_incomplete_release = sopts.debugging_opts.assume_incomplete_release;
-    let sysroot = match &sopts.maybe_sysroot {
-        Some(sysroot) => sysroot.clone(),
-        None => filesearch::get_or_default_sysroot(),
-    };
 
     let host_triple = config::host_triple();
     let target_triple = sopts.target_triple.triple();

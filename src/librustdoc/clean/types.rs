@@ -18,7 +18,7 @@ use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_data_structures::thin_vec::ThinVec;
 use rustc_hir as hir;
 use rustc_hir::def::{CtorKind, DefKind, Res};
-use rustc_hir::def_id::{CrateNum, DefId, DefIndex, LocalDefId, CRATE_DEF_INDEX, LOCAL_CRATE};
+use rustc_hir::def_id::{CrateNum, DefId, DefIndex, CRATE_DEF_INDEX, LOCAL_CRATE};
 use rustc_hir::lang_items::LangItem;
 use rustc_hir::{BodyId, Mutability};
 use rustc_index::vec::IndexVec;
@@ -86,22 +86,7 @@ impl FakeDefId {
     }
 
     #[inline]
-    crate fn as_local(self) -> Option<LocalDefId> {
-        match self {
-            FakeDefId::Real(id) => id.as_local(),
-            FakeDefId::Fake(idx, krate) => {
-                (krate == LOCAL_CRATE).then(|| LocalDefId { local_def_index: idx })
-            }
-        }
-    }
-
-    #[inline]
-    crate fn expect_local(self) -> LocalDefId {
-        self.as_local()
-            .unwrap_or_else(|| panic!("FakeDefId::expect_local: `{:?}` isn't local", self))
-    }
-
-    #[inline]
+    #[track_caller]
     crate fn expect_real(self) -> rustc_hir::def_id::DefId {
         self.as_real().unwrap_or_else(|| panic!("FakeDefId::expect_real: `{:?}` isn't real", self))
     }
@@ -1621,7 +1606,6 @@ impl Type {
                 }
             }
             RawPointer(..) => Some(PrimitiveType::RawPointer),
-            BorrowedRef { type_: box Generic(..), .. } => Some(PrimitiveType::Reference),
             BareFunction(..) => Some(PrimitiveType::Fn),
             Never => Some(PrimitiveType::Never),
             _ => None,
@@ -1680,13 +1664,7 @@ impl Type {
     }
 
     crate fn is_primitive(&self) -> bool {
-        match self {
-            Self::Primitive(_) => true,
-            Self::BorrowedRef { ref type_, .. } | Self::RawPointer(_, ref type_) => {
-                type_.is_primitive()
-            }
-            _ => false,
-        }
+        self.primitive_type().is_some()
     }
 
     crate fn projection(&self) -> Option<(&Type, DefId, Symbol)> {

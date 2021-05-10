@@ -685,10 +685,10 @@ impl Default for Options {
             target_triple: TargetTriple::from_triple(host_triple()),
             test: false,
             incremental: None,
-            debugging_opts: basic_debugging_options(),
+            debugging_opts: Default::default(),
             prints: Vec::new(),
             borrowck_mode: BorrowckMode::Migrate,
-            cg: basic_codegen_options(),
+            cg: Default::default(),
             error_format: ErrorOutputType::default(),
             externs: Externs(BTreeMap::new()),
             extern_dep_specs: ExternDepSpecs(BTreeMap::new()),
@@ -893,8 +893,13 @@ pub fn build_configuration(sess: &Session, mut user_cfg: CrateConfig) -> CrateCo
     user_cfg
 }
 
-pub(super) fn build_target_config(opts: &Options, target_override: Option<Target>) -> Target {
-    let target_result = target_override.map_or_else(|| Target::search(&opts.target_triple), Ok);
+pub(super) fn build_target_config(
+    opts: &Options,
+    target_override: Option<Target>,
+    sysroot: &PathBuf,
+) -> Target {
+    let target_result =
+        target_override.map_or_else(|| Target::search(&opts.target_triple, sysroot), Ok);
     let target = target_result.unwrap_or_else(|e| {
         early_error(
             opts.error_format,
@@ -1920,7 +1925,7 @@ pub fn build_session_options(matches: &getopts::Matches) -> Options {
 
     let (lint_opts, describe_lints, lint_cap) = get_cmd_lint_options(matches, error_format);
 
-    let mut debugging_opts = build_debugging_options(matches, error_format);
+    let mut debugging_opts = DebuggingOptions::build(matches, error_format);
     check_debug_option_stability(&debugging_opts, error_format, json_rendered);
 
     if !debugging_opts.unstable_options && json_unused_externs {
@@ -1933,7 +1938,7 @@ pub fn build_session_options(matches: &getopts::Matches) -> Options {
 
     let output_types = parse_output_types(&debugging_opts, matches, error_format);
 
-    let mut cg = build_codegen_options(matches, error_format);
+    let mut cg = CodegenOptions::build(matches, error_format);
     let (disable_thinlto, mut codegen_units) = should_override_cgus_and_disable_thinlto(
         &output_types,
         matches,

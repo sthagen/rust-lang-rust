@@ -525,7 +525,7 @@ impl<'a> Parser<'a> {
     fn ident_or_err(&mut self) -> PResult<'a, (Ident, /* is_raw */ bool)> {
         self.token.ident().ok_or_else(|| match self.prev_token.kind {
             TokenKind::DocComment(..) => {
-                self.span_fatal_err(self.prev_token.span, Error::UselessDocComment)
+                self.span_err(self.prev_token.span, Error::UselessDocComment)
             }
             _ => self.expected_ident_found(),
         })
@@ -1077,7 +1077,7 @@ impl<'a> Parser<'a> {
                     let span = expr.span;
 
                     match &expr.kind {
-                        // Not gated to supporte things like `doc = $expr` that work on stable.
+                        // Not gated to support things like `doc = $expr` that work on stable.
                         _ if is_interpolated_expr => {}
                         ExprKind::Lit(lit) if lit.kind.is_unsuffixed() => {}
                         _ => self.sess.gated_spans.gate(sym::extended_key_value_attributes, span),

@@ -1897,14 +1897,16 @@ impl Target {
         Ok(base)
     }
 
-    /// Search RUST_TARGET_PATH for a JSON file specifying the given target
-    /// triple. Note that it could also just be a bare filename already, so also
-    /// check for that. If one of the hardcoded targets we know about, just
-    /// return it directly.
+    /// Search for a JSON file specifying the given target triple.
     ///
-    /// The error string could come from any of the APIs called, including
-    /// filesystem access and JSON decoding.
-    pub fn search(target_triple: &TargetTriple) -> Result<Target, String> {
+    /// If none is found in `$RUST_TARGET_PATH`, look for a file called `target.json` inside the
+    /// sysroot under the target-triple's `rustlib` directory.  Note that it could also just be a
+    /// bare filename already, so also check for that. If one of the hardcoded targets we know
+    /// about, just return it directly.
+    ///
+    /// The error string could come from any of the APIs called, including filesystem access and
+    /// JSON decoding.
+    pub fn search(target_triple: &TargetTriple, sysroot: &PathBuf) -> Result<Target, String> {
         use rustc_serialize::json;
         use std::env;
         use std::fs;
@@ -1931,14 +1933,26 @@ impl Target {
 
                 let target_path = env::var_os("RUST_TARGET_PATH").unwrap_or_default();
 
-                // FIXME 16351: add a sane default search path?
-
                 for dir in env::split_paths(&target_path) {
                     let p = dir.join(&path);
                     if p.is_file() {
                         return load_file(&p);
                     }
                 }
+
+                // Additionally look in the sysroot under `lib/rustlib/<triple>/target.json`
+                // as a fallback.
+                let rustlib_path = crate::target_rustlib_path(&sysroot, &target_triple);
+                let p = std::array::IntoIter::new([
+                    Path::new(sysroot),
+                    Path::new(&rustlib_path),
+                    Path::new("target.json"),
+                ])
+                .collect::<PathBuf>();
+                if p.is_file() {
+                    return load_file(&p);
+                }
+
                 Err(format!("Could not find specification for target {:?}", target_triple))
             }
             TargetTriple::TargetPath(ref target_path) => {
