@@ -80,7 +80,7 @@ impl<'tcx> SaveContext<'tcx> {
         let end = sm.lookup_char_pos(span.hi());
 
         SpanData {
-            file_name: start.file.name.to_string().into(),
+            file_name: start.file.name.prefer_remapped().to_string().into(),
             byte_start: span.lo().0,
             byte_end: span.hi().0,
             line_start: Row::new_one_indexed(start.line as u32),
@@ -290,7 +290,7 @@ impl<'tcx> SaveContext<'tcx> {
                     name: item.ident.to_string(),
                     qualname,
                     span: self.span_from_span(item.ident.span),
-                    value: filename.to_string(),
+                    value: filename.prefer_remapped().to_string(),
                     parent: None,
                     children: m
                         .item_ids
@@ -786,7 +786,7 @@ impl<'tcx> SaveContext<'tcx> {
         let callee = span.source_callee()?;
 
         let mac_name = match callee.kind {
-            ExpnKind::Macro(kind, name) => match kind {
+            ExpnKind::Macro { kind, name, proc_macro: _ } => match kind {
                 MacroKind::Bang => name,
 
                 // Ignore attribute macros, their spans are usually mangled

@@ -91,6 +91,8 @@ crate struct SharedContext<'tcx> {
     crate include_sources: bool,
     /// The local file sources we've emitted and their respective url-paths.
     crate local_sources: FxHashMap<PathBuf, String>,
+    /// Show the memory layout of types in the docs.
+    pub(super) show_type_layout: bool,
     /// Whether the collapsed pass ran
     collapsed: bool,
     /// The base-URL of the issue tracker for when an item has been tagged with
@@ -291,7 +293,7 @@ impl<'tcx> Context<'tcx> {
 
         // We can safely ignore synthetic `SourceFile`s.
         let file = match item.span(self.tcx()).filename(self.sess()) {
-            FileName::Real(ref path) => path.local_path().to_path_buf(),
+            FileName::Real(ref path) => path.local_path_if_available().to_path_buf(),
             _ => return None,
         };
         let file = &file;
@@ -373,11 +375,12 @@ impl<'tcx> FormatRenderer<'tcx> for Context<'tcx> {
             generate_search_filter,
             unstable_features,
             generate_redirect_map,
+            show_type_layout,
             ..
         } = options;
 
         let src_root = match krate.src {
-            FileName::Real(ref p) => match p.local_path().parent() {
+            FileName::Real(ref p) => match p.local_path_if_available().parent() {
                 Some(p) => p.to_path_buf(),
                 None => PathBuf::new(),
             },
@@ -446,6 +449,7 @@ impl<'tcx> FormatRenderer<'tcx> for Context<'tcx> {
             all: RefCell::new(AllTypes::new()),
             errors: receiver,
             redirections: if generate_redirect_map { Some(Default::default()) } else { None },
+            show_type_layout,
         };
 
         // Add the default themes to the `Vec` of stylepaths

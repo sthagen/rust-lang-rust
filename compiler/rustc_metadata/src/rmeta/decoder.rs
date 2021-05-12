@@ -716,30 +716,37 @@ impl<'a, 'tcx> CrateMetadataRef<'a> {
             .decode((self, sess))
     }
 
-    fn load_proc_macro(&self, id: DefIndex, sess: &Session) -> SyntaxExtension {
-        let (name, kind, helper_attrs) = match *self.raw_proc_macro(id) {
+    fn load_proc_macro(&self, def_id: DefId, sess: &Session) -> SyntaxExtension {
+        let (name, kind, helper_attrs) = match *self.raw_proc_macro(def_id.index) {
             ProcMacro::CustomDerive { trait_name, attributes, client } => {
                 let helper_attrs =
                     attributes.iter().cloned().map(Symbol::intern).collect::<Vec<_>>();
                 (
                     trait_name,
-                    SyntaxExtensionKind::Derive(Box::new(ProcMacroDerive { client })),
+                    SyntaxExtensionKind::Derive(Box::new(ProcMacroDerive {
+                        client,
+                        krate: def_id.krate,
+                    })),
                     helper_attrs,
                 )
             }
-            ProcMacro::Attr { name, client } => {
-                (name, SyntaxExtensionKind::Attr(Box::new(AttrProcMacro { client })), Vec::new())
-            }
-            ProcMacro::Bang { name, client } => {
-                (name, SyntaxExtensionKind::Bang(Box::new(BangProcMacro { client })), Vec::new())
-            }
+            ProcMacro::Attr { name, client } => (
+                name,
+                SyntaxExtensionKind::Attr(Box::new(AttrProcMacro { client, krate: def_id.krate })),
+                Vec::new(),
+            ),
+            ProcMacro::Bang { name, client } => (
+                name,
+                SyntaxExtensionKind::Bang(Box::new(BangProcMacro { client, krate: def_id.krate })),
+                Vec::new(),
+            ),
         };
 
-        let attrs: Vec<_> = self.get_item_attrs(id, sess).collect();
+        let attrs: Vec<_> = self.get_item_attrs(def_id.index, sess).collect();
         SyntaxExtension::new(
             sess,
             kind,
-            self.get_span(id, sess),
+            self.get_span(def_id.index, sess),
             helper_attrs,
             self.root.edition,
             Symbol::intern(name),
@@ -1379,6 +1386,15 @@ impl<'a, 'tcx> CrateMetadataRef<'a> {
         }
     }
 
+    fn get_proc_macro_quoted_span(&self, index: usize, sess: &Session) -> Span {
+        self.root
+            .tables
+            .proc_macro_quoted_spans
+            .get(self, index)
+            .unwrap_or_else(|| panic!("Missing proc macro quoted span: {:?}", index))
+            .decode((self, sess))
+    }
+
     fn get_foreign_modules(&self, tcx: TyCtxt<'tcx>) -> Lrc<FxHashMap<DefId, ForeignModule>> {
         if self.root.is_proc_macro_crate() {
             // Proc macro crates do not have any *target* foreign modules.
@@ -1635,9 +1651,11 @@ impl<'a, 'tcx> CrateMetadataRef<'a> {
             if let Some(virtual_dir) = virtual_rust_source_base_dir {
                 if let Some(real_dir) = &sess.opts.real_rust_source_base_dir {
                     if let rustc_span::FileName::Real(old_name) = name {
-                        if let rustc_span::RealFileName::Named(one_path) = old_name {
-                            if let Ok(rest) = one_path.strip_prefix(virtual_dir) {
-                                let virtual_name = one_path.clone();
+                        if let rustc_span::RealFileName::Remapped { local_path: _, virtual_name } =
+                            old_name
+                        {
+                            if let Ok(rest) = virtual_name.strip_prefix(virtual_dir) {
+                                let virtual_name = virtual_name.clone();
 
                                 // The std library crates are in
                                 // `$sysroot/lib/rustlib/src/rust/library`, whereas other crates
@@ -1673,8 +1691,8 @@ impl<'a, 'tcx> CrateMetadataRef<'a> {
                                     virtual_name.display(),
                                     new_path.display(),
                                 );
-                                let new_name = rustc_span::RealFileName::Devirtualized {
-                                    local_path: new_path,
+                                let new_name = rustc_span::RealFileName::Remapped {
+                                    local_path: Some(new_path),
                                     virtual_name,
                                 };
                                 *old_name = new_name;
@@ -1694,7 +1712,6 @@ impl<'a, 'tcx> CrateMetadataRef<'a> {
                     // containing the information we need.
                     let rustc_span::SourceFile {
                         mut name,
-                        name_was_remapped,
                         src_hash,
                         start_pos,
                         end_pos,
@@ -1706,11 +1723,34 @@ impl<'a, 'tcx> CrateMetadataRef<'a> {
                         ..
                     } = source_file_to_import;
 
+                    // If this file is under $sysroot/lib/rustlib/src/ but has not been remapped
+                    // during rust bootstrapping by `remap-debuginfo = true`, and the user
+                    // wish to simulate that behaviour by -Z simulate-remapped-rust-src-base,
+                    // then we change `name` to a similar state as if the rust was bootstrapped
+                    // with `remap-debuginfo = true`.
+                    // This is useful for testing so that tests about the effects of
+                    // `try_to_translate_virtual_to_real` don't have to worry about how the
+                    // compiler is bootstrapped.
+                    if let Some(virtual_dir) =
+                        &sess.opts.debugging_opts.simulate_remapped_rust_src_base
+                    {
+                        if let Some(real_dir) = &sess.opts.real_rust_source_base_dir {
+                            if let rustc_span::FileName::Real(ref mut old_name) = name {
+                                if let rustc_span::RealFileName::LocalPath(local) = old_name {
+                                    if let Ok(rest) = local.strip_prefix(real_dir) {
+                                        *old_name = rustc_span::RealFileName::Remapped {
+                                            local_path: None,
+                                            virtual_name: virtual_dir.join(rest),
+                                        };
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // If this file's path has been remapped to `/rustc/$hash`,
                     // we might be able to reverse that (also see comments above,
                     // on `try_to_translate_virtual_to_real`).
-                    // FIXME(eddyb) we could check `name_was_remapped` here,
-                    // but in practice it seems to be always `false`.
                     try_to_translate_virtual_to_real(&mut name);
 
                     let source_length = (end_pos - start_pos).to_usize();
@@ -1735,7 +1775,6 @@ impl<'a, 'tcx> CrateMetadataRef<'a> {
 
                     let local_version = sess.source_map().new_imported_source_file(
                         name,
-                        name_was_remapped,
                         src_hash,
                         name_hash,
                         source_length,

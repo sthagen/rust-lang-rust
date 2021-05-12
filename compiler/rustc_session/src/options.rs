@@ -621,9 +621,9 @@ mod parse {
         true
     }
 
-    crate fn parse_linker_flavor(slote: &mut Option<LinkerFlavor>, v: Option<&str>) -> bool {
+    crate fn parse_linker_flavor(slot: &mut Option<LinkerFlavor>, v: Option<&str>) -> bool {
         match v.and_then(LinkerFlavor::from_str) {
-            Some(lf) => *slote = Some(lf),
+            Some(lf) => *slot = Some(lf),
             _ => return false,
         }
         true
@@ -1201,6 +1201,9 @@ options! {
         "whether ELF relocations can be relaxed"),
     relro_level: Option<RelroLevel> = (None, parse_relro_level, [TRACKED],
         "choose which RELRO level to use"),
+    simulate_remapped_rust_src_base: Option<PathBuf> = (None, parse_opt_pathbuf, [TRACKED],
+        "simulate the effect of remap-debuginfo = true at bootstrapping by remapping path \
+        to rust's source base directory. only meant for testing purposes"),
     report_delayed_bugs: bool = (false, parse_bool, [TRACKED],
         "immediately print bugs registered with `delay_span_bug` (default: no)"),
     sanitizer: SanitizerSet = (SanitizerSet::empty(), parse_sanitizers, [TRACKED],

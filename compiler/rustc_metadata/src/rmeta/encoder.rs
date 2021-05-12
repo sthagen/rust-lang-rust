@@ -28,9 +28,12 @@ use rustc_middle::ty::codec::TyEncoder;
 use rustc_middle::ty::{self, SymbolName, Ty, TyCtxt};
 use rustc_serialize::{opaque, Encodable, Encoder};
 use rustc_session::config::CrateType;
-use rustc_span::hygiene::{ExpnDataEncodeMode, HygieneEncodeContext, MacroKind};
 use rustc_span::symbol::{sym, Ident, Symbol};
 use rustc_span::{self, ExternalSource, FileName, SourceFile, Span, SyntaxContext};
+use rustc_span::{
+    hygiene::{ExpnDataEncodeMode, HygieneEncodeContext, MacroKind},
+    RealFileName,
+};
 use rustc_target::abi::VariantIdx;
 use std::hash::Hash;
 use std::num::NonZeroUsize;
@@ -466,7 +469,6 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         let source_map = self.tcx.sess.source_map();
         let all_source_files = source_map.files();
 
-        let (working_dir, _cwd_remapped) = self.tcx.sess.working_dir.clone();
         // By replacing the `Option` with `None`, we ensure that we can't
         // accidentally serialize any more `Span`s after the source map encoding
         // is done.
@@ -485,18 +487,41 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
             })
             .map(|(_, source_file)| {
                 let mut adapted = match source_file.name {
-                    // This path of this SourceFile has been modified by
-                    // path-remapping, so we use it verbatim (and avoid
-                    // cloning the whole map in the process).
-                    _ if source_file.name_was_remapped => source_file.clone(),
-
-                    // Otherwise expand all paths to absolute paths because
-                    // any relative paths are potentially relative to a
-                    // wrong directory.
-                    FileName::Real(ref name) => {
-                        let name = name.stable_name();
+                    FileName::Real(ref realname) => {
                         let mut adapted = (**source_file).clone();
-                        adapted.name = Path::new(&working_dir).join(name).into();
+                        adapted.name = FileName::Real(match realname {
+                            RealFileName::LocalPath(path_to_file) => {
+                                // Prepend path of working directory onto potentially
+                                // relative paths, because they could become relative
+                                // to a wrong directory.
+                                let working_dir = &self.tcx.sess.working_dir;
+                                match working_dir {
+                                    RealFileName::LocalPath(absolute) => {
+                                        // If working_dir has not been remapped, then we emit a
+                                        // LocalPath variant as it's likely to be a valid path
+                                        RealFileName::LocalPath(
+                                            Path::new(absolute).join(path_to_file),
+                                        )
+                                    }
+                                    RealFileName::Remapped { local_path: _, virtual_name } => {
+                                        // If working_dir has been remapped, then we emit
+                                        // Remapped variant as the expanded path won't be valid
+                                        RealFileName::Remapped {
+                                            local_path: None,
+                                            virtual_name: Path::new(virtual_name)
+                                                .join(path_to_file),
+                                        }
+                                    }
+                                }
+                            }
+                            RealFileName::Remapped { local_path: _, virtual_name } => {
+                                RealFileName::Remapped {
+                                    // We do not want any local path to be exported into metadata
+                                    local_path: None,
+                                    virtual_name: virtual_name.clone(),
+                                }
+                            }
+                        });
                         adapted.name_hash = {
                             let mut hasher: StableHasher = StableHasher::new();
                             adapted.name.hash(&mut hasher);
@@ -1579,6 +1604,11 @@ impl EncodeContext<'a, 'tcx> {
             let proc_macro_decls_static = tcx.proc_macro_decls_static(LOCAL_CRATE).unwrap().index;
             let stability = tcx.lookup_stability(DefId::local(CRATE_DEF_INDEX)).copied();
             let macros = self.lazy(hir.krate().proc_macros.iter().map(|p| p.owner.local_def_index));
+            let spans = self.tcx.sess.parse_sess.proc_macro_quoted_spans();
+            for (i, span) in spans.into_iter().enumerate() {
+                let span = self.lazy(span);
+                self.tables.proc_macro_quoted_spans.set(i, span);
+            }
 
             record!(self.tables.def_kind[LOCAL_CRATE.as_def_id()] <- DefKind::Mod);
             record!(self.tables.span[LOCAL_CRATE.as_def_id()] <- tcx.def_span(LOCAL_CRATE.as_def_id()));
