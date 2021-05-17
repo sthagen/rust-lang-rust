@@ -209,7 +209,6 @@ crate struct CrateRoot<'tcx> {
     has_global_allocator: bool,
     has_panic_handler: bool,
     has_default_lib_allocator: bool,
-    plugin_registrar_fn: Option<DefIndex>,
 
     crate_deps: Lazy<[CrateDep]>,
     dylib_dependency_formats: Lazy<[Option<LinkagePreference>]>,
@@ -451,4 +450,4 @@ struct GeneratorData<'tcx> {
 // Tags used for encoding Spans:
 const TAG_VALID_SPAN_LOCAL: u8 = 0;
 const TAG_VALID_SPAN_FOREIGN: u8 = 1;
-const TAG_INVALID_SPAN: u8 = 2;
+const TAG_PARTIAL_SPAN: u8 = 2;

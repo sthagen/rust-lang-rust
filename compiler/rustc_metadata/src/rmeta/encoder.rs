@@ -187,11 +187,48 @@ impl<'a, 'tcx> Encodable<EncodeContext<'a, 'tcx>> for ExpnId {
 
 impl<'a, 'tcx> Encodable<EncodeContext<'a, 'tcx>> for Span {
     fn encode(&self, s: &mut EncodeContext<'a, 'tcx>) -> opaque::EncodeResult {
-        if *self == rustc_span::DUMMY_SP {
-            return TAG_INVALID_SPAN.encode(s);
+        let span = self.data();
+
+        // Don't serialize any `SyntaxContext`s from a proc-macro crate,
+        // since we don't load proc-macro dependencies during serialization.
+        // This means that any hygiene information from macros used *within*
+        // a proc-macro crate (e.g. invoking a macro that expands to a proc-macro
+        // definition) will be lost.
+        //
+        // This can show up in two ways:
+        //
+        // 1. Any hygiene information associated with identifier of
+        // a proc macro (e.g. `#[proc_macro] pub fn $name`) will be lost.
+        // Since proc-macros can only be invoked from a different crate,
+        // real code should never need to care about this.
+        //
+        // 2. Using `Span::def_site` or `Span::mixed_site` will not
+        // include any hygiene information associated with the definition
+        // site. This means that a proc-macro cannot emit a `$crate`
+        // identifier which resolves to one of its dependencies,
+        // which also should never come up in practice.
+        //
+        // Additionally, this affects `Span::parent`, and any other
+        // span inspection APIs that would otherwise allow traversing
+        // the `SyntaxContexts` associated with a span.
+        //
+        // None of these user-visible effects should result in any
+        // cross-crate inconsistencies (getting one behavior in the same
+        // crate, and a different behavior in another crate) due to the
+        // limited surface that proc-macros can expose.
+        //
+        // IMPORTANT: If this is ever changed, be sure to update
+        // `rustc_span::hygiene::raw_encode_expn_id` to handle
+        // encoding `ExpnData` for proc-macro crates.
+        if s.is_proc_macro {
+            SyntaxContext::root().encode(s)?;
+        } else {
+            span.ctxt.encode(s)?;
         }
 
-        let span = self.data();
+        if self.is_dummy() {
+            return TAG_PARTIAL_SPAN.encode(s);
+        }
 
         // The Span infrastructure should make sure that this invariant holds:
         debug_assert!(span.lo <= span.hi);
@@ -206,7 +243,7 @@ impl<'a, 'tcx> Encodable<EncodeContext<'a, 'tcx>> for Span {
         if !s.source_file_cache.0.contains(span.hi) {
             // Unfortunately, macro expansion still sometimes generates Spans
             // that malformed in this way.
-            return TAG_INVALID_SPAN.encode(s);
+            return TAG_PARTIAL_SPAN.encode(s);
         }
 
         let source_files = s.required_source_files.as_mut().expect("Already encoded SourceMap!");
@@ -261,43 +298,6 @@ impl<'a, 'tcx> Encodable<EncodeContext<'a, 'tcx>> for Span {
         // from the variable-length integer encoding that we use.
         let len = hi - lo;
         len.encode(s)?;
-
-        // Don't serialize any `SyntaxContext`s from a proc-macro crate,
-        // since we don't load proc-macro dependencies during serialization.
-        // This means that any hygiene information from macros used *within*
-        // a proc-macro crate (e.g. invoking a macro that expands to a proc-macro
-        // definition) will be lost.
-        //
-        // This can show up in two ways:
-        //
-        // 1. Any hygiene information associated with identifier of
-        // a proc macro (e.g. `#[proc_macro] pub fn $name`) will be lost.
-        // Since proc-macros can only be invoked from a different crate,
-        // real code should never need to care about this.
-        //
-        // 2. Using `Span::def_site` or `Span::mixed_site` will not
-        // include any hygiene information associated with the definition
-        // site. This means that a proc-macro cannot emit a `$crate`
-        // identifier which resolves to one of its dependencies,
-        // which also should never come up in practice.
-        //
-        // Additionally, this affects `Span::parent`, and any other
-        // span inspection APIs that would otherwise allow traversing
-        // the `SyntaxContexts` associated with a span.
-        //
-        // None of these user-visible effects should result in any
-        // cross-crate inconsistencies (getting one behavior in the same
-        // crate, and a different behavior in another crate) due to the
-        // limited surface that proc-macros can expose.
-        //
-        // IMPORTANT: If this is ever changed, be sure to update
-        // `rustc_span::hygiene::raw_encode_expn_id` to handle
-        // encoding `ExpnData` for proc-macro crates.
-        if s.is_proc_macro {
-            SyntaxContext::root().encode(s)?;
-        } else {
-            span.ctxt.encode(s)?;
-        }
 
         if tag == TAG_VALID_SPAN_FOREIGN {
             // This needs to be two lines to avoid holding the `s.source_file_cache`
@@ -678,7 +678,6 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
             has_global_allocator: tcx.has_global_allocator(LOCAL_CRATE),
             has_panic_handler: tcx.has_panic_handler(LOCAL_CRATE),
             has_default_lib_allocator,
-            plugin_registrar_fn: tcx.plugin_registrar_fn(LOCAL_CRATE).map(|id| id.index),
             proc_macro_data,
             compiler_builtins: tcx.sess.contains_name(&attrs, sym::compiler_builtins),
             needs_allocator: tcx.sess.contains_name(&attrs, sym::needs_allocator),
@@ -970,13 +969,12 @@ impl EncodeContext<'a, 'tcx> {
                 record!(self.tables.super_predicates[def_id] <- self.tcx.super_predicates_of(def_id));
             }
         }
-        let inherent_impls = tcx.crate_inherent_impls(LOCAL_CRATE);
+        let inherent_impls = tcx.crate_inherent_impls(());
         for (def_id, implementations) in inherent_impls.inherent_impls.iter() {
-            assert!(def_id.is_local());
             if implementations.is_empty() {
                 continue;
             }
-            record!(self.tables.inherent_impls[def_id] <- implementations.iter().map(|&def_id| {
+            record!(self.tables.inherent_impls[def_id.to_def_id()] <- implementations.iter().map(|&def_id| {
                 assert!(def_id.is_local());
                 def_id.index
             }));
@@ -1263,7 +1261,7 @@ impl EncodeContext<'a, 'tcx> {
 
         let mut keys_and_jobs = self
             .tcx
-            .mir_keys(LOCAL_CRATE)
+            .mir_keys(())
             .iter()
             .filter_map(|&def_id| {
                 let (encode_const, encode_opt) = should_encode_mir(self.tcx, def_id);
@@ -1601,7 +1599,7 @@ impl EncodeContext<'a, 'tcx> {
             let tcx = self.tcx;
             let hir = tcx.hir();
 
-            let proc_macro_decls_static = tcx.proc_macro_decls_static(LOCAL_CRATE).unwrap().index;
+            let proc_macro_decls_static = tcx.proc_macro_decls_static(()).unwrap().local_def_index;
             let stability = tcx.lookup_stability(DefId::local(CRATE_DEF_INDEX)).copied();
             let macros = self.lazy(hir.krate().proc_macros.iter().map(|p| p.owner.local_def_index));
             let spans = self.tcx.sess.parse_sess.proc_macro_quoted_spans();
@@ -1798,7 +1796,7 @@ impl EncodeContext<'a, 'tcx> {
 
     fn encode_dylib_dependency_formats(&mut self) -> Lazy<[Option<LinkagePreference>]> {
         empty_proc_macro!(self);
-        let formats = self.tcx.dependency_formats(LOCAL_CRATE);
+        let formats = self.tcx.dependency_formats(());
         for (ty, arr) in formats.iter() {
             if *ty != CrateType::Dylib {
                 continue;
@@ -2028,7 +2026,7 @@ fn prefetch_mir(tcx: TyCtxt<'_>) {
         return;
     }
 
-    par_iter(tcx.mir_keys(LOCAL_CRATE)).for_each(|&def_id| {
+    par_iter(tcx.mir_keys(())).for_each(|&def_id| {
         let (encode_const, encode_opt) = should_encode_mir(tcx, def_id);
 
         if encode_const {

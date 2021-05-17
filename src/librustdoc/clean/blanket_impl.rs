@@ -1,6 +1,5 @@
 use crate::rustc_trait_selection::traits::query::evaluate_obligation::InferCtxtExt;
 use rustc_hir as hir;
-use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_infer::infer::{InferOk, TyCtxtInferExt};
 use rustc_infer::traits;
 use rustc_middle::ty::subst::Subst;
@@ -20,7 +19,7 @@ impl<'a, 'tcx> BlanketImplFinder<'a, 'tcx> {
 
         debug!("get_blanket_impls({:?})", ty);
         let mut impls = Vec::new();
-        for &trait_def_id in self.cx.tcx.all_traits(LOCAL_CRATE).iter() {
+        for &trait_def_id in self.cx.tcx.all_traits(()).iter() {
             if !self.cx.cache.access_levels.is_public(trait_def_id)
                 || self.cx.generated_synthetics.get(&(ty, trait_def_id)).is_some()
             {
@@ -119,7 +118,7 @@ impl<'a, 'tcx> BlanketImplFinder<'a, 'tcx> {
                             .clean(self.cx),
                         negative_polarity: false,
                         synthetic: false,
-                        blanket_impl: Some(trait_ref.self_ty().clean(self.cx)),
+                        blanket_impl: Some(box trait_ref.self_ty().clean(self.cx)),
                     }),
                     cfg: None,
                 });

@@ -27,7 +27,7 @@ use rustc_middle::middle::exported_symbols::{ExportedSymbol, SymbolExportLevel};
 use rustc_middle::mir::interpret::{AllocDecodingSession, AllocDecodingState};
 use rustc_middle::mir::{self, Body, Promoted};
 use rustc_middle::ty::codec::TyDecoder;
-use rustc_middle::ty::{self, Ty, TyCtxt};
+use rustc_middle::ty::{self, Ty, TyCtxt, Visibility};
 use rustc_serialize::{opaque, Decodable, Decoder};
 use rustc_session::Session;
 use rustc_span::hygiene::ExpnDataDecodeMode;
@@ -406,17 +406,17 @@ impl<'a, 'tcx> Decodable<DecodeContext<'a, 'tcx>> for ExpnId {
 
 impl<'a, 'tcx> Decodable<DecodeContext<'a, 'tcx>> for Span {
     fn decode(decoder: &mut DecodeContext<'a, 'tcx>) -> Result<Span, String> {
+        let ctxt = SyntaxContext::decode(decoder)?;
         let tag = u8::decode(decoder)?;
 
-        if tag == TAG_INVALID_SPAN {
-            return Ok(DUMMY_SP);
+        if tag == TAG_PARTIAL_SPAN {
+            return Ok(DUMMY_SP.with_ctxt(ctxt));
         }
 
         debug_assert!(tag == TAG_VALID_SPAN_LOCAL || tag == TAG_VALID_SPAN_FOREIGN);
 
         let lo = BytePos::decode(decoder)?;
         let len = BytePos::decode(decoder)?;
-        let ctxt = SyntaxContext::decode(decoder)?;
         let hi = lo + len;
 
         let sess = if let Some(sess) = decoder.sess {
@@ -1309,6 +1309,17 @@ impl<'a, 'tcx> CrateMetadataRef<'a> {
             .unwrap_or_else(Lazy::empty)
             .decode(self)
             .map(|index| respan(self.get_span(index, sess), self.item_ident(index, sess).name))
+            .collect()
+    }
+
+    fn get_struct_field_visibilities(&self, id: DefIndex) -> Vec<Visibility> {
+        self.root
+            .tables
+            .children
+            .get(self, id)
+            .unwrap_or_else(Lazy::empty)
+            .decode(self)
+            .map(|field_index| self.get_visibility(field_index))
             .collect()
     }
 
