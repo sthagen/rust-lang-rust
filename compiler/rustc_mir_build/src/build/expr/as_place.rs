@@ -3,13 +3,13 @@
 use crate::build::expr::category::Category;
 use crate::build::ForGuard::{OutsideGuard, RefWithinGuard};
 use crate::build::{BlockAnd, BlockAndExtension, Builder};
-use crate::thir::*;
 use rustc_hir::def_id::DefId;
 use rustc_hir::HirId;
 use rustc_middle::hir::place::ProjectionKind as HirProjectionKind;
 use rustc_middle::middle::region;
 use rustc_middle::mir::AssertKind::BoundsCheck;
 use rustc_middle::mir::*;
+use rustc_middle::thir::*;
 use rustc_middle::ty::AdtDef;
 use rustc_middle::ty::{self, CanonicalUserTypeAnnotation, Ty, TyCtxt, Variance};
 use rustc_span::Span;
@@ -209,9 +209,7 @@ fn to_upvars_resolved_place_builder<'a, 'tcx>(
     match from_builder.base {
         PlaceBase::Local(_) => Ok(from_builder),
         PlaceBase::Upvar { var_hir_id, closure_def_id, closure_kind } => {
-            // Captures are represented using fields inside a structure.
-            // This represents accessing self in the closure structure
-            let mut upvar_resolved_place_builder = PlaceBuilder::from(Local::new(1));
+            let mut upvar_resolved_place_builder = PlaceBuilder::from(ty::CAPTURE_STRUCT_LOCAL);
             match closure_kind {
                 ty::ClosureKind::Fn | ty::ClosureKind::FnMut => {
                     upvar_resolved_place_builder = upvar_resolved_place_builder.deref();
