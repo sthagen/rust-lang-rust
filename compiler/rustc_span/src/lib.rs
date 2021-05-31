@@ -21,6 +21,7 @@
 #![feature(nll)]
 #![feature(min_specialization)]
 #![feature(thread_local_const_init)]
+#![feature(trusted_step)]
 
 #[macro_use]
 extern crate rustc_macros;
@@ -45,8 +46,6 @@ use def_id::{CrateNum, DefId, LOCAL_CRATE};
 pub mod lev_distance;
 mod span_encoding;
 pub use span_encoding::{Span, DUMMY_SP};
-
-pub mod crate_disambiguator;
 
 pub mod symbol;
 pub use symbol::{sym, Symbol};
