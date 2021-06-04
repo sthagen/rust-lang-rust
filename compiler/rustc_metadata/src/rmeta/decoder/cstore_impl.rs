@@ -155,6 +155,7 @@ provide! { <'tcx> tcx, def_id, other, cdata,
     is_ctfe_mir_available => { cdata.is_ctfe_mir_available(def_id.index) }
 
     dylib_dependency_formats => { cdata.get_dylib_dependency_formats(tcx) }
+    is_private_dep => { cdata.private_dep }
     is_panic_runtime => { cdata.root.panic_runtime }
     is_compiler_builtins => { cdata.root.compiler_builtins }
     has_global_allocator => { cdata.root.has_global_allocator }
@@ -187,7 +188,7 @@ provide! { <'tcx> tcx, def_id, other, cdata,
     foreign_modules => { cdata.get_foreign_modules(tcx) }
     crate_hash => { cdata.root.hash }
     crate_host_hash => { cdata.host_hash }
-    original_crate_name => { cdata.root.name }
+    crate_name => { cdata.root.name }
 
     extra_filename => { cdata.root.extra_filename.clone() }
 
@@ -204,7 +205,6 @@ provide! { <'tcx> tcx, def_id, other, cdata,
         let r = *cdata.dep_kind.lock();
         r
     }
-    crate_name => { cdata.root.name }
     item_children => {
         let mut result = SmallVec::<[_; 8]>::new();
         cdata.each_child_of_item(def_id.index, |child| result.push(child), tcx.sess);
@@ -249,6 +249,10 @@ pub fn provide(providers: &mut Providers) {
         },
         is_statically_included_foreign_item: |tcx, id| {
             matches!(tcx.native_library_kind(id), Some(NativeLibKind::Static { .. }))
+        },
+        is_private_dep: |_tcx, cnum| {
+            assert_eq!(cnum, LOCAL_CRATE);
+            false
         },
         native_library_kind: |tcx, id| {
             tcx.native_libraries(id.krate)
@@ -454,6 +458,13 @@ impl CStore {
         self.get_crate_data(def_id.krate).module_expansion(def_id.index, sess)
     }
 
+    /// Only public-facing way to traverse all the definitions in a non-local crate.
+    /// Critically useful for this third-party project: <https://github.com/hacspec/hacspec>.
+    /// See <https://github.com/rust-lang/rust/pull/85889> for context.
+    pub fn num_def_ids_untracked(&self, cnum: CrateNum) -> usize {
+        self.get_crate_data(cnum).num_def_ids()
+    }
+
     pub fn item_attrs(&self, def_id: DefId, sess: &Session) -> Vec<ast::Attribute> {
         self.get_crate_data(def_id.krate).get_item_attrs(def_id.index, sess).collect()
     }
@@ -475,10 +486,6 @@ impl CrateStore for CStore {
 
     fn crate_name_untracked(&self, cnum: CrateNum) -> Symbol {
         self.get_crate_data(cnum).root.name
-    }
-
-    fn crate_is_private_dep_untracked(&self, cnum: CrateNum) -> bool {
-        self.get_crate_data(cnum).private_dep
     }
 
     fn stable_crate_id_untracked(&self, cnum: CrateNum) -> StableCrateId {

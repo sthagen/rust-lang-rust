@@ -269,7 +269,7 @@ pub struct CrateVariancesMap<'tcx> {
 // the types of AST nodes.
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
 pub struct CReaderCacheKey {
-    pub cnum: CrateNum,
+    pub cnum: Option<CrateNum>,
     pub pos: usize,
 }
 
@@ -1097,12 +1097,14 @@ pub struct ParamEnv<'tcx> {
 
 unsafe impl rustc_data_structures::tagged_ptr::Tag for traits::Reveal {
     const BITS: usize = 1;
+    #[inline]
     fn into_usize(self) -> usize {
         match self {
             traits::Reveal::UserFacing => 0,
             traits::Reveal::All => 1,
         }
     }
+    #[inline]
     unsafe fn from_usize(ptr: usize) -> Self {
         match ptr {
             0 => traits::Reveal::UserFacing,
@@ -1200,6 +1202,7 @@ impl<'tcx> ParamEnv<'tcx> {
     }
 
     /// Returns this same environment but with no caller bounds.
+    #[inline]
     pub fn without_caller_bounds(self) -> Self {
         Self::new(List::empty(), self.reveal())
     }
@@ -1618,7 +1621,7 @@ impl<'tcx> TyCtxt<'tcx> {
 
     fn item_name_from_def_id(self, def_id: DefId) -> Option<Symbol> {
         if def_id.index == CRATE_DEF_INDEX {
-            Some(self.original_crate_name(def_id.krate))
+            Some(self.crate_name(def_id.krate))
         } else {
             let def_key = self.def_key(def_id);
             match def_key.disambiguated_data.data {

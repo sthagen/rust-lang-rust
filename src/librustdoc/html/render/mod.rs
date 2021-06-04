@@ -1369,7 +1369,11 @@ fn render_impl(
                             })
                         })
                         .map(|item| format!("{}.{}", item.type_(), name));
-                    write!(w, "<h4 id=\"{}\" class=\"{}{}\">", id, item_type, in_trait_class,);
+                    write!(
+                        w,
+                        "<div id=\"{}\" class=\"{}{} has-srclink\">",
+                        id, item_type, in_trait_class,
+                    );
                     w.write_str("<code>");
                     render_assoc_item(
                         w,
@@ -1388,13 +1392,17 @@ fn render_impl(
                     );
                     write!(w, "<a href=\"#{}\" class=\"anchor\"></a>", id);
                     write_srclink(cx, item, w);
-                    w.write_str("</h4>");
+                    w.write_str("</div>");
                 }
             }
             clean::TypedefItem(ref tydef, _) => {
                 let source_id = format!("{}.{}", ItemType::AssocType, name);
                 let id = cx.derive_id(source_id.clone());
-                write!(w, "<h4 id=\"{}\" class=\"{}{}\"><code>", id, item_type, in_trait_class);
+                write!(
+                    w,
+                    "<div id=\"{}\" class=\"{}{} has-srclink\"><code>",
+                    id, item_type, in_trait_class
+                );
                 assoc_type(
                     w,
                     item,
@@ -1406,12 +1414,16 @@ fn render_impl(
                 );
                 w.write_str("</code>");
                 write!(w, "<a href=\"#{}\" class=\"anchor\"></a>", id);
-                w.write_str("</h4>");
+                w.write_str("</div>");
             }
             clean::AssocConstItem(ref ty, ref default) => {
                 let source_id = format!("{}.{}", item_type, name);
                 let id = cx.derive_id(source_id.clone());
-                write!(w, "<h4 id=\"{}\" class=\"{}{}\"><code>", id, item_type, in_trait_class);
+                write!(
+                    w,
+                    "<div id=\"{}\" class=\"{}{} has-srclink\"><code>",
+                    id, item_type, in_trait_class
+                );
                 assoc_const(
                     w,
                     item,
@@ -1431,12 +1443,12 @@ fn render_impl(
                 );
                 write!(w, "<a href=\"#{}\" class=\"anchor\"></a>", id);
                 write_srclink(cx, item, w);
-                w.write_str("</h4>");
+                w.write_str("</div>");
             }
             clean::AssocTypeItem(ref bounds, ref default) => {
                 let source_id = format!("{}.{}", item_type, name);
                 let id = cx.derive_id(source_id.clone());
-                write!(w, "<h4 id=\"{}\" class=\"{}{}\"><code>", id, item_type, in_trait_class);
+                write!(w, "<div id=\"{}\" class=\"{}{}\"><code>", id, item_type, in_trait_class,);
                 assoc_type(
                     w,
                     item,
@@ -1448,7 +1460,7 @@ fn render_impl(
                 );
                 w.write_str("</code>");
                 write!(w, "<a href=\"#{}\" class=\"anchor\"></a>", id);
-                w.write_str("</h4>");
+                w.write_str("</div>");
             }
             clean::StrippedItem(..) => return,
             _ => panic!("can't make docs for trait item with name {:?}", item.name),
@@ -1577,7 +1589,8 @@ fn render_impl(
         if let Some(use_absolute) = use_absolute {
             write!(
                 w,
-                "{}<h3 id=\"{}\" class=\"impl\"{}><code class=\"in-band\">",
+                "{}<div id=\"{}\" class=\"impl has-srclink\"{}>\
+                     <code class=\"in-band\">",
                 open_details(&mut close_tags, is_implementing_trait),
                 id,
                 aliases
@@ -1604,7 +1617,8 @@ fn render_impl(
         } else {
             write!(
                 w,
-                "{}<h3 id=\"{}\" class=\"impl\"{}><code class=\"in-band\">{}</code>",
+                "{}<div id=\"{}\" class=\"impl has-srclink\"{}>\
+                     <code class=\"in-band\">{}</code>",
                 open_details(&mut close_tags, is_implementing_trait),
                 id,
                 aliases,
@@ -1621,9 +1635,9 @@ fn render_impl(
         );
         write_srclink(cx, &i.impl_item, w);
         if !toggled {
-            w.write_str("</h3>");
+            w.write_str("</div>");
         } else {
-            w.write_str("</h3></summary>");
+            w.write_str("</div></summary>");
         }
 
         if trait_.is_some() {
@@ -1649,13 +1663,9 @@ fn render_impl(
             );
         }
     }
-    if toggled {
+    if !default_impl_items.is_empty() || !impl_items.is_empty() {
         w.write_str("<div class=\"impl-items\">");
         w.push_buffer(default_impl_items);
-        if trait_.is_some() && !impl_items.is_empty() {
-            w.write_str("<details class=\"undocumented\"><summary></summary>");
-            close_tags.insert_str(0, "</details>");
-        }
         w.push_buffer(impl_items);
         close_tags.insert_str(0, "</div>");
     }
@@ -1703,7 +1713,7 @@ fn print_sidebar(cx: &Context<'_>, it: &clean::Item, buffer: &mut Buffer) {
                 "<div class=\"block version\">\
                      <p>Version {}</p>\
                  </div>",
-                Escape(version)
+                Escape(version),
             );
         }
     }
@@ -1713,9 +1723,10 @@ fn print_sidebar(cx: &Context<'_>, it: &clean::Item, buffer: &mut Buffer) {
         write!(
             buffer,
             "<a id=\"all-types\" href=\"all.html\"><p>See all {}'s items</p></a>",
-            it.name.as_ref().expect("crates always have a name")
+            it.name.as_ref().expect("crates always have a name"),
         );
     }
+
     match *it.kind {
         clean::StructItem(ref s) => sidebar_struct(cx, buffer, it, s),
         clean::TraitItem(ref t) => sidebar_trait(cx, buffer, it, t),
@@ -1725,7 +1736,7 @@ fn print_sidebar(cx: &Context<'_>, it: &clean::Item, buffer: &mut Buffer) {
         clean::TypedefItem(_, _) => sidebar_typedef(cx, buffer, it),
         clean::ModuleItem(ref m) => sidebar_module(buffer, &m.items),
         clean::ForeignTypeItem => sidebar_foreign_type(cx, buffer, it),
-        _ => (),
+        _ => {}
     }
 
     // The sidebar is designed to display sibling functions, modules and
@@ -1736,22 +1747,24 @@ fn print_sidebar(cx: &Context<'_>, it: &clean::Item, buffer: &mut Buffer) {
     // as much HTML as possible in order to allow non-JS-enabled browsers
     // to navigate the documentation (though slightly inefficiently).
 
-    buffer.write_str("<p class=\"location\">");
-    for (i, name) in cx.current.iter().take(parentlen).enumerate() {
-        if i > 0 {
-            buffer.write_str("::<wbr>");
+    if !it.is_mod() {
+        buffer.write_str("<p class=\"location\">Other items in<br>");
+        for (i, name) in cx.current.iter().take(parentlen).enumerate() {
+            if i > 0 {
+                buffer.write_str("::<wbr>");
+            }
+            write!(
+                buffer,
+                "<a href=\"{}index.html\">{}</a>",
+                &cx.root_path()[..(cx.current.len() - i - 1) * 3],
+                *name
+            );
         }
-        write!(
-            buffer,
-            "<a href=\"{}index.html\">{}</a>",
-            &cx.root_path()[..(cx.current.len() - i - 1) * 3],
-            *name
-        );
+        buffer.write_str("</p>");
     }
-    buffer.write_str("</p>");
 
     // Sidebar refers to the enclosing module, not this module.
-    let relpath = if it.is_mod() { "../" } else { "" };
+    let relpath = if it.is_mod() && parentlen != 0 { "./" } else { "" };
     write!(
         buffer,
         "<div id=\"sidebar-vars\" data-name=\"{name}\" data-ty=\"{ty}\" data-relpath=\"{path}\">\
@@ -1760,17 +1773,7 @@ fn print_sidebar(cx: &Context<'_>, it: &clean::Item, buffer: &mut Buffer) {
         ty = it.type_(),
         path = relpath
     );
-
-    if parentlen == 0 {
-        write!(
-            buffer,
-            "<script defer src=\"{}sidebar-items{}.js\"></script>",
-            relpath, cx.shared.resource_suffix
-        );
-    } else {
-        write!(buffer, "<script defer src=\"{}sidebar-items.js\"></script>", relpath);
-    }
-
+    write!(buffer, "<script defer src=\"{}sidebar-items.js\"></script>", relpath);
     // Closes sidebar-elems div.
     buffer.write_str("</div>");
 }
@@ -2278,8 +2281,8 @@ fn sidebar_enum(cx: &Context<'_>, buf: &mut Buffer, it: &clean::Item, e: &clean:
     }
 }
 
-fn item_ty_to_strs(ty: &ItemType) -> (&'static str, &'static str) {
-    match *ty {
+fn item_ty_to_strs(ty: ItemType) -> (&'static str, &'static str) {
+    match ty {
         ItemType::ExternCrate | ItemType::Import => ("reexports", "Re-exports"),
         ItemType::Module => ("modules", "Modules"),
         ItemType::Struct => ("structs", "Structs"),
@@ -2311,10 +2314,14 @@ fn item_ty_to_strs(ty: &ItemType) -> (&'static str, &'static str) {
 fn sidebar_module(buf: &mut Buffer, items: &[clean::Item]) {
     let mut sidebar = String::new();
 
+    // Re-exports are handled a bit differently because they can be extern crates or imports.
     if items.iter().any(|it| {
-        it.type_() == ItemType::ExternCrate || (it.type_() == ItemType::Import && !it.is_stripped())
+        it.name.is_some()
+            && (it.type_() == ItemType::ExternCrate
+                || (it.type_() == ItemType::Import && !it.is_stripped()))
     }) {
-        sidebar.push_str("<li><a href=\"#reexports\">Re-exports</a></li>");
+        let (id, name) = item_ty_to_strs(ItemType::Import);
+        sidebar.push_str(&format!("<li><a href=\"#{}\">{}</a></li>", id, name));
     }
 
     // ordering taken from item_module, reorder, where it prioritized elements in a certain order
@@ -2341,13 +2348,9 @@ fn sidebar_module(buf: &mut Buffer, items: &[clean::Item]) {
         ItemType::ForeignType,
         ItemType::Keyword,
     ] {
-        if items.iter().any(|it| !it.is_stripped() && it.type_() == myty) {
-            let (short, name) = item_ty_to_strs(&myty);
-            sidebar.push_str(&format!(
-                "<li><a href=\"#{id}\">{name}</a></li>",
-                id = short,
-                name = name
-            ));
+        if items.iter().any(|it| !it.is_stripped() && it.type_() == myty && it.name.is_some()) {
+            let (id, name) = item_ty_to_strs(myty);
+            sidebar.push_str(&format!("<li><a href=\"#{}\">{}</a></li>", id, name));
         }
     }
 

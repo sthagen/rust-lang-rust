@@ -119,7 +119,7 @@ crate fn render<T: Print, S: Print>(
     {after_content}\
     <div id=\"rustdoc-vars\" data-root-path=\"{root_path}\" data-current-crate=\"{krate}\" \
        data-search-index-js=\"{root_path}search-index{suffix}.js\" \
-       data-search-js=\"{static_root_path}search{suffix}.js\"></div>
+       data-search-js=\"{static_root_path}search{suffix}.js\"></div>\
     <script src=\"{static_root_path}main{suffix}.js\"></script>\
     {extra_scripts}\
 </body>\
@@ -235,6 +235,7 @@ crate fn redirect(url: &str) -> String {
 <html lang="en">
 <head>
     <meta http-equiv="refresh" content="0;URL={url}">
+    <title>Redirection</title>
 </head>
 <body>
     <p>Redirecting to <a href="{url}">{url}</a>...</p>
