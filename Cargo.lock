@@ -294,7 +294,7 @@ dependencies = [
  "rand 0.8.3",
  "rustc-workspace-hack",
  "rustfix",
- "semver 1.0.1",
+ "semver 1.0.3",
  "serde",
  "serde_ignored",
  "serde_json",
@@ -652,9 +652,9 @@ dependencies = [
 
 [[package]]
 name = "compiler_builtins"
-version = "0.1.43"
+version = "0.1.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "65af2dcae4779003dfa91aedc6ade7bdc7ba685944e50a8b4f9380df376a4466"
+checksum = "787187ae221adfcda34b03006f1617099e4ae26b50e5a4db282496014ab75837"
 dependencies = [
  "cc",
  "rustc-std-workspace-core",
@@ -2154,9 +2154,9 @@ dependencies = [
 
 [[package]]
 name = "memchr"
-version = "2.3.3"
+version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3728d817d99e5ac407411fa471ff9800a778d88a24685968b36824eaf4bee400"
+checksum = "b16bd47d9e329435e309c58469fe0791c2d0d1ba96ec0954152a5ae2b04387dc"
 
 [[package]]
 name = "memmap2"
@@ -2357,6 +2357,17 @@ dependencies = [
  "compiler_builtins",
  "rustc-std-workspace-alloc",
  "rustc-std-workspace-core",
+]
+
+[[package]]
+name = "object"
+version = "0.25.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8bc1d42047cf336f0f939c99e97183cf31551bf0f2865a2ec9c8d91fd4ffb5e"
+dependencies = [
+ "crc32fast",
+ "indexmap",
+ "memchr",
 ]
 
 [[package]]
@@ -3701,7 +3712,7 @@ dependencies = [
  "itertools 0.9.0",
  "jobserver",
  "libc",
- "object",
+ "object 0.25.2",
  "pathdiff",
  "rustc_apfloat",
  "rustc_ast",
@@ -4681,9 +4692,9 @@ dependencies = [
 
 [[package]]
 name = "semver"
-version = "1.0.1"
+version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d023dabf011d5dcb5ac64e3685d97d3b0ef412911077a2851455c6098524a723"
+checksum = "5f3aac57ee7f3272d8395c6e4f502f434f0e289fcd62876f70daa008c20dcabe"
 dependencies = [
  "serde",
 ]
@@ -4912,7 +4923,7 @@ dependencies = [
  "hermit-abi",
  "libc",
  "miniz_oxide",
- "object",
+ "object 0.22.0",
  "panic_abort",
  "panic_unwind",
  "profiler_builtins",

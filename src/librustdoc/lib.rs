@@ -81,6 +81,8 @@ use rustc_session::config::{make_crate_type_option, ErrorOutputType, RustcOptGro
 use rustc_session::getopts;
 use rustc_session::{early_error, early_warn};
 
+use crate::clean::utils::DOC_RUST_LANG_ORG_CHANNEL;
+
 /// A macro to create a FxHashMap.
 ///
 /// Example:
@@ -510,6 +512,14 @@ fn opts() -> Vec<RustcOptGroup> {
                 "LEVEL",
             )
         }),
+        unstable("force-warns", |o| {
+            o.optopt(
+                "",
+                "force-warns",
+                "Lints that will warn even if allowed somewhere else",
+                "LINTS",
+            )
+        }),
         unstable("index-page", |o| {
             o.optopt("", "index-page", "Markdown file to be used as index page", "PATH")
         }),
@@ -603,7 +613,10 @@ fn usage(argv0: &str) {
     }
     println!("{}", options.usage(&format!("{} [options] <input>", argv0)));
     println!("    @path               Read newline separated options from `path`\n");
-    println!("More information available at https://doc.rust-lang.org/rustdoc/what-is-rustdoc.html")
+    println!(
+        "More information available at {}/rustdoc/what-is-rustdoc.html",
+        DOC_RUST_LANG_ORG_CHANNEL
+    );
 }
 
 /// A result type used by several functions under `main()`.

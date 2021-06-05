@@ -449,6 +449,7 @@ impl Step for Miri {
                 SourceType::Submodule,
                 &[],
             );
+            cargo.add_rustc_lib_path(builder, compiler);
             cargo.arg("--").arg("miri").arg("setup");
 
             // Tell `cargo miri setup` where to find the sources.
@@ -500,6 +501,7 @@ impl Step for Miri {
                 SourceType::Submodule,
                 &[],
             );
+            cargo.add_rustc_lib_path(builder, compiler);
 
             // miri tests need to know about the stage sysroot
             cargo.env("MIRI_SYSROOT", miri_sysroot);
@@ -507,8 +509,6 @@ impl Step for Miri {
             cargo.env("MIRI", miri);
 
             cargo.arg("--").args(builder.config.cmd.test_args());
-
-            cargo.add_rustc_lib_path(builder, compiler);
 
             let mut cargo = Command::from(cargo);
             if !try_run(builder, &mut cargo) {
@@ -1486,6 +1486,7 @@ note: if you're sure you want to do this, please open an issue as to why. In the
             }
         }
         cmd.env("RUSTC_BOOTSTRAP", "1");
+        cmd.env("DOC_RUST_LANG_ORG_CHANNEL", builder.doc_rust_lang_org_channel());
         builder.add_rust_test_threads(&mut cmd);
 
         if builder.config.sanitizers_enabled(target) {

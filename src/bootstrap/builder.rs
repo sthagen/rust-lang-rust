@@ -574,6 +574,18 @@ impl<'a> Builder<'a> {
         self.run_step_descriptions(&Builder::get_step_descriptions(Kind::Doc), paths);
     }
 
+    /// NOTE: keep this in sync with `rustdoc::clean::utils::doc_rust_lang_org_channel`, or tests will fail on beta/stable.
+    pub fn doc_rust_lang_org_channel(&self) -> String {
+        let channel = match &*self.config.channel {
+            "stable" => &self.version,
+            "beta" => "beta",
+            "nightly" | "dev" => "nightly",
+            // custom build of rustdoc maybe? link to the latest stable docs just in case
+            _ => "stable",
+        };
+        "https://doc.rust-lang.org/".to_owned() + channel
+    }
+
     fn run_step_descriptions(&self, v: &[StepDescription], paths: &[PathBuf]) {
         StepDescription::run(v, self, paths);
     }
@@ -709,7 +721,15 @@ impl<'a> Builder<'a> {
             return;
         }
 
-        add_dylib_path(vec![self.rustc_libdir(compiler)], cmd);
+        let mut dylib_dirs = vec![self.rustc_libdir(compiler)];
+
+        // Ensure that the downloaded LLVM libraries can be found.
+        if self.config.llvm_from_ci {
+            let ci_llvm_lib = self.out.join(&*compiler.host.triple).join("ci-llvm").join("lib");
+            dylib_dirs.push(ci_llvm_lib);
+        }
+
+        add_dylib_path(dylib_dirs, cmd);
     }
 
     /// Gets a path to the compiler specified.
