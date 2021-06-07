@@ -269,7 +269,9 @@ pub fn std_cargo(builder: &Builder<'_>, target: TargetSelection, stage: u32, car
 
     if builder.no_std(target) == Some(true) {
         let mut features = "compiler-builtins-mem".to_string();
-        features.push_str(compiler_builtins_c_feature);
+        if !target.starts_with("bpf") {
+            features.push_str(compiler_builtins_c_feature);
+        }
 
         // for no-std targets we only compile a few no_std crates
         cargo
@@ -634,8 +636,7 @@ pub fn rustc_cargo_env(builder: &Builder<'_>, cargo: &mut Cargo, target: TargetS
     cargo
         .env("CFG_RELEASE", builder.rust_release())
         .env("CFG_RELEASE_CHANNEL", &builder.config.channel)
-        .env("CFG_VERSION", builder.rust_version())
-        .env("CFG_PREFIX", builder.config.prefix.clone().unwrap_or_default());
+        .env("CFG_VERSION", builder.rust_version());
 
     let libdir_relative = builder.config.libdir_relative().unwrap_or_else(|| Path::new("lib"));
     cargo.env("CFG_LIBDIR_RELATIVE", libdir_relative);
