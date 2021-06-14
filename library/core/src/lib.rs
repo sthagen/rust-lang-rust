@@ -65,6 +65,7 @@
 #![feature(allow_internal_unstable)]
 #![feature(arbitrary_self_types)]
 #![feature(asm)]
+#![feature(bool_to_option)]
 #![feature(cfg_target_has_atomic)]
 #![feature(const_heap)]
 #![feature(const_alloc_layout)]
@@ -165,6 +166,7 @@
 #![feature(no_niche)] // rust-lang/rust#68303
 #![feature(no_coverage)] // rust-lang/rust#84605
 #![feature(int_error_matching)]
+#![cfg_attr(bootstrap, feature(target_feature_11))]
 #![deny(unsafe_op_in_unsafe_fn)]
 #![deny(or_patterns_back_compat)]
 
