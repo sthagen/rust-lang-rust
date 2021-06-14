@@ -5,7 +5,7 @@ use rustc_fs_util::fix_windows_verbatim_for_gcc;
 use rustc_hir::def_id::CrateNum;
 use rustc_middle::middle::cstore::{DllImport, LibSource};
 use rustc_middle::middle::dependency_format::Linkage;
-use rustc_session::config::{self, CFGuard, CrateType, DebugInfo};
+use rustc_session::config::{self, CFGuard, CrateType, DebugInfo, LdImpl, Strip};
 use rustc_session::config::{OutputFilenames, OutputType, PrintRequest};
 use rustc_session::output::{check_file_is_writeable, invalid_output_for_target, out_filename};
 use rustc_session::search_paths::PathKind;
@@ -907,14 +907,6 @@ fn link_natively<'a, B: ArchiveBuilder<'a>>(
         }
     }
 
-    fn escape_string(s: &[u8]) -> String {
-        str::from_utf8(s).map(|s| s.to_owned()).unwrap_or_else(|_| {
-            let mut x = "Non-UTF-8 output: ".to_string();
-            x.extend(s.iter().flat_map(|&b| ascii::escape_default(b)).map(char::from));
-            x
-        })
-    }
-
     match prog {
         Ok(prog) => {
             if !prog.status.success() {
@@ -1056,6 +1048,47 @@ fn link_natively<'a, B: ArchiveBuilder<'a>>(
         // ... and otherwise we're processing a `*.dwp` packed dwarf file.
         SplitDebuginfo::Packed => link_dwarf_object(sess, &out_filename),
     }
+
+    if sess.target.is_like_osx {
+        if let Some(option) = osx_strip_opt(sess.opts.debugging_opts.strip) {
+            strip_symbols_in_osx(sess, &out_filename, option);
+        }
+    }
+}
+
+fn strip_symbols_in_osx<'a>(sess: &'a Session, out_filename: &Path, option: &str) {
+    let prog = Command::new("strip").arg(option).arg(out_filename).output();
+    match prog {
+        Ok(prog) => {
+            if !prog.status.success() {
+                let mut output = prog.stderr.clone();
+                output.extend_from_slice(&prog.stdout);
+                sess.struct_warn(&format!(
+                    "stripping debug info with `strip` failed: {}",
+                    prog.status
+                ))
+                .note(&escape_string(&output))
+                .emit();
+            }
+        }
+        Err(e) => sess.fatal(&format!("unable to run `strip`: {}", e)),
+    }
+}
+
+fn osx_strip_opt<'a>(strip: Strip) -> Option<&'a str> {
+    match strip {
+        Strip::Debuginfo => Some("-S"),
+        Strip::Symbols => Some("-x"),
+        Strip::None => None,
+    }
+}
+
+fn escape_string(s: &[u8]) -> String {
+    str::from_utf8(s).map(|s| s.to_owned()).unwrap_or_else(|_| {
+        let mut x = "Non-UTF-8 output: ".to_string();
+        x.extend(s.iter().flat_map(|&b| ascii::escape_default(b)).map(char::from));
+        x
+    })
 }
 
 fn add_sanitizer_libraries(sess: &Session, crate_type: CrateType, linker: &mut dyn Linker) {
@@ -1894,6 +1927,8 @@ fn add_order_independent_options(
     out_filename: &Path,
     tmpdir: &Path,
 ) {
+    add_gcc_ld_path(cmd, sess, flavor);
+
     add_apple_sdk(cmd, sess, flavor);
 
     add_link_script(cmd, sess, tmpdir, crate_type);
@@ -2493,5 +2528,32 @@ fn get_apple_sdk_root(sdk_name: &str) -> Result<String, String> {
     match res {
         Ok(output) => Ok(output.trim().to_string()),
         Err(e) => Err(format!("failed to get {} SDK path: {}", sdk_name, e)),
+    }
+}
+
+fn add_gcc_ld_path(cmd: &mut dyn Linker, sess: &Session, flavor: LinkerFlavor) {
+    if let Some(ld_impl) = sess.opts.debugging_opts.gcc_ld {
+        if let LinkerFlavor::Gcc = flavor {
+            match ld_impl {
+                LdImpl::Lld => {
+                    let tools_path =
+                        sess.host_filesearch(PathKind::All).get_tools_search_paths(false);
+                    let lld_path = tools_path
+                        .into_iter()
+                        .map(|p| p.join("gcc-ld"))
+                        .find(|p| {
+                            p.join(if sess.host.is_like_windows { "ld.exe" } else { "ld" }).exists()
+                        })
+                        .unwrap_or_else(|| sess.fatal("rust-lld (as ld) not found"));
+                    cmd.cmd().arg({
+                        let mut arg = OsString::from("-B");
+                        arg.push(lld_path);
+                        arg
+                    });
+                }
+            }
+        } else {
+            sess.fatal("option `-Z gcc-ld` is used even though linker flavor is not gcc");
+        }
     }
 }
