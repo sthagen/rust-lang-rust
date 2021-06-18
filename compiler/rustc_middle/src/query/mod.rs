@@ -191,10 +191,6 @@ rustc_queries! {
         desc { |tcx| "elaborating item bounds for `{}`", tcx.def_path_str(key) }
     }
 
-    query projection_ty_from_predicates(key: (DefId, DefId)) -> Option<ty::ProjectionTy<'tcx>> {
-        desc { |tcx| "finding projection type inside predicates of `{}`", tcx.def_path_str(key.0) }
-    }
-
     query native_libraries(_: CrateNum) -> Lrc<Vec<NativeLib>> {
         desc { "looking up the native libraries of a linked crate" }
     }
@@ -959,9 +955,9 @@ rustc_queries! {
         desc { |tcx| "checking if item has mir available: `{}`", tcx.def_path_str(key) }
     }
 
-    query vtable_methods(key: ty::PolyTraitRef<'tcx>)
-                        -> &'tcx [Option<(DefId, SubstsRef<'tcx>)>] {
-        desc { |tcx| "finding all methods for trait {}", tcx.def_path_str(key.def_id()) }
+    query vtable_entries(key: ty::PolyTraitRef<'tcx>)
+                        -> &'tcx [ty::VtblEntry<'tcx>] {
+        desc { |tcx| "finding all vtable entries for trait {}", tcx.def_path_str(key.def_id()) }
     }
 
     query codegen_fulfill_obligation(

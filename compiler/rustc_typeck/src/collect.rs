@@ -77,7 +77,6 @@ pub fn provide(providers: &mut Providers) {
         generics_of,
         predicates_of,
         predicates_defined_on,
-        projection_ty_from_predicates,
         explicit_predicates_of,
         super_predicates_of,
         super_predicates_that_define_assoc_type,
@@ -180,8 +179,7 @@ crate fn placeholder_type_error(
     // Suggest, but only if it is not a function in const or static
     if suggest {
         let mut is_fn = false;
-        let mut is_const = false;
-        let mut is_static = false;
+        let mut is_const_or_static = false;
 
         if let Some(hir_ty) = hir_ty {
             if let hir::TyKind::BareFn(_) = hir_ty.kind {
@@ -191,19 +189,26 @@ crate fn placeholder_type_error(
                 let parent_id = tcx.hir().get_parent_node(hir_ty.hir_id);
                 let parent_node = tcx.hir().get(parent_id);
 
-                if let hir::Node::Item(item) = parent_node {
-                    if let hir::ItemKind::Const(_, _) = item.kind {
-                        is_const = true;
-                    } else if let hir::ItemKind::Static(_, _, _) = item.kind {
-                        is_static = true;
-                    }
-                }
+                is_const_or_static = match parent_node {
+                    Node::Item(&hir::Item {
+                        kind: hir::ItemKind::Const(..) | hir::ItemKind::Static(..),
+                        ..
+                    })
+                    | Node::TraitItem(&hir::TraitItem {
+                        kind: hir::TraitItemKind::Const(..),
+                        ..
+                    })
+                    | Node::ImplItem(&hir::ImplItem {
+                        kind: hir::ImplItemKind::Const(..), ..
+                    }) => true,
+                    _ => false,
+                };
             }
         }
 
         // if function is wrapped around a const or static,
         // then don't show the suggestion
-        if !(is_fn && (is_const || is_static)) {
+        if !(is_fn && is_const_or_static) {
             err.multipart_suggestion(
                 "use type parameters instead",
                 sugg,
@@ -2350,29 +2355,6 @@ fn explicit_predicates_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::GenericPredicat
     } else {
         gather_explicit_predicates_of(tcx, def_id)
     }
-}
-
-fn projection_ty_from_predicates(
-    tcx: TyCtxt<'tcx>,
-    key: (
-        // ty_def_id
-        DefId,
-        // def_id of `N` in `<T as Trait>::N`
-        DefId,
-    ),
-) -> Option<ty::ProjectionTy<'tcx>> {
-    let (ty_def_id, item_def_id) = key;
-    let mut projection_ty = None;
-    for (predicate, _) in tcx.predicates_of(ty_def_id).predicates {
-        if let ty::PredicateKind::Projection(projection_predicate) = predicate.kind().skip_binder()
-        {
-            if item_def_id == projection_predicate.projection_ty.item_def_id {
-                projection_ty = Some(projection_predicate.projection_ty);
-                break;
-            }
-        }
-    }
-    projection_ty
 }
 
 /// Converts a specific `GenericBound` from the AST into a set of

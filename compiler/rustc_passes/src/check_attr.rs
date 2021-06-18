@@ -456,6 +456,8 @@ impl CheckAttrVisitor<'tcx> {
                     _ => None,
                 }
             }
+            // we check the validity of params elsewhere
+            Target::Param => return false,
             _ => None,
         } {
             return err_fn(meta.span(), &format!("isn't allowed on {}", err));
@@ -523,8 +525,11 @@ impl CheckAttrVisitor<'tcx> {
             self.doc_attr_str_error(meta, "keyword");
             return false;
         }
-        match self.tcx.hir().expect_item(hir_id).kind {
-            ItemKind::Mod(ref module) => {
+        match self.tcx.hir().find(hir_id).and_then(|node| match node {
+            hir::Node::Item(item) => Some(&item.kind),
+            _ => None,
+        }) {
+            Some(ItemKind::Mod(ref module)) => {
                 if !module.item_ids.is_empty() {
                     self.tcx
                         .sess

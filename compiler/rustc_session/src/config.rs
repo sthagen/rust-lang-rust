@@ -833,7 +833,7 @@ fn default_configuration(sess: &Session) -> CrateConfig {
     if sess.target.has_elf_tls {
         ret.insert((sym::target_thread_local, None));
     }
-    for &(i, align) in &[
+    for (i, align) in [
         (8, layout.i8_align.abi),
         (16, layout.i16_align.abi),
         (32, layout.i32_align.abi),
@@ -1169,7 +1169,7 @@ pub fn get_cmd_lint_options(
     let mut lint_opts_with_position = vec![];
     let mut describe_lints = false;
 
-    for &level in &[lint::Allow, lint::Warn, lint::Deny, lint::Forbid] {
+    for level in [lint::Allow, lint::Warn, lint::Deny, lint::Forbid] {
         for (passed_arg_pos, lint_name) in matches.opt_strs_pos(level.as_str()) {
             let arg_pos = if let lint::Forbid = level {
                 // HACK: forbid is always specified last, so it can't be overridden.
@@ -1207,7 +1207,8 @@ pub fn get_cmd_lint_options(
         );
     }
 
-    let force_warns = matches.opt_strs("force-warns");
+    let force_warns =
+        matches.opt_strs("force-warns").into_iter().map(|name| name.replace('-', "_")).collect();
 
     (lint_opts, describe_lints, lint_cap, force_warns)
 }

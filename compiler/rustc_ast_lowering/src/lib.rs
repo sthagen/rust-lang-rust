@@ -331,7 +331,7 @@ pub fn lower_crate<'a, 'hir>(
         lifetimes_to_define: Vec::new(),
         is_collecting_in_band_lifetimes: false,
         in_scope_lifetimes: Vec::new(),
-        allow_try_trait: Some([sym::control_flow_enum, sym::try_trait_v2][..].into()),
+        allow_try_trait: Some([sym::try_trait_v2][..].into()),
         allow_gen_future: Some([sym::gen_future][..].into()),
     }
     .lower_crate(krate)
@@ -417,7 +417,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
             fn allocate_use_tree_hir_id_counters(&mut self, tree: &UseTree) {
                 match tree.kind {
                     UseTreeKind::Simple(_, id1, id2) => {
-                        for &id in &[id1, id2] {
+                        for id in [id1, id2] {
                             self.lctx.allocate_hir_id_counter(id);
                         }
                     }
