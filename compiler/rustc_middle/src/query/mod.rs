@@ -1444,7 +1444,7 @@ rustc_queries! {
         eval_always
         desc { "calculating the stability index for the local crate" }
     }
-    query all_crate_nums(_: ()) -> &'tcx [CrateNum] {
+    query crates(_: ()) -> &'tcx [CrateNum] {
         eval_always
         desc { "fetching all foreign CrateNum instances" }
     }
@@ -1559,9 +1559,22 @@ rustc_queries! {
         desc { "evaluating trait selection obligation `{}`", goal.value }
     }
 
+    /// Evaluates whether the given type implements the given trait
+    /// in the given environment.
+    ///
+    /// The inputs are:
+    ///
+    /// - the def-id of the trait
+    /// - the self type
+    /// - the *other* type parameters of the trait, excluding the self-type
+    /// - the parameter environment
+    ///
+    /// FIXME. If the type, trait, or environment has inference variables,
+    /// this yields `EvaluatedToUnknown`. It should be refactored
+    /// to use canonicalization, really.
     query type_implements_trait(
         key: (DefId, Ty<'tcx>, SubstsRef<'tcx>, ty::ParamEnv<'tcx>, )
-    ) -> bool {
+    ) -> traits::EvaluationResult {
         desc { "evaluating `type_implements_trait` `{:?}`", key }
     }
 

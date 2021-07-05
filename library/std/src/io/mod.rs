@@ -277,6 +277,8 @@ pub use self::error::{Error, ErrorKind, Result};
 pub use self::stdio::set_output_capture;
 #[stable(feature = "rust1", since = "1.0.0")]
 pub use self::stdio::{stderr, stdin, stdout, Stderr, Stdin, Stdout};
+#[unstable(feature = "stdio_locked", issue = "none")]
+pub use self::stdio::{stderr_locked, stdin_locked, stdout_locked};
 #[stable(feature = "rust1", since = "1.0.0")]
 pub use self::stdio::{StderrLock, StdinLock, StdoutLock};
 #[unstable(feature = "print_internals", issue = "none")]
@@ -1416,6 +1418,27 @@ pub trait Write {
     /// The default implementation calls [`write`] with either the first nonempty
     /// buffer provided, or an empty one if none exists.
     ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::io::IoSlice;
+    /// use std::io::prelude::*;
+    /// use std::fs::File;
+    ///
+    /// fn main() -> std::io::Result<()> {
+    ///     let mut data1 = [1; 8];
+    ///     let mut data2 = [15; 8];
+    ///     let io_slice1 = IoSlice::new(&mut data1);
+    ///     let io_slice2 = IoSlice::new(&mut data2);
+    ///
+    ///     let mut buffer = File::create("foo.txt")?;
+    ///
+    ///     // Writes some prefix of the byte string, not necessarily all of it.
+    ///     buffer.write_vectored(&[io_slice1, io_slice2])?;
+    ///     Ok(())
+    /// }
+    /// ```
+    ///
     /// [`write`]: Write::write
     #[stable(feature = "iovec", since = "1.36.0")]
     fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> Result<usize> {
@@ -1644,7 +1667,7 @@ pub trait Write {
                 if output.error.is_err() {
                     output.error
                 } else {
-                    Err(Error::new_const(ErrorKind::Other, &"formatter error"))
+                    Err(Error::new_const(ErrorKind::Uncategorized, &"formatter error"))
                 }
             }
         }

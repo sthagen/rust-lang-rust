@@ -452,7 +452,7 @@ impl fmt::Debug for ChildStderr {
 ///
 /// let output = if cfg!(target_os = "windows") {
 ///     Command::new("cmd")
-///             .args(&["/C", "echo hello"])
+///             .args(["/C", "echo hello"])
 ///             .output()
 ///             .expect("failed to execute process")
 /// } else {
@@ -609,7 +609,7 @@ impl Command {
     /// use std::process::Command;
     ///
     /// Command::new("ls")
-    ///         .args(&["-l", "-a"])
+    ///         .args(["-l", "-a"])
     ///         .spawn()
     ///         .expect("ls command failed to start");
     /// ```
@@ -1658,8 +1658,7 @@ impl Child {
     /// Forces the child process to exit. If the child has already exited, an [`InvalidInput`]
     /// error is returned.
     ///
-    /// The mapping to [`ErrorKind`]s is not part of the compatibility contract of the function,
-    /// especially the [`Other`] kind might change to more specific kinds in the future.
+    /// The mapping to [`ErrorKind`]s is not part of the compatibility contract of the function.
     ///
     /// This is equivalent to sending a SIGKILL on Unix platforms.
     ///
@@ -1680,7 +1679,6 @@ impl Child {
     ///
     /// [`ErrorKind`]: io::ErrorKind
     /// [`InvalidInput`]: io::ErrorKind::InvalidInput
-    /// [`Other`]: io::ErrorKind::Other
     #[stable(feature = "process", since = "1.0.0")]
     pub fn kill(&mut self) -> io::Result<()> {
         self.handle.kill()

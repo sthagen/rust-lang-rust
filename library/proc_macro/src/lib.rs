@@ -31,7 +31,6 @@
 #![feature(restricted_std)]
 #![feature(rustc_attrs)]
 #![feature(min_specialization)]
-#![feature(bound_cloned)]
 #![recursion_limit = "256"]
 
 #[unstable(feature = "proc_macro_internals", issue = "27812")]
@@ -1233,5 +1232,19 @@ pub mod tracked_env {
         let value = env::var(key);
         crate::bridge::client::FreeFunctions::track_env_var(key, value.as_deref().ok());
         value
+    }
+}
+
+/// Tracked access to additional files.
+#[unstable(feature = "track_path", issue = "73921")]
+pub mod tracked_path {
+
+    /// Track a file explicitly.
+    ///
+    /// Commonly used for tracking asset preprocessing.
+    #[unstable(feature = "track_path", issue = "73921")]
+    pub fn path<P: AsRef<str>>(path: P) {
+        let path: &str = path.as_ref();
+        crate::bridge::client::FreeFunctions::track_path(path);
     }
 }

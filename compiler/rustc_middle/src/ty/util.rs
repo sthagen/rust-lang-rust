@@ -7,7 +7,7 @@ use crate::ty::layout::IntegerExt;
 use crate::ty::query::TyCtxtAt;
 use crate::ty::subst::{GenericArgKind, Subst, SubstsRef};
 use crate::ty::TyKind::*;
-use crate::ty::{self, DefIdTree, List, Ty, TyCtxt, TypeFoldable};
+use crate::ty::{self, DebruijnIndex, DefIdTree, List, Ty, TyCtxt, TypeFoldable};
 use rustc_apfloat::Float as _;
 use rustc_ast as ast;
 use rustc_attr::{self as attr, SignedInt, UnsignedInt};
@@ -816,6 +816,15 @@ impl<'tcx> ty::TyS<'tcx> {
                     [component_ty] => component_ty,
                     _ => self,
                 };
+
+                // FIXME(#86868): We should be canonicalizing, or else moving this to a method of inference
+                // context, or *something* like that, but for now just avoid passing inference
+                // variables to queries that can't cope with them. Instead, conservatively
+                // return "true" (may change drop order).
+                if query_ty.needs_infer() {
+                    return true;
+                }
+
                 // This doesn't depend on regions, so try to minimize distinct
                 // query keys used.
                 let erased = tcx.normalize_erasing_regions(param_env, query_ty);
@@ -904,6 +913,10 @@ impl<'tcx> ty::TyS<'tcx> {
             ty = inner_ty;
         }
         ty
+    }
+
+    pub fn outer_exclusive_binder(&'tcx self) -> DebruijnIndex {
+        self.outer_exclusive_binder
     }
 }
 
