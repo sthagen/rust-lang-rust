@@ -42,13 +42,11 @@ use rustc_hir::intravisit::{self, NestedVisitorMap, Visitor};
 use rustc_infer::infer::UpvarRegion;
 use rustc_middle::hir::place::{Place, PlaceBase, PlaceWithHirId, Projection, ProjectionKind};
 use rustc_middle::mir::FakeReadCause;
-use rustc_middle::ty::{
-    self, ClosureSizeProfileData, TraitRef, Ty, TyCtxt, TypeckResults, UpvarSubsts,
-};
+use rustc_middle::ty::{self, ClosureSizeProfileData, Ty, TyCtxt, TypeckResults, UpvarSubsts};
 use rustc_session::lint;
 use rustc_span::sym;
 use rustc_span::{MultiSpan, Span, Symbol};
-use rustc_trait_selection::traits::{Obligation, ObligationCause};
+use rustc_trait_selection::infer::InferCtxtExt;
 
 use rustc_data_structures::stable_set::FxHashSet;
 use rustc_index::vec::Idx;
@@ -173,7 +171,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
         let closure_hir_id = self.tcx.hir().local_def_id_to_hir_id(local_def_id);
 
-        if should_do_disjoint_capture_migration_analysis(self.tcx, closure_hir_id) {
+        if should_do_rust_2021_incompatible_closure_captures_analysis(self.tcx, closure_hir_id) {
             self.perform_2229_migration_anaysis(closure_def_id, body_id, capture_clause, span);
         }
 
@@ -505,7 +503,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             let local_def_id = closure_def_id.expect_local();
             let closure_hir_id = self.tcx.hir().local_def_id_to_hir_id(local_def_id);
             self.tcx.struct_span_lint_hir(
-                lint::builtin::DISJOINT_CAPTURE_MIGRATION,
+                lint::builtin::RUST_2021_INCOMPATIBLE_CLOSURE_CAPTURES,
                 closure_hir_id,
                 span,
                 |lint| {
@@ -578,29 +576,6 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         reasons
     }
 
-    /// Returns true if `ty` may implement `trait_def_id`
-    fn ty_impls_trait(
-        &self,
-        ty: Ty<'tcx>,
-        cause: &ObligationCause<'tcx>,
-        trait_def_id: DefId,
-    ) -> bool {
-        use crate::rustc_middle::ty::ToPredicate;
-        use crate::rustc_middle::ty::WithConstness;
-        use rustc_trait_selection::traits::query::evaluate_obligation::InferCtxtExt;
-        let tcx = self.infcx.tcx;
-
-        let trait_ref = TraitRef { def_id: trait_def_id, substs: tcx.mk_substs_trait(ty, &[]) };
-
-        let obligation = Obligation::new(
-            cause.clone(),
-            self.param_env,
-            trait_ref.without_const().to_predicate(tcx),
-        );
-
-        self.infcx.predicate_may_hold(&obligation)
-    }
-
     /// Returns true if migration is needed for trait for the provided var_hir_id
     fn need_2229_migrations_for_trait(
         &self,
@@ -618,10 +593,17 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
         let ty = self.infcx.resolve_vars_if_possible(self.node_ty(var_hir_id));
 
-        let cause = ObligationCause::misc(self.tcx.hir().span(var_hir_id), self.body_id);
-
         let obligation_should_hold = check_trait
-            .map(|check_trait| self.ty_impls_trait(ty, &cause, check_trait))
+            .map(|check_trait| {
+                self.infcx
+                    .type_implements_trait(
+                        check_trait,
+                        ty,
+                        self.tcx.mk_substs_trait(ty, &[]),
+                        self.param_env,
+                    )
+                    .must_apply_modulo_regions()
+            })
             .unwrap_or(false);
 
         // Check whether catpured fields also implement the trait
@@ -630,7 +612,16 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             let ty = capture.place.ty();
 
             let obligation_holds_for_capture = check_trait
-                .map(|check_trait| self.ty_impls_trait(ty, &cause, check_trait))
+                .map(|check_trait| {
+                    self.infcx
+                        .type_implements_trait(
+                            check_trait,
+                            ty,
+                            self.tcx.mk_substs_trait(ty, &[]),
+                            self.param_env,
+                        )
+                        .must_apply_modulo_regions()
+                })
                 .unwrap_or(false);
 
             if !obligation_holds_for_capture && obligation_should_hold {
@@ -961,13 +952,13 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let is_drop_defined_for_ty = |ty: Ty<'tcx>| {
             let drop_trait = self.tcx.require_lang_item(hir::LangItem::Drop, Some(closure_span));
             let ty_params = self.tcx.mk_substs_trait(base_path_ty, &[]);
-            self.tcx
-                .type_implements_trait((
+            self.infcx
+                .type_implements_trait(
                     drop_trait,
                     ty,
                     ty_params,
                     self.tcx.param_env(closure_def_id.expect_local()),
-                ))
+                )
                 .must_apply_modulo_regions()
         };
 
@@ -1829,8 +1820,12 @@ fn var_name(tcx: TyCtxt<'_>, var_hir_id: hir::HirId) -> Symbol {
     tcx.hir().name(var_hir_id)
 }
 
-fn should_do_disjoint_capture_migration_analysis(tcx: TyCtxt<'_>, closure_id: hir::HirId) -> bool {
-    let (level, _) = tcx.lint_level_at_node(lint::builtin::DISJOINT_CAPTURE_MIGRATION, closure_id);
+fn should_do_rust_2021_incompatible_closure_captures_analysis(
+    tcx: TyCtxt<'_>,
+    closure_id: hir::HirId,
+) -> bool {
+    let (level, _) =
+        tcx.lint_level_at_node(lint::builtin::RUST_2021_INCOMPATIBLE_CLOSURE_CAPTURES, closure_id);
 
     !matches!(level, lint::Level::Allow)
 }

@@ -11,7 +11,7 @@ use rustc_data_structures::sync::{par_iter, Lrc, OnceCell, ParallelIterator, Wor
 use rustc_data_structures::temp_dir::MaybeTempDir;
 use rustc_errors::{ErrorReported, PResult};
 use rustc_expand::base::ExtCtxt;
-use rustc_hir::def_id::LOCAL_CRATE;
+use rustc_hir::def_id::{StableCrateId, LOCAL_CRATE};
 use rustc_hir::Crate;
 use rustc_lint::LintStore;
 use rustc_metadata::creader::CStore;
@@ -195,9 +195,13 @@ pub fn register_plugins<'a>(
     let crate_types = util::collect_crate_types(sess, &krate.attrs);
     sess.init_crate_types(crate_types);
 
-    let disambiguator = util::compute_crate_disambiguator(sess);
-    sess.crate_disambiguator.set(disambiguator).expect("not yet initialized");
-    rustc_incremental::prepare_session_directory(sess, &crate_name, disambiguator)?;
+    let stable_crate_id = StableCrateId::new(
+        crate_name,
+        sess.crate_types().contains(&CrateType::Executable),
+        sess.opts.cg.metadata.clone(),
+    );
+    sess.stable_crate_id.set(stable_crate_id).expect("not yet initialized");
+    rustc_incremental::prepare_session_directory(sess, &crate_name, stable_crate_id)?;
 
     if sess.opts.incremental.is_some() {
         sess.time("incr_comp_garbage_collect_session_directories", || {
@@ -210,10 +214,6 @@ pub fn register_plugins<'a>(
             }
         });
     }
-
-    sess.time("recursion_limit", || {
-        middle::limits::update_limits(sess, &krate);
-    });
 
     let mut lint_store = rustc_lint::new_lint_store(
         sess.opts.debugging_opts.no_interleave_lints,
@@ -311,9 +311,11 @@ pub fn configure_and_expand(
 
         // Create the config for macro expansion
         let features = sess.features_untracked();
+        let recursion_limit =
+            rustc_middle::middle::limits::get_recursion_limit(&krate.attrs, &sess);
         let cfg = rustc_expand::expand::ExpansionConfig {
             features: Some(&features),
-            recursion_limit: sess.recursion_limit(),
+            recursion_limit,
             trace_mac: sess.opts.debugging_opts.trace_macros,
             should_test: sess.opts.test,
             span_debug: sess.opts.debugging_opts.span_debug,
@@ -872,6 +874,13 @@ fn analysis(tcx: TyCtxt<'_>, (): ()) -> Result<()> {
                     tcx.ensure().check_mod_unstable_api_usage(module);
                     tcx.ensure().check_mod_const_bodies(module);
                 });
+            },
+            {
+                // We force these querie to run,
+                // since they might not otherwise get called.
+                // This marks the corresponding crate-level attributes
+                // as used, and ensures that their values are valid.
+                tcx.ensure().limits(());
             }
         );
     });

@@ -53,6 +53,7 @@ use rustc_middle::ty::OpaqueTypeKey;
 use rustc_serialize::opaque::{FileEncodeResult, FileEncoder};
 use rustc_session::config::{BorrowckMode, CrateType, OutputFilenames};
 use rustc_session::lint::{Level, Lint};
+use rustc_session::Limit;
 use rustc_session::Session;
 use rustc_span::def_id::StableCrateId;
 use rustc_span::source_map::MultiSpan;
@@ -1298,30 +1299,34 @@ impl<'tcx> TyCtxt<'tcx> {
     }
 
     #[inline]
-    pub fn stable_crate_id(self, cnum: CrateNum) -> StableCrateId {
-        self.def_path_hash(cnum.as_def_id()).stable_crate_id()
+    pub fn stable_crate_id(self, crate_num: CrateNum) -> StableCrateId {
+        if crate_num == LOCAL_CRATE {
+            self.sess.local_stable_crate_id()
+        } else {
+            self.cstore.stable_crate_id_untracked(crate_num)
+        }
     }
 
     pub fn def_path_debug_str(self, def_id: DefId) -> String {
         // We are explicitly not going through queries here in order to get
-        // crate name and disambiguator since this code is called from debug!()
+        // crate name and stable crate id since this code is called from debug!()
         // statements within the query system and we'd run into endless
         // recursion otherwise.
-        let (crate_name, crate_disambiguator) = if def_id.is_local() {
-            (self.crate_name, self.sess.local_crate_disambiguator())
+        let (crate_name, stable_crate_id) = if def_id.is_local() {
+            (self.crate_name, self.sess.local_stable_crate_id())
         } else {
             (
                 self.cstore.crate_name_untracked(def_id.krate),
-                self.cstore.crate_disambiguator_untracked(def_id.krate),
+                self.def_path_hash(def_id.krate.as_def_id()).stable_crate_id(),
             )
         };
 
         format!(
             "{}[{}]{}",
             crate_name,
-            // Don't print the whole crate disambiguator. That's just
+            // Don't print the whole stable crate id. That's just
             // annoying in debug output.
-            &(crate_disambiguator.to_fingerprint().to_hex())[..4],
+            &(format!("{:08x}", stable_crate_id.to_u64()))[..4],
             self.def_path(def_id).to_string_no_crate_verbose()
         )
     }
@@ -1568,6 +1573,22 @@ impl<'tcx> TyCtxt<'tcx> {
             },
             def_kind => (def_kind.article(), def_kind.descr(def_id)),
         }
+    }
+
+    pub fn type_length_limit(self) -> Limit {
+        self.limits(()).type_length_limit
+    }
+
+    pub fn recursion_limit(self) -> Limit {
+        self.limits(()).recursion_limit
+    }
+
+    pub fn move_size_limit(self) -> Limit {
+        self.limits(()).move_size_limit
+    }
+
+    pub fn const_eval_limit(self) -> Limit {
+        self.limits(()).const_eval_limit
     }
 }
 

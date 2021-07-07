@@ -2967,13 +2967,14 @@ declare_lint_pass! {
         MISSING_ABI,
         INVALID_DOC_ATTRIBUTES,
         SEMICOLON_IN_EXPRESSIONS_FROM_MACROS,
-        DISJOINT_CAPTURE_MIGRATION,
+        RUST_2021_INCOMPATIBLE_CLOSURE_CAPTURES,
         LEGACY_DERIVE_HELPERS,
         PROC_MACRO_BACK_COMPAT,
-        OR_PATTERNS_BACK_COMPAT,
+        RUST_2021_INCOMPATIBLE_OR_PATTERNS,
         LARGE_ASSIGNMENTS,
-        FUTURE_PRELUDE_COLLISION,
-        RESERVED_PREFIX,
+        RUST_2021_PRELUDE_COLLISIONS,
+        RUST_2021_PREFIXES_INCOMPATIBLE_SYNTAX,
+        UNSUPPORTED_CALLING_CONVENTIONS,
     ]
 }
 
@@ -3001,7 +3002,7 @@ declare_lint! {
 }
 
 declare_lint! {
-    /// The `disjoint_capture_migration` lint detects variables that aren't completely
+    /// The `rust_2021_incompatible_closure_captures` lint detects variables that aren't completely
     /// captured in Rust 2021 and affect the Drop order of at least one path starting at this variable.
     /// It can also detect when a variable implements a trait, but one of its field does not and
     /// the field is captured by a closure and used with the assumption that said field implements
@@ -3010,7 +3011,7 @@ declare_lint! {
     /// ### Example of drop reorder
     ///
     /// ```rust,compile_fail
-    /// # #![deny(disjoint_capture_migration)]
+    /// # #![deny(rust_2021_incompatible_closure_captures)]
     /// # #![allow(unused)]
     /// struct FancyInteger(i32);
     ///
@@ -3045,7 +3046,7 @@ declare_lint! {
     /// ### Example of auto-trait
     ///
     /// ```rust,compile_fail
-    /// #![deny(disjoint_capture_migration)]
+    /// #![deny(rust_2021_incompatible_closure_captures)]
     /// use std::thread;
     ///
     /// struct Pointer(*mut i32);
@@ -3067,7 +3068,7 @@ declare_lint! {
     /// In the above example, only `fptr.0` is captured in Rust 2021.
     /// The field is of type *mut i32 which doesn't implement Send, making the code invalid as the
     /// field cannot be sent between thread safely.
-    pub DISJOINT_CAPTURE_MIGRATION,
+    pub RUST_2021_INCOMPATIBLE_CLOSURE_CAPTURES,
     Allow,
     "detects closures affected by Rust 2021 changes",
     @future_incompatible = FutureIncompatibleInfo {
@@ -3182,12 +3183,12 @@ declare_lint! {
 }
 
 declare_lint! {
-    /// The `or_patterns_back_compat` lint detects usage of old versions of or-patterns.
+    /// The `rust_2021_incompatible_or_patterns` lint detects usage of old versions of or-patterns.
     ///
     /// ### Example
     ///
     /// ```rust,compile_fail
-    /// #![deny(or_patterns_back_compat)]
+    /// #![deny(rust_2021_incompatible_or_patterns)]
     /// macro_rules! match_any {
     ///     ( $expr:expr , $( $( $pat:pat )|+ => $expr_arm:expr ),+ ) => {
     ///         match $expr {
@@ -3210,7 +3211,7 @@ declare_lint! {
     /// ### Explanation
     ///
     /// In Rust 2021, the pat matcher will match new patterns, which include the | character.
-    pub OR_PATTERNS_BACK_COMPAT,
+    pub RUST_2021_INCOMPATIBLE_OR_PATTERNS,
     Allow,
     "detects usage of old versions of or-patterns",
     @future_incompatible = FutureIncompatibleInfo {
@@ -3220,13 +3221,13 @@ declare_lint! {
 }
 
 declare_lint! {
-    /// The `future_prelude_collision` lint detects the usage of trait methods which are ambiguous
+    /// The `rust_2021_prelude_collisions` lint detects the usage of trait methods which are ambiguous
     /// with traits added to the prelude in future editions.
     ///
     /// ### Example
     ///
     /// ```rust,compile_fail
-    /// #![deny(future_prelude_collision)]
+    /// #![deny(rust_2021_prelude_collisions)]
     ///
     /// trait Foo {
     ///     fn try_into(self) -> Result<String, !>;
@@ -3258,7 +3259,7 @@ declare_lint! {
     ///  is called directly on a type.
     ///
     /// [prelude changes]: https://blog.rust-lang.org/inside-rust/2021/03/04/planning-rust-2021.html#prelude-changes
-    pub FUTURE_PRELUDE_COLLISION,
+    pub RUST_2021_PRELUDE_COLLISIONS,
     Allow,
     "detects the usage of trait methods which are ambiguous with traits added to the \
         prelude in future editions",
@@ -3269,13 +3270,13 @@ declare_lint! {
 }
 
 declare_lint! {
-    /// The `reserved_prefix` lint detects identifiers that will be parsed as a
+    /// The `rust_2021_prefixes_incompatible_syntax` lint detects identifiers that will be parsed as a
     /// prefix instead in Rust 2021.
     ///
     /// ### Example
     ///
     /// ```rust,compile_fail
-    /// #![deny(reserved_prefix)]
+    /// #![deny(rust_2021_prefixes_incompatible_syntax)]
     ///
     /// macro_rules! m {
     ///     (z $x:expr) => ();
@@ -3294,7 +3295,7 @@ declare_lint! {
     ///
     /// This lint suggests to add whitespace between the `z` and `"hey"` tokens
     /// to keep them separated in Rust 2021.
-    pub RESERVED_PREFIX,
+    pub RUST_2021_PREFIXES_INCOMPATIBLE_SYNTAX,
     Allow,
     "identifiers that will be parsed as a prefix in Rust 2021",
     @future_incompatible = FutureIncompatibleInfo {
@@ -3302,4 +3303,50 @@ declare_lint! {
         reason: FutureIncompatibilityReason::EditionError(Edition::Edition2021),
     };
     crate_level_only
+}
+
+declare_lint! {
+    /// The `unsupported_calling_conventions` lint is output whenever there is an use of the
+    /// `stdcall`, `fastcall`, `thiscall`, `vectorcall` calling conventions (or their unwind
+    /// variants) on targets that cannot meaningfully be supported for the requested target.
+    ///
+    /// For example `stdcall` does not make much sense for a x86_64 or, more apparently, powerpc
+    /// code, because this calling convention was never specified for those targets.
+    ///
+    /// Historically MSVC toolchains have fallen back to the regular C calling convention for
+    /// targets other than x86, but Rust doesn't really see a similar need to introduce a similar
+    /// hack across many more targets.
+    ///
+    /// ### Example
+    ///
+    /// ```rust,ignore (needs specific targets)
+    /// extern "stdcall" fn stdcall() {}
+    /// ```
+    ///
+    /// This will produce:
+    ///
+    /// ```text
+    /// warning: use of calling convention not supported on this target
+    ///   --> $DIR/unsupported.rs:39:1
+    ///    |
+    /// LL | extern "stdcall" fn stdcall() {}
+    ///    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ///    |
+    ///    = note: `#[warn(unsupported_calling_conventions)]` on by default
+    ///    = warning: this was previously accepted by the compiler but is being phased out;
+    ///               it will become a hard error in a future release!
+    ///    = note: for more information, see issue ...
+    /// ```
+    ///
+    /// ### Explanation
+    ///
+    /// On most of the targets the behaviour of `stdcall` and similar calling conventions is not
+    /// defined at all, but was previously accepted due to a bug in the implementation of the
+    /// compiler.
+    pub UNSUPPORTED_CALLING_CONVENTIONS,
+    Warn,
+    "use of unsupported calling convention",
+    @future_incompatible = FutureIncompatibleInfo {
+        reference: "issue #00000 <https://github.com/rust-lang/rust/issues/00000>",
+    };
 }
