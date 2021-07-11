@@ -416,9 +416,6 @@ declare_features! (
     /// Allows accessing fields of unions inside `const` functions.
     (active, const_fn_union, "1.27.0", Some(51909), None),
 
-    /// Allows casting raw pointers to `usize` during const eval.
-    (active, const_raw_ptr_to_usize_cast, "1.27.0", Some(51910), None),
-
     /// Allows dereferencing raw pointers during const eval.
     (active, const_raw_ptr_deref, "1.27.0", Some(51911), None),
 
@@ -685,7 +682,7 @@ declare_features! (
     (incomplete, unnamed_fields, "1.53.0", Some(49804), None),
 
     /// Allows qualified paths in struct expressions, struct patterns and tuple struct patterns.
-    (active, more_qualified_paths, "1.54.0", Some(80080), None),
+    (active, more_qualified_paths, "1.54.0", Some(86935), None),
 
     // -------------------------------------------------------------------------
     // feature-group-end: actual feature gates

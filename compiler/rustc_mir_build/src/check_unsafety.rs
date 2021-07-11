@@ -25,7 +25,8 @@ struct UnsafetyVisitor<'a, 'tcx> {
     /// The `#[target_feature]` attributes of the body. Used for checking
     /// calls to functions with `#[target_feature]` (RFC 2396).
     body_target_features: &'tcx Vec<Symbol>,
-    is_const: bool,
+    in_possible_lhs_union_assign: bool,
+    in_union_destructure: bool,
 }
 
 impl<'tcx> UnsafetyVisitor<'_, 'tcx> {
@@ -158,14 +159,115 @@ impl<'a, 'tcx> Visitor<'a, 'tcx> for UnsafetyVisitor<'a, 'tcx> {
         }
     }
 
+    fn visit_pat(&mut self, pat: &Pat<'tcx>) {
+        use PatKind::*;
+
+        if self.in_union_destructure {
+            match *pat.kind {
+                // binding to a variable allows getting stuff out of variable
+                Binding { .. }
+                // match is conditional on having this value
+                | Constant { .. }
+                | Variant { .. }
+                | Leaf { .. }
+                | Deref { .. }
+                | Range { .. }
+                | Slice { .. }
+                | Array { .. } => {
+                    self.requires_unsafe(pat.span, AccessToUnionField);
+                    return; // don't walk pattern
+                }
+                // wildcard doesn't take anything
+                Wild |
+                // these just wrap other patterns
+                Or { .. } |
+                AscribeUserType { .. } => {}
+            }
+        };
+
+        if let ty::Adt(adt_def, _) = pat.ty.kind() {
+            // check for extracting values from union via destructuring
+            if adt_def.is_union() {
+                match *pat.kind {
+                    // assigning the whole union is okay
+                    // let x = Union { ... };
+                    // let y = x; // safe
+                    Binding { .. } |
+                    // binding to wildcard is okay since that never reads anything and stops double errors
+                    // with implict wildcard branches from `if let`s
+                    Wild |
+                    // doesn't have any effect on semantics
+                    AscribeUserType { .. } |
+                    // creating a union literal
+                    Constant { .. } => {},
+                    Leaf { .. } | Or { .. } => {
+                        // pattern matching with a union and not doing something like v = Union { bar: 5 }
+                        self.in_union_destructure = true;
+                        visit::walk_pat(self, pat);
+                        self.in_union_destructure = false;
+                        return; // don't walk pattern
+                    }
+                    Variant { .. } | Deref { .. } | Range { .. } | Slice { .. } | Array { .. } =>
+                        unreachable!("impossible union destructuring type"),
+                }
+            }
+        }
+
+        visit::walk_pat(self, pat);
+    }
+
     fn visit_expr(&mut self, expr: &Expr<'tcx>) {
+        // could we be in a the LHS of an assignment of a union?
+        match expr.kind {
+            ExprKind::Field { .. }
+            | ExprKind::VarRef { .. }
+            | ExprKind::UpvarRef { .. }
+            | ExprKind::Scope { .. }
+            | ExprKind::Cast { .. } => {}
+
+            ExprKind::AddressOf { .. }
+            | ExprKind::Adt { .. }
+            | ExprKind::Array { .. }
+            | ExprKind::Binary { .. }
+            | ExprKind::Block { .. }
+            | ExprKind::Borrow { .. }
+            | ExprKind::Literal { .. }
+            | ExprKind::ConstBlock { .. }
+            | ExprKind::Deref { .. }
+            | ExprKind::Index { .. }
+            | ExprKind::NeverToAny { .. }
+            | ExprKind::PlaceTypeAscription { .. }
+            | ExprKind::ValueTypeAscription { .. }
+            | ExprKind::Pointer { .. }
+            | ExprKind::Repeat { .. }
+            | ExprKind::StaticRef { .. }
+            | ExprKind::ThreadLocalRef { .. }
+            | ExprKind::Tuple { .. }
+            | ExprKind::Unary { .. }
+            | ExprKind::Call { .. }
+            | ExprKind::Assign { .. }
+            | ExprKind::AssignOp { .. }
+            | ExprKind::Break { .. }
+            | ExprKind::Closure { .. }
+            | ExprKind::Continue { .. }
+            | ExprKind::Return { .. }
+            | ExprKind::Yield { .. }
+            | ExprKind::Loop { .. }
+            | ExprKind::Match { .. }
+            | ExprKind::Box { .. }
+            | ExprKind::If { .. }
+            | ExprKind::InlineAsm { .. }
+            | ExprKind::LlvmInlineAsm { .. }
+            | ExprKind::LogicalOp { .. }
+            | ExprKind::Use { .. } => self.in_possible_lhs_union_assign = false,
+        };
         match expr.kind {
             ExprKind::Scope { value, lint_level: LintLevel::Explicit(hir_id), region_scope: _ } => {
                 let prev_id = self.hir_context;
                 self.hir_context = hir_id;
                 self.visit_expr(&self.thir[value]);
                 self.hir_context = prev_id;
-                return;
+                return; // don't visit the whole expression
             }
             ExprKind::Call { fun, ty: _, args: _, from_hir_call: _, fn_span: _ } => {
                 if self.thir[fun].ty.fn_sig(self.tcx).unsafety() == hir::Unsafety::Unsafe {
@@ -212,16 +314,6 @@ impl<'a, 'tcx> Visitor<'a, 'tcx> for UnsafetyVisitor<'a, 'tcx> {
                 (Bound::Unbounded, Bound::Unbounded) => {}
                 _ => self.requires_unsafe(expr.span, InitializingTypeWith),
             },
-            ExprKind::Cast { source } => {
-                let source = &self.thir[source];
-                if self.tcx.features().const_raw_ptr_to_usize_cast
-                    && self.is_const
-                    && (source.ty.is_unsafe_ptr() || source.ty.is_fn_ptr())
-                    && expr.ty.is_integral()
-                {
-                    self.requires_unsafe(expr.span, CastOfPointerToInt);
-                }
-            }
             ExprKind::Closure {
                 closure_id,
                 substs: _,
@@ -246,9 +338,29 @@ impl<'a, 'tcx> Visitor<'a, 'tcx> for UnsafetyVisitor<'a, 'tcx> {
                 // Unsafe blocks can be used in closures, make sure to take it into account
                 self.safety_context = closure_visitor.safety_context;
             }
+            ExprKind::Field { lhs, .. } => {
+                // assigning to union field is okay for AccessToUnionField
+                if let ty::Adt(adt_def, _) = &self.thir[lhs].ty.kind() {
+                    if adt_def.is_union() {
+                        if self.in_possible_lhs_union_assign {
+                            // FIXME: trigger AssignToDroppingUnionField unsafety if needed
+                        } else {
+                            self.requires_unsafe(expr.span, AccessToUnionField);
+                        }
+                    }
+                }
+            }
+            // don't have any special handling for AssignOp since it causes a read *and* write to lhs
+            ExprKind::Assign { lhs, rhs } => {
+                // assigning to a union is safe, check here so it doesn't get treated as a read later
+                self.in_possible_lhs_union_assign = true;
+                visit::walk_expr(self, &self.thir()[lhs]);
+                self.in_possible_lhs_union_assign = false;
+                visit::walk_expr(self, &self.thir()[rhs]);
+                return; // don't visit the whole expression
+            }
             _ => {}
         }
-
         visit::walk_expr(self, expr);
     }
 }
@@ -290,13 +402,11 @@ enum UnsafeOpKind {
     CallToUnsafeFunction,
     UseOfInlineAssembly,
     InitializingTypeWith,
-    CastOfPointerToInt,
     UseOfMutableStatic,
     UseOfExternStatic,
     DerefOfRawPointer,
     #[allow(dead_code)] // FIXME
     AssignToDroppingUnionField,
-    #[allow(dead_code)] // FIXME
     AccessToUnionField,
     #[allow(dead_code)] // FIXME
     MutationOfLayoutConstrainedField,
@@ -324,9 +434,6 @@ impl UnsafeOpKind {
                 "initializing a layout restricted type's field with a value outside the valid \
                  range is undefined behavior",
             ),
-            CastOfPointerToInt => {
-                ("cast of pointer to int", "casting pointers to integers in constants")
-            }
             UseOfMutableStatic => (
                 "use of mutable static",
                 "mutable statics can be mutated by multiple threads: aliasing violations or data \
@@ -404,11 +511,6 @@ pub fn check_unsafety<'tcx>(tcx: TyCtxt<'tcx>, def: ty::WithOptConstParam<LocalD
     let body_target_features = &tcx.codegen_fn_attrs(def.did).target_features;
     let safety_context =
         if body_unsafety.is_unsafe() { SafetyContext::UnsafeFn } else { SafetyContext::Safe };
-    let is_const = match tcx.hir().body_owner_kind(hir_id) {
-        hir::BodyOwnerKind::Closure => false,
-        hir::BodyOwnerKind::Fn => tcx.is_const_fn_raw(def.did.to_def_id()),
-        hir::BodyOwnerKind::Const | hir::BodyOwnerKind::Static(_) => true,
-    };
     let mut visitor = UnsafetyVisitor {
         tcx,
         thir,
@@ -416,7 +518,8 @@ pub fn check_unsafety<'tcx>(tcx: TyCtxt<'tcx>, def: ty::WithOptConstParam<LocalD
         hir_context: hir_id,
         body_unsafety,
         body_target_features,
-        is_const,
+        in_possible_lhs_union_assign: false,
+        in_union_destructure: false,
     };
     visitor.visit_expr(&thir[expr]);
 }
