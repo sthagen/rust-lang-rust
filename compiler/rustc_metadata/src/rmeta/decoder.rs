@@ -393,12 +393,19 @@ impl<'a, 'tcx> Decodable<DecodeContext<'a, 'tcx>> for ExpnId {
                 } else {
                     local_cdata.cstore.get_crate_data(cnum)
                 };
-                Ok(crate_data
+                let expn_data = crate_data
                     .root
                     .expn_data
                     .get(&crate_data, index)
                     .unwrap()
-                    .decode((&crate_data, sess)))
+                    .decode((&crate_data, sess));
+                let expn_hash = crate_data
+                    .root
+                    .expn_hashes
+                    .get(&crate_data, index)
+                    .unwrap()
+                    .decode((&crate_data, sess));
+                Ok((expn_data, expn_hash))
             },
         )
     }
@@ -950,6 +957,10 @@ impl<'a, 'tcx> CrateMetadataRef<'a> {
 
     fn get_impl_defaultness(&self, id: DefIndex) -> hir::Defaultness {
         self.get_impl_data(id).defaultness
+    }
+
+    fn get_impl_constness(&self, id: DefIndex) -> hir::Constness {
+        self.get_impl_data(id).constness
     }
 
     fn get_coerce_unsized_info(&self, id: DefIndex) -> Option<ty::adjustment::CoerceUnsizedInfo> {
