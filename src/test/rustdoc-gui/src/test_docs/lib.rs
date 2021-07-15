@@ -96,11 +96,13 @@ pub fn check_list_code_block() {}
 #[doc(cfg(unix))]
 pub fn replaced_function() {}
 
+/// Some doc with `code`!
 pub enum AnEnum {
     WithVariants { and: usize, sub: usize, variants: usize },
 }
 
 #[doc(keyword = "CookieMonster")]
+/// Some keyword.
 pub mod keyword {}
 
 /// Just some type alias.
