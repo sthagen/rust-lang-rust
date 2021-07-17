@@ -405,7 +405,7 @@ declare_features! (
     (active, in_band_lifetimes, "1.23.0", Some(44524), None),
 
     /// Allows associated types to be generic, e.g., `type Foo<T>;` (RFC 1598).
-    (incomplete, generic_associated_types, "1.23.0", Some(44265), None),
+    (active, generic_associated_types, "1.23.0", Some(44265), None),
 
     /// Allows defining `trait X = A + B;` alias items.
     (active, trait_alias, "1.24.0", Some(41517), None),
@@ -534,7 +534,7 @@ declare_features! (
     (active, bindings_after_at, "1.41.0", Some(65490), None),
 
     /// Allows `impl const Trait for T` syntax.
-    (incomplete, const_trait_impl, "1.42.0", Some(67792), None),
+    (active, const_trait_impl, "1.42.0", Some(67792), None),
 
     /// Allows `T: ?const Trait` syntax in bounds.
     (incomplete, const_trait_bound_opt_out, "1.42.0", Some(67794), None),
