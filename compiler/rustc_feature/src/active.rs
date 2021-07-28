@@ -413,9 +413,6 @@ declare_features! (
     /// Allows inferring `'static` outlives requirements (RFC 2093).
     (active, infer_static_outlives_requirements, "1.26.0", Some(54185), None),
 
-    /// Allows accessing fields of unions inside `const` functions.
-    (active, const_fn_union, "1.27.0", Some(51909), None),
-
     /// Allows dereferencing raw pointers during const eval.
     (active, const_raw_ptr_deref, "1.27.0", Some(51911), None),
 
@@ -526,10 +523,6 @@ declare_features! (
     /// Allows using `&mut` in constant functions.
     (active, const_mut_refs, "1.41.0", Some(57349), None),
 
-    /// Allows bindings in the subpattern of a binding pattern.
-    /// For example, you can write `x @ Some(y)`.
-    (active, bindings_after_at, "1.41.0", Some(65490), None),
-
     /// Allows `impl const Trait for T` syntax.
     (active, const_trait_impl, "1.42.0", Some(67792), None),
 
@@ -568,9 +561,6 @@ declare_features! (
 
     /// Lazily evaluate constants. This allows constants to depend on type parameters.
     (incomplete, lazy_normalization_consts, "1.46.0", Some(72219), None),
-
-    /// Allows calling `transmute` in const fn
-    (active, const_fn_transmute, "1.46.0", Some(53605), None),
 
     /// Allows `if let` guard in match arms.
     (incomplete, if_let_guard, "1.47.0", Some(51114), None),
@@ -683,6 +673,12 @@ declare_features! (
 
     /// Allows `cfg(target_abi = "...")`.
     (active, cfg_target_abi, "1.55.0", Some(80970), None),
+
+    /// Infer generic args for both consts and types.
+    (active, generic_arg_infer, "1.55.0", Some(85077), None),
+
+    /// Allows `#[derive(Default)]` and `#[default]` on enums.
+    (active, derive_default_enum, "1.56.0", Some(86985), None),
 
     // -------------------------------------------------------------------------
     // feature-group-end: actual feature gates
