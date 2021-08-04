@@ -293,7 +293,7 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
     ) -> Result<(Res, Option<String>), ErrorKind<'path>> {
         let tcx = self.cx.tcx;
         let no_res = || ResolutionFailure::NotResolved {
-            module_id: module_id.into(),
+            module_id: module_id,
             partial_res: None,
             unresolved: path_str.into(),
         };
@@ -521,7 +521,7 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
                     // but the disambiguator logic expects the associated item.
                     // Store the kind in a side channel so that only the disambiguator logic looks at it.
                     if let Some((kind, id)) = side_channel {
-                        self.kind_side_channel.set(Some((kind, id.into())));
+                        self.kind_side_channel.set(Some((kind, id)));
                     }
                     Ok((res, Some(fragment)))
                 };
@@ -1244,11 +1244,8 @@ impl LinkCollector<'_, '_> {
                     item.def_id.expect_def_id().as_local().map(|src_id| (src_id, dst_id))
                 })
             {
-                let hir_src = self.cx.tcx.hir().local_def_id_to_hir_id(src_id);
-                let hir_dst = self.cx.tcx.hir().local_def_id_to_hir_id(dst_id);
-
-                if self.cx.tcx.privacy_access_levels(()).is_exported(hir_src)
-                    && !self.cx.tcx.privacy_access_levels(()).is_exported(hir_dst)
+                if self.cx.tcx.privacy_access_levels(()).is_exported(src_id)
+                    && !self.cx.tcx.privacy_access_levels(()).is_exported(dst_id)
                 {
                     privacy_error(self.cx, &diag_info, &path_str);
                 }
@@ -1268,7 +1265,7 @@ impl LinkCollector<'_, '_> {
                     // doesn't allow statements like `use str::trim;`, making this a (hopefully)
                     // valid omission. See https://github.com/rust-lang/rust/pull/80660#discussion_r551585677
                     // for discussion on the matter.
-                    verify(kind, id.into())?;
+                    verify(kind, id)?;
 
                     // FIXME: it would be nice to check that the feature gate was enabled in the original crate, not just ignore it altogether.
                     // However I'm not sure how to check that across crates.
@@ -1306,9 +1303,9 @@ impl LinkCollector<'_, '_> {
                 Some(ItemLink { link: ori_link.link, link_text, did: None, fragment })
             }
             Res::Def(kind, id) => {
-                verify(kind, id.into())?;
+                verify(kind, id)?;
                 let id = clean::register_res(self.cx, rustc_hir::def::Res::Def(kind, id));
-                Some(ItemLink { link: ori_link.link, link_text, did: Some(id.into()), fragment })
+                Some(ItemLink { link: ori_link.link, link_text, did: Some(id), fragment })
             }
         }
     }
@@ -1886,7 +1883,7 @@ fn resolution_failure(
                         name = start;
                         for ns in [TypeNS, ValueNS, MacroNS] {
                             if let Some(res) =
-                                collector.check_full_res(ns, &start, module_id.into(), &None)
+                                collector.check_full_res(ns, &start, module_id, &None)
                             {
                                 debug!("found partial_res={:?}", res);
                                 *partial_res = Some(res);
