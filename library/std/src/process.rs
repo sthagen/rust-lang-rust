@@ -205,6 +205,10 @@ pub struct Child {
     pub stderr: Option<ChildStderr>,
 }
 
+/// Allows extension traits within `std`.
+#[unstable(feature = "sealed", issue = "none")]
+impl crate::sealed::Sealed for Child {}
+
 impl AsInner<imp::Process> for Child {
     fn as_inner(&self) -> &imp::Process {
         &self.handle
@@ -1453,7 +1457,7 @@ impl ExitStatus {
     ///
     /// In Unix terms the return value is the **exit status**: the value passed to `exit`, if the
     /// process finished by calling `exit`.  Note that on Unix the exit status is truncated to 8
-    /// bits, and that values that didn't come from a program's call to `exit` may be invented the
+    /// bits, and that values that didn't come from a program's call to `exit` may be invented by the
     /// runtime system (often, for example, 255, 254, 127 or 126).
     ///
     /// On Unix, this will return `None` if the process was terminated by a signal.

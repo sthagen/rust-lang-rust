@@ -1205,6 +1205,14 @@ impl<'a> Builder<'a> {
                 self.config.rust_debug_assertions.to_string()
             },
         );
+        cargo.env(
+            profile_var("OVERFLOW_CHECKS"),
+            if mode == Mode::Std {
+                self.config.rust_overflow_checks_std.to_string()
+            } else {
+                self.config.rust_overflow_checks.to_string()
+            },
+        );
 
         // `dsymutil` adds time to builds on Apple platforms for no clear benefit, and also makes
         // it more difficult for debuggers to find debug info. The compiler currently defaults to
@@ -1291,7 +1299,7 @@ impl<'a> Builder<'a> {
         // efficient initial-exec TLS model. This doesn't work with `dlopen`,
         // so we can't use it by default in general, but we can use it for tools
         // and our own internal libraries.
-        if !mode.must_support_dlopen() {
+        if !mode.must_support_dlopen() && !target.triple.starts_with("powerpc-") {
             rustflags.arg("-Ztls-model=initial-exec");
         }
 
