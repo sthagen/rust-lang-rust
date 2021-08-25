@@ -120,9 +120,8 @@ impl<'a, 'tcx> ExprUseVisitor<'a, 'tcx> {
         }
     }
 
+    #[instrument(skip(self), level = "debug")]
     pub fn consume_body(&mut self, body: &hir::Body<'_>) {
-        debug!("consume_body(body={:?})", body);
-
         for param in body.params {
             let param_ty = return_if_err!(self.mc.pat_ty_adjusted(&param.pat));
             debug!("consume_body: param_ty = {:?}", param_ty);
@@ -269,6 +268,9 @@ impl<'a, 'tcx> ExprUseVisitor<'a, 'tcx> {
                                     if def.variants.len() > 1 {
                                         needs_to_be_read = true;
                                     }
+                                } else {
+                                    // If it is not ty::Adt, then it should be read
+                                    needs_to_be_read = true;
                                 }
                             }
                             PatKind::Lit(_) | PatKind::Range(..) => {
@@ -816,7 +818,7 @@ fn copy_or_move<'a, 'tcx>(
 }
 
 // - If a place is used in a `ByValue` context then move it if it's not a `Copy` type.
-// - If the place that is a `Copy` type consider it a `ImmBorrow`.
+// - If the place that is a `Copy` type consider it an `ImmBorrow`.
 fn delegate_consume<'a, 'tcx>(
     mc: &mc::MemCategorizationContext<'a, 'tcx>,
     delegate: &mut (dyn Delegate<'tcx> + 'a),

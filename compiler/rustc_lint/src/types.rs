@@ -669,9 +669,7 @@ enum FfiResult<'tcx> {
 }
 
 crate fn nonnull_optimization_guaranteed<'tcx>(tcx: TyCtxt<'tcx>, def: &ty::AdtDef) -> bool {
-    tcx.get_attrs(def.did)
-        .iter()
-        .any(|a| tcx.sess.check_name(a, sym::rustc_nonnull_optimization_guaranteed))
+    tcx.get_attrs(def.did).iter().any(|a| a.has_name(sym::rustc_nonnull_optimization_guaranteed))
 }
 
 /// `repr(transparent)` structs can have a single non-ZST field, this function returns that
@@ -797,7 +795,7 @@ crate fn repr_nullable_ptr<'tcx>(
         // Return the nullable type this Option-like enum can be safely represented with.
         let field_ty_abi = &cx.layout_of(field_ty).unwrap().abi;
         if let Abi::Scalar(field_ty_scalar) = field_ty_abi {
-            match (field_ty_scalar.valid_range.start(), field_ty_scalar.valid_range.end()) {
+            match (field_ty_scalar.valid_range.start, field_ty_scalar.valid_range.end) {
                 (0, _) => unreachable!("Non-null optimisation extended to a non-zero value."),
                 (1, _) => {
                     return Some(get_nullable_type(cx, field_ty).unwrap());
@@ -1171,7 +1169,7 @@ impl<'a, 'tcx> ImproperCTypesVisitor<'a, 'tcx> {
                     ty::Projection(..) => {
                         let ty = self.cx.tcx.normalize_erasing_regions(self.cx.param_env, ty);
 
-                        // If `ty` is a opaque type directly then `super_visit_with` won't invoke
+                        // If `ty` is an opaque type directly then `super_visit_with` won't invoke
                         // this function again.
                         if ty.has_opaque_types() {
                             self.visit_ty(ty)

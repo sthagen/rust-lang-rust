@@ -512,6 +512,22 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                     }
                 }
 
+                ty::PredicateKind::Coerce(p) => {
+                    let p = bound_predicate.rebind(p);
+                    // Does this code ever run?
+                    match self.infcx.coerce_predicate(&obligation.cause, obligation.param_env, p) {
+                        Some(Ok(InferOk { mut obligations, .. })) => {
+                            self.add_depth(obligations.iter_mut(), obligation.recursion_depth);
+                            self.evaluate_predicates_recursively(
+                                previous_stack,
+                                obligations.into_iter(),
+                            )
+                        }
+                        Some(Err(_)) => Ok(EvaluatedToErr),
+                        None => Ok(EvaluatedToAmbig),
+                    }
+                }
+
                 ty::PredicateKind::WellFormed(arg) => match wf::obligations(
                     self.infcx,
                     obligation.param_env,
@@ -608,10 +624,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                         if let (ty::ConstKind::Unevaluated(a), ty::ConstKind::Unevaluated(b)) =
                             (c1.val, c2.val)
                         {
-                            if self
-                                .tcx()
-                                .try_unify_abstract_consts(((a.def, a.substs), (b.def, b.substs)))
-                            {
+                            if self.infcx.try_unify_abstract_consts(a, b) {
                                 return Ok(EvaluatedToOk);
                             }
                         }
@@ -1500,6 +1513,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 | FnPointerCandidate
                 | BuiltinObjectCandidate
                 | BuiltinUnsizeCandidate
+                | TraitUpcastingUnsizeCandidate(_)
                 | BuiltinCandidate { .. }
                 | TraitAliasCandidate(..)
                 | ObjectCandidate(_)
@@ -1517,6 +1531,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 | FnPointerCandidate
                 | BuiltinObjectCandidate
                 | BuiltinUnsizeCandidate
+                | TraitUpcastingUnsizeCandidate(_)
                 | BuiltinCandidate { has_nested: true }
                 | TraitAliasCandidate(..),
                 ParamCandidate(ref cand),
@@ -1546,6 +1561,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 | FnPointerCandidate
                 | BuiltinObjectCandidate
                 | BuiltinUnsizeCandidate
+                | TraitUpcastingUnsizeCandidate(_)
                 | BuiltinCandidate { .. }
                 | TraitAliasCandidate(..),
             ) => true,
@@ -1557,6 +1573,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 | FnPointerCandidate
                 | BuiltinObjectCandidate
                 | BuiltinUnsizeCandidate
+                | TraitUpcastingUnsizeCandidate(_)
                 | BuiltinCandidate { .. }
                 | TraitAliasCandidate(..),
                 ObjectCandidate(_) | ProjectionCandidate(_),
@@ -1566,12 +1583,19 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 // See if we can toss out `victim` based on specialization.
                 // This requires us to know *for sure* that the `other` impl applies
                 // i.e., `EvaluatedToOk`.
+                //
+                // FIXME(@lcnr): Using `modulo_regions` here seems kind of scary
+                // to me but is required for `std` to compile, so I didn't change it
+                // for now.
+                let tcx = self.tcx();
                 if other.evaluation.must_apply_modulo_regions() {
-                    let tcx = self.tcx();
                     if tcx.specializes((other_def, victim_def)) {
                         return true;
                     }
-                    return match tcx.impls_are_allowed_to_overlap(other_def, victim_def) {
+                }
+
+                if other.evaluation.must_apply_considering_regions() {
+                    match tcx.impls_are_allowed_to_overlap(other_def, victim_def) {
                         Some(ty::ImplOverlapKind::Permitted { marker: true }) => {
                             // Subtle: If the predicate we are evaluating has inference
                             // variables, do *not* allow discarding candidates due to
@@ -1616,7 +1640,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                         }
                         Some(_) => true,
                         None => false,
-                    };
+                    }
                 } else {
                     false
                 }
@@ -1630,6 +1654,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 | FnPointerCandidate
                 | BuiltinObjectCandidate
                 | BuiltinUnsizeCandidate
+                | TraitUpcastingUnsizeCandidate(_)
                 | BuiltinCandidate { has_nested: true }
                 | TraitAliasCandidate(..),
                 ImplCandidate(_)
@@ -1638,6 +1663,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 | FnPointerCandidate
                 | BuiltinObjectCandidate
                 | BuiltinUnsizeCandidate
+                | TraitUpcastingUnsizeCandidate(_)
                 | BuiltinCandidate { has_nested: true }
                 | TraitAliasCandidate(..),
             ) => false,

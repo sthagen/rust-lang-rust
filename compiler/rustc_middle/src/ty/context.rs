@@ -1136,7 +1136,7 @@ impl<'tcx> TyCtxt<'tcx> {
     pub fn layout_scalar_valid_range(self, def_id: DefId) -> (Bound<u128>, Bound<u128>) {
         let attrs = self.get_attrs(def_id);
         let get = |name| {
-            let attr = match attrs.iter().find(|a| self.sess.check_name(a, name)) {
+            let attr = match attrs.iter().find(|a| a.has_name(name)) {
                 Some(attr) => attr,
                 None => return Bound::Unbounded,
             };
@@ -1792,7 +1792,7 @@ pub mod tls {
         if context == 0 {
             f(None)
         } else {
-            // We could get a `ImplicitCtxt` pointer from another thread.
+            // We could get an `ImplicitCtxt` pointer from another thread.
             // Ensure that `ImplicitCtxt` is `Sync`.
             sync::assert_sync::<ImplicitCtxt<'_, '_>>();
 

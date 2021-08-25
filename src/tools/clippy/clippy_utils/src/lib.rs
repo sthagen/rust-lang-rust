@@ -254,6 +254,10 @@ pub fn in_macro(span: Span) -> bool {
     }
 }
 
+pub fn is_unit_expr(expr: &Expr<'_>) -> bool {
+    matches!(expr.kind, ExprKind::Block(Block { stmts: [], expr: None, .. }, _) | ExprKind::Tup([]))
+}
+
 /// Checks if given pattern is a wildcard (`_`)
 pub fn is_wild(pat: &Pat<'_>) -> bool {
     matches!(pat.kind, PatKind::Wild)
@@ -583,7 +587,7 @@ pub fn trait_ref_of_method<'tcx>(cx: &LateContext<'tcx>, hir_id: HirId) -> Optio
 /// For example, if `e` represents the `v[0].a.b[x]`
 /// this method will return a tuple, composed of a `Vec`
 /// containing the `Expr`s for `v[0], v[0].a, v[0].a.b, v[0].a.b[x]`
-/// and a `Expr` for root of them, `v`
+/// and an `Expr` for root of them, `v`
 fn projection_stack<'a, 'hir>(mut e: &'a Expr<'hir>) -> (Vec<&'a Expr<'hir>>, &'a Expr<'hir>) {
     let mut result = vec![];
     let root = loop {
@@ -877,7 +881,7 @@ fn line_span<T: LintContext>(cx: &T, span: Span) -> Span {
     let source_map_and_line = cx.sess().source_map().lookup_line(span.lo()).unwrap();
     let line_no = source_map_and_line.line;
     let line_start = source_map_and_line.sf.lines[line_no];
-    Span::new(line_start, span.hi(), span.ctxt())
+    span.with_lo(line_start)
 }
 
 /// Gets the parent node, if any.

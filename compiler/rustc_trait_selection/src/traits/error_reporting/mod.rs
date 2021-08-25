@@ -565,6 +565,13 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                         span_bug!(span, "subtype requirement gave wrong error: `{:?}`", predicate)
                     }
 
+                    ty::PredicateKind::Coerce(predicate) => {
+                        // Errors for Coerce predicates show up as
+                        // `FulfillmentErrorCode::CodeSubtypeError`,
+                        // not selection error.
+                        span_bug!(span, "coerce requirement gave wrong error: `{:?}`", predicate)
+                    }
+
                     ty::PredicateKind::RegionOutlives(predicate) => {
                         let predicate = bound_predicate.rebind(predicate);
                         let predicate = self.resolve_vars_if_possible(predicate);
@@ -2002,7 +2009,7 @@ pub enum ArgKind {
     Arg(String, String),
 
     /// An argument of tuple type. For a "found" argument, the span is
-    /// the location in the source of the pattern. For a "expected"
+    /// the location in the source of the pattern. For an "expected"
     /// argument, it will be None. The vector is a list of (name, ty)
     /// strings for the components of the tuple.
     Tuple(Option<Span>, Vec<(String, String)>),

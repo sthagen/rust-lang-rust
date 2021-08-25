@@ -648,7 +648,7 @@ rustc_queries! {
         }
     }
 
-    /// HACK: when evaluated, this reports a "unsafe derive on repr(packed)" error.
+    /// HACK: when evaluated, this reports an "unsafe derive on repr(packed)" error.
     ///
     /// Unsafety checking is executed for each method separately, but we only want
     /// to emit this error once per derive. As there are some impls with multiple
@@ -987,9 +987,9 @@ rustc_queries! {
         desc { |tcx| "finding all vtable entries for trait {}", tcx.def_path_str(key.def_id()) }
     }
 
-    query vtable_trait_upcasting_coercion_new_vptr_slot(key: (ty::PolyTraitRef<'tcx>, ty::PolyTraitRef<'tcx>)) -> Option<usize> {
-        desc { |tcx| "finding the slot within vtable for trait {} vtable ptr during trait upcasting coercion from {} vtable",
-            tcx.def_path_str(key.1.def_id()), tcx.def_path_str(key.0.def_id()) }
+    query vtable_trait_upcasting_coercion_new_vptr_slot(key: (ty::Ty<'tcx>, ty::Ty<'tcx>)) -> Option<usize> {
+        desc { |tcx| "finding the slot within vtable for trait object {} vtable ptr during trait upcasting coercion from {} vtable",
+            key.1, key.0 }
     }
 
     query codegen_fulfill_obligation(
@@ -1733,7 +1733,7 @@ rustc_queries! {
     }
 
     /// Performs an HIR-based well-formed check on the item with the given `HirId`. If
-    /// we get an `Umimplemented` error that matches the provided `Predicate`, return
+    /// we get an `Unimplemented` error that matches the provided `Predicate`, return
     /// the cause of the newly created obligation.
     ///
     /// This is only used by error-reporting code to get a better cause (in particular, a better

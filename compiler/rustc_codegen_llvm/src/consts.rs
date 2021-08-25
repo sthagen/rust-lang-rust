@@ -16,7 +16,9 @@ use rustc_middle::mir::interpret::{
 use rustc_middle::mir::mono::MonoItem;
 use rustc_middle::ty::{self, Instance, Ty};
 use rustc_middle::{bug, span_bug};
-use rustc_target::abi::{AddressSpace, Align, HasDataLayout, LayoutOf, Primitive, Scalar, Size};
+use rustc_target::abi::{
+    AddressSpace, Align, HasDataLayout, LayoutOf, Primitive, Scalar, Size, WrappingRange,
+};
 use tracing::debug;
 
 pub fn const_alloc_to_llvm(cx: &CodegenCx<'ll, '_>, alloc: &Allocation) -> &'ll Value {
@@ -59,7 +61,7 @@ pub fn const_alloc_to_llvm(cx: &CodegenCx<'ll, '_>, alloc: &Allocation) -> &'ll 
                 Pointer::new(alloc_id, Size::from_bytes(ptr_offset)),
                 &cx.tcx,
             ),
-            &Scalar { value: Primitive::Pointer, valid_range: 0..=!0 },
+            &Scalar { value: Primitive::Pointer, valid_range: WrappingRange { start: 0, end: !0 } },
             cx.type_i8p_ext(address_space),
         ));
         next_offset = offset + pointer_size;
@@ -474,7 +476,13 @@ impl StaticMethods for CodegenCx<'ll, 'tcx> {
             }
 
             if attrs.flags.contains(CodegenFnAttrFlags::USED) {
-                self.add_used_global(g);
+                // The semantics of #[used] in Rust only require the symbol to make it into the
+                // object file. It is explicitly allowed for the linker to strip the symbol if it
+                // is dead. As such, use llvm.compiler.used instead of llvm.used.
+                // Additionally, https://reviews.llvm.org/D97448 in LLVM 13 started emitting unique
+                // sections with SHF_GNU_RETAIN flag for llvm.used symbols, which may trigger bugs
+                // in some versions of the gold linker.
+                self.add_compiler_used_global(g);
             }
         }
     }
@@ -483,5 +491,12 @@ impl StaticMethods for CodegenCx<'ll, 'tcx> {
     fn add_used_global(&self, global: &'ll Value) {
         let cast = unsafe { llvm::LLVMConstPointerCast(global, self.type_i8p()) };
         self.used_statics.borrow_mut().push(cast);
+    }
+
+    /// Add a global value to a list to be stored in the `llvm.compiler.used` variable,
+    /// an array of i8*.
+    fn add_compiler_used_global(&self, global: &'ll Value) {
+        let cast = unsafe { llvm::LLVMConstPointerCast(global, self.type_i8p()) };
+        self.compiler_used_statics.borrow_mut().push(cast);
     }
 }

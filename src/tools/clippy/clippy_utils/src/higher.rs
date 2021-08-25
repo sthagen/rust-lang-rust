@@ -79,15 +79,7 @@ pub struct IfLet<'hir> {
 }
 
 impl<'hir> IfLet<'hir> {
-    #[inline]
-    pub fn ast(cx: &LateContext<'tcx>, expr: &Expr<'hir>) -> Option<Self> {
-        let rslt = Self::hir(expr)?;
-        Self::is_not_within_while_context(cx, expr)?;
-        Some(rslt)
-    }
-
-    #[inline]
-    pub const fn hir(expr: &Expr<'hir>) -> Option<Self> {
+    pub fn hir(cx: &LateContext<'_>, expr: &Expr<'hir>) -> Option<Self> {
         if let ExprKind::If(
             Expr {
                 kind: ExprKind::Let(let_pat, let_expr, _),
@@ -97,6 +89,14 @@ impl<'hir> IfLet<'hir> {
             if_else,
         ) = expr.kind
         {
+            let hir = cx.tcx.hir();
+            let mut iter = hir.parent_iter(expr.hir_id);
+            if let Some((_, Node::Block(Block { stmts: [], .. }))) = iter.next() {
+                if let Some((_, Node::Expr(Expr { kind: ExprKind::Loop(_, _, LoopSource::While, _), .. }))) = iter.next() {
+                    // while loop desugar
+                    return None;
+                }
+            }
             return Some(Self {
                 let_pat,
                 let_expr,
@@ -105,22 +105,6 @@ impl<'hir> IfLet<'hir> {
             });
         }
         None
-    }
-
-    #[inline]
-    fn is_not_within_while_context(cx: &LateContext<'tcx>, expr: &Expr<'hir>) -> Option<()> {
-        let hir = cx.tcx.hir();
-        let parent = hir.get_parent_node(expr.hir_id);
-        let parent_parent = hir.get_parent_node(parent);
-        let parent_parent_node = hir.get(parent_parent);
-        if let Node::Expr(Expr {
-            kind: ExprKind::Loop(_, _, LoopSource::While, _),
-            ..
-        }) = parent_parent_node
-        {
-            return None;
-        }
-        Some(())
     }
 }
 
@@ -485,12 +469,28 @@ impl FormatArgsExpn<'tcx> {
             if let ExpnKind::Macro(_, name) = expr.span.ctxt().outer_expn_data().kind;
             let name = name.as_str();
             if name.ends_with("format_args") || name.ends_with("format_args_nl");
-            if let ExprKind::Call(_, args) = expr.kind;
-            if let Some((strs_ref, args, fmt_expr)) = match args {
+
+            if let ExprKind::Match(inner_match, [arm], _) = expr.kind;
+
+            // `match match`, if you will
+            if let ExprKind::Match(args, [inner_arm], _) = inner_match.kind;
+            if let ExprKind::Tup(value_args) = args.kind;
+            if let Some(value_args) = value_args
+                .iter()
+                .map(|e| match e.kind {
+                    ExprKind::AddrOf(_, _, e) => Some(e),
+                    _ => None,
+                })
+                .collect();
+            if let ExprKind::Array(args) = inner_arm.body.kind;
+
+            if let ExprKind::Block(Block { stmts: [], expr: Some(expr), .. }, _) = arm.body.kind;
+            if let ExprKind::Call(_, call_args) = expr.kind;
+            if let Some((strs_ref, fmt_expr)) = match call_args {
                 // Arguments::new_v1
-                [strs_ref, args] => Some((strs_ref, args, None)),
+                [strs_ref, _] => Some((strs_ref, None)),
                 // Arguments::new_v1_formatted
-                [strs_ref, args, fmt_expr] => Some((strs_ref, args, Some(fmt_expr))),
+                [strs_ref, _, fmt_expr] => Some((strs_ref, Some(fmt_expr))),
                 _ => None,
             };
             if let ExprKind::AddrOf(BorrowKind::Ref, _, strs_arr) = strs_ref.kind;
@@ -506,17 +506,6 @@ impl FormatArgsExpn<'tcx> {
                     None
                 })
                 .collect();
-            if let ExprKind::AddrOf(BorrowKind::Ref, _, args) = args.kind;
-            if let ExprKind::Match(args, [arm], _) = args.kind;
-            if let ExprKind::Tup(value_args) = args.kind;
-            if let Some(value_args) = value_args
-                .iter()
-                .map(|e| match e.kind {
-                    ExprKind::AddrOf(_, _, e) => Some(e),
-                    _ => None,
-                })
-                .collect();
-            if let ExprKind::Array(args) = arm.body.kind;
             then {
                 Some(FormatArgsExpn {
                     format_string_span: strs_ref.span,

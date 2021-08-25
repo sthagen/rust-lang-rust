@@ -91,6 +91,17 @@ fn ios_deployment_target() -> (u32, u32) {
     deployment_target("IPHONEOS_DEPLOYMENT_TARGET").unwrap_or((7, 0))
 }
 
+pub fn ios_llvm_target(arch: &str) -> String {
+    // Modern iOS tooling extracts information about deployment target
+    // from LC_BUILD_VERSION. This load command will only be emitted when
+    // we build with a version specific `llvm_target`, with the version
+    // set high enough. Luckily one LC_BUILD_VERSION is enough, for Xcode
+    // to pick it up (since std and core are still built with the fallback
+    // of version 7.0 and hence emit the old LC_IPHONE_MIN_VERSION).
+    let (major, minor) = ios_deployment_target();
+    format!("{}-apple-ios{}.{}.0", arch, major, minor)
+}
+
 pub fn ios_sim_llvm_target(arch: &str) -> String {
     let (major, minor) = ios_deployment_target();
     format!("{}-apple-ios{}.{}.0-simulator", arch, major, minor)

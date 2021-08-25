@@ -402,6 +402,7 @@ impl<'a, 'b, 'tcx> FulfillProcessor<'a, 'b, 'tcx> {
                 | ty::PredicateKind::ObjectSafe(_)
                 | ty::PredicateKind::ClosureKind(..)
                 | ty::PredicateKind::Subtype(_)
+                | ty::PredicateKind::Coerce(_)
                 | ty::PredicateKind::ConstEvaluatable(..)
                 | ty::PredicateKind::ConstEquate(..) => {
                     let pred = infcx.replace_bound_vars_with_placeholders(binder);
@@ -517,6 +518,31 @@ impl<'a, 'b, 'tcx> FulfillProcessor<'a, 'b, 'tcx> {
                     }
                 }
 
+                ty::PredicateKind::Coerce(coerce) => {
+                    match self.selcx.infcx().coerce_predicate(
+                        &obligation.cause,
+                        obligation.param_env,
+                        Binder::dummy(coerce),
+                    ) {
+                        None => {
+                            // None means that both are unresolved.
+                            pending_obligation.stalled_on = vec![
+                                TyOrConstInferVar::maybe_from_ty(coerce.a).unwrap(),
+                                TyOrConstInferVar::maybe_from_ty(coerce.b).unwrap(),
+                            ];
+                            ProcessResult::Unchanged
+                        }
+                        Some(Ok(ok)) => ProcessResult::Changed(mk_pending(ok.obligations)),
+                        Some(Err(err)) => {
+                            let expected_found = ExpectedFound::new(false, coerce.a, coerce.b);
+                            ProcessResult::Error(FulfillmentErrorCode::CodeSubtypeError(
+                                expected_found,
+                                err,
+                            ))
+                        }
+                    }
+                }
+
                 ty::PredicateKind::ConstEvaluatable(def_id, substs) => {
                     match const_evaluatable::is_const_evaluatable(
                         self.selcx.infcx(),
@@ -552,11 +578,7 @@ impl<'a, 'b, 'tcx> FulfillProcessor<'a, 'b, 'tcx> {
                         if let (ty::ConstKind::Unevaluated(a), ty::ConstKind::Unevaluated(b)) =
                             (c1.val, c2.val)
                         {
-                            if self
-                                .selcx
-                                .tcx()
-                                .try_unify_abstract_consts(((a.def, a.substs), (b.def, b.substs)))
-                            {
+                            if infcx.try_unify_abstract_consts(a, b) {
                                 return ProcessResult::Changed(vec![]);
                             }
                         }
