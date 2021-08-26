@@ -858,13 +858,25 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     path.segments,
                 );
             }
-            QPath::TypeRelative(ref qself, ref segment) => (self.to_ty(qself), qself, segment),
+            QPath::TypeRelative(ref qself, ref segment) => {
+                // Don't use `self.to_ty`, since this will register a WF obligation.
+                // If we're trying to call a non-existent method on a trait
+                // (e.g. `MyTrait::missing_method`), then resolution will
+                // give us a `QPath::TypeRelative` with a trait object as
+                // `qself`. In that case, we want to avoid registering a WF obligation
+                // for `dyn MyTrait`, since we don't actually need the trait
+                // to be object-safe.
+                // We manually call `register_wf_obligation` in the success path
+                // below.
+                (<dyn AstConv<'_>>::ast_ty_to_ty(self, qself), qself, segment)
+            }
             QPath::LangItem(..) => {
                 bug!("`resolve_ty_and_res_fully_qualified_call` called on `LangItem`")
             }
         };
         if let Some(&cached_result) = self.typeck_results.borrow().type_dependent_defs().get(hir_id)
         {
+            self.register_wf_obligation(ty.into(), qself.span, traits::WellFormed(None));
             // Return directly on cache hit. This is useful to avoid doubly reporting
             // errors with default match binding modes. See #44614.
             let def = cached_result.map_or(Res::Err, |(kind, def_id)| Res::Def(kind, def_id));
@@ -878,6 +890,14 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     method::MethodError::PrivateMatch(kind, def_id, _) => Ok((kind, def_id)),
                     _ => Err(ErrorReported),
                 };
+
+                // If we have a path like `MyTrait::missing_method`, then don't register
+                // a WF obligation for `dyn MyTrait` when method lookup fails. Otherwise,
+                // register a WF obligation so that we can detect any additional
+                // errors in the self type.
+                if !(matches!(error, method::MethodError::NoMatch(_)) && ty.is_trait()) {
+                    self.register_wf_obligation(ty.into(), qself.span, traits::WellFormed(None));
+                }
                 if item_name.name != kw::Empty {
                     if let Some(mut e) = self.report_method_error(
                         span,
@@ -895,6 +915,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
         if result.is_ok() {
             self.maybe_lint_bare_trait(qpath, hir_id);
+            self.register_wf_obligation(ty.into(), qself.span, traits::WellFormed(None));
         }
 
         // Write back the new resolution.
@@ -1178,12 +1199,12 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let mut user_self_ty = None;
         let mut is_alias_variant_ctor = false;
         match res {
-            Res::Def(DefKind::Ctor(CtorOf::Variant, _), _) => {
-                if let Some(self_ty) = self_ty {
-                    let adt_def = self_ty.ty_adt_def().unwrap();
-                    user_self_ty = Some(UserSelfTy { impl_def_id: adt_def.did, self_ty });
-                    is_alias_variant_ctor = true;
-                }
+            Res::Def(DefKind::Ctor(CtorOf::Variant, _), _)
+                if let Some(self_ty) = self_ty =>
+            {
+                let adt_def = self_ty.ty_adt_def().unwrap();
+                user_self_ty = Some(UserSelfTy { impl_def_id: adt_def.did, self_ty });
+                is_alias_variant_ctor = true;
             }
             Res::Def(DefKind::AssocFn | DefKind::AssocConst, def_id) => {
                 let container = tcx.associated_item(def_id).container;
