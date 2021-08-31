@@ -1489,7 +1489,7 @@ fn generics_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::Generics {
                 }
 
                 // HACK(eddyb) this provides the correct generics when
-                // `feature(const_generics)` is enabled, so that const expressions
+                // `feature(generic_const_expressions)` is enabled, so that const expressions
                 // used with const generics, e.g. `Foo<{N+1}>`, can work at all.
                 //
                 // Note that we do not supply the parent generics when using
@@ -2002,7 +2002,16 @@ fn predicates_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::GenericPredicates<'_> {
         // prove that the trait applies to the types that were
         // used, and adding the predicate into this list ensures
         // that this is done.
-        let span = tcx.sess.source_map().guess_head_span(tcx.def_span(def_id));
+        let mut span = tcx.def_span(def_id);
+        if tcx.sess.source_map().is_local_span(span) {
+            // `guess_head_span` reads the actual source file from
+            // disk to try to determine the 'head' snippet of the span.
+            // Don't do this for a span that comes from a file outside
+            // of our crate, since this would make our query output
+            // (and overall crate metadata) dependent on the
+            // *current* state of an external file.
+            span = tcx.sess.source_map().guess_head_span(span);
+        }
         result.predicates =
             tcx.arena.alloc_from_iter(result.predicates.iter().copied().chain(std::iter::once((
                 ty::TraitRef::identity(tcx, def_id).without_const().to_predicate(tcx),
@@ -2300,7 +2309,7 @@ fn gather_explicit_predicates_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::GenericP
         }
     }
 
-    if tcx.features().const_evaluatable_checked {
+    if tcx.features().generic_const_exprs {
         predicates.extend(const_evaluatable_predicates_of(tcx, def_id.expect_local()));
     }
 
