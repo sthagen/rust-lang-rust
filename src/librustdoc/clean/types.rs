@@ -715,6 +715,7 @@ impl ItemKind {
             StructItem(s) => s.fields.iter(),
             UnionItem(u) => u.fields.iter(),
             VariantItem(Variant::Struct(v)) => v.fields.iter(),
+            VariantItem(Variant::Tuple(v)) => v.iter(),
             EnumItem(e) => e.variants.iter(),
             TraitItem(t) => t.items.iter(),
             ImplItem(i) => i.items.iter(),
@@ -1937,7 +1938,7 @@ crate struct Enum {
 #[derive(Clone, Debug)]
 crate enum Variant {
     CLike,
-    Tuple(Vec<Type>),
+    Tuple(Vec<Item>),
     Struct(VariantStruct),
 }
 
@@ -2018,14 +2019,24 @@ crate enum GenericArg {
 #[derive(Clone, PartialEq, Eq, Debug, Hash)]
 crate enum GenericArgs {
     AngleBracketed { args: Vec<GenericArg>, bindings: Vec<TypeBinding> },
-    Parenthesized { inputs: Vec<Type>, output: Option<Type> },
+    Parenthesized { inputs: Vec<Type>, output: Option<Box<Type>> },
 }
+
+// `GenericArgs` is in every `PathSegment`, so its size can significantly
+// affect rustdoc's memory usage.
+#[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
+rustc_data_structures::static_assert_size!(GenericArgs, 56);
 
 #[derive(Clone, PartialEq, Eq, Debug, Hash)]
 crate struct PathSegment {
     crate name: Symbol,
     crate args: GenericArgs,
 }
+
+// `PathSegment` usually occurs multiple times in every `Path`, so its size can
+// significantly affect rustdoc's memory usage.
+#[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
+rustc_data_structures::static_assert_size!(PathSegment, 64);
 
 #[derive(Clone, Debug)]
 crate struct Typedef {
