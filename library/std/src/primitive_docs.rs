@@ -388,8 +388,11 @@ mod prim_char {}
 #[stable(feature = "rust1", since = "1.0.0")]
 mod prim_unit {}
 
-#[doc(alias = "ptr")]
 #[doc(primitive = "pointer")]
+#[doc(alias = "ptr")]
+#[doc(alias = "*")]
+#[doc(alias = "*const")]
+#[doc(alias = "*mut")]
 //
 /// Raw, unsafe pointers, `*const T`, and `*mut T`.
 ///
@@ -502,10 +505,10 @@ mod prim_unit {}
 #[stable(feature = "rust1", since = "1.0.0")]
 mod prim_pointer {}
 
+#[doc(primitive = "array")]
 #[doc(alias = "[]")]
 #[doc(alias = "[T;N]")] // unfortunately, rustdoc doesn't have fuzzy search for aliases
 #[doc(alias = "[T; N]")]
-#[doc(primitive = "array")]
 /// A fixed-size array, denoted `[T; N]`, for the element type, `T`, and the
 /// non-negative compile-time constant size, `N`.
 ///
@@ -612,8 +615,7 @@ mod prim_pointer {}
 /// Starting in the 2021 edition, `array.into_iter()` uses `IntoIterator` normally to iterate
 /// by value, and `iter()` should be used to iterate by reference like previous editions.
 ///
-#[cfg_attr(bootstrap, doc = "```rust,edition2021,ignore")]
-#[cfg_attr(not(bootstrap), doc = "```rust,edition2021")]
+/// ```rust,edition2021
 /// // Rust 2021:
 ///
 /// let array: [i32; 3] = [0; 3];
