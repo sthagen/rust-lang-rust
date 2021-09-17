@@ -934,7 +934,6 @@ symbols! {
         panic_unwind,
         panicking,
         param_attrs,
-        parent_trait,
         partial_cmp,
         partial_ord,
         passes,
@@ -1359,7 +1358,6 @@ symbols! {
         unix,
         unlikely,
         unmarked_api,
-        unnamed_fields,
         unpin,
         unreachable,
         unreachable_code,
@@ -1419,6 +1417,7 @@ symbols! {
         wrapping_sub,
         wreg,
         write_bytes,
+        write_str,
         x87_reg,
         xer,
         xmm_reg,
@@ -1701,8 +1700,11 @@ impl<CTX> ToStableHashKey<CTX> for Symbol {
 // The `FxHashMap`+`Vec` pair could be replaced by `FxIndexSet`, but #75278
 // found that to regress performance up to 2% in some cases. This might be
 // revisited after further improvements to `indexmap`.
+//
+// This type is private to prevent accidentally constructing more than one `Interner` on the same
+// thread, which makes it easy to mixup `Symbol`s between `Interner`s.
 #[derive(Default)]
-pub struct Interner {
+pub(crate) struct Interner {
     arena: DroplessArena,
     names: FxHashMap<&'static str, Symbol>,
     strings: Vec<&'static str>,
