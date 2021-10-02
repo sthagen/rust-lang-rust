@@ -7,7 +7,6 @@ use crate::ich::{NodeIdHashingMode, StableHashingContext};
 use crate::infer::canonical::{Canonical, CanonicalVarInfo, CanonicalVarInfos};
 use crate::lint::{struct_lint_level, LintDiagnosticBuilder, LintLevelSource};
 use crate::middle;
-use crate::middle::cstore::EncodedMetadata;
 use crate::middle::resolve_lifetime::{self, LifetimeScopeForPath, ObjectLifetimeDefault};
 use crate::middle::stability;
 use crate::mir::interpret::{self, AllocId, Allocation, ConstValue, Scalar};
@@ -1322,11 +1321,6 @@ impl<'tcx> TyCtxt<'tcx> {
             &(format!("{:08x}", stable_crate_id.to_u64()))[..4],
             self.def_path(def_id).to_string_no_crate_verbose()
         )
-    }
-
-    pub fn encode_metadata(self) -> EncodedMetadata {
-        let _prof_timer = self.prof.verbose_generic_activity("generate_crate_metadata");
-        self.untracked_resolutions.cstore.encode_metadata(self)
     }
 
     /// Note that this is *untracked* and should only be used within the query
@@ -2706,6 +2700,29 @@ impl<'tcx> TyCtxt<'tcx> {
 
     pub fn lifetime_scope(self, id: HirId) -> Option<LifetimeScopeForPath> {
         self.lifetime_scope_map(id.owner).and_then(|mut map| map.remove(&id.local_id))
+    }
+
+    /// Whether the `def_id` counts as const fn in the current crate, considering all active
+    /// feature gates
+    pub fn is_const_fn(self, def_id: DefId) -> bool {
+        if self.is_const_fn_raw(def_id) {
+            match self.lookup_const_stability(def_id) {
+                Some(stability) if stability.level.is_unstable() => {
+                    // has a `rustc_const_unstable` attribute, check whether the user enabled the
+                    // corresponding feature gate.
+                    self.features()
+                        .declared_lib_features
+                        .iter()
+                        .any(|&(sym, _)| sym == stability.feature)
+                }
+                // functions without const stability are either stable user written
+                // const fn or the user is using feature gates and we thus don't
+                // care what they do
+                _ => true,
+            }
+        } else {
+            false
+        }
     }
 }
 

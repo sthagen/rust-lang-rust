@@ -206,11 +206,11 @@ enum ResolutionError<'a> {
     /// parameter list.
     NameAlreadyUsedInParameterList(Symbol, Span),
     /// Error E0407: method is not a member of trait.
-    MethodNotMemberOfTrait(Symbol, &'a str),
+    MethodNotMemberOfTrait(Ident, &'a str, Option<Symbol>),
     /// Error E0437: type is not a member of trait.
-    TypeNotMemberOfTrait(Symbol, &'a str),
+    TypeNotMemberOfTrait(Ident, &'a str, Option<Symbol>),
     /// Error E0438: const is not a member of trait.
-    ConstNotMemberOfTrait(Symbol, &'a str),
+    ConstNotMemberOfTrait(Ident, &'a str, Option<Symbol>),
     /// Error E0408: variable `{}` is not bound in all patterns.
     VariableNotBoundInPattern(&'a BindingError),
     /// Error E0409: variable `{}` is bound in inconsistent ways within the same match arm.
@@ -1152,7 +1152,7 @@ impl ResolverAstLowering for Resolver<'_> {
         self.legacy_const_generic_args(expr)
     }
 
-    fn get_partial_res(&mut self, id: NodeId) -> Option<PartialRes> {
+    fn get_partial_res(&self, id: NodeId) -> Option<PartialRes> {
         self.partial_res_map.get(&id).cloned()
     }
 
@@ -2969,7 +2969,15 @@ impl<'a> Resolver<'a> {
                 (None, false)
             };
             if !candidates.is_empty() {
-                diagnostics::show_candidates(&mut err, span, &candidates, instead, found_use);
+                diagnostics::show_candidates(
+                    &self.definitions,
+                    self.session,
+                    &mut err,
+                    span,
+                    &candidates,
+                    instead,
+                    found_use,
+                );
             } else if let Some((span, msg, sugg, appl)) = suggestion {
                 err.span_suggestion(span, msg, sugg, appl);
             }

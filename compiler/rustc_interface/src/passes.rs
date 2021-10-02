@@ -16,9 +16,9 @@ use rustc_hir::def_id::{StableCrateId, LOCAL_CRATE};
 use rustc_hir::Crate;
 use rustc_lint::LintStore;
 use rustc_metadata::creader::CStore;
+use rustc_metadata::{encode_metadata, EncodedMetadata};
 use rustc_middle::arena::Arena;
 use rustc_middle::dep_graph::DepGraph;
-use rustc_middle::middle;
 use rustc_middle::middle::cstore::{MetadataLoader, MetadataLoaderDyn};
 use rustc_middle::ty::query::Providers;
 use rustc_middle::ty::{self, GlobalCtxt, ResolverOutputs, TyCtxt};
@@ -886,9 +886,7 @@ fn analysis(tcx: TyCtxt<'_>, (): ()) -> Result<()> {
         parallel!(
             {
                 sess.time("match_checking", || {
-                    tcx.par_body_owners(|def_id| {
-                        tcx.ensure().check_match(def_id.to_def_id());
-                    });
+                    tcx.hir().par_body_owners(|def_id| tcx.ensure().check_match(def_id.to_def_id()))
                 });
             },
             {
@@ -907,11 +905,11 @@ fn analysis(tcx: TyCtxt<'_>, (): ()) -> Result<()> {
     });
 
     sess.time("MIR_borrow_checking", || {
-        tcx.par_body_owners(|def_id| tcx.ensure().mir_borrowck(def_id));
+        tcx.hir().par_body_owners(|def_id| tcx.ensure().mir_borrowck(def_id));
     });
 
     sess.time("MIR_effect_checking", || {
-        for def_id in tcx.body_owners() {
+        for def_id in tcx.hir().body_owners() {
             tcx.ensure().thir_check_unsafety(def_id);
             if !tcx.sess.opts.debugging_opts.thir_unsafeck {
                 rustc_mir_transform::check_unsafety::check_unsafety(tcx, def_id);
@@ -977,7 +975,7 @@ fn analysis(tcx: TyCtxt<'_>, (): ()) -> Result<()> {
 fn encode_and_write_metadata(
     tcx: TyCtxt<'_>,
     outputs: &OutputFilenames,
-) -> (middle::cstore::EncodedMetadata, bool) {
+) -> (EncodedMetadata, bool) {
     #[derive(PartialEq, Eq, PartialOrd, Ord)]
     enum MetadataKind {
         None,
@@ -1000,8 +998,8 @@ fn encode_and_write_metadata(
         .unwrap_or(MetadataKind::None);
 
     let metadata = match metadata_kind {
-        MetadataKind::None => middle::cstore::EncodedMetadata::new(),
-        MetadataKind::Uncompressed | MetadataKind::Compressed => tcx.encode_metadata(),
+        MetadataKind::None => EncodedMetadata::new(),
+        MetadataKind::Uncompressed | MetadataKind::Compressed => encode_metadata(tcx),
     };
 
     let _prof_timer = tcx.sess.prof.generic_activity("write_crate_metadata");
@@ -1020,7 +1018,7 @@ fn encode_and_write_metadata(
             .tempdir_in(out_filename.parent().unwrap())
             .unwrap_or_else(|err| tcx.sess.fatal(&format!("couldn't create a temp dir: {}", err)));
         let metadata_tmpdir = MaybeTempDir::new(metadata_tmpdir, tcx.sess.opts.cg.save_temps);
-        let metadata_filename = emit_metadata(tcx.sess, &metadata.raw_data, &metadata_tmpdir);
+        let metadata_filename = emit_metadata(tcx.sess, metadata.raw_data(), &metadata_tmpdir);
         if let Err(e) = util::non_durable_rename(&metadata_filename, &out_filename) {
             tcx.sess.fatal(&format!("failed to write {}: {}", out_filename.display(), e));
         }
