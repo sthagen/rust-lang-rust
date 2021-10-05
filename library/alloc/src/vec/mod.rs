@@ -849,7 +849,6 @@ impl<T, A: Allocator> Vec<T, A> {
     /// # Examples
     ///
     /// ```
-    /// #![feature(try_reserve)]
     /// use std::collections::TryReserveError;
     ///
     /// fn process_data(data: &[u32]) -> Result<Vec<u32>, TryReserveError> {
@@ -867,7 +866,7 @@ impl<T, A: Allocator> Vec<T, A> {
     /// }
     /// # process_data(&[1, 2, 3]).expect("why is the test harness OOMing on 12 bytes?");
     /// ```
-    #[unstable(feature = "try_reserve", reason = "new API", issue = "48043")]
+    #[stable(feature = "try_reserve", since = "1.57.0")]
     pub fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
         self.buf.try_reserve(self.len, additional)
     }
@@ -892,7 +891,6 @@ impl<T, A: Allocator> Vec<T, A> {
     /// # Examples
     ///
     /// ```
-    /// #![feature(try_reserve)]
     /// use std::collections::TryReserveError;
     ///
     /// fn process_data(data: &[u32]) -> Result<Vec<u32>, TryReserveError> {
@@ -910,7 +908,7 @@ impl<T, A: Allocator> Vec<T, A> {
     /// }
     /// # process_data(&[1, 2, 3]).expect("why is the test harness OOMing on 12 bytes?");
     /// ```
-    #[unstable(feature = "try_reserve", reason = "new API", issue = "48043")]
+    #[stable(feature = "try_reserve", since = "1.57.0")]
     pub fn try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
         self.buf.try_reserve_exact(self.len, additional)
     }
@@ -2137,6 +2135,7 @@ impl<T: Clone, A: Allocator> Vec<T, A> {
     /// in order to be able to clone the passed value.
     /// If you need more flexibility (or want to rely on [`Default`] instead of
     /// [`Clone`]), use [`Vec::resize_with`].
+    /// If you only need to resize to a smaller size, use [`Vec::truncate`].
     ///
     /// # Examples
     ///
@@ -2188,7 +2187,12 @@ impl<T: Clone, A: Allocator> Vec<T, A> {
 
     /// Copies elements from `src` range to the end of the vector.
     ///
-    /// ## Examples
+    /// # Panics
+    ///
+    /// Panics if the starting point is greater than the end point or if
+    /// the end point is greater than the length of the vector.
+    ///
+    /// # Examples
     ///
     /// ```
     /// let mut vec = vec![0, 1, 2, 3, 4];
