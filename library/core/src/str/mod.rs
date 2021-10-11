@@ -188,6 +188,7 @@ impl str {
     /// // third byte of `老`
     /// assert!(!s.is_char_boundary(8));
     /// ```
+    #[must_use]
     #[stable(feature = "is_char_boundary", since = "1.9.0")]
     #[inline]
     pub fn is_char_boundary(&self, index: usize) -> bool {
@@ -1536,7 +1537,8 @@ impl str {
     #[inline]
     pub fn split_once<'a, P: Pattern<'a>>(&'a self, delimiter: P) -> Option<(&'a str, &'a str)> {
         let (start, end) = delimiter.into_searcher(self).next_match()?;
-        Some((&self[..start], &self[end..]))
+        // SAFETY: `Searcher` is known to return valid indices.
+        unsafe { Some((self.get_unchecked(..start), self.get_unchecked(end..))) }
     }
 
     /// Splits the string on the last occurrence of the specified delimiter and
@@ -1556,7 +1558,8 @@ impl str {
         P: Pattern<'a, Searcher: ReverseSearcher<'a>>,
     {
         let (start, end) = delimiter.into_searcher(self).next_match_back()?;
-        Some((&self[..start], &self[end..]))
+        // SAFETY: `Searcher` is known to return valid indices.
+        unsafe { Some((self.get_unchecked(..start), self.get_unchecked(end..))) }
     }
 
     /// An iterator over the disjoint matches of a pattern within the given string
