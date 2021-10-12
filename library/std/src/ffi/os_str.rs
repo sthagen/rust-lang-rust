@@ -119,6 +119,7 @@ impl OsString {
     /// let os_string = OsString::new();
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
+    #[must_use]
     #[inline]
     pub fn new() -> OsString {
         OsString { inner: Buf::from_string(String::new()) }
@@ -199,6 +200,7 @@ impl OsString {
     /// assert_eq!(capacity, os_string.capacity());
     /// ```
     #[stable(feature = "osstring_simple_functions", since = "1.9.0")]
+    #[must_use]
     #[inline]
     pub fn with_capacity(capacity: usize) -> OsString {
         OsString { inner: Buf::with_capacity(capacity) }
@@ -346,6 +348,7 @@ impl OsString {
     ///
     /// let b: Box<OsStr> = s.into_boxed_os_str();
     /// ```
+    #[must_use = "`self` will be dropped if the result is not used"]
     #[stable(feature = "into_boxed_os_str", since = "1.20.0")]
     pub fn into_boxed_os_str(self) -> Box<OsStr> {
         let rw = Box::into_raw(self.inner.into_box()) as *mut OsStr;

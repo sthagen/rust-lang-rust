@@ -448,6 +448,7 @@ impl<T> Arc<T> {
     /// ```
     #[cfg(not(no_global_oom_handling))]
     #[unstable(feature = "new_uninit", issue = "63291")]
+    #[must_use]
     pub fn new_uninit() -> Arc<mem::MaybeUninit<T>> {
         unsafe {
             Arc::from_ptr(Arc::allocate_for_layout(
@@ -480,6 +481,7 @@ impl<T> Arc<T> {
     /// [zeroed]: mem::MaybeUninit::zeroed
     #[cfg(not(no_global_oom_handling))]
     #[unstable(feature = "new_uninit", issue = "63291")]
+    #[must_use]
     pub fn new_zeroed() -> Arc<mem::MaybeUninit<T>> {
         unsafe {
             Arc::from_ptr(Arc::allocate_for_layout(
@@ -494,6 +496,7 @@ impl<T> Arc<T> {
     /// `data` will be pinned in memory and unable to be moved.
     #[cfg(not(no_global_oom_handling))]
     #[stable(feature = "pin", since = "1.33.0")]
+    #[must_use]
     pub fn pin(data: T) -> Pin<Arc<T>> {
         unsafe { Pin::new_unchecked(Arc::new(data)) }
     }
@@ -662,6 +665,7 @@ impl<T> Arc<[T]> {
     /// ```
     #[cfg(not(no_global_oom_handling))]
     #[unstable(feature = "new_uninit", issue = "63291")]
+    #[must_use]
     pub fn new_uninit_slice(len: usize) -> Arc<[mem::MaybeUninit<T>]> {
         unsafe { Arc::from_ptr(Arc::allocate_for_slice(len)) }
     }
@@ -688,6 +692,7 @@ impl<T> Arc<[T]> {
     /// [zeroed]: mem::MaybeUninit::zeroed
     #[cfg(not(no_global_oom_handling))]
     #[unstable(feature = "new_uninit", issue = "63291")]
+    #[must_use]
     pub fn new_zeroed_slice(len: usize) -> Arc<[mem::MaybeUninit<T>]> {
         unsafe {
             Arc::from_ptr(Arc::allocate_for_layout(
@@ -735,6 +740,7 @@ impl<T> Arc<mem::MaybeUninit<T>> {
     /// assert_eq!(*five, 5)
     /// ```
     #[unstable(feature = "new_uninit", issue = "63291")]
+    #[must_use = "`self` will be dropped if the result is not used"]
     #[inline]
     pub unsafe fn assume_init(self) -> Arc<T> {
         Arc::from_inner(mem::ManuallyDrop::new(self).ptr.cast())
@@ -776,6 +782,7 @@ impl<T> Arc<[mem::MaybeUninit<T>]> {
     /// assert_eq!(*values, [1, 2, 3])
     /// ```
     #[unstable(feature = "new_uninit", issue = "63291")]
+    #[must_use = "`self` will be dropped if the result is not used"]
     #[inline]
     pub unsafe fn assume_init(self) -> Arc<[T]> {
         unsafe { Arc::from_ptr(mem::ManuallyDrop::new(self).ptr.as_ptr() as _) }
@@ -1678,6 +1685,7 @@ impl<T> Weak<T> {
     /// assert!(empty.upgrade().is_none());
     /// ```
     #[stable(feature = "downgraded_weak", since = "1.10.0")]
+    #[must_use]
     pub fn new() -> Weak<T> {
         Weak { ptr: NonNull::new(usize::MAX as *mut ArcInner<T>).expect("MAX is not 0") }
     }
@@ -1759,6 +1767,7 @@ impl<T: ?Sized> Weak<T> {
     ///
     /// [`from_raw`]: Weak::from_raw
     /// [`as_ptr`]: Weak::as_ptr
+    #[must_use = "`self` will be dropped if the result is not used"]
     #[stable(feature = "weak_into_raw", since = "1.45.0")]
     pub fn into_raw(self) -> *const T {
         let result = self.as_ptr();
