@@ -39,9 +39,9 @@ static FILES_UNVERSIONED: Lazy<FxHashMap<&str, &[u8]>> = Lazy::new(|| {
         "SourceCodePro-Semibold.ttf.woff" => static_files::source_code_pro::SEMIBOLD,
         "SourceCodePro-It.ttf.woff" => static_files::source_code_pro::ITALIC,
         "SourceCodePro-LICENSE.txt" => static_files::source_code_pro::LICENSE,
-        "noto-sans-kr-regular.woff2" => static_files::noto_sans_kr::REGULAR2,
-        "noto-sans-kr-regular.woff" => static_files::noto_sans_kr::REGULAR,
-        "noto-sans-kr-LICENSE.txt" => static_files::noto_sans_kr::LICENSE,
+        "NanumBarunGothic.ttf.woff2" => static_files::nanum_barun_gothic::REGULAR2,
+        "NanumBarunGothic.ttf.woff" => static_files::nanum_barun_gothic::REGULAR,
+        "NanumBarunGothic-LICENSE.txt" => static_files::nanum_barun_gothic::LICENSE,
         "LICENSE-MIT.txt" => static_files::LICENSE_MIT,
         "LICENSE-APACHE.txt" => static_files::LICENSE_APACHE,
         "COPYRIGHT.txt" => static_files::COPYRIGHT,
@@ -128,7 +128,7 @@ impl Context<'_> {
     ) -> Result<(), Error> {
         if minify {
             let contents = contents.as_ref();
-            let contents = if resource.extension() == Some(&OsStr::new("css")) {
+            let contents = if resource.extension() == Some(OsStr::new("css")) {
                 minifier::css::minify(contents).map_err(|e| {
                     Error::new(format!("failed to minify CSS file: {}", e), resource.path(self))
                 })?
@@ -301,6 +301,15 @@ pub(super) fn write_shared(
             ),
             cx,
             options,
+        )?;
+    }
+
+    if cx.shared.layout.scrape_examples_extension {
+        cx.write_minify(
+            SharedResource::InvocationSpecific { basename: "scrape-examples.js" },
+            static_files::SCRAPE_EXAMPLES_JS,
+            options.enable_minification,
+            &options.emit,
         )?;
     }
 

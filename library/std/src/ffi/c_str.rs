@@ -1171,6 +1171,7 @@ impl CStr {
     /// }
     /// # }
     /// ```
+    #[inline]
     #[must_use]
     #[stable(feature = "rust1", since = "1.0.0")]
     pub unsafe fn from_ptr<'a>(ptr: *const c_char) -> &'a CStr {
@@ -1256,7 +1257,7 @@ impl CStr {
     #[inline]
     #[must_use]
     #[stable(feature = "cstr_from_bytes", since = "1.10.0")]
-    #[rustc_const_unstable(feature = "const_cstr_unchecked", issue = "none")]
+    #[rustc_const_unstable(feature = "const_cstr_unchecked", issue = "90343")]
     pub const unsafe fn from_bytes_with_nul_unchecked(bytes: &[u8]) -> &CStr {
         // SAFETY: Casting to CStr is safe because its internal representation
         // is a [u8] too (safe only inside std).

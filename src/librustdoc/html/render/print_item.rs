@@ -21,7 +21,7 @@ use super::{
     render_impl, render_stability_since_raw, write_srclink, AssocItemLink, Context,
     ImplRenderingParameters,
 };
-use crate::clean::{self, GetDefId};
+use crate::clean;
 use crate::formats::item_type::ItemType;
 use crate::formats::{AssocItemRender, Impl, RenderMode};
 use crate::html::escape::Escape;
@@ -34,10 +34,10 @@ use crate::html::markdown::{HeadingOffset, MarkdownSummaryLine};
 
 use serde::Serialize;
 
-const ITEM_TABLE_OPEN: &'static str = "<div class=\"item-table\">";
-const ITEM_TABLE_CLOSE: &'static str = "</div>";
-const ITEM_TABLE_ROW_OPEN: &'static str = "<div class=\"item-row\">";
-const ITEM_TABLE_ROW_CLOSE: &'static str = "</div>";
+const ITEM_TABLE_OPEN: &str = "<div class=\"item-table\">";
+const ITEM_TABLE_CLOSE: &str = "</div>";
+const ITEM_TABLE_ROW_OPEN: &str = "<div class=\"item-row\">";
+const ITEM_TABLE_ROW_CLOSE: &str = "</div>";
 
 // A component in a `use` path, like `string` in std::string::ToString
 #[derive(Serialize)]
@@ -742,7 +742,7 @@ fn item_trait(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item, t: &clean::Tra
         }
 
         let (local, foreign) = implementors.iter().partition::<Vec<_>, _>(|i| {
-            i.inner_impl().for_.def_id_full(cache).map_or(true, |d| cache.paths.contains_key(&d))
+            i.inner_impl().for_.def_id(cache).map_or(true, |d| cache.paths.contains_key(&d))
         });
 
         let (mut synthetic, mut concrete): (Vec<&&Impl>, Vec<&&Impl>) =
@@ -761,7 +761,7 @@ fn item_trait(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item, t: &clean::Tra
                 render_impl(
                     w,
                     cx,
-                    &implementor,
+                    implementor,
                     it,
                     assoc_link,
                     RenderMode::Normal,
@@ -983,7 +983,7 @@ fn item_union(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item, s: &clean::Uni
             if let Some(stability_class) = field.stability_class(cx.tcx()) {
                 write!(w, "<span class=\"stab {stab}\"></span>", stab = stability_class);
             }
-            document(w, cx, field, Some(it), HeadingOffset::H2);
+            document(w, cx, field, Some(it), HeadingOffset::H3);
         }
     }
     let def_id = it.def_id.expect_def_id();
@@ -1094,7 +1094,7 @@ fn item_enum(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item, e: &clean::Enum
             w.write_str("</code>");
             render_stability_since(w, variant, it, cx.tcx());
             w.write_str("</div>");
-            document(w, cx, variant, Some(it), HeadingOffset::H2);
+            document(w, cx, variant, Some(it), HeadingOffset::H3);
             document_non_exhaustive(w, variant);
 
             use crate::clean::Variant;
@@ -1134,7 +1134,7 @@ fn item_enum(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item, e: &clean::Enum
                                 f = field.name.as_ref().unwrap(),
                                 t = ty.print(cx)
                             );
-                            document(w, cx, field, Some(variant), HeadingOffset::H2);
+                            document(w, cx, field, Some(variant), HeadingOffset::H4);
                         }
                         _ => unreachable!(),
                     }
@@ -1157,6 +1157,7 @@ fn item_macro(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item, t: &clean::Mac
             None,
             None,
             it.span(cx.tcx()).inner().edition(),
+            None,
             None,
             None,
         );
@@ -1285,7 +1286,7 @@ fn item_struct(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item, s: &clean::St
                     name = field_name,
                     ty = ty.print(cx)
                 );
-                document(w, cx, field, Some(it), HeadingOffset::H2);
+                document(w, cx, field, Some(it), HeadingOffset::H3);
             }
         }
     }
@@ -1496,7 +1497,7 @@ fn render_union(
     );
     if let Some(g) = g {
         write!(w, "{}", g.print(cx));
-        write!(w, "{}", print_where_clause(&g, cx, 0, true));
+        write!(w, "{}", print_where_clause(g, cx, 0, true));
     }
 
     write!(w, " {{\n{}", tab);
