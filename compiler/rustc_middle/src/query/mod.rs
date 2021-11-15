@@ -797,7 +797,7 @@ rustc_queries! {
     /// additional requirements that the closure's creator must verify.
     query mir_borrowck(key: LocalDefId) -> &'tcx mir::BorrowCheckResult<'tcx> {
         desc { |tcx| "borrow-checking `{}`", tcx.def_path_str(key.to_def_id()) }
-        cache_on_disk_if(tcx) { tcx.is_closure(key.to_def_id()) }
+        cache_on_disk_if(tcx) { tcx.is_typeck_child(key.to_def_id()) }
     }
     query mir_borrowck_const_arg(key: (LocalDefId, DefId)) -> &'tcx mir::BorrowCheckResult<'tcx> {
         desc {
@@ -820,6 +820,14 @@ rustc_queries! {
         -> () {
         eval_always
         desc { "check for overlap between inherent impls defined in this crate" }
+    }
+
+    /// Checks whether all impls in the crate pass the overlap check, returning
+    /// which impls fail it. If all impls are correct, the returned slice is empty.
+    query orphan_check_crate(_: ()) -> &'tcx [LocalDefId] {
+        desc {
+            "checking whether the immpl in the this crate follow the orphan rules",
+        }
     }
 
     /// Check whether the function has any recursion that could cause the inliner to trigger
@@ -1056,11 +1064,6 @@ rustc_queries! {
     }
 
     /// Return all `impl` blocks in the current crate.
-    ///
-    /// To allow caching this between crates, you must pass in [`LOCAL_CRATE`] as the crate number.
-    /// Passing in any other crate will cause an ICE.
-    ///
-    /// [`LOCAL_CRATE`]: rustc_hir::def_id::LOCAL_CRATE
     query all_local_trait_impls(_: ()) -> &'tcx BTreeMap<DefId, Vec<LocalDefId>> {
         desc { "local trait impls" }
     }

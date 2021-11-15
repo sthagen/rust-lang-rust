@@ -36,8 +36,8 @@ use std::hash::Hash;
 use std::{mem, vec};
 
 use crate::core::{self, DocContext, ImplTraitParam};
-use crate::doctree;
 use crate::formats::item_type::ItemType;
+use crate::visit_ast::Module as DocModule;
 
 use utils::*;
 
@@ -54,7 +54,7 @@ crate trait Clean<T> {
     fn clean(&self, cx: &mut DocContext<'_>) -> T;
 }
 
-impl Clean<Item> for doctree::Module<'_> {
+impl Clean<Item> for DocModule<'_> {
     fn clean(&self, cx: &mut DocContext<'_>) -> Item {
         let mut items: Vec<Item> = vec![];
         items.extend(self.foreigns.iter().map(|x| x.clean(cx)));
@@ -190,7 +190,7 @@ impl Clean<Lifetime> for hir::Lifetime {
             | rl::Region::Free(_, node_id),
         ) = def
         {
-            if let Some(lt) = cx.lt_substs.get(&node_id).cloned() {
+            if let Some(lt) = cx.substs.get(&node_id).and_then(|p| p.as_lt()).cloned() {
                 return lt;
             }
         }
@@ -1120,7 +1120,6 @@ impl Clean<Item> for ty::AssocItem {
 }
 
 fn clean_qpath(hir_ty: &hir::Ty<'_>, cx: &mut DocContext<'_>) -> Type {
-    use rustc_hir::GenericParamCount;
     let hir::Ty { hir_id: _, span, ref kind } = *hir_ty;
     let qpath = match kind {
         hir::TyKind::Path(qpath) => qpath,
@@ -1130,7 +1129,7 @@ fn clean_qpath(hir_ty: &hir::Ty<'_>, cx: &mut DocContext<'_>) -> Type {
     match qpath {
         hir::QPath::Resolved(None, ref path) => {
             if let Res::Def(DefKind::TyParam, did) = path.res {
-                if let Some(new_ty) = cx.ty_substs.get(&did).cloned() {
+                if let Some(new_ty) = cx.substs.get(&did).and_then(|p| p.as_ty()).cloned() {
                     return new_ty;
                 }
                 if let Some(bounds) = cx.impl_trait_bounds.remove(&did.into()) {
@@ -1138,97 +1137,12 @@ fn clean_qpath(hir_ty: &hir::Ty<'_>, cx: &mut DocContext<'_>) -> Type {
                 }
             }
 
-            let mut alias = None;
-            if let Res::Def(DefKind::TyAlias, def_id) = path.res {
-                // Substitute private type aliases
-                if let Some(def_id) = def_id.as_local() {
-                    let hir_id = cx.tcx.hir().local_def_id_to_hir_id(def_id);
-                    if !cx.cache.access_levels.is_exported(def_id.to_def_id()) {
-                        alias = Some(&cx.tcx.hir().expect_item(hir_id).kind);
-                    }
-                }
-            };
-
-            if let Some(&hir::ItemKind::TyAlias(ref ty, ref generics)) = alias {
-                let provided_params = &path.segments.last().expect("segments were empty");
-                let mut ty_substs = FxHashMap::default();
-                let mut lt_substs = FxHashMap::default();
-                let mut ct_substs = FxHashMap::default();
-                let generic_args = provided_params.args();
-                {
-                    let mut indices: GenericParamCount = Default::default();
-                    for param in generics.params.iter() {
-                        match param.kind {
-                            hir::GenericParamKind::Lifetime { .. } => {
-                                let mut j = 0;
-                                let lifetime = generic_args.args.iter().find_map(|arg| match arg {
-                                    hir::GenericArg::Lifetime(lt) => {
-                                        if indices.lifetimes == j {
-                                            return Some(lt);
-                                        }
-                                        j += 1;
-                                        None
-                                    }
-                                    _ => None,
-                                });
-                                if let Some(lt) = lifetime.cloned() {
-                                    let lt_def_id = cx.tcx.hir().local_def_id(param.hir_id);
-                                    let cleaned = if !lt.is_elided() {
-                                        lt.clean(cx)
-                                    } else {
-                                        self::types::Lifetime::elided()
-                                    };
-                                    lt_substs.insert(lt_def_id.to_def_id(), cleaned);
-                                }
-                                indices.lifetimes += 1;
-                            }
-                            hir::GenericParamKind::Type { ref default, .. } => {
-                                let ty_param_def_id = cx.tcx.hir().local_def_id(param.hir_id);
-                                let mut j = 0;
-                                let type_ = generic_args.args.iter().find_map(|arg| match arg {
-                                    hir::GenericArg::Type(ty) => {
-                                        if indices.types == j {
-                                            return Some(ty);
-                                        }
-                                        j += 1;
-                                        None
-                                    }
-                                    _ => None,
-                                });
-                                if let Some(ty) = type_ {
-                                    ty_substs.insert(ty_param_def_id.to_def_id(), ty.clean(cx));
-                                } else if let Some(default) = *default {
-                                    ty_substs
-                                        .insert(ty_param_def_id.to_def_id(), default.clean(cx));
-                                }
-                                indices.types += 1;
-                            }
-                            hir::GenericParamKind::Const { .. } => {
-                                let const_param_def_id = cx.tcx.hir().local_def_id(param.hir_id);
-                                let mut j = 0;
-                                let const_ = generic_args.args.iter().find_map(|arg| match arg {
-                                    hir::GenericArg::Const(ct) => {
-                                        if indices.consts == j {
-                                            return Some(ct);
-                                        }
-                                        j += 1;
-                                        None
-                                    }
-                                    _ => None,
-                                });
-                                if let Some(ct) = const_ {
-                                    ct_substs.insert(const_param_def_id.to_def_id(), ct.clean(cx));
-                                }
-                                // FIXME(const_generics_defaults)
-                                indices.consts += 1;
-                            }
-                        }
-                    }
-                }
-                return cx.enter_alias(ty_substs, lt_substs, ct_substs, |cx| ty.clean(cx));
+            if let Some(expanded) = maybe_expand_private_type_alias(cx, path) {
+                expanded
+            } else {
+                let path = path.clean(cx);
+                resolve_type(cx, path)
             }
-            let path = path.clean(cx);
-            resolve_type(cx, path)
         }
         hir::QPath::Resolved(Some(ref qself), p) => {
             // Try to normalize `<X as Y>::T` to a type
@@ -1270,6 +1184,94 @@ fn clean_qpath(hir_ty: &hir::Ty<'_>, cx: &mut DocContext<'_>) -> Type {
         }
         hir::QPath::LangItem(..) => bug!("clean: requiring documentation of lang item"),
     }
+}
+
+fn maybe_expand_private_type_alias(cx: &mut DocContext<'_>, path: &hir::Path<'_>) -> Option<Type> {
+    let Res::Def(DefKind::TyAlias, def_id) = path.res else { return None };
+    // Substitute private type aliases
+    let Some(def_id) = def_id.as_local() else { return None };
+    let hir_id = cx.tcx.hir().local_def_id_to_hir_id(def_id);
+    let alias = if !cx.cache.access_levels.is_exported(def_id.to_def_id()) {
+        &cx.tcx.hir().expect_item(hir_id).kind
+    } else {
+        return None;
+    };
+    let hir::ItemKind::TyAlias(ty, generics) = alias else { return None };
+
+    let provided_params = &path.segments.last().expect("segments were empty");
+    let mut substs = FxHashMap::default();
+    let generic_args = provided_params.args();
+
+    let mut indices: hir::GenericParamCount = Default::default();
+    for param in generics.params.iter() {
+        match param.kind {
+            hir::GenericParamKind::Lifetime { .. } => {
+                let mut j = 0;
+                let lifetime = generic_args.args.iter().find_map(|arg| match arg {
+                    hir::GenericArg::Lifetime(lt) => {
+                        if indices.lifetimes == j {
+                            return Some(lt);
+                        }
+                        j += 1;
+                        None
+                    }
+                    _ => None,
+                });
+                if let Some(lt) = lifetime.cloned() {
+                    let lt_def_id = cx.tcx.hir().local_def_id(param.hir_id);
+                    let cleaned = if !lt.is_elided() {
+                        lt.clean(cx)
+                    } else {
+                        self::types::Lifetime::elided()
+                    };
+                    substs.insert(lt_def_id.to_def_id(), SubstParam::Lifetime(cleaned));
+                }
+                indices.lifetimes += 1;
+            }
+            hir::GenericParamKind::Type { ref default, .. } => {
+                let ty_param_def_id = cx.tcx.hir().local_def_id(param.hir_id);
+                let mut j = 0;
+                let type_ = generic_args.args.iter().find_map(|arg| match arg {
+                    hir::GenericArg::Type(ty) => {
+                        if indices.types == j {
+                            return Some(ty);
+                        }
+                        j += 1;
+                        None
+                    }
+                    _ => None,
+                });
+                if let Some(ty) = type_ {
+                    substs.insert(ty_param_def_id.to_def_id(), SubstParam::Type(ty.clean(cx)));
+                } else if let Some(default) = *default {
+                    substs.insert(ty_param_def_id.to_def_id(), SubstParam::Type(default.clean(cx)));
+                }
+                indices.types += 1;
+            }
+            hir::GenericParamKind::Const { .. } => {
+                let const_param_def_id = cx.tcx.hir().local_def_id(param.hir_id);
+                let mut j = 0;
+                let const_ = generic_args.args.iter().find_map(|arg| match arg {
+                    hir::GenericArg::Const(ct) => {
+                        if indices.consts == j {
+                            return Some(ct);
+                        }
+                        j += 1;
+                        None
+                    }
+                    _ => None,
+                });
+                if let Some(ct) = const_ {
+                    substs
+                        .insert(const_param_def_id.to_def_id(), SubstParam::Constant(ct.clean(cx)));
+                }
+                // FIXME(const_generics_defaults)
+                indices.consts += 1;
+            }
+        }
+    }
+
+    Some(cx.enter_alias(substs, |cx| ty.clean(cx)))
 }
 
 impl Clean<Type> for hir::Ty<'_> {
@@ -1879,7 +1881,7 @@ fn clean_extern_crate(
     // this is the ID of the crate itself
     let crate_def_id = DefId { krate: cnum, index: CRATE_DEF_INDEX };
     let attrs = cx.tcx.hir().attrs(krate.hir_id());
-    let please_inline = krate.vis.node.is_pub()
+    let please_inline = cx.tcx.visibility(krate.def_id).is_public()
         && attrs.iter().any(|a| {
             a.has_name(sym::doc)
                 && match a.meta_item_list() {
@@ -1931,9 +1933,12 @@ fn clean_use_statement(
         return Vec::new();
     }
 
+    let visibility = cx.tcx.visibility(import.def_id);
     let attrs = cx.tcx.hir().attrs(import.hir_id());
     let inline_attr = attrs.lists(sym::doc).get_word_attr(sym::inline);
-    let pub_underscore = import.vis.node.is_pub() && name == kw::Underscore;
+    let pub_underscore = visibility.is_public() && name == kw::Underscore;
+    let current_mod = cx.tcx.parent_module_from_def_id(import.def_id);
+    let parent_mod = cx.tcx.parent_module_from_def_id(current_mod);
 
     if pub_underscore {
         if let Some(ref inline) = inline_attr {
@@ -1952,8 +1957,9 @@ fn clean_use_statement(
     // forcefully don't inline if this is not public or if the
     // #[doc(no_inline)] attribute is present.
     // Don't inline doc(hidden) imports so they can be stripped at a later stage.
-    let mut denied = !(import.vis.node.is_pub()
-        || (cx.render_options.document_private && import.vis.node.is_pub_restricted()))
+    let mut denied = !(visibility.is_public()
+        || (cx.render_options.document_private
+            && visibility.is_accessible_from(parent_mod.to_def_id(), cx.tcx)))
         || pub_underscore
         || attrs.iter().any(|a| {
             a.has_name(sym::doc)

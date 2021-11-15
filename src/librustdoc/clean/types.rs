@@ -254,7 +254,7 @@ impl ExternalCrate {
                             as_keyword(Res::Def(DefKind::Mod, id.def_id.to_def_id()))
                         }
                         hir::ItemKind::Use(path, hir::UseKind::Single)
-                            if item.vis.node.is_pub() =>
+                            if tcx.visibility(id.def_id).is_public() =>
                         {
                             as_keyword(path.res.expect_non_local())
                                 .map(|(_, prim)| (id.def_id.to_def_id(), prim))
@@ -320,7 +320,7 @@ impl ExternalCrate {
                             as_primitive(Res::Def(DefKind::Mod, id.def_id.to_def_id()))
                         }
                         hir::ItemKind::Use(path, hir::UseKind::Single)
-                            if item.vis.node.is_pub() =>
+                            if tcx.visibility(id.def_id).is_public() =>
                         {
                             as_primitive(path.res.expect_non_local()).map(|(_, prim)| {
                                 // Pretend the primitive is local.
@@ -2277,5 +2277,34 @@ impl TypeBinding {
             TypeBindingKind::Equality { ref ty } => ty,
             _ => panic!("expected equality type binding for parenthesized generic args"),
         }
+    }
+}
+
+/// The type, lifetime, or constant that a private type alias's parameter should be
+/// replaced with when expanding a use of that type alias.
+///
+/// For example:
+///
+/// ```
+/// type PrivAlias<T> = Vec<T>;
+///
+/// pub fn public_fn() -> PrivAlias<i32> { vec![] }
+/// ```
+///
+/// `public_fn`'s docs will show it as returning `Vec<i32>`, since `PrivAlias` is private.
+/// [`SubstParam`] is used to record that `T` should be mapped to `i32`.
+crate enum SubstParam {
+    Type(Type),
+    Lifetime(Lifetime),
+    Constant(Constant),
+}
+
+impl SubstParam {
+    crate fn as_ty(&self) -> Option<&Type> {
+        if let Self::Type(ty) = self { Some(ty) } else { None }
+    }
+
+    crate fn as_lt(&self) -> Option<&Lifetime> {
+        if let Self::Lifetime(lt) = self { Some(lt) } else { None }
     }
 }
