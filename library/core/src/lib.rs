@@ -97,6 +97,7 @@
 #![allow(explicit_outlives_requirements)]
 //
 // Library features for const fns:
+#![feature(const_align_offset)]
 #![feature(const_align_of_val)]
 #![feature(const_alloc_layout)]
 #![feature(const_arguments_as_str)]
@@ -104,6 +105,7 @@
 #![feature(const_bigint_helper_methods)]
 #![feature(const_caller_location)]
 #![feature(const_cell_into_inner)]
+#![feature(const_char_convert)]
 #![feature(const_discriminant)]
 #![feature(const_eval_select)]
 #![feature(const_float_bits_conv)]
@@ -130,6 +132,7 @@
 #![feature(const_size_of_val)]
 #![feature(const_slice_from_raw_parts)]
 #![feature(const_slice_ptr_len)]
+#![feature(const_str_from_utf8_unchecked_mut)]
 #![feature(const_swap)]
 #![feature(const_trait_impl)]
 #![feature(const_type_id)]
@@ -138,6 +141,7 @@
 #![feature(duration_consts_2)]
 #![feature(ptr_metadata)]
 #![feature(slice_ptr_get)]
+#![feature(str_internals)]
 #![feature(variant_count)]
 #![feature(const_array_from_ref)]
 #![feature(const_slice_from_ref)]
@@ -402,11 +406,13 @@ pub mod arch {
 #[allow(missing_debug_implementations, dead_code, unsafe_op_in_unsafe_fn, unused_unsafe)]
 #[allow(rustdoc::bare_urls)]
 #[unstable(feature = "portable_simd", issue = "86656")]
+#[cfg(not(all(miri, doctest)))] // Miri does not support all SIMD intrinsics
 #[cfg(not(bootstrap))]
 mod core_simd;
 
 #[doc = include_str!("../../portable-simd/crates/core_simd/src/core_simd_docs.md")]
 #[unstable(feature = "portable_simd", issue = "86656")]
+#[cfg(not(all(miri, doctest)))] // Miri does not support all SIMD intrinsics
 #[cfg(not(bootstrap))]
 pub mod simd {
     #[unstable(feature = "portable_simd", issue = "86656")]

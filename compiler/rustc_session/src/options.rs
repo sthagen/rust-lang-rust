@@ -4,7 +4,6 @@ use crate::early_error;
 use crate::lint;
 use crate::search_paths::SearchPath;
 use crate::utils::NativeLib;
-
 use rustc_target::spec::{CodeModel, LinkerFlavor, MergeFunctions, PanicStrategy, SanitizerSet};
 use rustc_target::spec::{RelocModel, RelroLevel, SplitDebuginfo, TargetTriple, TlsModel};
 
@@ -150,6 +149,7 @@ top_level_options!(
         /// If `Some`, enable incremental compilation, using the given
         /// directory to store intermediate results.
         incremental: Option<PathBuf> [UNTRACKED],
+        assert_incr_state: Option<IncrementalStateAssertion> [UNTRACKED],
 
         debugging_opts: DebuggingOptions [SUBSTRUCT],
         prints: Vec<PrintRequest> [UNTRACKED],
@@ -219,7 +219,7 @@ top_level_options!(
 /// generated code to parse an option into its respective field in the struct. There are a few
 /// hand-written parsers for parsing specific types of values in this module.
 macro_rules! options {
-    ($struct_name:ident, $stat:ident, $prefix:expr, $outputname:expr,
+    ($struct_name:ident, $stat:ident, $optmod:ident, $prefix:expr, $outputname:expr,
      $($( #[$attr:meta] )* $opt:ident : $t:ty = (
         $init:expr,
         $parse:ident,
@@ -264,13 +264,15 @@ macro_rules! options {
     }
 
     pub const $stat: OptionDescrs<$struct_name> =
-        &[ $( (stringify!($opt), $opt, desc::$parse, $desc) ),* ];
+        &[ $( (stringify!($opt), $optmod::$opt, desc::$parse, $desc) ),* ];
 
+    mod $optmod {
     $(
-        fn $opt(cg: &mut $struct_name, v: Option<&str>) -> bool {
-            parse::$parse(&mut redirect_field!(cg.$opt), v)
+        pub(super) fn $opt(cg: &mut super::$struct_name, v: Option<&str>) -> bool {
+            super::parse::$parse(&mut redirect_field!(cg.$opt), v)
         }
     )*
+    }
 
 ) }
 
@@ -918,7 +920,7 @@ mod parse {
 }
 
 options! {
-    CodegenOptions, CG_OPTIONS, "C", "codegen",
+    CodegenOptions, CG_OPTIONS, cgopts, "C", "codegen",
 
     // This list is in alphabetical order.
     //
@@ -1013,6 +1015,8 @@ options! {
         "use soft float ABI (*eabihf targets only) (default: no)"),
     split_debuginfo: Option<SplitDebuginfo> = (None, parse_split_debuginfo, [TRACKED],
         "how to handle split-debuginfo, a platform-specific option"),
+    strip: Strip = (Strip::None, parse_strip, [UNTRACKED],
+        "tell the linker which information to strip (`none` (default), `debuginfo` or `symbols`)"),
     target_cpu: Option<String> = (None, parse_opt_string, [TRACKED],
         "select target processor (`rustc --print target-cpus` for details)"),
     target_feature: String = (String::new(), parse_target_feature, [TRACKED],
@@ -1027,7 +1031,7 @@ options! {
 }
 
 options! {
-    DebuggingOptions, DB_OPTIONS, "Z", "debugging",
+    DebuggingOptions, DB_OPTIONS, dbopts, "Z", "debugging",
 
     // This list is in alphabetical order.
     //
@@ -1042,6 +1046,9 @@ options! {
         "make cfg(version) treat the current version as incomplete (default: no)"),
     asm_comments: bool = (false, parse_bool, [TRACKED],
         "generate comments into the assembly (may change behavior) (default: no)"),
+    assert_incr_state: Option<String> = (None, parse_opt_string, [UNTRACKED],
+        "assert that the incremental cache is in given state: \
+         either `loaded` or `not-loaded`."),
     ast_json: bool = (false, parse_bool, [UNTRACKED],
         "print the AST as JSON and halt (default: no)"),
     ast_json_noexpand: bool = (false, parse_bool, [UNTRACKED],
@@ -1233,6 +1240,8 @@ options! {
         and set the maximum total size of a const allocation for which this is allowed (default: never)"),
     perf_stats: bool = (false, parse_bool, [UNTRACKED],
         "print some performance-related statistics (default: no)"),
+    pick_stable_methods_before_any_unstable: bool = (true, parse_bool, [TRACKED],
+        "try to pick stable methods first before picking any unstable methods (default: yes)"),
     plt: Option<bool> = (None, parse_opt_bool, [TRACKED],
         "whether to use the PLT when calling into shared libraries;
         only has effect for PIC code on systems with ELF binaries

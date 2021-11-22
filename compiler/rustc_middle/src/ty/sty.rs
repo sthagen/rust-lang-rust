@@ -1805,10 +1805,13 @@ impl<'tcx> TyS<'tcx> {
     pub fn simd_size_and_type(&self, tcx: TyCtxt<'tcx>) -> (u64, Ty<'tcx>) {
         match self.kind() {
             Adt(def, substs) => {
+                assert!(def.repr.simd(), "`simd_size_and_type` called on non-SIMD type");
                 let variant = def.non_enum_variant();
                 let f0_ty = variant.fields[0].ty(tcx, substs);
 
                 match f0_ty.kind() {
+                    // If the first field is an array, we assume it is the only field and its
+                    // elements are the SIMD components.
                     Array(f0_elem_ty, f0_len) => {
                         // FIXME(repr_simd): https://github.com/rust-lang/rust/pull/78863#discussion_r522784112
                         // The way we evaluate the `N` in `[T; N]` here only works since we use
@@ -1816,6 +1819,8 @@ impl<'tcx> TyS<'tcx> {
                         // if we use it in generic code. See the `simd-array-trait` ui test.
                         (f0_len.eval_usize(tcx, ParamEnv::empty()) as u64, f0_elem_ty)
                     }
+                    // Otherwise, the fields of this Adt are the SIMD components (and we assume they
+                    // all have the same type).
                     _ => (variant.fields.len() as u64, f0_ty),
                 }
             }
@@ -2067,7 +2072,9 @@ impl<'tcx> TyS<'tcx> {
     ) -> Option<Discr<'tcx>> {
         match self.kind() {
             TyKind::Adt(adt, _) if adt.variants.is_empty() => {
-                bug!("discriminant_for_variant called on zero variant enum");
+                // This can actually happen during CTFE, see
+                // https://github.com/rust-lang/rust/issues/89765.
+                None
             }
             TyKind::Adt(adt, _) if adt.is_enum() => {
                 Some(adt.discriminant_for_variant(tcx, variant_index))
@@ -2086,10 +2093,10 @@ impl<'tcx> TyS<'tcx> {
             ty::Generator(_, substs, _) => substs.as_generator().discr_ty(tcx),
 
             ty::Param(_) | ty::Projection(_) | ty::Opaque(..) | ty::Infer(ty::TyVar(_)) => {
-                let assoc_items =
-                    tcx.associated_items(tcx.lang_items().discriminant_kind_trait().unwrap());
-                let discriminant_def_id = assoc_items.in_definition_order().next().unwrap().def_id;
-                tcx.mk_projection(discriminant_def_id, tcx.mk_substs([self.into()].iter()))
+                let assoc_items = tcx.associated_item_def_ids(
+                    tcx.require_lang_item(hir::LangItem::DiscriminantKind, None),
+                );
+                tcx.mk_projection(assoc_items[0], tcx.intern_substs(&[self.into()]))
             }
 
             ty::Bool

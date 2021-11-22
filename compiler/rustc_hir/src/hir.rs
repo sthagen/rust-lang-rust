@@ -504,7 +504,7 @@ pub enum GenericParamKind<'hir> {
     },
     Type {
         default: Option<&'hir Ty<'hir>>,
-        synthetic: Option<SyntheticTyParamKind>,
+        synthetic: bool,
     },
     Const {
         ty: &'hir Ty<'hir>,
@@ -577,16 +577,6 @@ impl Generics<'hir> {
     }
 }
 
-/// Synthetic type parameters are converted to another form during lowering; this allows
-/// us to track the original form they had, and is useful for error messages.
-#[derive(Copy, Clone, PartialEq, Eq, Encodable, Decodable, Hash, Debug)]
-#[derive(HashStable_Generic)]
-pub enum SyntheticTyParamKind {
-    ImplTrait,
-    // Created by the `#[rustc_synthetic]` attribute.
-    FromAttr,
-}
-
 /// A where-clause in a definition.
 #[derive(Debug, HashStable_Generic)]
 pub struct WhereClause<'hir> {
@@ -645,6 +635,22 @@ pub struct WhereBoundPredicate<'hir> {
     pub bounded_ty: &'hir Ty<'hir>,
     /// Trait and lifetime bounds (e.g., `Clone + Send + 'static`).
     pub bounds: GenericBounds<'hir>,
+}
+
+impl WhereBoundPredicate<'hir> {
+    /// Returns `true` if `param_def_id` matches the `bounded_ty` of this predicate.
+    pub fn is_param_bound(&self, param_def_id: DefId) -> bool {
+        let path = match self.bounded_ty.kind {
+            TyKind::Path(QPath::Resolved(None, path)) => path,
+            _ => return false,
+        };
+        match path.res {
+            Res::Def(DefKind::TyParam, def_id) | Res::SelfTy(Some(def_id), None) => {
+                def_id == param_def_id
+            }
+            _ => false,
+        }
+    }
 }
 
 /// A lifetime predicate (e.g., `'a: 'b + 'c`).
@@ -1815,8 +1821,6 @@ impl<'hir> QPath<'hir> {
 pub enum LocalSource {
     /// A `match _ { .. }`.
     Normal,
-    /// A desugared `for _ in _ { .. }` loop.
-    ForLoopDesugar,
     /// When lowering async functions, we create locals within the `async move` so that
     /// all parameters are dropped after the future is polled.
     ///

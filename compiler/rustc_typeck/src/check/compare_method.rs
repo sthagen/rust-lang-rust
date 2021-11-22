@@ -210,12 +210,8 @@ fn compare_predicate_entailment<'tcx>(
     let normalize_cause = traits::ObligationCause::misc(impl_m_span, impl_m_hir_id);
     let param_env =
         ty::ParamEnv::new(tcx.intern_predicates(&hybrid_preds.predicates), Reveal::UserFacing);
-    let param_env = traits::normalize_param_env_or_error(
-        tcx,
-        impl_m.def_id,
-        param_env,
-        normalize_cause.clone(),
-    );
+    let param_env =
+        traits::normalize_param_env_or_error(tcx, impl_m.def_id, param_env, normalize_cause);
 
     tcx.infer_ctxt().enter(|infcx| {
         let inh = Inherited::new(infcx, impl_m.def_id.expect_local());
@@ -226,12 +222,15 @@ fn compare_predicate_entailment<'tcx>(
         let mut selcx = traits::SelectionContext::new(&infcx);
 
         let impl_m_own_bounds = impl_m_predicates.instantiate_own(tcx, impl_to_placeholder_substs);
-        for predicate in impl_m_own_bounds.predicates {
+        for (predicate, span) in iter::zip(impl_m_own_bounds.predicates, impl_m_own_bounds.spans) {
+            let normalize_cause = traits::ObligationCause::misc(span, impl_m_hir_id);
             let traits::Normalized { value: predicate, obligations } =
-                traits::normalize(&mut selcx, param_env, normalize_cause.clone(), predicate);
+                traits::normalize(&mut selcx, param_env, normalize_cause, predicate);
 
             inh.register_predicates(obligations);
-            inh.register_predicate(traits::Obligation::new(cause.clone(), param_env, predicate));
+            let mut cause = cause.clone();
+            cause.make_mut().span = span;
+            inh.register_predicate(traits::Obligation::new(cause, param_env, predicate));
         }
 
         // We now need to check that the signature of the impl method is
@@ -280,6 +279,12 @@ fn compare_predicate_entailment<'tcx>(
 
         let sub_result = infcx.at(&cause, param_env).sup(trait_fty, impl_fty).map(
             |InferOk { obligations, .. }| {
+                // FIXME: We'd want to keep more accurate spans than "the method signature" when
+                // processing the comparison between the trait and impl fn, but we sadly lose them
+                // and point at the whole signature when a trait bound or specific input or output
+                // type would be more appropriate. In other places we have a `Vec<Span>`
+                // corresponding to their `Vec<Predicate>`, but we don't have that here.
+                // Fixing this would improve the output of test `issue-83765.rs`.
                 inh.register_predicates(obligations);
             },
         );
@@ -607,10 +612,7 @@ fn compare_number_of_generics<'tcx>(
                         .params
                         .iter()
                         .filter_map(|p| match p.kind {
-                            GenericParamKind::Type {
-                                synthetic: Some(hir::SyntheticTyParamKind::ImplTrait),
-                                ..
-                            } => Some(p.span),
+                            GenericParamKind::Type { synthetic: true, .. } => Some(p.span),
                             _ => None,
                         })
                         .collect();
@@ -627,10 +629,7 @@ fn compare_number_of_generics<'tcx>(
                 .params
                 .iter()
                 .filter_map(|p| match p.kind {
-                    GenericParamKind::Type {
-                        synthetic: Some(hir::SyntheticTyParamKind::ImplTrait),
-                        ..
-                    } => Some(p.span),
+                    GenericParamKind::Type { synthetic: true, .. } => Some(p.span),
                     _ => None,
                 })
                 .collect();
@@ -823,7 +822,7 @@ fn compare_synthetic_generics<'tcx>(
             match (impl_synthetic, trait_synthetic) {
                 // The case where the impl method uses `impl Trait` but the trait method uses
                 // explicit generics
-                (Some(hir::SyntheticTyParamKind::ImplTrait), None) => {
+                (true, false) => {
                     err.span_label(impl_span, "expected generic parameter, found `impl Trait`");
                     (|| {
                         // try taking the name from the trait impl
@@ -864,7 +863,7 @@ fn compare_synthetic_generics<'tcx>(
                 }
                 // The case where the trait method uses `impl Trait`, but the impl method uses
                 // explicit generics.
-                (None, Some(hir::SyntheticTyParamKind::ImplTrait)) => {
+                (false, true) => {
                     err.span_label(impl_span, "expected `impl Trait`, found generic parameter");
                     (|| {
                         let impl_m = impl_m.def_id.as_local()?;
@@ -1391,12 +1390,13 @@ pub fn check_type_bounds<'tcx>(
 
         let impl_ty_hir_id = tcx.hir().local_def_id_to_hir_id(impl_ty.def_id.expect_local());
         let normalize_cause = traits::ObligationCause::misc(impl_ty_span, impl_ty_hir_id);
-        let mk_cause = |span| {
-            ObligationCause::new(
-                impl_ty_span,
-                impl_ty_hir_id,
-                ObligationCauseCode::BindingObligation(trait_ty.def_id, span),
-            )
+        let mk_cause = |span: Span| {
+            let code = if span.is_dummy() {
+                traits::MiscObligation
+            } else {
+                traits::BindingObligation(trait_ty.def_id, span)
+            };
+            ObligationCause::new(impl_ty_span, impl_ty_hir_id, code)
         };
 
         let obligations = tcx
