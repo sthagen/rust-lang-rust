@@ -335,20 +335,15 @@ impl Default for ErrorOutputType {
 }
 
 /// Parameter to control path trimming.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum TrimmedDefPaths {
     /// `try_print_trimmed_def_path` never prints a trimmed path and never calls the expensive query
+    #[default]
     Never,
     /// `try_print_trimmed_def_path` calls the expensive query, the query doesn't call `delay_good_path_bug`
     Always,
     /// `try_print_trimmed_def_path` calls the expensive query, the query calls `delay_good_path_bug`
     GoodPath,
-}
-
-impl Default for TrimmedDefPaths {
-    fn default() -> Self {
-        Self::Never
-    }
 }
 
 /// Use tree-based collections to cheaply get a deterministic `Hash` implementation.
@@ -538,6 +533,7 @@ pub enum PrintRequest {
     TlsModels,
     TargetSpec,
     NativeStaticLibs,
+    StackProtectorStrategies,
 }
 
 #[derive(Copy, Clone)]
@@ -1110,8 +1106,8 @@ pub fn rustc_short_optgroups() -> Vec<RustcOptGroup> {
             "print",
             "Compiler information to print on stdout",
             "[crate-name|file-names|sysroot|target-libdir|cfg|target-list|\
-             target-cpus|target-features|relocation-models|\
-             code-models|tls-models|target-spec-json|native-static-libs]",
+             target-cpus|target-features|relocation-models|code-models|\
+             tls-models|target-spec-json|native-static-libs|stack-protector-strategies]",
         ),
         opt::flagmulti_s("g", "", "Equivalent to -C debuginfo=2"),
         opt::flagmulti_s("O", "", "Equivalent to -C opt-level=2"),
@@ -1527,6 +1523,7 @@ fn collect_print_requests(
         "code-models" => PrintRequest::CodeModels,
         "tls-models" => PrintRequest::TlsModels,
         "native-static-libs" => PrintRequest::NativeStaticLibs,
+        "stack-protector-strategies" => PrintRequest::StackProtectorStrategies,
         "target-spec-json" => {
             if dopts.unstable_options {
                 PrintRequest::TargetSpec
@@ -2494,7 +2491,9 @@ crate mod dep_tracking {
     use rustc_span::edition::Edition;
     use rustc_span::RealFileName;
     use rustc_target::spec::{CodeModel, MergeFunctions, PanicStrategy, RelocModel};
-    use rustc_target::spec::{RelroLevel, SanitizerSet, SplitDebuginfo, TargetTriple, TlsModel};
+    use rustc_target::spec::{
+        RelroLevel, SanitizerSet, SplitDebuginfo, StackProtector, TargetTriple, TlsModel,
+    };
     use std::collections::hash_map::DefaultHasher;
     use std::collections::BTreeMap;
     use std::hash::Hash;
@@ -2568,6 +2567,7 @@ crate mod dep_tracking {
         Edition,
         LinkerPluginLto,
         SplitDebuginfo,
+        StackProtector,
         SwitchWithOptPath,
         SymbolManglingVersion,
         SourceFileHashAlgorithm,
