@@ -92,7 +92,9 @@ pub enum LifetimeName {
     Param(ParamName),
 
     /// User wrote nothing (e.g., the lifetime in `&u32`).
-    Implicit,
+    ///
+    /// The bool indicates whether the user should have written something.
+    Implicit(bool),
 
     /// Implicit lifetime in a context like `dyn Foo`. This is
     /// distinguished from implicit lifetimes elsewhere because the
@@ -122,7 +124,7 @@ impl LifetimeName {
     pub fn ident(&self) -> Ident {
         match *self {
             LifetimeName::ImplicitObjectLifetimeDefault
-            | LifetimeName::Implicit
+            | LifetimeName::Implicit(_)
             | LifetimeName::Error => Ident::empty(),
             LifetimeName::Underscore => Ident::with_dummy_span(kw::UnderscoreLifetime),
             LifetimeName::Static => Ident::with_dummy_span(kw::StaticLifetime),
@@ -133,7 +135,7 @@ impl LifetimeName {
     pub fn is_elided(&self) -> bool {
         match self {
             LifetimeName::ImplicitObjectLifetimeDefault
-            | LifetimeName::Implicit
+            | LifetimeName::Implicit(_)
             | LifetimeName::Underscore => true,
 
             // It might seem surprising that `Fresh(_)` counts as
@@ -3228,31 +3230,6 @@ impl<'hir> Node<'hir> {
         }
     }
 
-    /// Returns `Constness::Const` when this node is a const fn/impl/item.
-    pub fn constness_for_typeck(&self) -> Constness {
-        match self {
-            Node::Item(Item {
-                kind: ItemKind::Fn(FnSig { header: FnHeader { constness, .. }, .. }, ..),
-                ..
-            })
-            | Node::TraitItem(TraitItem {
-                kind: TraitItemKind::Fn(FnSig { header: FnHeader { constness, .. }, .. }, ..),
-                ..
-            })
-            | Node::ImplItem(ImplItem {
-                kind: ImplItemKind::Fn(FnSig { header: FnHeader { constness, .. }, .. }, ..),
-                ..
-            })
-            | Node::Item(Item { kind: ItemKind::Impl(Impl { constness, .. }), .. }) => *constness,
-
-            Node::Item(Item { kind: ItemKind::Const(..), .. })
-            | Node::TraitItem(TraitItem { kind: TraitItemKind::Const(..), .. })
-            | Node::ImplItem(ImplItem { kind: ImplItemKind::Const(..), .. }) => Constness::Const,
-
-            _ => Constness::NotConst,
-        }
-    }
-
     pub fn as_owner(self) -> Option<OwnerNode<'hir>> {
         match self {
             Node::Item(i) => Some(OwnerNode::Item(i)),
@@ -3298,7 +3275,7 @@ mod size_asserts {
     rustc_data_structures::static_assert_size!(super::Expr<'static>, 64);
     rustc_data_structures::static_assert_size!(super::Pat<'static>, 88);
     rustc_data_structures::static_assert_size!(super::QPath<'static>, 24);
-    rustc_data_structures::static_assert_size!(super::Ty<'static>, 72);
+    rustc_data_structures::static_assert_size!(super::Ty<'static>, 80);
 
     rustc_data_structures::static_assert_size!(super::Item<'static>, 184);
     rustc_data_structures::static_assert_size!(super::TraitItem<'static>, 128);

@@ -24,7 +24,7 @@ use rustc_middle::ty::error::ExpectedFound;
 use rustc_middle::ty::fold::TypeFolder;
 use rustc_middle::ty::{
     self, fast_reject, AdtKind, SubtypePredicate, ToPolyTraitRef, ToPredicate, Ty, TyCtxt,
-    TypeFoldable, WithConstness,
+    TypeFoldable,
 };
 use rustc_session::DiagnosticMessageId;
 use rustc_span::symbol::{kw, sym};
@@ -539,11 +539,6 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                         // is otherwise overwhelming and unhelpful (see #85844 for an
                         // example).
 
-                        let trait_is_debug =
-                            self.tcx.is_diagnostic_item(sym::Debug, trait_ref.def_id());
-                        let trait_is_display =
-                            self.tcx.is_diagnostic_item(sym::Display, trait_ref.def_id());
-
                         let in_std_macro =
                             match obligation.cause.span.ctxt().outer_expn_data().macro_def_id {
                                 Some(macro_def_id) => {
@@ -553,7 +548,12 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                                 None => false,
                             };
 
-                        if in_std_macro && (trait_is_debug || trait_is_display) {
+                        if in_std_macro
+                            && matches!(
+                                self.tcx.get_diagnostic_name(trait_ref.def_id()),
+                                Some(sym::Debug | sym::Display)
+                            )
+                        {
                             err.emit();
                             return;
                         }
