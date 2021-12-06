@@ -7,7 +7,7 @@ use crate::mir::interpret::{Allocation, ConstValue, GlobalAlloc, Scalar};
 use crate::mir::visit::MirVisitable;
 use crate::ty::adjustment::PointerCast;
 use crate::ty::codec::{TyDecoder, TyEncoder};
-use crate::ty::fold::{TypeFoldable, TypeFolder, TypeVisitor};
+use crate::ty::fold::{FallibleTypeFolder, TypeFoldable, TypeVisitor};
 use crate::ty::print::{FmtPrinter, Printer};
 use crate::ty::subst::{Subst, SubstsRef};
 use crate::ty::{self, List, Ty, TyCtxt};
@@ -16,6 +16,7 @@ use rustc_hir::def::{CtorKind, Namespace};
 use rustc_hir::def_id::{DefId, CRATE_DEF_INDEX};
 use rustc_hir::{self, GeneratorKind};
 use rustc_hir::{self as hir, HirId};
+use rustc_session::Session;
 use rustc_target::abi::{Size, VariantIdx};
 
 use polonius_engine::Atom;
@@ -99,7 +100,21 @@ pub trait MirPass<'tcx> {
         }
     }
 
+    /// Returns `true` if this pass is enabled with the current combination of compiler flags.
+    fn is_enabled(&self, _sess: &Session) -> bool {
+        true
+    }
+
     fn run_pass(&self, tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>);
+
+    /// If this pass causes the MIR to enter a new phase, return that phase.
+    fn phase_change(&self) -> Option<MirPhase> {
+        None
+    }
+
+    fn is_mir_dump_enabled(&self) -> bool {
+        true
+    }
 }
 
 /// The various "big phases" that MIR goes through.
@@ -1803,6 +1818,16 @@ impl<V, T> ProjectionElem<V, T> {
             | Self::Downcast(_, _) => false,
         }
     }
+
+    /// Returns `true` if this is a `Downcast` projection with the given `VariantIdx`.
+    pub fn is_downcast_to(&self, v: VariantIdx) -> bool {
+        matches!(*self, Self::Downcast(_, x) if x == v)
+    }
+
+    /// Returns `true` if this is a `Field` projection with the given index.
+    pub fn is_field_to(&self, f: Field) -> bool {
+        matches!(*self, Self::Field(x, _) if x == f)
+    }
 }
 
 /// Alias for projections as they appear in places, where the base is a place
@@ -2760,10 +2785,13 @@ impl UserTypeProjection {
 TrivialTypeFoldableAndLiftImpls! { ProjectionKind, }
 
 impl<'tcx> TypeFoldable<'tcx> for UserTypeProjection {
-    fn super_fold_with<F: TypeFolder<'tcx>>(self, folder: &mut F) -> Result<Self, F::Error> {
+    fn try_super_fold_with<F: FallibleTypeFolder<'tcx>>(
+        self,
+        folder: &mut F,
+    ) -> Result<Self, F::Error> {
         Ok(UserTypeProjection {
-            base: self.base.fold_with(folder)?,
-            projs: self.projs.fold_with(folder)?,
+            base: self.base.try_fold_with(folder)?,
+            projs: self.projs.try_fold_with(folder)?,
         })
     }
 

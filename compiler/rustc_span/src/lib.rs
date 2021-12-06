@@ -20,7 +20,6 @@
 #![feature(negative_impls)]
 #![feature(nll)]
 #![feature(min_specialization)]
-#![feature(thread_local_const_init)]
 
 #[macro_use]
 extern crate rustc_macros;
@@ -549,6 +548,16 @@ impl Span {
     /// Returns `true` if `span` originates in a derive-macro's expansion.
     pub fn in_derive_expansion(self) -> bool {
         matches!(self.ctxt().outer_expn_data().kind, ExpnKind::Macro(MacroKind::Derive, _))
+    }
+
+    /// Gate suggestions that would not be appropriate in a context the user didn't write.
+    pub fn can_be_used_for_suggestions(self) -> bool {
+        !self.from_expansion()
+        // FIXME: If this span comes from a `derive` macro but it points at code the user wrote,
+        // the callsite span and the span will be pointing at different places. It also means that
+        // we can safely provide suggestions on this span.
+            || (matches!(self.ctxt().outer_expn_data().kind, ExpnKind::Macro(MacroKind::Derive, _))
+                && self.parent_callsite().map(|p| (p.lo(), p.hi())) != Some((self.lo(), self.hi())))
     }
 
     #[inline]

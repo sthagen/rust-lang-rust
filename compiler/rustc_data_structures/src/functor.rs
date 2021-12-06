@@ -4,14 +4,6 @@ use std::mem;
 pub trait IdFunctor: Sized {
     type Inner;
 
-    #[inline]
-    fn map_id<F>(self, mut f: F) -> Self
-    where
-        F: FnMut(Self::Inner) -> Self::Inner,
-    {
-        self.try_map_id::<_, !>(|value| Ok(f(value))).into_ok()
-    }
-
     fn try_map_id<F, E>(self, f: F) -> Result<Self, E>
     where
         F: FnMut(Self::Inner) -> Result<Self::Inner, E>;
@@ -31,11 +23,9 @@ impl<T> IdFunctor for Box<T> {
             let value = raw.read();
             // SAFETY: Converts `Box<T>` to `Box<MaybeUninit<T>>` which is the
             // inverse of `Box::assume_init()` and should be safe.
-            let mut raw: Box<mem::MaybeUninit<T>> = Box::from_raw(raw.cast());
+            let raw: Box<mem::MaybeUninit<T>> = Box::from_raw(raw.cast());
             // SAFETY: Write the mapped value back into the `Box`.
-            raw.write(f(value)?);
-            // SAFETY: We just initialized `raw`.
-            raw.assume_init()
+            Box::write(raw, f(value)?)
         })
     }
 }

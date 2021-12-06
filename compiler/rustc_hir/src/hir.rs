@@ -17,8 +17,7 @@ use rustc_index::vec::IndexVec;
 use rustc_macros::HashStable_Generic;
 use rustc_span::source_map::Spanned;
 use rustc_span::symbol::{kw, sym, Ident, Symbol};
-use rustc_span::{def_id::LocalDefId, BytePos};
-use rustc_span::{MultiSpan, Span, DUMMY_SP};
+use rustc_span::{def_id::LocalDefId, BytePos, MultiSpan, Span, DUMMY_SP};
 use rustc_target::asm::InlineAsmRegOrRegClass;
 use rustc_target::spec::abi::Abi;
 
@@ -526,12 +525,20 @@ pub struct GenericParam<'hir> {
 }
 
 impl GenericParam<'hir> {
-    pub fn bounds_span(&self) -> Option<Span> {
-        self.bounds.iter().fold(None, |span, bound| {
-            let span = span.map(|s| s.to(bound.span())).unwrap_or_else(|| bound.span());
-
-            Some(span)
-        })
+    pub fn bounds_span_for_suggestions(&self) -> Option<Span> {
+        self.bounds
+            .iter()
+            .fold(None, |span: Option<Span>, bound| {
+                // We include bounds that come from a `#[derive(_)]` but point at the user's code,
+                // as we use this method to get a span appropriate for suggestions.
+                if !bound.span().can_be_used_for_suggestions() {
+                    None
+                } else {
+                    let span = span.map(|s| s.to(bound.span())).unwrap_or_else(|| bound.span());
+                    Some(span)
+                }
+            })
+            .map(|sp| sp.shrink_to_hi())
     }
 }
 
@@ -3227,6 +3234,31 @@ impl<'hir> Node<'hir> {
             Node::Variant(Variant { id, .. }) => Some(*id),
             Node::Ctor(variant) => variant.ctor_hir_id(),
             Node::Crate(_) | Node::Visibility(_) => None,
+        }
+    }
+
+    /// Returns `Constness::Const` when this node is a const fn/impl/item.
+    pub fn constness_for_typeck(&self) -> Constness {
+        match self {
+            Node::Item(Item {
+                kind: ItemKind::Fn(FnSig { header: FnHeader { constness, .. }, .. }, ..),
+                ..
+            })
+            | Node::TraitItem(TraitItem {
+                kind: TraitItemKind::Fn(FnSig { header: FnHeader { constness, .. }, .. }, ..),
+                ..
+            })
+            | Node::ImplItem(ImplItem {
+                kind: ImplItemKind::Fn(FnSig { header: FnHeader { constness, .. }, .. }, ..),
+                ..
+            })
+            | Node::Item(Item { kind: ItemKind::Impl(Impl { constness, .. }), .. }) => *constness,
+
+            Node::Item(Item { kind: ItemKind::Const(..), .. })
+            | Node::TraitItem(TraitItem { kind: TraitItemKind::Const(..), .. })
+            | Node::ImplItem(ImplItem { kind: ImplItemKind::Const(..), .. }) => Constness::Const,
+
+            _ => Constness::NotConst,
         }
     }
 

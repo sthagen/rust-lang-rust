@@ -346,7 +346,7 @@ crate fn print_where_clause<'a, 'tcx: 'a>(
 
 impl clean::Lifetime {
     crate fn print(&self) -> impl fmt::Display + '_ {
-        self.get_ref()
+        self.0.as_str()
     }
 }
 
@@ -1176,6 +1176,10 @@ impl clean::FnDecl {
                 if i > 0 {
                     args.push_str(" <br>");
                     args_plain.push(' ');
+                }
+                if input.is_const {
+                    args.push_str("const ");
+                    args_plain.push_str("const ");
                 }
                 if !input.name.is_empty() {
                     args.push_str(&format!("{}: ", input.name));

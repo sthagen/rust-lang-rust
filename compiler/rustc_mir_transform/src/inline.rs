@@ -37,21 +37,16 @@ struct CallSite<'tcx> {
     source_info: SourceInfo,
 }
 
-/// Returns true if MIR inlining is enabled in the current compilation session.
-crate fn is_enabled(tcx: TyCtxt<'_>) -> bool {
-    if let Some(enabled) = tcx.sess.opts.debugging_opts.inline_mir {
-        return enabled;
-    }
-
-    tcx.sess.mir_opt_level() >= 3
-}
-
 impl<'tcx> MirPass<'tcx> for Inline {
-    fn run_pass(&self, tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
-        if !is_enabled(tcx) {
-            return;
+    fn is_enabled(&self, sess: &rustc_session::Session) -> bool {
+        if let Some(enabled) = sess.opts.debugging_opts.inline_mir {
+            return enabled;
         }
 
+        sess.opts.mir_opt_level() >= 3
+    }
+
+    fn run_pass(&self, tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
         let span = trace_span!("inline", body = %tcx.def_path_str(body.source.def_id()));
         let _guard = span.enter();
         if inline(tcx, body) {
@@ -441,6 +436,13 @@ impl Inliner<'tcx> {
                     }
                 }
                 TerminatorKind::Resume => cost += RESUME_PENALTY,
+                TerminatorKind::InlineAsm { cleanup, .. } => {
+                    cost += INSTR_COST;
+
+                    if cleanup.is_some() {
+                        cost += LANDINGPAD_PENALTY;
+                    }
+                }
                 _ => cost += INSTR_COST,
             }
 
@@ -954,9 +956,13 @@ impl<'a, 'tcx> MutVisitor<'tcx> for Integrator<'a, 'tcx> {
             {
                 bug!("False unwinds should have been removed before inlining")
             }
-            TerminatorKind::InlineAsm { ref mut destination, .. } => {
+            TerminatorKind::InlineAsm { ref mut destination, ref mut cleanup, .. } => {
                 if let Some(ref mut tgt) = *destination {
                     *tgt = self.map_block(*tgt);
+                } else if !self.in_cleanup_block {
+                    // Unless this inline asm is in a cleanup block, add an unwind edge to
+                    // the original call's cleanup block
+                    *cleanup = self.cleanup_block;
                 }
             }
         }

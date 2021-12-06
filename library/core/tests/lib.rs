@@ -56,14 +56,14 @@
 #![feature(iter_intersperse)]
 #![feature(iter_is_partitioned)]
 #![feature(iter_order_by)]
+#![feature(iterator_try_reduce)]
 #![feature(const_mut_refs)]
 #![feature(const_pin)]
 #![feature(const_slice_from_raw_parts)]
-#![cfg_attr(bootstrap, feature(const_raw_ptr_deref))]
 #![feature(never_type)]
 #![feature(unwrap_infallible)]
 #![feature(result_into_ok_or_err)]
-#![cfg_attr(not(bootstrap), feature(portable_simd))]
+#![feature(portable_simd)]
 #![feature(ptr_metadata)]
 #![feature(once_cell)]
 #![feature(unsized_tuple_coercion)]
@@ -109,7 +109,6 @@ mod pattern;
 mod pin;
 mod ptr;
 mod result;
-#[cfg(not(bootstrap))]
 mod simd;
 mod slice;
 mod str;

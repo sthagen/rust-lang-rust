@@ -370,17 +370,12 @@ impl AutoTraitFinder<'tcx> {
                 computed_preds.clone().chain(user_computed_preds.iter().cloned()),
             )
             .map(|o| o.predicate);
-            new_env = ty::ParamEnv::new(
-                tcx.mk_predicates(normalized_preds),
-                param_env.reveal(),
-                param_env.constness(),
-            );
+            new_env = ty::ParamEnv::new(tcx.mk_predicates(normalized_preds), param_env.reveal());
         }
 
         let final_user_env = ty::ParamEnv::new(
             tcx.mk_predicates(user_computed_preds.into_iter()),
             user_env.reveal(),
-            user_env.constness(),
         );
         debug!(
             "evaluate_nested_obligations(ty={:?}, trait_did={:?}): succeeded with '{:?}' \
@@ -865,11 +860,11 @@ impl<'a, 'tcx> TypeFolder<'tcx> for RegionReplacer<'a, 'tcx> {
         self.tcx
     }
 
-    fn fold_region(&mut self, r: ty::Region<'tcx>) -> Result<ty::Region<'tcx>, Self::Error> {
-        Ok((match r {
+    fn fold_region(&mut self, r: ty::Region<'tcx>) -> ty::Region<'tcx> {
+        (match r {
             ty::ReVar(vid) => self.vid_to_region.get(vid).cloned(),
             _ => None,
         })
-        .unwrap_or_else(|| r.super_fold_with(self).into_ok()))
+        .unwrap_or_else(|| r.super_fold_with(self))
     }
 }

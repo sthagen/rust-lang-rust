@@ -62,6 +62,13 @@ macro_rules! throw_machine_stop_str {
 pub struct ConstProp;
 
 impl<'tcx> MirPass<'tcx> for ConstProp {
+    fn is_enabled(&self, _sess: &rustc_session::Session) -> bool {
+        // FIXME(#70073): Unlike the other passes in "optimizations", this one emits errors, so it
+        // runs even when MIR optimizations are disabled. We should separate the lint out from the
+        // transform and move the lint as early in the pipeline as possible.
+        true
+    }
+
     fn run_pass(&self, tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
         // will be evaluated by miri and produce its errors there
         if body.source.promoted.is_some() {
@@ -1022,6 +1029,7 @@ impl<'tcx> Visitor<'tcx> for CanConstProp {
             // These are just stores, where the storing is not propagatable, but there may be later
             // mutations of the same local via `Store`
             | MutatingUse(MutatingUseContext::Call)
+            | MutatingUse(MutatingUseContext::AsmOutput)
             // Actual store that can possibly even propagate a value
             | MutatingUse(MutatingUseContext::Store) => {
                 if !self.found_assignment.insert(local) {
@@ -1052,7 +1060,7 @@ impl<'tcx> Visitor<'tcx> for CanConstProp {
 
             // These could be propagated with a smarter analysis or just some careful thinking about
             // whether they'd be fine right now.
-            MutatingUse(MutatingUseContext::AsmOutput)
+            MutatingUse(MutatingUseContext::LlvmAsmOutput)
             | MutatingUse(MutatingUseContext::Yield)
             | MutatingUse(MutatingUseContext::Drop)
             | MutatingUse(MutatingUseContext::Retag)

@@ -703,7 +703,8 @@ impl<T> Option<T> {
     #[inline]
     #[track_caller]
     #[stable(feature = "rust1", since = "1.0.0")]
-    pub fn expect(self, msg: &str) -> T {
+    #[rustc_const_unstable(feature = "const_option", issue = "67441")]
+    pub const fn expect(self, msg: &str) -> T {
         match self {
             Some(val) => val,
             None => expect_failed(msg),
@@ -1658,7 +1659,7 @@ impl<T, E> Option<Result<T, E>> {
 #[inline(never)]
 #[cold]
 #[track_caller]
-fn expect_failed(msg: &str) -> ! {
+const fn expect_failed(msg: &str) -> ! {
     panic!("{}", msg)
 }
 
@@ -2086,6 +2087,11 @@ impl<T> const ops::FromResidual for Option<T> {
             None => None,
         }
     }
+}
+
+#[unstable(feature = "try_trait_v2_residual", issue = "91285")]
+impl<T> ops::Residual<T> for Option<convert::Infallible> {
+    type TryType = Option<T>;
 }
 
 impl<T> Option<Option<T>> {
