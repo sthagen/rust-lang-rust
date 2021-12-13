@@ -1350,7 +1350,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                     tcx,
                     span,
                     item.trait_ref().def_id(),
-                    &object_safety_violations[..],
+                    &object_safety_violations,
                 )
                 .emit();
                 return tcx.ty_error();
@@ -1587,7 +1587,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                 traits::transitive_bounds_that_define_assoc_type(
                     tcx,
                     predicates.iter().filter_map(|(p, _)| {
-                        p.to_opt_poly_trait_ref().map(|trait_ref| trait_ref.value)
+                        Some(p.to_opt_poly_trait_pred()?.map_bound(|t| t.trait_ref))
                     }),
                     assoc_name,
                 )
@@ -2336,9 +2336,16 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                 let def_id = item_id.def_id.to_def_id();
 
                 match opaque_ty.kind {
-                    hir::ItemKind::OpaqueTy(hir::OpaqueTy { impl_trait_fn, .. }) => {
-                        self.impl_trait_ty_to_ty(def_id, lifetimes, impl_trait_fn.is_some())
-                    }
+                    hir::ItemKind::OpaqueTy(hir::OpaqueTy { origin, .. }) => self
+                        .impl_trait_ty_to_ty(
+                            def_id,
+                            lifetimes,
+                            matches!(
+                                origin,
+                                hir::OpaqueTyOrigin::FnReturn(..)
+                                    | hir::OpaqueTyOrigin::AsyncFn(..)
+                            ),
+                        ),
                     ref i => bug!("`impl Trait` pointed to non-opaque type?? {:#?}", i),
                 }
             }

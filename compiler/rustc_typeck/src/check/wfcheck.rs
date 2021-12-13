@@ -21,7 +21,6 @@ use rustc_middle::ty::subst::{GenericArgKind, InternalSubsts, Subst};
 use rustc_middle::ty::trait_def::TraitSpecializationKind;
 use rustc_middle::ty::{
     self, AdtKind, GenericParamDefKind, ToPredicate, Ty, TyCtxt, TypeFoldable, TypeVisitor,
-    WithConstness,
 };
 use rustc_session::parse::feature_err;
 use rustc_span::symbol::{sym, Ident, Symbol};
@@ -683,7 +682,8 @@ pub fn check_impl_item(tcx: TyCtxt<'_>, def_id: LocalDefId) {
 
     let (method_sig, span) = match impl_item.kind {
         hir::ImplItemKind::Fn(ref sig, _) => (Some(sig), impl_item.span),
-        hir::ImplItemKind::TyAlias(ty) => (None, ty.span),
+        // Constrain binding and overflow error spans to `<Ty>` in `type foo = <Ty>`.
+        hir::ImplItemKind::TyAlias(ty) if ty.span != DUMMY_SP => (None, ty.span),
         _ => (None, impl_item.span),
     };
 
@@ -696,7 +696,6 @@ fn check_param_wf(tcx: TyCtxt<'_>, param: &hir::GenericParam<'_>) {
         hir::GenericParamKind::Lifetime { .. } | hir::GenericParamKind::Type { .. } => (),
 
         // Const parameters are well formed if their type is structural match.
-        // FIXME(const_generics_defaults): we also need to check that the `default` is wf.
         hir::GenericParamKind::Const { ty: hir_ty, default: _ } => {
             let ty = tcx.type_of(tcx.hir().local_def_id(param.hir_id));
 

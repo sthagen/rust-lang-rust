@@ -801,7 +801,7 @@ impl Visitor<'tcx> for Checker<'mir, 'tcx> {
                 if let Some(trait_id) = tcx.trait_of_item(callee) {
                     trace!("attempting to call a trait method");
                     if !self.tcx.features().const_trait_impl {
-                        self.check_op(ops::FnCallNonConst);
+                        self.check_op(ops::FnCallNonConst(Some((callee, substs))));
                         return;
                     }
 
@@ -817,8 +817,7 @@ impl Visitor<'tcx> for Checker<'mir, 'tcx> {
                     );
 
                     let implsrc = tcx.infer_ctxt().enter(|infcx| {
-                        let mut selcx =
-                            SelectionContext::with_constness(&infcx, hir::Constness::Const);
+                        let mut selcx = SelectionContext::new(&infcx);
                         selcx.select(&obligation)
                     });
 
@@ -857,7 +856,7 @@ impl Visitor<'tcx> for Checker<'mir, 'tcx> {
                             }
 
                             if !nonconst_call_permission {
-                                self.check_op(ops::FnCallNonConst);
+                                self.check_op(ops::FnCallNonConst(None));
                                 return;
                             }
                         }
@@ -926,7 +925,7 @@ impl Visitor<'tcx> for Checker<'mir, 'tcx> {
                     }
 
                     if !nonconst_call_permission {
-                        self.check_op(ops::FnCallNonConst);
+                        self.check_op(ops::FnCallNonConst(None));
                         return;
                     }
                 }
