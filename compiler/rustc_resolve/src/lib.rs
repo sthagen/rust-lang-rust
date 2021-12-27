@@ -13,7 +13,6 @@
 #![feature(drain_filter)]
 #![feature(bool_to_option)]
 #![feature(crate_visibility_modifier)]
-#![feature(iter_zip)]
 #![feature(let_else)]
 #![feature(never_type)]
 #![feature(nll)]
@@ -3482,7 +3481,7 @@ fn names_to_string(names: &[Symbol]) -> String {
         if Ident::with_dummy_span(*name).is_raw_guess() {
             result.push_str("r#");
         }
-        result.push_str(&name.as_str());
+        result.push_str(name.as_str());
     }
     result
 }

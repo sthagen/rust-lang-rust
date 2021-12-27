@@ -963,7 +963,7 @@ fn preprocess_link<'a>(
         return None;
     }
 
-    let stripped = ori_link.link.replace("`", "");
+    let stripped = ori_link.link.replace('`', "");
     let mut parts = stripped.split('#');
 
     let link = parts.next().unwrap();
@@ -2153,8 +2153,8 @@ fn privacy_error(cx: &DocContext<'_>, diag_info: &DiagnosticInfo<'_>, path_str: 
     let sym;
     let item_name = match diag_info.item.name {
         Some(name) => {
-            sym = name.as_str();
-            &*sym
+            sym = name;
+            sym.as_str()
         }
         None => "<unknown>",
     };
