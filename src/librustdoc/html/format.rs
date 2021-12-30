@@ -21,10 +21,12 @@ use rustc_middle::ty::TyCtxt;
 use rustc_span::def_id::CRATE_DEF_INDEX;
 use rustc_target::spec::abi::Abi;
 
-use crate::clean::{self, utils::find_nearest_parent_module, ExternalCrate, ItemId, PrimitiveType};
+use crate::clean::{
+    self, types::ExternalLocation, utils::find_nearest_parent_module, ExternalCrate, ItemId,
+    PrimitiveType,
+};
 use crate::formats::item_type::ItemType;
 use crate::html::escape::Escape;
-use crate::html::render::cache::ExternalLocation;
 use crate::html::render::Context;
 
 use super::url_parts_builder::UrlPartsBuilder;
@@ -141,9 +143,7 @@ crate fn print_generic_bounds<'a, 'tcx: 'a>(
     display_fn(move |f| {
         let mut bounds_dup = FxHashSet::default();
 
-        for (i, bound) in
-            bounds.iter().filter(|b| bounds_dup.insert(b.print(cx).to_string())).enumerate()
-        {
+        for (i, bound) in bounds.iter().filter(|b| bounds_dup.insert(b.clone())).enumerate() {
             if i > 0 {
                 f.write_str(" + ")?;
             }
@@ -222,15 +222,16 @@ impl clean::Generics {
         cx: &'a Context<'tcx>,
     ) -> impl fmt::Display + 'a + Captures<'tcx> {
         display_fn(move |f| {
-            let real_params =
-                self.params.iter().filter(|p| !p.is_synthetic_type_param()).collect::<Vec<_>>();
-            if real_params.is_empty() {
+            let mut real_params =
+                self.params.iter().filter(|p| !p.is_synthetic_type_param()).peekable();
+            if real_params.peek().is_none() {
                 return Ok(());
             }
+
             if f.alternate() {
-                write!(f, "<{:#}>", comma_sep(real_params.iter().map(|g| g.print(cx))))
+                write!(f, "<{:#}>", comma_sep(real_params.map(|g| g.print(cx))))
             } else {
-                write!(f, "&lt;{}&gt;", comma_sep(real_params.iter().map(|g| g.print(cx))))
+                write!(f, "&lt;{}&gt;", comma_sep(real_params.map(|g| g.print(cx))))
             }
         })
     }
