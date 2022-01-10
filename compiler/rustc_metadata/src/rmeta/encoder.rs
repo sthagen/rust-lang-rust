@@ -404,24 +404,24 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         &mut self,
         lazy: Lazy<T>,
     ) -> Result<(), <Self as Encoder>::Error> {
-        let min_end = lazy.position.get() + T::min_size(lazy.meta);
+        let pos = lazy.position.get();
         let distance = match self.lazy_state {
             LazyState::NoNode => bug!("emit_lazy_distance: outside of a metadata node"),
             LazyState::NodeStart(start) => {
                 let start = start.get();
-                assert!(min_end <= start);
-                start - min_end
+                assert!(pos <= start);
+                start - pos
             }
-            LazyState::Previous(last_min_end) => {
+            LazyState::Previous(last_pos) => {
                 assert!(
-                    last_min_end <= lazy.position,
+                    last_pos <= lazy.position,
                     "make sure that the calls to `lazy*` \
                      are in the same order as the metadata fields",
                 );
-                lazy.position.get() - last_min_end.get()
+                lazy.position.get() - last_pos.get()
             }
         };
-        self.lazy_state = LazyState::Previous(NonZeroUsize::new(min_end).unwrap());
+        self.lazy_state = LazyState::Previous(NonZeroUsize::new(pos).unwrap());
         self.emit_usize(distance)
     }
 
@@ -436,7 +436,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         let meta = value.encode_contents_for_lazy(self);
         self.lazy_state = LazyState::NoNode;
 
-        assert!(pos.get() + <T>::min_size(meta) <= self.position());
+        assert!(pos.get() <= self.position());
 
         Lazy::from_position_and_meta(pos, meta)
     }
@@ -1094,7 +1094,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         // code uses it). However, we skip encoding anything relating to child
         // items - we encode information about proc-macros later on.
         let reexports = if !self.is_proc_macro {
-            match tcx.module_exports(local_def_id) {
+            match tcx.module_reexports(local_def_id) {
                 Some(exports) => self.lazy(exports),
                 _ => Lazy::empty(),
             }
@@ -1104,7 +1104,6 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
 
         record!(self.tables.kind[def_id] <- EntryKind::Mod(reexports));
         if self.is_proc_macro {
-            record!(self.tables.children[def_id] <- &[]);
             // Encode this here because we don't do it in encode_def_ids.
             record!(self.tables.expn_that_defined[def_id] <- tcx.expn_that_defined(local_def_id));
         } else {
@@ -1294,6 +1293,9 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         }
         self.encode_ident_span(def_id, impl_item.ident);
         self.encode_item_type(def_id);
+        if let Some(trait_item_def_id) = impl_item.trait_item_def_id {
+            record!(self.tables.trait_item_def_id[def_id] <- trait_item_def_id);
+        }
         if impl_item.kind == ty::AssocKind::Fn {
             record!(self.tables.fn_sig[def_id] <- tcx.fn_sig(def_id));
         }
