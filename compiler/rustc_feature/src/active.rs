@@ -288,6 +288,8 @@ declare_features! (
     (active, asm_sym, "1.58.0", Some(72016), None),
     /// Allows the `may_unwind` option in inline assembly.
     (active, asm_unwind, "1.58.0", Some(72016), None),
+    /// Allows users to enforce equality of associated constants `TraitImpl<AssocConst=3>`.
+    (active, associated_const_equality, "1.58.0", Some(92827), None),
     /// Allows the user of associated type bounds.
     (active, associated_type_bounds, "1.34.0", Some(52662), None),
     /// Allows associated type defaults.
@@ -413,7 +415,7 @@ declare_features! (
     // Allows setting the threshold for the `large_assignments` lint.
     (active, large_assignments, "1.52.0", Some(83518), None),
     /// Allows `if/while p && let q = r && ...` chains.
-    (incomplete, let_chains, "1.37.0", Some(53667), None),
+    (active, let_chains, "1.37.0", Some(53667), None),
     /// Allows `let...else` statements.
     (active, let_else, "1.56.0", Some(87335), None),
     /// Allows `#[link(..., cfg(..))]`.

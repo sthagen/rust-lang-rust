@@ -36,15 +36,14 @@ impl<'tcx> Const<'tcx> {
         Self::from_opt_const_arg_anon_const(tcx, ty::WithOptConstParam::unknown(def_id))
     }
 
+    #[instrument(skip(tcx), level = "debug")]
     pub fn from_opt_const_arg_anon_const(
         tcx: TyCtxt<'tcx>,
         def: ty::WithOptConstParam<LocalDefId>,
     ) -> &'tcx Self {
         debug!("Const::from_anon_const(def={:?})", def);
 
-        let hir_id = tcx.hir().local_def_id_to_hir_id(def.did);
-
-        let body_id = match tcx.hir().get(hir_id) {
+        let body_id = match tcx.hir().get_by_def_id(def.did) {
             hir::Node::AnonConst(ac) => ac.body,
             _ => span_bug!(
                 tcx.def_span(def.did.to_def_id()),
@@ -53,6 +52,7 @@ impl<'tcx> Const<'tcx> {
         };
 
         let expr = &tcx.hir().body(body_id).value;
+        debug!(?expr);
 
         let ty = tcx.type_of(def.def_id_for_type_of());
 
@@ -61,7 +61,7 @@ impl<'tcx> Const<'tcx> {
             None => tcx.mk_const(ty::Const {
                 val: ty::ConstKind::Unevaluated(ty::Unevaluated {
                     def: def.to_global(),
-                    substs_: None,
+                    substs: InternalSubsts::identity_for_item(tcx, def.did.to_def_id()),
                     promoted: None,
                 }),
                 ty,
@@ -69,11 +69,21 @@ impl<'tcx> Const<'tcx> {
         }
     }
 
+    #[instrument(skip(tcx), level = "debug")]
     fn try_eval_lit_or_param(
         tcx: TyCtxt<'tcx>,
         ty: Ty<'tcx>,
         expr: &'tcx hir::Expr<'tcx>,
     ) -> Option<&'tcx Self> {
+        // Unwrap a block, so that e.g. `{ P }` is recognised as a parameter. Const arguments
+        // currently have to be wrapped in curly brackets, so it's necessary to special-case.
+        let expr = match &expr.kind {
+            hir::ExprKind::Block(block, _) if block.stmts.is_empty() && block.expr.is_some() => {
+                block.expr.as_ref().unwrap()
+            }
+            _ => expr,
+        };
+
         let lit_input = match expr.kind {
             hir::ExprKind::Lit(ref lit) => Some(LitToConstInput { lit: &lit.node, ty, neg: false }),
             hir::ExprKind::Unary(hir::UnOp::Neg, ref expr) => match expr.kind {
@@ -88,21 +98,16 @@ impl<'tcx> Const<'tcx> {
         if let Some(lit_input) = lit_input {
             // If an error occurred, ignore that it's a literal and leave reporting the error up to
             // mir.
-            if let Ok(c) = tcx.at(expr.span).lit_to_const(lit_input) {
-                return Some(c);
-            } else {
-                tcx.sess.delay_span_bug(expr.span, "Const::from_anon_const: couldn't lit_to_const");
+            match tcx.at(expr.span).lit_to_const(lit_input) {
+                Ok(c) => return Some(c),
+                Err(e) => {
+                    tcx.sess.delay_span_bug(
+                        expr.span,
+                        &format!("Const::from_anon_const: couldn't lit_to_const {:?}", e),
+                    );
+                }
             }
         }
-
-        // Unwrap a block, so that e.g. `{ P }` is recognised as a parameter. Const arguments
-        // currently have to be wrapped in curly brackets, so it's necessary to special-case.
-        let expr = match &expr.kind {
-            hir::ExprKind::Block(block, _) if block.stmts.is_empty() && block.expr.is_some() => {
-                block.expr.as_ref().unwrap()
-            }
-            _ => expr,
-        };
 
         use hir::{def::DefKind::ConstParam, def::Res, ExprKind, Path, QPath};
         match expr.kind {
@@ -153,14 +158,14 @@ impl<'tcx> Const<'tcx> {
                 tcx.mk_const(ty::Const {
                     val: ty::ConstKind::Unevaluated(ty::Unevaluated {
                         def: ty::WithOptConstParam::unknown(def_id).to_global(),
-                        substs_: Some(substs),
+                        substs,
                         promoted: None,
                     }),
                     ty,
                 })
             }
         };
-        debug_assert!(!ret.has_free_regions(tcx));
+        debug_assert!(!ret.has_free_regions());
         ret
     }
 
@@ -260,8 +265,7 @@ impl<'tcx> Const<'tcx> {
 }
 
 pub fn const_param_default<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> &'tcx Const<'tcx> {
-    let hir_id = tcx.hir().local_def_id_to_hir_id(def_id.expect_local());
-    let default_def_id = match tcx.hir().get(hir_id) {
+    let default_def_id = match tcx.hir().get_by_def_id(def_id.expect_local()) {
         hir::Node::GenericParam(hir::GenericParam {
             kind: hir::GenericParamKind::Const { ty: _, default: Some(ac) },
             ..

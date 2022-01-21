@@ -831,8 +831,9 @@ impl AttributesExt for [ast::Attribute] {
                 self.iter()
                     .filter(|attr| attr.has_name(sym::cfg))
                     .filter_map(|attr| single(attr.meta_item_list()?))
-                    .filter_map(|attr| Cfg::parse(attr.meta_item()?).ok())
-                    .filter(|cfg| !hidden_cfg.contains(cfg))
+                    .filter_map(|attr| {
+                        Cfg::parse_without(attr.meta_item()?, hidden_cfg).ok().flatten()
+                    })
                     .fold(Cfg::True, |cfg, new_cfg| cfg & new_cfg)
             } else {
                 Cfg::True
@@ -1040,9 +1041,9 @@ impl Attributes {
     ) -> Attributes {
         let mut doc_strings: Vec<DocFragment> = vec![];
         let clean_attr = |(attr, parent_module): (&ast::Attribute, Option<DefId>)| {
-            if let Some(value) = attr.doc_str() {
+            if let Some((value, kind)) = attr.doc_str_and_comment_kind() {
                 trace!("got doc_str={:?}", value);
-                let value = beautify_doc_string(value);
+                let value = beautify_doc_string(value, kind);
                 let kind = if attr.is_doc_comment() {
                     DocFragmentKind::SugaredDoc
                 } else {
@@ -1212,7 +1213,7 @@ impl Lifetime {
 crate enum WherePredicate {
     BoundPredicate { ty: Type, bounds: Vec<GenericBound>, bound_params: Vec<Lifetime> },
     RegionPredicate { lifetime: Lifetime, bounds: Vec<GenericBound> },
-    EqPredicate { lhs: Type, rhs: Type },
+    EqPredicate { lhs: Type, rhs: Term },
 }
 
 impl WherePredicate {
@@ -1308,7 +1309,9 @@ impl FnDecl {
             FnRetTy::Return(Type::ImplTrait(bounds)) => match &bounds[0] {
                 GenericBound::TraitBound(PolyTrait { trait_, .. }, ..) => {
                     let bindings = trait_.bindings().unwrap();
-                    FnRetTy::Return(bindings[0].ty().clone())
+                    let ret_ty = bindings[0].term();
+                    let ty = ret_ty.ty().expect("Unexpected constant return term");
+                    FnRetTy::Return(ty.clone())
                 }
                 _ => panic!("unexpected desugaring of async function"),
             },
@@ -2122,6 +2125,24 @@ crate struct Constant {
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
+crate enum Term {
+    Type(Type),
+    Constant(Constant),
+}
+
+impl Term {
+    crate fn ty(&self) -> Option<&Type> {
+        if let Term::Type(ty) = self { Some(ty) } else { None }
+    }
+}
+
+impl From<Type> for Term {
+    fn from(ty: Type) -> Self {
+        Term::Type(ty)
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 crate enum ConstantKind {
     /// This is the wrapper around `ty::Const` for a non-local constant. Because it doesn't have a
     /// `BodyId`, we need to handle it on its own.
@@ -2283,14 +2304,14 @@ crate struct TypeBinding {
 
 #[derive(Clone, PartialEq, Eq, Debug, Hash)]
 crate enum TypeBindingKind {
-    Equality { ty: Type },
+    Equality { term: Term },
     Constraint { bounds: Vec<GenericBound> },
 }
 
 impl TypeBinding {
-    crate fn ty(&self) -> &Type {
+    crate fn term(&self) -> &Term {
         match self.kind {
-            TypeBindingKind::Equality { ref ty } => ty,
+            TypeBindingKind::Equality { ref term } => term,
             _ => panic!("expected equality type binding for parenthesized generic args"),
         }
     }

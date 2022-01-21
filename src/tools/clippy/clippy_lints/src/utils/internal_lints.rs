@@ -1,5 +1,6 @@
 use clippy_utils::consts::{constant_simple, Constant};
 use clippy_utils::diagnostics::{span_lint, span_lint_and_help, span_lint_and_sugg, span_lint_and_then};
+use clippy_utils::macros::root_macro_call_first_node;
 use clippy_utils::source::snippet;
 use clippy_utils::ty::match_type;
 use clippy_utils::{
@@ -16,13 +17,12 @@ use rustc_hir as hir;
 use rustc_hir::def::{DefKind, Res};
 use rustc_hir::def_id::DefId;
 use rustc_hir::hir_id::CRATE_HIR_ID;
-use rustc_hir::intravisit::{NestedVisitorMap, Visitor};
+use rustc_hir::intravisit::Visitor;
 use rustc_hir::{
     BinOpKind, Block, Expr, ExprKind, HirId, Item, Local, MutTy, Mutability, Node, Path, Stmt, StmtKind, Ty, TyKind,
     UnOp,
 };
 use rustc_lint::{EarlyContext, EarlyLintPass, LateContext, LateLintPass, LintContext};
-use rustc_middle::hir::map::Map;
 use rustc_middle::mir::interpret::ConstValue;
 use rustc_middle::ty;
 use rustc_semver::RustcVersion;
@@ -34,7 +34,7 @@ use rustc_typeck::hir_ty_to_ty;
 
 use std::borrow::{Borrow, Cow};
 
-#[cfg(feature = "metadata-collector-lint")]
+#[cfg(feature = "internal")]
 pub mod metadata_collector;
 
 declare_clippy_lint! {
@@ -410,9 +410,13 @@ impl<'tcx> LateLintPass<'tcx> for LintWithoutLintPass {
                 }
                 self.declared_lints.insert(item.ident.name, item.span);
             }
-        } else if is_expn_of(item.span, "impl_lint_pass").is_some()
-            || is_expn_of(item.span, "declare_lint_pass").is_some()
-        {
+        } else if let Some(macro_call) = root_macro_call_first_node(cx, item) {
+            if !matches!(
+                &*cx.tcx.item_name(macro_call.def_id).as_str(),
+                "impl_lint_pass" | "declare_lint_pass"
+            ) {
+                return;
+            }
             if let hir::ItemKind::Impl(hir::Impl {
                 of_trait: None,
                 items: impl_item_refs,
@@ -539,7 +543,7 @@ struct LintCollector<'a, 'tcx> {
 }
 
 impl<'a, 'tcx> Visitor<'tcx> for LintCollector<'a, 'tcx> {
-    type Map = Map<'tcx>;
+    type NestedFilter = nested_filter::All;
 
     fn visit_path(&mut self, path: &'tcx Path<'_>, _: HirId) {
         if path.segments.len() == 1 {
@@ -547,8 +551,8 @@ impl<'a, 'tcx> Visitor<'tcx> for LintCollector<'a, 'tcx> {
         }
     }
 
-    fn nested_visit_map(&mut self) -> NestedVisitorMap<Self::Map> {
-        NestedVisitorMap::All(self.cx.tcx.hir())
+    fn nested_visit_map(&mut self) -> Self::Map {
+        self.cx.tcx.hir()
     }
 }
 
@@ -579,7 +583,7 @@ impl<'tcx> LateLintPass<'tcx> for CompilerLintFunctions {
         }
 
         if_chain! {
-            if let ExprKind::MethodCall(path, _, [self_arg, ..], _) = &expr.kind;
+            if let ExprKind::MethodCall(path, [self_arg, ..], _) = &expr.kind;
             let fn_name = path.ident;
             if let Some(sugg) = self.map.get(&*fn_name.as_str());
             let ty = cx.typeck_results().expr_ty(self_arg).peel_refs();
@@ -661,7 +665,7 @@ impl<'tcx> LateLintPass<'tcx> for CollapsibleCalls {
             if let ExprKind::Closure(_, _, body_id, _, _) = &and_then_args[4].kind;
             let body = cx.tcx.hir().body(*body_id);
             let only_expr = peel_blocks_with_stmt(&body.value);
-            if let ExprKind::MethodCall(ps, _, span_call_args, _) = &only_expr.kind;
+            if let ExprKind::MethodCall(ps, span_call_args, _) = &only_expr.kind;
             then {
                 let and_then_snippets = get_and_then_snippets(cx, and_then_args);
                 let mut sle = SpanlessEq::new(cx).deny_side_effects();
@@ -924,9 +928,20 @@ pub fn check_path(cx: &LateContext<'_>, path: &[&str]) -> bool {
         let lang_item_path = cx.get_def_path(*item_def_id);
         if path_syms.starts_with(&lang_item_path) {
             if let [item] = &path_syms[lang_item_path.len()..] {
-                for child in cx.tcx.module_children(*item_def_id) {
-                    if child.ident.name == *item {
-                        return true;
+                if matches!(
+                    cx.tcx.def_kind(*item_def_id),
+                    DefKind::Mod | DefKind::Enum | DefKind::Trait
+                ) {
+                    for child in cx.tcx.module_children(*item_def_id) {
+                        if child.ident.name == *item {
+                            return true;
+                        }
+                    }
+                } else {
+                    for child in cx.tcx.associated_item_def_ids(*item_def_id) {
+                        if cx.tcx.item_name(*child) == *item {
+                            return true;
+                        }
                     }
                 }
             }
@@ -1082,7 +1097,7 @@ impl InterningDefinedSymbol {
         };
         if_chain! {
             // is a method call
-            if let ExprKind::MethodCall(_, _, [item], _) = call.kind;
+            if let ExprKind::MethodCall(_, [item], _) = call.kind;
             if let Some(did) = cx.typeck_results().type_dependent_def_id(call.hir_id);
             let ty = cx.typeck_results().expr_ty(item);
             // ...on either an Ident or a Symbol

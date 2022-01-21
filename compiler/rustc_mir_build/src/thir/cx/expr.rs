@@ -163,9 +163,9 @@ impl<'tcx> Cx<'tcx> {
 
         let kind = match expr.kind {
             // Here comes the interesting stuff:
-            hir::ExprKind::MethodCall(_, method_span, ref args, fn_span) => {
+            hir::ExprKind::MethodCall(segment, ref args, fn_span) => {
                 // Rewrite a.b(c) into UFCS form like Trait::b(a, c)
-                let expr = self.method_callee(expr, method_span, None);
+                let expr = self.method_callee(expr, segment.ident.span, None);
                 // When we apply adjustments to the receiver, use the span of
                 // the overall method call for better diagnostics. args[0]
                 // is guaranteed to exist, since a method call always has a receiver.
@@ -315,7 +315,6 @@ impl<'tcx> Cx<'tcx> {
                             lhs: self.mirror_expr(lhs),
                             rhs: self.mirror_expr(rhs),
                         },
-
                         _ => {
                             let op = bin_op(op.node);
                             ExprKind::Binary {
@@ -568,12 +567,6 @@ impl<'tcx> Cx<'tcx> {
                     .collect(),
                 options: asm.options,
                 line_spans: asm.line_spans,
-            },
-
-            hir::ExprKind::LlvmInlineAsm(ref asm) => ExprKind::LlvmInlineAsm {
-                asm: &asm.inner,
-                outputs: self.mirror_exprs(asm.outputs_exprs),
-                inputs: self.mirror_exprs(asm.inputs_exprs),
             },
 
             hir::ExprKind::ConstBlock(ref anon_const) => {

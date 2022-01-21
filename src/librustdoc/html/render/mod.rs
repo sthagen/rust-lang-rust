@@ -69,8 +69,9 @@ use crate::formats::item_type::ItemType;
 use crate::formats::{AssocItemRender, Impl, RenderMode};
 use crate::html::escape::Escape;
 use crate::html::format::{
-    href, print_abi_with_space, print_constness_with_space, print_default_space,
-    print_generic_bounds, print_where_clause, Buffer, HrefError, PrintWithSpace,
+    href, join_with_double_colon, print_abi_with_space, print_constness_with_space,
+    print_default_space, print_generic_bounds, print_where_clause, Buffer, HrefError,
+    PrintWithSpace,
 };
 use crate::html::highlight;
 use crate::html::markdown::{HeadingOffset, Markdown, MarkdownHtml, MarkdownSummaryLine};
@@ -421,6 +422,12 @@ fn settings(root_path: &str, suffix: &str, theme_names: Vec<String>) -> Result<S
             "Theme preferences",
             vec![
                 Setting::from(("use-system-theme", "Use system theme", true)),
+                Setting::Select {
+                    js_data_name: "theme",
+                    description: "Theme",
+                    default_value: "light",
+                    options: theme_names.clone(),
+                },
                 Setting::Select {
                     js_data_name: "preferred-dark-theme",
                     description: "Preferred dark theme",
@@ -792,6 +799,20 @@ fn assoc_type(
     }
 }
 
+/// Writes a span containing the versions at which an item became stable and/or const-stable. For
+/// example, if the item became stable at 1.0.0, and const-stable at 1.45.0, this function would
+/// write a span containing "1.0.0 (const: 1.45.0)".
+///
+/// Returns `true` if a stability annotation was rendered.
+///
+/// Stability and const-stability are considered separately. If the item is unstable, no version
+/// will be written. If the item is const-unstable, "const: unstable" will be appended to the
+/// span, with a link to the tracking issue if present. If an item's stability or const-stability
+/// version matches the version of its enclosing item, that version will be omitted.
+///
+/// Note that it is possible for an unstable function to be const-stable. In that case, the span
+/// will include the const-stable version, but no stable version will be emitted, as a natural
+/// consequence of the above rules.
 fn render_stability_since_raw(
     w: &mut Buffer,
     ver: Option<Symbol>,
@@ -799,51 +820,56 @@ fn render_stability_since_raw(
     containing_ver: Option<Symbol>,
     containing_const_ver: Option<Symbol>,
 ) -> bool {
-    let ver = ver.filter(|inner| !inner.is_empty());
+    let stable_version = ver.filter(|inner| !inner.is_empty() && Some(*inner) != containing_ver);
 
-    match (ver, const_stability) {
-        // stable and const stable
-        (Some(v), Some(ConstStability { level: StabilityLevel::Stable { since }, .. }))
+    let mut title = String::new();
+    let mut stability = String::new();
+
+    if let Some(ver) = stable_version {
+        stability.push_str(&ver.as_str());
+        title.push_str(&format!("Stable since Rust version {}", ver));
+    }
+
+    let const_title_and_stability = match const_stability {
+        Some(ConstStability { level: StabilityLevel::Stable { since }, .. })
             if Some(since) != containing_const_ver =>
         {
-            write!(
-                w,
-                "<span class=\"since\" title=\"Stable since Rust version {0}, const since {1}\">{0} (const: {1})</span>",
-                v, since
-            );
+            Some((format!("const since {}", since), format!("const: {}", since)))
         }
-        // stable and const unstable
-        (
-            Some(v),
-            Some(ConstStability { level: StabilityLevel::Unstable { issue, .. }, feature, .. }),
-        ) => {
-            write!(
-                w,
-                "<span class=\"since\" title=\"Stable since Rust version {0}, const unstable\">{0} (const: ",
-                v
-            );
-            if let Some(n) = issue {
-                write!(
-                    w,
-                    "<a href=\"https://github.com/rust-lang/rust/issues/{}\" title=\"Tracking issue for {}\">unstable</a>",
+        Some(ConstStability { level: StabilityLevel::Unstable { issue, .. }, feature, .. }) => {
+            let unstable = if let Some(n) = issue {
+                format!(
+                    r#"<a href="https://github.com/rust-lang/rust/issues/{}" title="Tracking issue for {}">unstable</a>"#,
                     n, feature
-                );
+                )
             } else {
-                write!(w, "unstable");
-            }
-            write!(w, ")</span>");
+                String::from("unstable")
+            };
+
+            Some((String::from("const unstable"), format!("const: {}", unstable)))
         }
-        // stable
-        (Some(v), _) if ver != containing_ver => {
-            write!(
-                w,
-                "<span class=\"since\" title=\"Stable since Rust version {0}\">{0}</span>",
-                v
-            );
+        _ => None,
+    };
+
+    if let Some((const_title, const_stability)) = const_title_and_stability {
+        if !title.is_empty() {
+            title.push_str(&format!(", {}", const_title));
+        } else {
+            title.push_str(&const_title);
         }
-        _ => return false,
+
+        if !stability.is_empty() {
+            stability.push_str(&format!(" ({})", const_stability));
+        } else {
+            stability.push_str(&const_stability);
+        }
     }
-    true
+
+    if !stability.is_empty() {
+        write!(w, r#"<span class="since" title="{}">{}</span>"#, title, stability);
+    }
+
+    !stability.is_empty()
 }
 
 fn render_assoc_item(
@@ -1190,11 +1216,9 @@ fn render_deref_methods(
             }
         }
         render_assoc_items_inner(w, cx, container_item, did, what, derefs);
-    } else {
-        if let Some(prim) = target.primitive_type() {
-            if let Some(&did) = cache.primitive_locations.get(&prim) {
-                render_assoc_items_inner(w, cx, container_item, did, what, derefs);
-            }
+    } else if let Some(prim) = target.primitive_type() {
+        if let Some(&did) = cache.primitive_locations.get(&prim) {
+            render_assoc_items_inner(w, cx, container_item, did, what, derefs);
         }
     }
 }
@@ -1737,15 +1761,8 @@ fn print_sidebar(cx: &Context<'_>, it: &clean::Item, buffer: &mut Buffer) {
     {
         write!(
             buffer,
-            "<h2 class=\"location\">{}{}</h2>",
+            "<h2 class=\"location\"><a href=\"#\">{}{}</a></h2>",
             match *it.kind {
-                clean::StructItem(..) => "Struct ",
-                clean::TraitItem(..) => "Trait ",
-                clean::PrimitiveItem(..) => "Primitive Type ",
-                clean::UnionItem(..) => "Union ",
-                clean::EnumItem(..) => "Enum ",
-                clean::TypedefItem(..) => "Type Definition ",
-                clean::ForeignTypeItem => "Foreign Type ",
                 clean::ModuleItem(..) =>
                     if it.is_crate() {
                         "Crate "
@@ -1758,26 +1775,14 @@ fn print_sidebar(cx: &Context<'_>, it: &clean::Item, buffer: &mut Buffer) {
         );
     }
 
-    if it.is_crate() {
-        if let Some(ref version) = cx.cache().crate_version {
-            write!(
-                buffer,
-                "<div class=\"block version\">\
-                     <div class=\"narrow-helper\"></div>\
-                     <p>Version {}</p>\
-                 </div>",
-                Escape(version),
-            );
-        }
-    }
-
     buffer.write_str("<div class=\"sidebar-elems\">");
     if it.is_crate() {
-        write!(
-            buffer,
-            "<a id=\"all-types\" href=\"all.html\"><p>See all {}'s items</p></a>",
-            it.name.as_ref().expect("crates always have a name"),
-        );
+        write!(buffer, "<div class=\"block\"><ul>");
+        if let Some(ref version) = cx.cache().crate_version {
+            write!(buffer, "<li class=\"version\">Version {}</li>", Escape(version));
+        }
+        write!(buffer, "<li><a id=\"all-types\" href=\"all.html\">All Items</a></li>");
+        buffer.write_str("</div></ul>");
     }
 
     match *it.kind {
@@ -1801,7 +1806,7 @@ fn print_sidebar(cx: &Context<'_>, it: &clean::Item, buffer: &mut Buffer) {
     // to navigate the documentation (though slightly inefficiently).
 
     if !it.is_mod() {
-        buffer.write_str("<h2 class=\"location\">Other items in<br>");
+        buffer.write_str("<h2 class=\"location\">In ");
         for (i, name) in cx.current.iter().take(parentlen).enumerate() {
             if i > 0 {
                 buffer.write_str("::<wbr>");
@@ -2515,7 +2520,7 @@ fn collect_paths_for_type(first_ty: clean::Type, cache: &Cache) -> Vec<String> {
         let fqp = cache.exact_paths.get(&did).cloned().or_else(get_extern);
 
         if let Some(path) = fqp {
-            out.push(path.join("::"));
+            out.push(join_with_double_colon(&path));
         }
     };
 

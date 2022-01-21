@@ -2,10 +2,12 @@
 //! injecting code into the crate before it is lowered to HIR.
 
 #![doc(html_root_url = "https://doc.rust-lang.org/nightly/nightly-rustc/")]
+#![feature(array_windows)]
 #![feature(box_patterns)]
 #![feature(bool_to_option)]
 #![feature(crate_visibility_modifier)]
 #![feature(decl_macro)]
+#![feature(is_sorted)]
 #![feature(nll)]
 #![feature(proc_macro_internals)]
 #![feature(proc_macro_quote)]
@@ -33,7 +35,6 @@ mod env;
 mod format;
 mod format_foreign;
 mod global_allocator;
-mod llvm_asm;
 mod log_syntax;
 mod panic;
 mod source_util;
@@ -78,7 +79,6 @@ pub fn register_builtin_macros(resolver: &mut dyn ResolverExpand) {
         include_str: source_util::expand_include_str,
         include: source_util::expand_include,
         line: source_util::expand_line,
-        llvm_asm: llvm_asm::expand_llvm_asm,
         log_syntax: log_syntax::expand_log_syntax,
         module_path: source_util::expand_mod,
         option_env: env::expand_option_env,

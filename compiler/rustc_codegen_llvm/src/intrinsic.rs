@@ -7,7 +7,6 @@ use crate::type_of::LayoutLlvmExt;
 use crate::va_arg::emit_va_arg;
 use crate::value::Value;
 
-use rustc_ast as ast;
 use rustc_codegen_ssa::base::{compare_simd_types, wants_msvc_seh};
 use rustc_codegen_ssa::common::span_invalid_monomorphization_error;
 use rustc_codegen_ssa::common::{IntPredicate, TypeKind};
@@ -351,7 +350,7 @@ impl<'ll, 'tcx> IntrinsicCallMethods<'tcx> for Builder<'_, 'll, 'tcx> {
                     self.type_void(),
                     true,
                     false,
-                    ast::LlvmAsmDialect::Att,
+                    llvm::AsmDialect::Att,
                     &[span],
                     false,
                     None,
@@ -1689,7 +1688,7 @@ unsupported {} from `{}` with element `{}` of size `{}` to `{}`"#,
     bitwise_red!(simd_reduce_all: vector_reduce_and, true);
     bitwise_red!(simd_reduce_any: vector_reduce_or, true);
 
-    if name == sym::simd_cast {
+    if name == sym::simd_cast || name == sym::simd_as {
         require_simd!(ret_ty, "return");
         let (out_len, out_elem) = ret_ty.simd_size_and_type(bx.tcx());
         require!(
@@ -1715,14 +1714,26 @@ unsupported {} from `{}` with element `{}` of size `{}` to `{}`"#,
         let (in_style, in_width) = match in_elem.kind() {
             // vectors of pointer-sized integers should've been
             // disallowed before here, so this unwrap is safe.
-            ty::Int(i) => (Style::Int(true), i.bit_width().unwrap()),
-            ty::Uint(u) => (Style::Int(false), u.bit_width().unwrap()),
+            ty::Int(i) => (
+                Style::Int(true),
+                i.normalize(bx.tcx().sess.target.pointer_width).bit_width().unwrap(),
+            ),
+            ty::Uint(u) => (
+                Style::Int(false),
+                u.normalize(bx.tcx().sess.target.pointer_width).bit_width().unwrap(),
+            ),
             ty::Float(f) => (Style::Float, f.bit_width()),
             _ => (Style::Unsupported, 0),
         };
         let (out_style, out_width) = match out_elem.kind() {
-            ty::Int(i) => (Style::Int(true), i.bit_width().unwrap()),
-            ty::Uint(u) => (Style::Int(false), u.bit_width().unwrap()),
+            ty::Int(i) => (
+                Style::Int(true),
+                i.normalize(bx.tcx().sess.target.pointer_width).bit_width().unwrap(),
+            ),
+            ty::Uint(u) => (
+                Style::Int(false),
+                u.normalize(bx.tcx().sess.target.pointer_width).bit_width().unwrap(),
+            ),
             ty::Float(f) => (Style::Float, f.bit_width()),
             _ => (Style::Unsupported, 0),
         };
@@ -1749,10 +1760,10 @@ unsupported {} from `{}` with element `{}` of size `{}` to `{}`"#,
                 });
             }
             (Style::Float, Style::Int(out_is_signed)) => {
-                return Ok(if out_is_signed {
-                    bx.fptosi(args[0].immediate(), llret_ty)
-                } else {
-                    bx.fptoui(args[0].immediate(), llret_ty)
+                return Ok(match (out_is_signed, name == sym::simd_as) {
+                    (false, false) => bx.fptoui(args[0].immediate(), llret_ty),
+                    (true, false) => bx.fptosi(args[0].immediate(), llret_ty),
+                    (_, true) => bx.cast_float_to_int(out_is_signed, args[0].immediate(), llret_ty),
                 });
             }
             (Style::Float, Style::Float) => {

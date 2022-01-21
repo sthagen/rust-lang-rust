@@ -245,7 +245,7 @@ enum LenOutput<'tcx> {
     Option(DefId),
     Result(DefId, Ty<'tcx>),
 }
-fn parse_len_output(cx: &LateContext<'_>, sig: FnSig<'tcx>) -> Option<LenOutput<'tcx>> {
+fn parse_len_output<'tcx>(cx: &LateContext<'_>, sig: FnSig<'tcx>) -> Option<LenOutput<'tcx>> {
     match *sig.output().kind() {
         ty::Int(_) | ty::Uint(_) => Some(LenOutput::Integral),
         ty::Adt(adt, subs) if cx.tcx.is_diagnostic_item(sym::Option, adt.did) => {
@@ -370,7 +370,7 @@ fn check_for_is_empty(
 }
 
 fn check_cmp(cx: &LateContext<'_>, span: Span, method: &Expr<'_>, lit: &Expr<'_>, op: &str, compare_to: u32) {
-    if let (&ExprKind::MethodCall(method_path, _, args, _), &ExprKind::Lit(ref lit)) = (&method.kind, &lit.kind) {
+    if let (&ExprKind::MethodCall(method_path, args, _), &ExprKind::Lit(ref lit)) = (&method.kind, &lit.kind) {
         // check if we are in an is_empty() method
         if let Some(name) = get_item_name(cx, method) {
             if name.as_str() == "is_empty" {

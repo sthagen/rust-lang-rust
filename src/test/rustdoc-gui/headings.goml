@@ -15,7 +15,6 @@
 goto: file://|DOC_PATH|/test_docs/struct.HeavilyDocumentedStruct.html
 
 assert-css: ("h1.fqn", {"font-size": "24px"})
-assert-css: (".main-heading", {"border-bottom-width": "1px"})
 
 assert-css: ("h2#top-doc-prose-title", {"font-size": "20.8px"})
 assert-css: ("h2#top-doc-prose-title", {"border-bottom-width": "1px"})
@@ -55,7 +54,6 @@ assert-css: ("h6#sub-sub-heading-for-struct-impl-item-doc", {"font-size": "15.2p
 goto: file://|DOC_PATH|/test_docs/enum.HeavilyDocumentedEnum.html
 
 assert-css: ("h1.fqn", {"font-size": "24px"})
-assert-css: (".main-heading", {"border-bottom-width": "1px"})
 
 assert-css: ("h2#top-doc-prose-title", {"font-size": "20.8px"})
 assert-css: ("h2#top-doc-prose-title", {"border-bottom-width": "1px"})
@@ -110,12 +108,11 @@ assert-css: ("h6#sub-sub-heading-for-enum-impl-item-doc", {"font-size": "15.2px"
 assert-css: ("h6#sub-sub-heading-for-enum-impl-item-doc", {"border-bottom-width": "0px"})
 
 assert-text: (".sidebar .others h3", "Modules")
-assert-css: (".sidebar .others h3", {"border-bottom-width": "1px"}, ALL)
+assert-css: (".sidebar .others h3", {"border-bottom-width": "0px"}, ALL)
 
 goto: file://|DOC_PATH|/test_docs/union.HeavilyDocumentedUnion.html
 
 assert-css: ("h1.fqn", {"font-size": "24px"})
-assert-css: (".main-heading", {"border-bottom-width": "1px"})
 
 assert-css: ("h2#top-doc-prose-title", {"font-size": "20.8px"})
 assert-css: ("h2#top-doc-prose-title", {"border-bottom-width": "1px"})
@@ -148,9 +145,21 @@ assert-css: ("h6#sub-heading-for-union-impl-item-doc", {"border-bottom-width": "
 goto: file://|DOC_PATH|/test_docs/macro.heavily_documented_macro.html
 
 assert-css: ("h1.fqn", {"font-size": "24px"})
-assert-css: (".main-heading", {"border-bottom-width": "1px"})
 
 assert-css: ("h2#top-doc-prose-title", {"font-size": "20.8px"})
 assert-css: ("h2#top-doc-prose-title", {"border-bottom-width": "1px"})
 assert-css: ("h3#top-doc-prose-sub-heading", {"font-size": "18.4px"})
 assert-css: ("h3#top-doc-prose-sub-heading", {"border-bottom-width": "1px"})
+
+goto: file://|DOC_PATH|/staged_api/struct.Foo.html
+show-text: true
+local-storage: {"rustdoc-theme": "light", "rustdoc-use-system-theme": "false"}
+assert-css: (".since", {"color": "rgb(128, 128, 128)"})
+
+local-storage: {"rustdoc-theme": "dark", "rustdoc-use-system-theme": "false"}
+reload:
+assert-css: (".since", {"color": "rgb(128, 128, 128)"})
+
+local-storage: {"rustdoc-theme": "ayu", "rustdoc-use-system-theme": "false"}
+reload:
+assert-css: (".since", {"color": "rgb(128, 128, 128)"})

@@ -65,11 +65,11 @@ use rustc_hir::def_id::DefId;
 use rustc_hir::lang_items::LangItem;
 use rustc_hir::{Item, ItemKind, Node};
 use rustc_middle::dep_graph::DepContext;
-use rustc_middle::ty::error::TypeError;
 use rustc_middle::ty::{
     self,
+    error::TypeError,
     subst::{GenericArgKind, Subst, SubstsRef},
-    Region, Ty, TyCtxt, TypeFoldable,
+    Binder, Region, Ty, TyCtxt, TypeFoldable,
 };
 use rustc_span::{sym, BytePos, DesugaringKind, MultiSpan, Pos, Span};
 use rustc_target::spec::abi;
@@ -151,11 +151,10 @@ fn msg_span_from_early_bound_and_free_regions<'tcx>(
 ) -> (String, Span) {
     let sm = tcx.sess.source_map();
 
-    let scope = region.free_region_binding_scope(tcx);
-    let node = tcx.hir().local_def_id_to_hir_id(scope.expect_local());
+    let scope = region.free_region_binding_scope(tcx).expect_local();
     match *region {
         ty::ReEarlyBound(ref br) => {
-            let mut sp = sm.guess_head_span(tcx.hir().span(node));
+            let mut sp = sm.guess_head_span(tcx.def_span(scope));
             if let Some(param) =
                 tcx.hir().get_generics(scope).and_then(|generics| generics.get_named(br.name))
             {
@@ -166,7 +165,7 @@ fn msg_span_from_early_bound_and_free_regions<'tcx>(
         ty::ReFree(ty::FreeRegion {
             bound_region: ty::BoundRegionKind::BrNamed(_, name), ..
         }) => {
-            let mut sp = sm.guess_head_span(tcx.hir().span(node));
+            let mut sp = sm.guess_head_span(tcx.def_span(scope));
             if let Some(param) =
                 tcx.hir().get_generics(scope).and_then(|generics| generics.get_named(name))
             {
@@ -181,13 +180,13 @@ fn msg_span_from_early_bound_and_free_regions<'tcx>(
                 } else {
                     (
                         format!("the anonymous lifetime #{} defined here", idx + 1),
-                        tcx.hir().span(node),
+                        tcx.def_span(scope),
                     )
                 }
             }
             _ => (
                 format!("the lifetime `{}` as defined here", region),
-                sm.guess_head_span(tcx.hir().span(node)),
+                sm.guess_head_span(tcx.def_span(scope)),
             ),
         },
         _ => bug!(),
@@ -1550,10 +1549,6 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         }
 
         impl<'tcx> ty::fold::TypeVisitor<'tcx> for OpaqueTypesVisitor<'tcx> {
-            fn tcx_for_anon_const_substs(&self) -> Option<TyCtxt<'tcx>> {
-                Some(self.tcx)
-            }
-
             fn visit_ty(&mut self, t: Ty<'tcx>) -> ControlFlow<Self::BreakTy> {
                 if let Some((kind, def_id)) = TyCategory::from_ty(self.tcx, t) {
                     let span = self.tcx.def_span(def_id);
@@ -1759,8 +1754,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         if let Some(ValuePairs::PolyTraitRefs(exp_found)) = values {
             if let ty::Closure(def_id, _) = exp_found.expected.skip_binder().self_ty().kind() {
                 if let Some(def_id) = def_id.as_local() {
-                    let hir_id = self.tcx.hir().local_def_id_to_hir_id(def_id);
-                    let span = self.tcx.hir().span(hir_id);
+                    let span = self.tcx.def_span(def_id);
                     diag.span_note(span, "this closure does not fulfill the lifetime requirements");
                 }
             }
@@ -1771,7 +1765,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         self.note_error_origin(diag, cause, exp_found, terr);
     }
 
-    pub fn get_impl_future_output_ty(&self, ty: Ty<'tcx>) -> Option<Ty<'tcx>> {
+    pub fn get_impl_future_output_ty(&self, ty: Ty<'tcx>) -> Option<Binder<'tcx, Ty<'tcx>>> {
         if let ty::Opaque(def_id, substs) = ty.kind() {
             let future_trait = self.tcx.require_lang_item(LangItem::Future, None);
             // Future::Output
@@ -1781,13 +1775,20 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
 
             for (predicate, _) in bounds {
                 let predicate = predicate.subst(self.tcx, substs);
-                if let ty::PredicateKind::Projection(projection_predicate) =
-                    predicate.kind().skip_binder()
-                {
-                    if projection_predicate.projection_ty.item_def_id == item_def_id {
-                        // We don't account for multiple `Future::Output = Ty` contraints.
-                        return Some(projection_predicate.ty);
-                    }
+                let output = predicate
+                    .kind()
+                    .map_bound(|kind| match kind {
+                        ty::PredicateKind::Projection(projection_predicate)
+                            if projection_predicate.projection_ty.item_def_id == item_def_id =>
+                        {
+                            projection_predicate.term.ty()
+                        }
+                        _ => None,
+                    })
+                    .transpose();
+                if output.is_some() {
+                    // We don't account for multiple `Future::Output = Ty` contraints.
+                    return output;
                 }
             }
         }
@@ -1829,8 +1830,8 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         }
 
         match (
-            self.get_impl_future_output_ty(exp_found.expected),
-            self.get_impl_future_output_ty(exp_found.found),
+            self.get_impl_future_output_ty(exp_found.expected).map(Binder::skip_binder),
+            self.get_impl_future_output_ty(exp_found.found).map(Binder::skip_binder),
         ) {
             (Some(exp), Some(found)) if same_type_modulo_infer(exp, found) => match cause.code() {
                 ObligationCauseCode::IfExpression(box IfExpressionCause { then, .. }) => {
@@ -2212,9 +2213,9 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                     if let Some(Node::Item(Item {
                         kind: ItemKind::Trait(..) | ItemKind::Impl { .. },
                         ..
-                    })) = hir.find(parent_id)
+                    })) = hir.find_by_def_id(parent_id)
                     {
-                        Some(self.tcx.generics_of(hir.local_def_id(parent_id).to_def_id()))
+                        Some(self.tcx.generics_of(parent_id))
                     } else {
                         None
                     },
@@ -2245,7 +2246,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                         if let Node::GenericParam(param) = hir.get(id) {
                             has_bounds = !param.bounds.is_empty();
                         }
-                        let sp = hir.span(id);
+                        let sp = self.tcx.def_span(def_id);
                         // `sp` only covers `T`, change it so that it covers
                         // `T:` when appropriate
                         let is_impl_trait = bound_kind.to_string().starts_with("impl ");
@@ -2291,12 +2292,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             .as_ref()
             .and_then(|(_, g, _)| g.params.first())
             .and_then(|param| param.def_id.as_local())
-            .map(|def_id| {
-                (
-                    hir.span(hir.local_def_id_to_hir_id(def_id)).shrink_to_lo(),
-                    format!("{}, ", new_lt),
-                )
-            });
+            .map(|def_id| (self.tcx.def_span(def_id).shrink_to_lo(), format!("{}, ", new_lt)));
 
         let labeled_user_string = match bound_kind {
             GenericKind::Param(ref p) => format!("the parameter type `{}`", p),

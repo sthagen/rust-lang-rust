@@ -60,11 +60,11 @@ Two noticeable items here:
 Starting with an `expr`, you can check whether it is calling a specific method `some_method`:
 
 ```rust
-impl LateLintPass<'_> for MyStructLint {
+impl<'tcx> LateLintPass<'tcx> for MyStructLint {
     fn check_expr(&mut self, cx: &LateContext<'tcx>, expr: &'tcx hir::Expr<'_>) {
         if_chain! {
             // Check our expr is calling a method
-            if let hir::ExprKind::MethodCall(path, _, [_self_arg, ..], _) = &expr.kind;
+            if let hir::ExprKind::MethodCall(path, _, [_self_arg, ..]) = &expr.kind;
             // Check the name of this method is `some_method`
             if path.ident.name == sym!(some_method);
             // Optionally, check the type of the self argument.

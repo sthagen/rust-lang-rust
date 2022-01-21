@@ -148,8 +148,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 hir::ExprKind::Call(hir::Expr { span, .. }, args) => {
                     (*span, *span, &args[..], None)
                 }
-                hir::ExprKind::MethodCall(path_segment, span, args, _) => (
-                    *span,
+                hir::ExprKind::MethodCall(path_segment, args, _) => (
+                    path_segment.ident.span,
                     // `sp` doesn't point at the whole `foo.bar()`, only at `bar`.
                     path_segment
                         .args
@@ -161,7 +161,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                                 .source_map()
                                 .next_point(tcx.sess.source_map().next_point(arg.span()))
                         })
-                        .unwrap_or(*span),
+                        .unwrap_or(path_segment.ident.span),
                     &args[1..], // Skip the receiver.
                     None,       // methods are never ctors
                 ),
@@ -846,7 +846,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     }
 
     fn parent_item_span(&self, id: hir::HirId) -> Option<Span> {
-        let node = self.tcx.hir().get(self.tcx.hir().get_parent_item(id));
+        let node = self.tcx.hir().get_by_def_id(self.tcx.hir().get_parent_item(id));
         match node {
             Node::Item(&hir::Item { kind: hir::ItemKind::Fn(_, _, body_id), .. })
             | Node::ImplItem(&hir::ImplItem { kind: hir::ImplItemKind::Fn(_, body_id), .. }) => {
@@ -862,7 +862,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
     /// Given a function block's `HirId`, returns its `FnDecl` if it exists, or `None` otherwise.
     fn get_parent_fn_decl(&self, blk_id: hir::HirId) -> Option<(&'tcx hir::FnDecl<'tcx>, Ident)> {
-        let parent = self.tcx.hir().get(self.tcx.hir().get_parent_item(blk_id));
+        let parent = self.tcx.hir().get_by_def_id(self.tcx.hir().get_parent_item(blk_id));
         self.get_node_fn_decl(parent).map(|(fn_decl, ident, _)| (fn_decl, ident))
     }
 
@@ -1036,7 +1036,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     let ty = self.resolve_vars_if_possible(ty);
                     // We walk the argument type because the argument's type could have
                     // been `Option<T>`, but the `FulfillmentError` references `T`.
-                    if ty.walk(self.tcx).any(|arg| arg == self_) { Some(i) } else { None }
+                    if ty.walk().any(|arg| arg == self_) { Some(i) } else { None }
                 })
                 .collect::<Vec<usize>>();
 

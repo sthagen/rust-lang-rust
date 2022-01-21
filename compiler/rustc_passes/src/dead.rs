@@ -3,18 +3,20 @@
 // from live codes are live, and everything else is dead.
 
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
+use rustc_errors::pluralize;
 use rustc_hir as hir;
 use rustc_hir::def::{CtorOf, DefKind, Res};
 use rustc_hir::def_id::{DefId, LocalDefId};
-use rustc_hir::intravisit::{self, NestedVisitorMap, Visitor};
+use rustc_hir::intravisit::{self, Visitor};
 use rustc_hir::itemlikevisit::ItemLikeVisitor;
 use rustc_hir::{Node, PatKind, TyKind};
-use rustc_middle::hir::map::Map;
+use rustc_middle::hir::nested_filter;
 use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use rustc_middle::middle::privacy;
 use rustc_middle::ty::{self, DefIdTree, TyCtxt};
 use rustc_session::lint;
 use rustc_span::symbol::{sym, Symbol};
+use rustc_span::Span;
 use std::mem;
 
 // Any local node that may call something in its body block should be
@@ -23,7 +25,7 @@ use std::mem;
 // may need to be marked as live.
 fn should_explore(tcx: TyCtxt<'_>, def_id: LocalDefId) -> bool {
     matches!(
-        tcx.hir().find(tcx.hir().local_def_id_to_hir_id(def_id)),
+        tcx.hir().find_by_def_id(def_id),
         Some(
             Node::Item(..)
                 | Node::ImplItem(..)
@@ -47,6 +49,10 @@ struct MarkSymbolVisitor<'tcx> {
     ignore_variant_stack: Vec<DefId>,
     // maps from tuple struct constructors to tuple struct items
     struct_constructors: FxHashMap<LocalDefId, LocalDefId>,
+    // maps from ADTs to ignored derived traits (e.g. Debug and Clone)
+    // and the span of their respective impl (i.e., part of the derive
+    // macro)
+    ignored_derived_traits: FxHashMap<DefId, Vec<(Span, DefId)>>,
 }
 
 impl<'tcx> MarkSymbolVisitor<'tcx> {
@@ -232,7 +238,7 @@ impl<'tcx> MarkSymbolVisitor<'tcx> {
             // tuple struct constructor function
             let id = self.struct_constructors.get(&id).copied().unwrap_or(id);
 
-            if let Some(node) = self.tcx.hir().find(self.tcx.hir().local_def_id_to_hir_id(id)) {
+            if let Some(node) = self.tcx.hir().find_by_def_id(id) {
                 self.live_symbols.insert(id);
                 self.visit_node(node);
             }
@@ -242,7 +248,7 @@ impl<'tcx> MarkSymbolVisitor<'tcx> {
     /// Automatically generated items marked with `rustc_trivial_field_reads`
     /// will be ignored for the purposes of dead code analysis (see PR #85200
     /// for discussion).
-    fn should_ignore_item(&self, def_id: DefId) -> bool {
+    fn should_ignore_item(&mut self, def_id: DefId) -> bool {
         if let Some(impl_of) = self.tcx.impl_of_method(def_id) {
             if !self.tcx.has_attr(impl_of, sym::automatically_derived) {
                 return false;
@@ -250,6 +256,16 @@ impl<'tcx> MarkSymbolVisitor<'tcx> {
 
             if let Some(trait_of) = self.tcx.trait_id_of_impl(impl_of) {
                 if self.tcx.has_attr(trait_of, sym::rustc_trivial_field_reads) {
+                    let trait_ref = self.tcx.impl_trait_ref(impl_of).unwrap();
+                    if let ty::Adt(adt_def, _) = trait_ref.self_ty().kind() {
+                        let impl_span = self.tcx.def_span(impl_of);
+                        if let Some(v) = self.ignored_derived_traits.get_mut(&adt_def.did) {
+                            v.push((impl_span, trait_of));
+                        } else {
+                            self.ignored_derived_traits
+                                .insert(adt_def.did, vec![(impl_span, trait_of)]);
+                        }
+                    }
                     return true;
                 }
             }
@@ -323,12 +339,6 @@ impl<'tcx> MarkSymbolVisitor<'tcx> {
 }
 
 impl<'tcx> Visitor<'tcx> for MarkSymbolVisitor<'tcx> {
-    type Map = intravisit::ErasedMap<'tcx>;
-
-    fn nested_visit_map(&mut self) -> intravisit::NestedVisitorMap<Self::Map> {
-        NestedVisitorMap::None
-    }
-
     fn visit_nested_body(&mut self, body: hir::BodyId) {
         let old_maybe_typeck_results =
             self.maybe_typeck_results.replace(self.tcx.typeck_body(body));
@@ -577,7 +587,7 @@ fn create_and_seed_worklist<'tcx>(
 fn find_live<'tcx>(
     tcx: TyCtxt<'tcx>,
     access_levels: &privacy::AccessLevels,
-) -> FxHashSet<LocalDefId> {
+) -> (FxHashSet<LocalDefId>, FxHashMap<DefId, Vec<(Span, DefId)>>) {
     let (worklist, struct_constructors) = create_and_seed_worklist(tcx, access_levels);
     let mut symbol_visitor = MarkSymbolVisitor {
         worklist,
@@ -590,14 +600,16 @@ fn find_live<'tcx>(
         pub_visibility: false,
         ignore_variant_stack: vec![],
         struct_constructors,
+        ignored_derived_traits: FxHashMap::default(),
     };
     symbol_visitor.mark_live_symbols();
-    symbol_visitor.live_symbols
+    (symbol_visitor.live_symbols, symbol_visitor.ignored_derived_traits)
 }
 
 struct DeadVisitor<'tcx> {
     tcx: TyCtxt<'tcx>,
     live_symbols: FxHashSet<LocalDefId>,
+    ignored_derived_traits: FxHashMap<DefId, Vec<(Span, DefId)>>,
 }
 
 impl<'tcx> DeadVisitor<'tcx> {
@@ -666,21 +678,51 @@ impl<'tcx> DeadVisitor<'tcx> {
             self.tcx.struct_span_lint_hir(lint::builtin::DEAD_CODE, id, span, |lint| {
                 let def_id = self.tcx.hir().local_def_id(id);
                 let descr = self.tcx.def_kind(def_id).descr(def_id.to_def_id());
-                lint.build(&format!("{} is never {}: `{}`", descr, participle, name)).emit()
+                let mut err = lint.build(&format!("{} is never {}: `{}`", descr, participle, name));
+                let hir = self.tcx.hir();
+                if let Some(encl_scope) = hir.get_enclosing_scope(id) {
+                    if let Some(encl_def_id) = hir.opt_local_def_id(encl_scope) {
+                        if let Some(ign_traits) =
+                            self.ignored_derived_traits.get(&encl_def_id.to_def_id())
+                        {
+                            let traits_str = ign_traits
+                                .iter()
+                                .map(|(_, t)| format!("`{}`", self.tcx.item_name(*t)))
+                                .collect::<Vec<_>>()
+                                .join(" and ");
+                            let plural_s = pluralize!(ign_traits.len());
+                            let article = if ign_traits.len() > 1 { "" } else { "a " };
+                            let is_are = if ign_traits.len() > 1 { "these are" } else { "this is" };
+                            let msg = format!(
+                                "`{}` has {}derived impl{} for the trait{} {}, but {} \
+                                 intentionally ignored during dead code analysis",
+                                self.tcx.item_name(encl_def_id.to_def_id()),
+                                article,
+                                plural_s,
+                                plural_s,
+                                traits_str,
+                                is_are
+                            );
+                            let multispan = ign_traits.iter().map(|(s, _)| *s).collect::<Vec<_>>();
+                            err.span_note(multispan, &msg);
+                        }
+                    }
+                }
+                err.emit();
             });
         }
     }
 }
 
 impl<'tcx> Visitor<'tcx> for DeadVisitor<'tcx> {
-    type Map = Map<'tcx>;
+    type NestedFilter = nested_filter::All;
 
     /// Walk nested items in place so that we don't report dead-code
     /// on inner functions when the outer function is already getting
     /// an error. We could do this also by checking the parents, but
     /// this is how the code is setup and it seems harmless enough.
-    fn nested_visit_map(&mut self) -> NestedVisitorMap<Self::Map> {
-        NestedVisitorMap::All(self.tcx.hir())
+    fn nested_visit_map(&mut self) -> Self::Map {
+        self.tcx.hir()
     }
 
     fn visit_item(&mut self, item: &'tcx hir::Item<'tcx>) {
@@ -796,7 +838,7 @@ impl<'tcx> Visitor<'tcx> for DeadVisitor<'tcx> {
 
 pub fn check_crate(tcx: TyCtxt<'_>) {
     let access_levels = &tcx.privacy_access_levels(());
-    let live_symbols = find_live(tcx, access_levels);
-    let mut visitor = DeadVisitor { tcx, live_symbols };
+    let (live_symbols, ignored_derived_traits) = find_live(tcx, access_levels);
+    let mut visitor = DeadVisitor { tcx, live_symbols, ignored_derived_traits };
     tcx.hir().walk_toplevel_module(&mut visitor);
 }

@@ -4,15 +4,15 @@ use rustc_errors::{pluralize, struct_span_err, Applicability, DiagnosticBuilder}
 use rustc_hir as hir;
 use rustc_hir::def::{DefKind, Namespace};
 use rustc_hir::def_id::DefId;
-use rustc_hir::intravisit::{self, NestedVisitorMap, Visitor};
+use rustc_hir::intravisit::{self, Visitor};
 use rustc_hir::{Body, Expr, ExprKind, FnRetTy, HirId, Local, MatchSource, Pat};
-use rustc_middle::hir::map::Map;
+use rustc_middle::hir::nested_filter;
 use rustc_middle::infer::unify_key::ConstVariableOriginKind;
 use rustc_middle::ty::print::Print;
 use rustc_middle::ty::subst::{GenericArg, GenericArgKind};
 use rustc_middle::ty::{self, Const, DefIdTree, InferConst, Ty, TyCtxt, TypeFoldable, TypeFolder};
 use rustc_span::symbol::kw;
-use rustc_span::Span;
+use rustc_span::{sym, Span};
 use std::borrow::Cow;
 
 struct FindHirNodeVisitor<'a, 'tcx> {
@@ -52,7 +52,7 @@ impl<'a, 'tcx> FindHirNodeVisitor<'a, 'tcx> {
 
     fn node_ty_contains_target(&self, hir_id: HirId) -> Option<Ty<'tcx>> {
         self.node_type_opt(hir_id).map(|ty| self.infcx.resolve_vars_if_possible(ty)).filter(|ty| {
-            ty.walk(self.infcx.tcx).any(|inner| {
+            ty.walk().any(|inner| {
                 inner == self.target
                     || match (inner.unpack(), self.target.unpack()) {
                         (GenericArgKind::Type(inner_ty), GenericArgKind::Type(target_ty)) => {
@@ -83,10 +83,10 @@ impl<'a, 'tcx> FindHirNodeVisitor<'a, 'tcx> {
 }
 
 impl<'a, 'tcx> Visitor<'tcx> for FindHirNodeVisitor<'a, 'tcx> {
-    type Map = Map<'tcx>;
+    type NestedFilter = nested_filter::OnlyBodies;
 
-    fn nested_visit_map(&mut self) -> NestedVisitorMap<Self::Map> {
-        NestedVisitorMap::OnlyBodies(self.infcx.tcx.hir())
+    fn nested_visit_map(&mut self) -> Self::Map {
+        self.infcx.tcx.hir()
     }
 
     fn visit_local(&mut self, local: &'tcx Local<'tcx>) {
@@ -121,8 +121,8 @@ impl<'a, 'tcx> Visitor<'tcx> for FindHirNodeVisitor<'a, 'tcx> {
                 }
             }
         }
-        if let ExprKind::MethodCall(_, call_span, exprs, _) = expr.kind {
-            if call_span == self.target_span
+        if let ExprKind::MethodCall(segment, exprs, _) = expr.kind {
+            if segment.ident.span == self.target_span
                 && Some(self.target)
                     == self.infcx.in_progress_typeck_results.and_then(|typeck_results| {
                         typeck_results
@@ -445,9 +445,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                             parent: None,
                         }
                     }
-                    ty::ConstKind::Unevaluated(ty::Unevaluated {
-                        substs_: Some(substs), ..
-                    }) => {
+                    ty::ConstKind::Unevaluated(ty::Unevaluated { substs, .. }) => {
                         assert!(substs.has_infer_types_or_consts());
 
                         // FIXME: We only use the first inference variable we encounter in
@@ -533,7 +531,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             // 3 |     let _ = x.sum() as f64;
             //   |               ^^^ cannot infer type for `S`
             span
-        } else if let Some(ExprKind::MethodCall(_, call_span, _, _)) =
+        } else if let Some(ExprKind::MethodCall(segment, ..)) =
             local_visitor.found_method_call.map(|e| &e.kind)
         {
             // Point at the call instead of the whole expression:
@@ -544,7 +542,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             //   |                         ^^^^^^^ cannot infer type
             //   |
             //   = note: cannot resolve `<_ as std::ops::Try>::Ok == _`
-            if span.contains(*call_span) { *call_span } else { span }
+            if span.contains(segment.ident.span) { segment.ident.span } else { span }
         } else {
             span
         };
@@ -711,7 +709,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             };
             err.span_label(pattern.span, msg);
         } else if let Some(e) = local_visitor.found_method_call {
-            if let ExprKind::MethodCall(segment, _, exprs, _) = &e.kind {
+            if let ExprKind::MethodCall(segment, exprs, _) = &e.kind {
                 // Suggest impl candidates:
                 //
                 // error[E0283]: type annotations needed
@@ -1003,9 +1001,9 @@ impl<'tcx> TypeFolder<'tcx> for ResolvedTypeParamEraser<'tcx> {
             | ty::Opaque(..)
             | ty::Projection(_)
             | ty::Never => t.super_fold_with(self),
-            ty::Array(ty, c) => self
-                .tcx()
-                .mk_ty(ty::Array(self.fold_ty(ty), self.replace_infers(c, 0, Symbol::intern("N")))),
+            ty::Array(ty, c) => {
+                self.tcx().mk_ty(ty::Array(self.fold_ty(ty), self.replace_infers(c, 0, sym::N)))
+            }
             // We don't want to hide type params that haven't been resolved yet.
             // This would be the type that will be written out with the type param
             // name in the output.

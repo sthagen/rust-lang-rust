@@ -37,7 +37,7 @@ declare_clippy_lint! {
 
 declare_lint_pass!(SizeOfInElementCount => [SIZE_OF_IN_ELEMENT_COUNT]);
 
-fn get_size_of_ty(cx: &LateContext<'tcx>, expr: &'tcx Expr<'_>, inverted: bool) -> Option<Ty<'tcx>> {
+fn get_size_of_ty<'tcx>(cx: &LateContext<'tcx>, expr: &'tcx Expr<'_>, inverted: bool) -> Option<Ty<'tcx>> {
     match expr.kind {
         ExprKind::Call(count_func, _func_args) => {
             if_chain! {
@@ -64,7 +64,10 @@ fn get_size_of_ty(cx: &LateContext<'tcx>, expr: &'tcx Expr<'_>, inverted: bool) 
     }
 }
 
-fn get_pointee_ty_and_count_expr(cx: &LateContext<'tcx>, expr: &'tcx Expr<'_>) -> Option<(Ty<'tcx>, &'tcx Expr<'tcx>)> {
+fn get_pointee_ty_and_count_expr<'tcx>(
+    cx: &LateContext<'tcx>,
+    expr: &'tcx Expr<'_>,
+) -> Option<(Ty<'tcx>, &'tcx Expr<'tcx>)> {
     const FUNCTIONS: [&[&str]; 8] = [
         &paths::PTR_COPY_NONOVERLAPPING,
         &paths::PTR_COPY,
@@ -105,7 +108,7 @@ fn get_pointee_ty_and_count_expr(cx: &LateContext<'tcx>, expr: &'tcx Expr<'_>) -
     };
     if_chain! {
         // Find calls to copy_{from,to}{,_nonoverlapping} and write_bytes methods
-        if let ExprKind::MethodCall(method_path, _, [ptr_self, .., count], _) = expr.kind;
+        if let ExprKind::MethodCall(method_path, [ptr_self, .., count], _) = expr.kind;
         let method_ident = method_path.ident.as_str();
         if METHODS.iter().any(|m| *m == &*method_ident);
 

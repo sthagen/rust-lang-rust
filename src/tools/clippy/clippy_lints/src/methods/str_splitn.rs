@@ -124,7 +124,7 @@ struct IterUsage {
 }
 
 #[allow(clippy::too_many_lines)]
-fn parse_iter_usage(
+fn parse_iter_usage<'tcx>(
     cx: &LateContext<'tcx>,
     ctxt: SyntaxContext,
     mut iter: impl Iterator<Item = (HirId, Node<'tcx>)>,
@@ -132,7 +132,7 @@ fn parse_iter_usage(
 ) -> Option<IterUsage> {
     let (kind, span) = match iter.next() {
         Some((_, Node::Expr(e))) if e.span.ctxt() == ctxt => {
-            let (name, args) = if let ExprKind::MethodCall(name, _, [_, args @ ..], _) = e.kind {
+            let (name, args) = if let ExprKind::MethodCall(name, [_, args @ ..], _) = e.kind {
                 (name, args)
             } else {
                 return None;
@@ -173,7 +173,7 @@ fn parse_iter_usage(
                         } else {
                             if_chain! {
                                 if let Some((_, Node::Expr(next_expr))) = iter.next();
-                                if let ExprKind::MethodCall(next_name, _, [_], _) = next_expr.kind;
+                                if let ExprKind::MethodCall(next_name, [_], _) = next_expr.kind;
                                 if next_name.ident.name == sym::next;
                                 if next_expr.span.ctxt() == ctxt;
                                 if let Some(next_id) = cx.typeck_results().type_dependent_def_id(next_expr.hir_id);
@@ -217,7 +217,7 @@ fn parse_iter_usage(
                 }
             },
             _ if e.span.ctxt() != ctxt => (None, span),
-            ExprKind::MethodCall(name, _, [_], _)
+            ExprKind::MethodCall(name, [_], _)
                 if name.ident.name == sym::unwrap
                     && cx
                         .typeck_results()
@@ -281,7 +281,7 @@ pub(super) fn check_needless_splitn(
     }
 }
 
-fn check_iter(
+fn check_iter<'tcx>(
     cx: &LateContext<'tcx>,
     ctxt: SyntaxContext,
     mut iter: impl Iterator<Item = (HirId, Node<'tcx>)>,
@@ -289,7 +289,7 @@ fn check_iter(
 ) -> bool {
     match iter.next() {
         Some((_, Node::Expr(e))) if e.span.ctxt() == ctxt => {
-            let (name, args) = if let ExprKind::MethodCall(name, _, [_, args @ ..], _) = e.kind {
+            let (name, args) = if let ExprKind::MethodCall(name, [_, args @ ..], _) = e.kind {
                 (name, args)
             } else {
                 return false;

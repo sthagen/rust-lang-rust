@@ -213,7 +213,7 @@ pub struct Expr<'tcx> {
 
 #[derive(Debug, HashStable)]
 pub enum ExprKind<'tcx> {
-    /// `Scope`s are used to explicitely mark destruction scopes,
+    /// `Scope`s are used to explicitly mark destruction scopes,
     /// and to track the `HirId` of the expressions within the scope.
     Scope {
         region_scope: region::Scope,
@@ -431,12 +431,6 @@ pub enum ExprKind<'tcx> {
     },
     /// An expression taking a reference to a thread local.
     ThreadLocalRef(DefId),
-    /// Inline LLVM assembly, i.e. `llvm_asm!()`.
-    LlvmInlineAsm {
-        asm: &'tcx hir::LlvmInlineAsmInner,
-        outputs: Box<[ExprId]>,
-        inputs: Box<[ExprId]>,
-    },
     /// A `yield` expression.
     Yield {
         value: ExprId,

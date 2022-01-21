@@ -182,7 +182,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         // `foo.bar::<u32>(...)` -- the `Self` type here will be the
         // type of `foo` (possibly adjusted), but we don't want to
         // include that. We want just the `[_, u32]` part.
-        if !method.substs.is_noop() {
+        if !method.substs.is_empty() {
             let method_generics = self.tcx.generics_of(method.def_id);
             if !method_generics.params.is_empty() {
                 let user_type_annotation = self.infcx.probe(|_| {
@@ -211,7 +211,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     }
 
     pub fn write_substs(&self, node_id: hir::HirId, substs: SubstsRef<'tcx>) {
-        if !substs.is_noop() {
+        if !substs.is_empty() {
             debug!("write_substs({:?}, {:?}) in fcx {}", node_id, substs, self.tag());
 
             self.typeck_results.borrow_mut().node_substs_mut().insert(node_id, substs);
@@ -235,7 +235,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     ) {
         debug!("fcx {}", self.tag());
 
-        if self.can_contain_user_lifetime_bounds((substs, user_self_ty)) {
+        if Self::can_contain_user_lifetime_bounds((substs, user_self_ty)) {
             let canonicalized = self.infcx.canonicalize_user_type_annotation(UserType::TypeOf(
                 def_id,
                 UserSubsts { substs, user_self_ty },
@@ -489,7 +489,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let ty = self.to_ty(ast_ty);
         debug!("to_ty_saving_user_provided_ty: ty={:?}", ty);
 
-        if self.can_contain_user_lifetime_bounds(ty) {
+        if Self::can_contain_user_lifetime_bounds(ty) {
             let c_ty = self.infcx.canonicalize_response(UserType::Ty(ty));
             debug!("to_ty_saving_user_provided_ty: c_ty={:?}", c_ty);
             self.typeck_results.borrow_mut().user_provided_types_mut().insert(ast_ty.hir_id, c_ty);
@@ -541,11 +541,11 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     // reader, although I have my doubts). Also pass in types with inference
     // types, because they may be repeated. Other sorts of things are already
     // sufficiently enforced with erased regions. =)
-    fn can_contain_user_lifetime_bounds<T>(&self, t: T) -> bool
+    fn can_contain_user_lifetime_bounds<T>(t: T) -> bool
     where
         T: TypeFoldable<'tcx>,
     {
-        t.has_free_regions(self.tcx) || t.has_projections() || t.has_infer_types()
+        t.has_free_regions() || t.has_projections() || t.has_infer_types()
     }
 
     pub fn node_ty(&self, id: hir::HirId) -> Ty<'tcx> {
@@ -964,7 +964,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         if found != self.tcx.types.unit {
             return;
         }
-        if let ExprKind::MethodCall(path_segment, _, [rcvr, ..], _) = expr.kind {
+        if let ExprKind::MethodCall(path_segment, [rcvr, ..], _) = expr.kind {
             if self
                 .typeck_results
                 .borrow()

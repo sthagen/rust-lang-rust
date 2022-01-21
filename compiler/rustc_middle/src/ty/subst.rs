@@ -275,10 +275,6 @@ impl<'a, 'tcx> InternalSubsts<'tcx> {
         }
     }
 
-    pub fn is_noop(&self) -> bool {
-        self.is_empty()
-    }
-
     #[inline]
     pub fn types(&'a self) -> impl DoubleEndedIterator<Item = Ty<'tcx>> + 'a {
         self.iter()
@@ -505,7 +501,7 @@ impl<'a, 'tcx> TypeFolder<'tcx> for SubstFolder<'a, 'tcx> {
     }
 
     fn fold_ty(&mut self, t: Ty<'tcx>) -> Ty<'tcx> {
-        if !t.potentially_needs_subst() {
+        if !t.needs_subst() {
             return t;
         }
 

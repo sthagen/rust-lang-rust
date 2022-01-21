@@ -28,7 +28,7 @@ pre, .rustdoc.source .example-wrap {
 	background-color: #2A2A2A;
 }
 
-.sidebar {
+.sidebar, .mobile-topbar, .sidebar-menu-toggle {
 	background-color: #505050;
 }
 
@@ -67,21 +67,6 @@ pre, .rustdoc.source .example-wrap {
 
 .source .sidebar {
 	background-color: #565656;
-}
-
-.sidebar .location {
-	border-color: #fff;
-	background: #575757;
-	color: #DDD;
-}
-
-.sidebar .version {
-	border-bottom-color: #DDD;
-}
-
-.sidebar-title {
-	border-top-color: #777;
-	border-bottom-color: #777;
 }
 
 .block a:hover {
@@ -166,9 +151,6 @@ a.result-keyword:focus { background-color: #884719; }
 pre.rust .comment { color: #8d8d8b; }
 pre.rust .doccomment { color: #8ca375; }
 
-nav:not(.sidebar) {
-	border-bottom-color: #4e4e4e;
-}
 nav.main .current {
 	border-top-color: #eee;
 	border-bottom-color: #eee;
@@ -186,7 +168,8 @@ a.anchor,
 .small-section-header a,
 #source-sidebar a,
 pre.rust a,
-.sidebar a,
+.sidebar h2 a,
+.sidebar h3 a,
 .in-band a {
 	color: #ddd;
 }
@@ -256,7 +239,8 @@ details.undocumented > summary::before {
 	background: rgba(0,0,0,0);
 }
 
-.since {
+.rightside,
+.out-of-band {
 	color: grey;
 }
 
@@ -450,13 +434,6 @@ kbd {
 	#theme-picker {
 		background: #f0f0f0;
 	}
-}
-
-#all-types {
-	background-color: #505050;
-}
-#all-types:hover {
-	background-color: #606060;
 }
 
 .search-results .result-name span.alias {

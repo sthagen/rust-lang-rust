@@ -317,9 +317,7 @@ impl<'tcx> Printer<'tcx> for &mut SymbolMangler<'tcx> {
 
         // Encode impl generic params if the substitutions contain parameters (implying
         // polymorphization is enabled) and this isn't an inherent impl.
-        if impl_trait_ref.is_some()
-            && substs.iter().any(|a| a.definitely_has_param_types_or_consts(self.tcx))
-        {
+        if impl_trait_ref.is_some() && substs.iter().any(|a| a.has_param_types_or_consts()) {
             self = self.path_generic_args(
                 |this| {
                     this.path_append_ns(
@@ -561,7 +559,10 @@ impl<'tcx> Printer<'tcx> for &mut SymbolMangler<'tcx> {
                         let name = cx.tcx.associated_item(projection.item_def_id).ident;
                         cx.push("p");
                         cx.push_ident(name.as_str());
-                        cx = projection.ty.print(cx)?;
+                        cx = match projection.term {
+                            ty::Term::Ty(ty) => ty.print(cx),
+                            ty::Term::Const(c) => c.print(cx),
+                        }?;
                     }
                     ty::ExistentialPredicate::AutoTrait(def_id) => {
                         cx = cx.print_def_path(*def_id, &[])?;
@@ -771,9 +772,9 @@ impl<'tcx> Printer<'tcx> for &mut SymbolMangler<'tcx> {
         disambiguated_data: &DisambiguatedDefPathData,
     ) -> Result<Self::Path, Self::Error> {
         let ns = match disambiguated_data.data {
-            // FIXME: It shouldn't be necessary to add anything for extern block segments,
-            // but we add 't' for backward compatibility.
-            DefPathData::ForeignMod => 't',
+            // Extern block segments can be skipped, names from extern blocks
+            // are effectively living in their parent modules.
+            DefPathData::ForeignMod => return print_prefix(self),
 
             // Uppercase categories are more stable than lowercase ones.
             DefPathData::TypeNs(_) => 't',

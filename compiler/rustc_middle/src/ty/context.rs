@@ -961,6 +961,7 @@ pub struct FreeRegionInfo {
 /// [rustc dev guide]: https://rustc-dev-guide.rust-lang.org/ty.html
 #[derive(Copy, Clone)]
 #[rustc_diagnostic_item = "TyCtxt"]
+#[cfg_attr(not(bootstrap), rustc_pass_by_value)]
 pub struct TyCtxt<'tcx> {
     gcx: &'tcx GlobalCtxt<'tcx>,
 }
@@ -1209,11 +1210,25 @@ impl<'tcx> TyCtxt<'tcx> {
         self.mk_ty(Error(DelaySpanBugEmitted(())))
     }
 
-    /// Like `err` but for constants.
+    /// Like [TyCtxt::ty_error] but for constants.
     #[track_caller]
     pub fn const_error(self, ty: Ty<'tcx>) -> &'tcx Const<'tcx> {
-        self.sess
-            .delay_span_bug(DUMMY_SP, "ty::ConstKind::Error constructed but no error reported.");
+        self.const_error_with_message(
+            ty,
+            DUMMY_SP,
+            "ty::ConstKind::Error constructed but no error reported",
+        )
+    }
+
+    /// Like [TyCtxt::ty_error_with_message] but for constants.
+    #[track_caller]
+    pub fn const_error_with_message<S: Into<MultiSpan>>(
+        self,
+        ty: Ty<'tcx>,
+        span: S,
+        msg: &str,
+    ) -> &'tcx Const<'tcx> {
+        self.sess.delay_span_bug(span, msg);
         self.mk_const(ty::Const { val: ty::ConstKind::Error(DelaySpanBugEmitted(())), ty })
     }
 
@@ -1307,7 +1322,7 @@ impl<'tcx> TyCtxt<'tcx> {
     /// Converts a `DefPathHash` to its corresponding `DefId` in the current compilation
     /// session, if it still exists. This is used during incremental compilation to
     /// turn a deserialized `DefPathHash` into its current `DefId`.
-    pub fn def_path_hash_to_def_id(self, hash: DefPathHash) -> DefId {
+    pub fn def_path_hash_to_def_id(self, hash: DefPathHash, err: &mut dyn FnMut() -> !) -> DefId {
         debug!("def_path_hash_to_def_id({:?})", hash);
 
         let stable_crate_id = hash.stable_crate_id();
@@ -1315,7 +1330,10 @@ impl<'tcx> TyCtxt<'tcx> {
         // If this is a DefPathHash from the local crate, we can look up the
         // DefId in the tcx's `Definitions`.
         if stable_crate_id == self.sess.local_stable_crate_id() {
-            self.untracked_resolutions.definitions.local_def_path_hash_to_def_id(hash).to_def_id()
+            self.untracked_resolutions
+                .definitions
+                .local_def_path_hash_to_def_id(hash, err)
+                .to_def_id()
         } else {
             // If this is a DefPathHash from an upstream crate, let the CrateStore map
             // it to a DefId.
@@ -1461,8 +1479,7 @@ impl<'tcx> TyCtxt<'tcx> {
             _ => return None, // not a free region
         };
 
-        let hir_id = self.hir().local_def_id_to_hir_id(suitable_region_binding_scope);
-        let is_impl_item = match self.hir().find(hir_id) {
+        let is_impl_item = match self.hir().find_by_def_id(suitable_region_binding_scope) {
             Some(Node::Item(..) | Node::TraitItem(..)) => false,
             Some(Node::ImplItem(..)) => {
                 self.is_bound_region_in_impl_item(suitable_region_binding_scope)
@@ -1495,8 +1512,7 @@ impl<'tcx> TyCtxt<'tcx> {
 
     pub fn return_type_impl_trait(self, scope_def_id: LocalDefId) -> Option<(Ty<'tcx>, Span)> {
         // `type_of()` will fail on these (#55796, #86483), so only allow `fn`s or closures.
-        let hir_id = self.hir().local_def_id_to_hir_id(scope_def_id);
-        match self.hir().get(hir_id) {
+        match self.hir().get_by_def_id(scope_def_id) {
             Node::Item(&hir::Item { kind: ItemKind::Fn(..), .. }) => {}
             Node::TraitItem(&hir::TraitItem { kind: TraitItemKind::Fn(..), .. }) => {}
             Node::ImplItem(&hir::ImplItem { kind: ImplItemKind::Fn(..), .. }) => {}
@@ -1510,6 +1526,7 @@ impl<'tcx> TyCtxt<'tcx> {
                 let sig = ret_ty.fn_sig(self);
                 let output = self.erase_late_bound_regions(sig.output());
                 if output.is_impl_trait() {
+                    let hir_id = self.hir().local_def_id_to_hir_id(scope_def_id);
                     let fn_decl = self.hir().fn_decl_by_hir_id(hir_id).unwrap();
                     Some((output, fn_decl.output.span()))
                 } else {
@@ -1661,7 +1678,7 @@ CloneLiftImpls! { for<'tcx> { Constness, traits::WellFormedLoc, } }
 pub mod tls {
     use super::{ptr_eq, GlobalCtxt, TyCtxt};
 
-    use crate::dep_graph::{DepKind, TaskDeps};
+    use crate::dep_graph::{DepKind, TaskDepsRef};
     use crate::ty::query;
     use rustc_data_structures::sync::{self, Lock};
     use rustc_data_structures::thin_vec::ThinVec;
@@ -1697,13 +1714,19 @@ pub mod tls {
 
         /// The current dep graph task. This is used to add dependencies to queries
         /// when executing them.
-        pub task_deps: Option<&'a Lock<TaskDeps>>,
+        pub task_deps: TaskDepsRef<'a>,
     }
 
     impl<'a, 'tcx> ImplicitCtxt<'a, 'tcx> {
         pub fn new(gcx: &'tcx GlobalCtxt<'tcx>) -> Self {
             let tcx = TyCtxt { gcx };
-            ImplicitCtxt { tcx, query: None, diagnostics: None, layout_depth: 0, task_deps: None }
+            ImplicitCtxt {
+                tcx,
+                query: None,
+                diagnostics: None,
+                layout_depth: 0,
+                task_deps: TaskDepsRef::Ignore,
+            }
         }
     }
 

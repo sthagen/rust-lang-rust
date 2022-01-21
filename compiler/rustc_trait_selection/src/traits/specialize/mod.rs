@@ -117,9 +117,8 @@ pub fn translate_substs<'a, 'tcx>(
 /// Specialization is determined by the sets of types to which the impls apply;
 /// `impl1` specializes `impl2` if it applies to a subset of the types `impl2` applies
 /// to.
+#[instrument(skip(tcx), level = "debug")]
 pub(super) fn specializes(tcx: TyCtxt<'_>, (impl1_def_id, impl2_def_id): (DefId, DefId)) -> bool {
-    debug!("specializes({:?}, {:?})", impl1_def_id, impl2_def_id);
-
     // The feature gate should prevent introducing new specializations, but not
     // taking advantage of upstream ones.
     let features = tcx.features();
@@ -485,7 +484,7 @@ crate fn to_pretty_impl_header(tcx: TyCtxt<'_>, impl_def_id: DefId) -> Option<St
     let mut types_without_default_bounds = FxHashSet::default();
     let sized_trait = tcx.lang_items().sized_trait();
 
-    if !substs.is_noop() {
+    if !substs.is_empty() {
         types_without_default_bounds.extend(substs.types());
         w.push('<');
         w.push_str(
