@@ -53,7 +53,7 @@ use rustc_middle::metadata::ModChild;
 use rustc_middle::middle::privacy::AccessLevels;
 use rustc_middle::span_bug;
 use rustc_middle::ty::query::Providers;
-use rustc_middle::ty::{self, DefIdTree, MainDefinition, ResolverOutputs};
+use rustc_middle::ty::{self, DefIdTree, MainDefinition, RegisteredTools, ResolverOutputs};
 use rustc_query_system::ich::StableHashingContext;
 use rustc_session::cstore::{CrateStore, MetadataLoaderDyn};
 use rustc_session::lint;
@@ -614,7 +614,8 @@ impl<'a> ModuleData<'a> {
         }
     }
 
-    fn def_id(&self) -> DefId {
+    // Public for rustdoc.
+    pub fn def_id(&self) -> DefId {
         self.opt_def_id().expect("`ModuleData::def_id` is called on a block module")
     }
 
@@ -989,7 +990,7 @@ pub struct Resolver<'a> {
     macro_names: FxHashSet<Ident>,
     builtin_macros: FxHashMap<Symbol, BuiltinMacroState>,
     registered_attrs: FxHashSet<Ident>,
-    registered_tools: FxHashSet<Ident>,
+    registered_tools: RegisteredTools,
     macro_use_prelude: FxHashMap<Symbol, &'a NameBinding<'a>>,
     all_macros: FxHashMap<Symbol, Res>,
     macro_map: FxHashMap<DefId, Lrc<SyntaxExtension>>,
@@ -1487,6 +1488,7 @@ impl<'a> Resolver<'a> {
             trait_impls: self.trait_impls,
             proc_macros,
             confused_type_with_std_module,
+            registered_tools: self.registered_tools,
         }
     }
 
@@ -1511,6 +1513,7 @@ impl<'a> Resolver<'a> {
             trait_impls: self.trait_impls.clone(),
             proc_macros,
             confused_type_with_std_module: self.confused_type_with_std_module.clone(),
+            registered_tools: self.registered_tools.clone(),
         }
     }
 
@@ -3403,6 +3406,16 @@ impl<'a> Resolver<'a> {
     // For rustdoc.
     pub fn all_macros(&self) -> &FxHashMap<Symbol, Res> {
         &self.all_macros
+    }
+
+    /// For rustdoc.
+    /// For local modules returns only reexports, for external modules returns all children.
+    pub fn module_children_or_reexports(&self, def_id: DefId) -> Vec<ModChild> {
+        if let Some(def_id) = def_id.as_local() {
+            self.reexport_map.get(&def_id).cloned().unwrap_or_default()
+        } else {
+            self.cstore().module_children_untracked(def_id, self.session)
+        }
     }
 
     /// Retrieves the span of the given `DefId` if `DefId` is in the local crate.

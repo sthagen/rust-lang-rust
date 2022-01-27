@@ -148,6 +148,28 @@ a.result-keyword:focus { background-color: #884719; }
 .content .fnname{ color: #2BAB63; }
 .content span.keyword, .content a.keyword, .block a.current.keyword { color: #D2991D; }
 
+.sidebar a { color: #fdbf35; }
+.sidebar a.current.enum { color: #12ece2; }
+.sidebar a.current.struct { color: #12ece2; }
+.sidebar a.current.type { color: #12ece2; }
+.sidebar a.current.associatedtype { color: #fdbf35; }
+.sidebar a.current.foreigntype { color: #12ece2; }
+.sidebar a.current.attr,
+.sidebar a.current.derive,
+.sidebar a.current.macro { color: #0be900; }
+.sidebar a.current.union { color: #12ece2; }
+.sidebar a.current.constant
+.sidebar a.current.static { color: #fdbf35; }
+.sidebar a.current.primitive { color: #12ece2; }
+.sidebar a.current.externcrate
+.sidebar a.current.mod { color: #fdbf35; }
+.sidebar a.current.trait { color: #cca7ff; }
+.sidebar a.current.traitalias { color: #cca7ff; }
+.sidebar a.current.fn,
+.sidebar a.current.method,
+.sidebar a.current.tymethod { color: #32d479; }
+.sidebar a.current.keyword { color: #fdbf35; }
+
 pre.rust .comment { color: #8d8d8b; }
 pre.rust .doccomment { color: #8ca375; }
 
@@ -194,25 +216,18 @@ details.undocumented > summary::before {
 	filter: invert(100%);
 }
 
-#crate-search {
+#crate-search, .search-input {
 	color: #111;
 	background-color: #f0f0f0;
 	border-color: #000;
-	box-shadow: 0 0 0 1px #000, 0 0 0 2px transparent;
 }
 
 .search-input {
-	color: #111;
-	background-color: #f0f0f0;
-	box-shadow: 0 0 0 1px #000, 0 0 0 2px transparent;
+	border-color: #e0e0e0;
 }
 
 .search-input:focus {
 	border-color: #008dfd;
-}
-
-#crate-search + .search-input:focus {
-	box-shadow: 0 0 8px 4px #078dd8;
 }
 
 .module-item .stab,

@@ -823,9 +823,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                             _ => None,
                         })
                     {
-                        let parent_trait_ref = data.parent_trait_ref;
+                        let parent_trait_ref = data.parent_trait_pred;
                         let parent_def_id = parent_trait_ref.def_id();
-                        let path = parent_trait_ref.print_only_trait_path();
+                        let path = parent_trait_ref.print_modifiers_and_trait_path();
                         let tr_self_ty = parent_trait_ref.skip_binder().self_ty();
                         let mut candidates = vec![];
                         self.tcx.for_each_relevant_impl(
@@ -1025,7 +1025,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                                 def_kind.article(),
                                 def_kind.descr(lev_candidate.def_id),
                             ),
-                            lev_candidate.ident.to_string(),
+                            lev_candidate.name.to_string(),
                             Applicability::MaybeIncorrect,
                         );
                     }
@@ -1480,7 +1480,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     let skip = skippable.contains(&did);
                     if pick.autoderefs == 0 && !skip {
                         err.span_label(
-                            pick.item.ident.span,
+                            pick.item.ident(self.tcx).span,
                             &format!("the method is available for `{}` here", rcvr_ty),
                         );
                     }
@@ -1514,7 +1514,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                             // an autoderef to `&self`
                             if pick.autoderefs == 0 && !skip {
                                 err.span_label(
-                                    pick.item.ident.span,
+                                    pick.item.ident(self.tcx).span,
                                     &format!("the method is available for `{}` here", new_rcvr_t),
                                 );
                                 err.multipart_suggestion(

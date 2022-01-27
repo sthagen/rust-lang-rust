@@ -5,7 +5,7 @@ use std::lazy::SyncOnceCell as OnceCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::{slice, vec};
+use std::vec;
 
 use arrayvec::ArrayVec;
 
@@ -429,7 +429,7 @@ impl Item {
 
     /// Convenience wrapper around [`Self::from_def_id_and_parts`] which converts
     /// `hir_id` to a [`DefId`]
-    pub fn from_hir_id_and_parts(
+    crate fn from_hir_id_and_parts(
         hir_id: hir::HirId,
         name: Option<Symbol>,
         kind: ItemKind,
@@ -438,7 +438,7 @@ impl Item {
         Item::from_def_id_and_parts(cx.tcx.hir().local_def_id(hir_id).to_def_id(), name, kind, cx)
     }
 
-    pub fn from_def_id_and_parts(
+    crate fn from_def_id_and_parts(
         def_id: DefId,
         name: Option<Symbol>,
         kind: ItemKind,
@@ -456,7 +456,7 @@ impl Item {
         )
     }
 
-    pub fn from_def_id_and_attrs_and_parts(
+    crate fn from_def_id_and_attrs_and_parts(
         def_id: DefId,
         name: Option<Symbol>,
         kind: ItemKind,
@@ -733,43 +733,12 @@ crate struct Module {
     crate span: Span,
 }
 
-crate struct ListAttributesIter<'a> {
-    attrs: slice::Iter<'a, ast::Attribute>,
-    current_list: vec::IntoIter<ast::NestedMetaItem>,
-    name: Symbol,
-}
-
-impl<'a> Iterator for ListAttributesIter<'a> {
-    type Item = ast::NestedMetaItem;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if let Some(nested) = self.current_list.next() {
-            return Some(nested);
-        }
-
-        for attr in &mut self.attrs {
-            if let Some(list) = attr.meta_item_list() {
-                if attr.has_name(self.name) {
-                    self.current_list = list.into_iter();
-                    if let Some(nested) = self.current_list.next() {
-                        return Some(nested);
-                    }
-                }
-            }
-        }
-
-        None
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let lower = self.current_list.len();
-        (lower, None)
-    }
-}
-
 crate trait AttributesExt {
-    /// Finds an attribute as List and returns the list of attributes nested inside.
-    fn lists(&self, name: Symbol) -> ListAttributesIter<'_>;
+    type AttributeIterator<'a>: Iterator<Item = ast::NestedMetaItem>
+    where
+        Self: 'a;
+
+    fn lists<'a>(&'a self, name: Symbol) -> Self::AttributeIterator<'a>;
 
     fn span(&self) -> Option<rustc_span::Span>;
 
@@ -781,8 +750,13 @@ crate trait AttributesExt {
 }
 
 impl AttributesExt for [ast::Attribute] {
-    fn lists(&self, name: Symbol) -> ListAttributesIter<'_> {
-        ListAttributesIter { attrs: self.iter(), current_list: Vec::new().into_iter(), name }
+    type AttributeIterator<'a> = impl Iterator<Item = ast::NestedMetaItem> + 'a;
+
+    fn lists<'a>(&'a self, name: Symbol) -> Self::AttributeIterator<'a> {
+        self.iter()
+            .filter(move |attr| attr.has_name(name))
+            .filter_map(ast::Attribute::meta_item_list)
+            .flatten()
     }
 
     /// Return the span of the first doc-comment, if it exists.
@@ -902,12 +876,9 @@ crate trait NestedAttributesExt {
     fn get_word_attr(self, word: Symbol) -> Option<ast::NestedMetaItem>;
 }
 
-impl<I> NestedAttributesExt for I
-where
-    I: IntoIterator<Item = ast::NestedMetaItem>,
-{
-    fn get_word_attr(self, word: Symbol) -> Option<ast::NestedMetaItem> {
-        self.into_iter().find(|attr| attr.is_word() && attr.has_name(word))
+impl<I: Iterator<Item = ast::NestedMetaItem>> NestedAttributesExt for I {
+    fn get_word_attr(mut self, word: Symbol) -> Option<ast::NestedMetaItem> {
+        self.find(|attr| attr.is_word() && attr.has_name(word))
     }
 }
 
@@ -984,26 +955,26 @@ crate fn collapse_doc_fragments(doc_strings: &[DocFragment]) -> String {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 crate struct ItemLink {
     /// The original link written in the markdown
-    pub(crate) link: String,
+    crate link: String,
     /// The link text displayed in the HTML.
     ///
     /// This may not be the same as `link` if there was a disambiguator
     /// in an intra-doc link (e.g. \[`fn@f`\])
-    pub(crate) link_text: String,
-    pub(crate) did: DefId,
+    crate link_text: String,
+    crate did: DefId,
     /// The url fragment to append to the link
-    pub(crate) fragment: Option<UrlFragment>,
+    crate fragment: Option<UrlFragment>,
 }
 
 pub struct RenderedLink {
     /// The text the link was original written as.
     ///
     /// This could potentially include disambiguators and backticks.
-    pub(crate) original_text: String,
+    crate original_text: String,
     /// The text to display in the HTML
-    pub(crate) new_text: String,
+    crate new_text: String,
     /// The URL to put in the `href`
-    pub(crate) href: String,
+    crate href: String,
 }
 
 /// The attributes on an [`Item`], including attributes like `#[derive(...)]` and `#[inline]`,
@@ -1015,7 +986,7 @@ crate struct Attributes {
 }
 
 impl Attributes {
-    crate fn lists(&self, name: Symbol) -> ListAttributesIter<'_> {
+    crate fn lists(&self, name: Symbol) -> impl Iterator<Item = ast::NestedMetaItem> + '_ {
         self.other_attrs.lists(name)
     }
 
@@ -2223,7 +2194,7 @@ impl Impl {
         self.trait_
             .as_ref()
             .map(|t| t.def_id())
-            .map(|did| tcx.provided_trait_methods(did).map(|meth| meth.ident.name).collect())
+            .map(|did| tcx.provided_trait_methods(did).map(|meth| meth.name).collect())
             .unwrap_or_default()
     }
 }

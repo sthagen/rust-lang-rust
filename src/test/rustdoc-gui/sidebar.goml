@@ -1,3 +1,4 @@
+// Checks multiple things on the sidebar display (width of its elements, colors, etc).
 goto: file://|DOC_PATH|/test_docs/index.html
 show-text: true
 local-storage: {"rustdoc-theme": "light"}
@@ -8,7 +9,7 @@ assert-text: (".sidebar > .location", "Crate test_docs")
 // In modules, we only have one "location" element.
 assert-count: (".sidebar .location", 1)
 assert-text: ("#all-types", "All Items")
-assert-css: ("#all-types", {"color": "rgb(56, 115, 173)"})
+assert-css: ("#all-types", {"color": "rgb(53, 109, 164)"})
 // We check that we have the crates list and that the "current" on is "test_docs".
 assert-text: (".sidebar-elems .crate > ul > li > a.current", "test_docs")
 // And we're also supposed to have the list of items in the current module.
@@ -37,7 +38,7 @@ assert-property: ("html", {"scrollTop": "0"})
 
 // We now go back to the crate page to click on the "lib2" crate link.
 goto: file://|DOC_PATH|/test_docs/index.html
-assert-css: (".sidebar-elems .crate > ul > li:first-child > a", {"color": "rgb(56, 115, 173)"})
+assert-css: (".sidebar-elems .crate > ul > li:first-child > a", {"color": "rgb(53, 109, 164)"})
 click: ".sidebar-elems .crate > ul > li:first-child > a"
 
 // PAGE: lib2/index.html
@@ -73,3 +74,7 @@ assert-text: (".sidebar > .location", "Module sub_sub_module")
 assert-false: ".sidebar-elems .crate"
 assert-text: (".sidebar-elems .items > ul > li:nth-child(1)", "Functions")
 assert-text: ("#functions + .item-table .item-left > a", "foo")
+
+// Links to trait implementations in the sidebar should not wrap even if they are long.
+goto: file://|DOC_PATH|/lib2/struct.HasALongTraitWithParams.html
+assert-property: (".sidebar-links a", {"offsetHeight": 29})
