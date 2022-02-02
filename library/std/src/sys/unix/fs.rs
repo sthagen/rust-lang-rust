@@ -489,10 +489,18 @@ impl Iterator for ReadDir {
                     };
                 }
 
+                // Only d_reclen bytes of *entry_ptr are valid, so we can't just copy the
+                // whole thing (#93384).  Instead, copy everything except the name.
+                let entry_bytes = entry_ptr as *const u8;
+                let entry_name = ptr::addr_of!((*entry_ptr).d_name) as *const u8;
+                let name_offset = entry_name.offset_from(entry_bytes) as usize;
+                let mut entry: dirent64 = mem::zeroed();
+                ptr::copy_nonoverlapping(entry_bytes, &mut entry as *mut _ as *mut u8, name_offset);
+
                 let ret = DirEntry {
-                    entry: *entry_ptr,
+                    entry,
                     // d_name is guaranteed to be null-terminated.
-                    name: CStr::from_ptr((*entry_ptr).d_name.as_ptr()).to_owned(),
+                    name: CStr::from_ptr(entry_name as *const _).to_owned(),
                     dir: Arc::clone(&self.inner),
                 };
                 if ret.name_bytes() != b"." && ret.name_bytes() != b".." {
@@ -590,7 +598,7 @@ impl DirEntry {
         target_os = "vxworks"
     ))]
     pub fn file_type(&self) -> io::Result<FileType> {
-        lstat(&self.path()).map(|m| m.file_type())
+        self.metadata().map(|m| m.file_type())
     }
 
     #[cfg(not(any(
@@ -608,7 +616,7 @@ impl DirEntry {
             libc::DT_SOCK => Ok(FileType { mode: libc::S_IFSOCK }),
             libc::DT_DIR => Ok(FileType { mode: libc::S_IFDIR }),
             libc::DT_BLK => Ok(FileType { mode: libc::S_IFBLK }),
-            _ => lstat(&self.path()).map(|m| m.file_type()),
+            _ => self.metadata().map(|m| m.file_type()),
         }
     }
 

@@ -439,6 +439,28 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                         } else {
                             err.span_label(span, explanation);
                         }
+
+                        if trait_predicate.is_const_if_const() && obligation.param_env.is_const() {
+                            let non_const_predicate = trait_ref.without_const();
+                            let non_const_obligation = Obligation {
+                                cause: obligation.cause.clone(),
+                                param_env: obligation.param_env.without_const(),
+                                predicate: non_const_predicate.to_predicate(tcx),
+                                recursion_depth: obligation.recursion_depth,
+                            };
+                            if self.predicate_may_hold(&non_const_obligation) {
+                                err.span_note(
+                                    span,
+                                    &format!(
+                                        "the trait `{}` is implemented for `{}`, \
+                                        but that implementation is not `const`",
+                                        non_const_predicate.print_modifiers_and_trait_path(),
+                                        trait_ref.skip_binder().self_ty(),
+                                    ),
+                                );
+                            }
+                        }
+
                         if let Some((msg, span)) = type_def {
                             err.span_label(span, &msg);
                         }
@@ -1351,19 +1373,31 @@ impl<'a, 'tcx> InferCtxtPrivExt<'a, 'tcx> for InferCtxt<'a, 'tcx> {
                         | ObligationCauseCode::ObjectCastObligation(_)
                         | ObligationCauseCode::OpaqueType
                 );
-                // FIXME(associated_const_equality): Handle Consts here
-                let data_ty = data.term.ty().unwrap();
                 if let Err(error) = self.at(&obligation.cause, obligation.param_env).eq_exp(
                     is_normalized_ty_expected,
                     normalized_ty,
-                    data_ty,
+                    data.term,
                 ) {
-                    values = Some(infer::ValuePairs::Types(ExpectedFound::new(
-                        is_normalized_ty_expected,
-                        normalized_ty,
-                        data_ty,
-                    )));
-
+                    values = Some(match (normalized_ty, data.term) {
+                        (ty::Term::Ty(normalized_ty), ty::Term::Ty(ty)) => {
+                            infer::ValuePairs::Types(ExpectedFound::new(
+                                is_normalized_ty_expected,
+                                normalized_ty,
+                                ty,
+                            ))
+                        }
+                        (ty::Term::Const(normalized_ct), ty::Term::Const(ct)) => {
+                            infer::ValuePairs::Consts(ExpectedFound::new(
+                                is_normalized_ty_expected,
+                                normalized_ct,
+                                ct,
+                            ))
+                        }
+                        (_, _) => span_bug!(
+                            obligation.cause.span,
+                            "found const or type where other expected"
+                        ),
+                    });
                     err_buf = error;
                     err = &err_buf;
                 }

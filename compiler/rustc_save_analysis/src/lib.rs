@@ -2,6 +2,7 @@
 #![feature(if_let_guard)]
 #![feature(nll)]
 #![recursion_limit = "256"]
+#![cfg_attr(not(bootstrap), allow(rustc::potential_query_instability))]
 
 mod dump_visitor;
 mod dumper;
@@ -984,7 +985,7 @@ pub fn process_crate<'l, 'tcx, H: SaveHandler>(
         tcx.dep_graph.with_ignore(|| {
             info!("Dumping crate {}", cratename);
 
-            // Privacy checking requires and is done after type checking; use a
+            // Privacy checking must be done outside of type inference; use a
             // fallback in case the access levels couldn't have been correctly computed.
             let access_levels = match tcx.sess.compile_status() {
                 Ok(..) => tcx.privacy_access_levels(()),

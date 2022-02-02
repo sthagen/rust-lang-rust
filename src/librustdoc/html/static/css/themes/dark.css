@@ -192,6 +192,7 @@ a.anchor,
 pre.rust a,
 .sidebar h2 a,
 .sidebar h3 a,
+.mobile-topbar h2 a,
 .in-band a {
 	color: #ddd;
 }
@@ -407,7 +408,7 @@ kbd {
 	background-color: #fafbfc;
 	border-color: #d1d5da;
 	border-bottom-color: #c6cbd1;
-	box-shadow-color: #c6cbd1;
+	box-shadow: inset 0 -1px 0 #c6cbd1;
 }
 
 #theme-picker, #settings-menu, #help-button {
@@ -496,5 +497,5 @@ div.files > .selected {
 	background: #616161;
 }
 .toggle-line:hover .toggle-line-inner {
-	background: ##898989;
+	background: #898989;
 }

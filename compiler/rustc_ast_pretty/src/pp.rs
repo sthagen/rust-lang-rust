@@ -136,6 +136,7 @@ mod ring;
 
 use ring::RingBuffer;
 use std::borrow::Cow;
+use std::cmp;
 use std::collections::VecDeque;
 use std::iter;
 
@@ -147,6 +148,22 @@ pub enum Breaks {
 }
 
 #[derive(Clone, Copy)]
+enum IndentStyle {
+    /// Vertically aligned under whatever column this block begins at.
+    ///
+    ///     fn demo(arg1: usize,
+    ///             arg2: usize);
+    Visual,
+    /// Indented relative to the indentation level of the previous line.
+    ///
+    ///     fn demo(
+    ///         arg1: usize,
+    ///         arg2: usize,
+    ///     );
+    Block { offset: isize },
+}
+
+#[derive(Clone, Copy)]
 pub struct BreakToken {
     offset: isize,
     blank_space: isize,
@@ -154,7 +171,7 @@ pub struct BreakToken {
 
 #[derive(Clone, Copy)]
 pub struct BeginToken {
-    offset: isize,
+    indent: IndentStyle,
     breaks: Breaks,
 }
 
@@ -178,15 +195,18 @@ impl Token {
 #[derive(Copy, Clone)]
 enum PrintFrame {
     Fits,
-    Broken { offset: isize, breaks: Breaks },
+    Broken { indent: usize, breaks: Breaks },
 }
 
 const SIZE_INFINITY: isize = 0xffff;
 
+/// Target line width.
+const MARGIN: isize = 78;
+/// Every line is allowed at least this much space, even if highly indented.
+const MIN_SPACE: isize = 60;
+
 pub struct Printer {
     out: String,
-    /// Width of lines we're constrained to
-    margin: isize,
     /// Number of spaces left on line
     space: isize,
     /// Ring-buffer of tokens and calculated sizes
@@ -204,6 +224,8 @@ pub struct Printer {
     scan_stack: VecDeque<usize>,
     /// Stack of blocks-in-progress being flushed by print
     print_stack: Vec<PrintFrame>,
+    /// Level of indentation of current line
+    indent: usize,
     /// Buffered indentation to avoid writing trailing whitespace
     pending_indentation: isize,
     /// The token most recently popped from the left boundary of the
@@ -219,16 +241,15 @@ struct BufEntry {
 
 impl Printer {
     pub fn new() -> Self {
-        let linewidth = 78;
         Printer {
             out: String::new(),
-            margin: linewidth as isize,
-            space: linewidth as isize,
+            space: MARGIN,
             buf: RingBuffer::new(),
             left_total: 0,
             right_total: 0,
             scan_stack: VecDeque::new(),
             print_stack: Vec::new(),
+            indent: 0,
             pending_indentation: 0,
             last_printed: None,
         }
@@ -368,38 +389,41 @@ impl Printer {
         *self
             .print_stack
             .last()
-            .unwrap_or(&PrintFrame::Broken { offset: 0, breaks: Breaks::Inconsistent })
+            .unwrap_or(&PrintFrame::Broken { indent: 0, breaks: Breaks::Inconsistent })
     }
 
     fn print_begin(&mut self, token: BeginToken, size: isize) {
         if size > self.space {
-            let col = self.margin - self.space + token.offset;
-            self.print_stack.push(PrintFrame::Broken { offset: col, breaks: token.breaks });
+            self.print_stack.push(PrintFrame::Broken { indent: self.indent, breaks: token.breaks });
+            self.indent = match token.indent {
+                IndentStyle::Block { offset } => (self.indent as isize + offset) as usize,
+                IndentStyle::Visual => (MARGIN - self.space) as usize,
+            };
         } else {
             self.print_stack.push(PrintFrame::Fits);
         }
     }
 
     fn print_end(&mut self) {
-        self.print_stack.pop().unwrap();
+        if let PrintFrame::Broken { indent, .. } = self.print_stack.pop().unwrap() {
+            self.indent = indent;
+        }
     }
 
     fn print_break(&mut self, token: BreakToken, size: isize) {
-        let break_offset =
-            match self.get_top() {
-                PrintFrame::Fits => None,
-                PrintFrame::Broken { offset, breaks: Breaks::Consistent } => Some(offset),
-                PrintFrame::Broken { offset, breaks: Breaks::Inconsistent } => {
-                    if size > self.space { Some(offset) } else { None }
-                }
-            };
-        if let Some(offset) = break_offset {
-            self.out.push('\n');
-            self.pending_indentation = offset + token.offset;
-            self.space = self.margin - (offset + token.offset);
-        } else {
+        let fits = match self.get_top() {
+            PrintFrame::Fits => true,
+            PrintFrame::Broken { breaks: Breaks::Consistent, .. } => false,
+            PrintFrame::Broken { breaks: Breaks::Inconsistent, .. } => size <= self.space,
+        };
+        if fits {
             self.pending_indentation += token.blank_space;
             self.space -= token.blank_space;
+        } else {
+            self.out.push('\n');
+            let indent = self.indent as isize + token.offset;
+            self.pending_indentation = indent;
+            self.space = cmp::max(MARGIN - indent, MIN_SPACE);
         }
     }
 
@@ -422,7 +446,10 @@ impl Printer {
 
     /// "raw box"
     pub fn rbox(&mut self, indent: usize, breaks: Breaks) {
-        self.scan_begin(BeginToken { offset: indent as isize, breaks })
+        self.scan_begin(BeginToken {
+            indent: IndentStyle::Block { offset: indent as isize },
+            breaks,
+        })
     }
 
     /// Inconsistent breaking box
@@ -433,6 +460,10 @@ impl Printer {
     /// Consistent breaking box
     pub fn cbox(&mut self, indent: usize) {
         self.rbox(indent, Breaks::Consistent)
+    }
+
+    pub fn visual_align(&mut self) {
+        self.scan_begin(BeginToken { indent: IndentStyle::Visual, breaks: Breaks::Consistent });
     }
 
     pub fn break_offset(&mut self, n: usize, off: isize) {
@@ -457,7 +488,7 @@ impl Printer {
         self.break_offset(n, 0)
     }
 
-    crate fn zerobreak(&mut self) {
+    pub fn zerobreak(&mut self) {
         self.spaces(0)
     }
 

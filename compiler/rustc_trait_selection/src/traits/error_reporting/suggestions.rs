@@ -1555,7 +1555,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
             // `erase_late_bound_regions`.
             let ty_erased = self.tcx.erase_late_bound_regions(ty);
             let ty_erased = self.tcx.erase_regions(ty_erased);
-            let eq = ty::TyS::same_type(ty_erased, target_ty_erased);
+            let eq = ty_erased == target_ty_erased;
             debug!(
                 "maybe_note_obligation_cause_for_async_await: ty_erased={:?} \
                     target_ty_erased={:?} eq={:?}",
@@ -2496,7 +2496,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                 let try_obligation = self.mk_trait_obligation_with_new_self_ty(
                     obligation.param_env,
                     trait_pred,
-                    normalized_ty,
+                    normalized_ty.ty().unwrap(),
                 );
                 debug!("suggest_await_before_try: try_trait_obligation {:?}", try_obligation);
                 if self.predicate_may_hold(&try_obligation)

@@ -220,7 +220,7 @@ pub struct CommonLifetimes<'tcx> {
     /// `ReStatic`
     pub re_static: Region<'tcx>,
 
-    /// Erased region, used after type-checking
+    /// Erased region, used outside of type inference.
     pub re_erased: Region<'tcx>,
 }
 
@@ -360,7 +360,7 @@ pub struct TypeckResults<'tcx> {
     field_indices: ItemLocalMap<usize>,
 
     /// Stores the types for various nodes in the AST. Note that this table
-    /// is not guaranteed to be populated until after typeck. See
+    /// is not guaranteed to be populated outside inference. See
     /// typeck::check::fn_ctxt for details.
     node_types: ItemLocalMap<Ty<'tcx>>,
 
@@ -2875,8 +2875,6 @@ fn ptr_eq<T, U>(t: *const T, u: *const U) -> bool {
 }
 
 pub fn provide(providers: &mut ty::query::Providers) {
-    providers.in_scope_traits_map =
-        |tcx, id| tcx.hir_crate(()).owners[id].as_ref().map(|owner_info| &owner_info.trait_map);
     providers.resolutions = |tcx, ()| &tcx.untracked_resolutions;
     providers.module_reexports =
         |tcx, id| tcx.resolutions(()).reexport_map.get(&id).map(|v| &v[..]);

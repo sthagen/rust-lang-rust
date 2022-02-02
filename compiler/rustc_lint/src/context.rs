@@ -143,7 +143,11 @@ impl LintStore {
         &self.lints
     }
 
-    pub fn get_lint_groups<'t>(&'t self) -> Vec<(&'static str, Vec<LintId>, bool)> {
+    pub fn get_lint_groups<'t>(
+        &'t self,
+    ) -> impl Iterator<Item = (&'static str, Vec<LintId>, bool)> + 't {
+        // This function is not used in a way which observes the order of lints.
+        #[cfg_attr(not(bootstrap), allow(rustc::potential_query_instability))]
         self.lint_groups
             .iter()
             .filter(|(_, LintGroup { depr, .. })| {
@@ -153,7 +157,6 @@ impl LintStore {
             .map(|(k, LintGroup { lint_ids, from_plugin, .. })| {
                 (*k, lint_ids.clone(), *from_plugin)
             })
-            .collect()
     }
 
     pub fn register_early_pass(
@@ -524,7 +527,7 @@ impl LintStore {
     }
 }
 
-/// Context for lint checking after type checking.
+/// Context for lint checking outside of type inference.
 pub struct LateContext<'tcx> {
     /// Type context we're checking in.
     pub tcx: TyCtxt<'tcx>,

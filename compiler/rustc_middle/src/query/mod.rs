@@ -56,6 +56,14 @@ rustc_queries! {
         desc { |tcx| "HIR owner of `{}`", tcx.def_path_str(key.to_def_id()) }
     }
 
+    /// Gives access to the HIR ID for the given `LocalDefId` owner `key`.
+    ///
+    /// This can be conveniently accessed by methods on `tcx.hir()`.
+    /// Avoid calling this query directly.
+    query local_def_id_to_hir_id(key: LocalDefId) -> hir::HirId {
+        desc { |tcx| "HIR ID of `{}`", tcx.def_path_str(key.to_def_id()) }
+    }
+
     /// Gives access to the HIR node's parent for the HIR owner `key`.
     ///
     /// This can be conveniently accessed by methods on `tcx.hir()`.
@@ -68,7 +76,7 @@ rustc_queries! {
     ///
     /// This can be conveniently accessed by methods on `tcx.hir()`.
     /// Avoid calling this query directly.
-    query hir_owner_nodes(key: LocalDefId) -> Option<&'tcx hir::OwnerNodes<'tcx>> {
+    query hir_owner_nodes(key: LocalDefId) -> hir::MaybeOwner<&'tcx hir::OwnerNodes<'tcx>> {
         desc { |tcx| "HIR owner items in `{}`", tcx.def_path_str(key.to_def_id()) }
     }
 
@@ -750,6 +758,22 @@ rustc_queries! {
         desc { |tcx| "checking liveness of variables in {}", describe_as_module(key, tcx) }
     }
 
+    /// Return the live symbols in the crate for dead code check.
+    ///
+    /// The second return value maps from ADTs to ignored derived traits (e.g. Debug and Clone) and
+    /// their respective impl (i.e., part of the derive macro)
+    query live_symbols_and_ignored_derived_traits(_: ()) -> (
+        FxHashSet<LocalDefId>,
+        FxHashMap<LocalDefId, Vec<(DefId, DefId)>>
+    ) {
+        storage(ArenaCacheSelector<'tcx>)
+        desc { "find live symbols in crate" }
+    }
+
+    query check_mod_deathness(key: LocalDefId) -> () {
+        desc { |tcx| "checking deathness of variables in {}", describe_as_module(key, tcx) }
+    }
+
     query check_mod_impl_wf(key: LocalDefId) -> () {
         desc { |tcx| "checking that impls are well-formed in {}", describe_as_module(key, tcx) }
     }
@@ -784,24 +808,11 @@ rustc_queries! {
         desc { |tcx| "type-checking `{}`", tcx.def_path_str(key.to_def_id()) }
         cache_on_disk_if { true }
         load_cached(tcx, id) {
-            #[cfg(bootstrap)]
-            {
-                match match tcx.on_disk_cache().as_ref() {
-                    Some(c) => c.try_load_query_result(*tcx, id),
-                    None => None,
-                } {
-                    Some(x) => Some(&*tcx.arena.alloc(x)),
-                    None => None,
-                }
-            }
-            #[cfg(not(bootstrap))]
-            {
-                let typeck_results: Option<ty::TypeckResults<'tcx>> = tcx
-                    .on_disk_cache().as_ref()
-                    .and_then(|c| c.try_load_query_result(*tcx, id));
+            let typeck_results: Option<ty::TypeckResults<'tcx>> = tcx
+                .on_disk_cache().as_ref()
+                .and_then(|c| c.try_load_query_result(*tcx, id));
 
-                typeck_results.map(|x| &*tcx.arena.alloc(x))
-            }
+            typeck_results.map(|x| &*tcx.arena.alloc(x))
         }
     }
 

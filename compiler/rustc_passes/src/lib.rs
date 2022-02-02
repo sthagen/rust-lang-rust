@@ -13,6 +13,7 @@
 #![feature(nll)]
 #![feature(try_blocks)]
 #![recursion_limit = "256"]
+#![cfg_attr(not(bootstrap), allow(rustc::potential_query_instability))]
 
 #[macro_use]
 extern crate rustc_middle;
@@ -44,6 +45,7 @@ mod weak_lang_items;
 pub fn provide(providers: &mut Providers) {
     check_attr::provide(providers);
     check_const::provide(providers);
+    dead::provide(providers);
     diagnostic_items::provide(providers);
     entry::provide(providers);
     lang_items::provide(providers);
