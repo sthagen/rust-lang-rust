@@ -132,6 +132,7 @@
 //! methods called `Printer::scan_*`, and the 'PRINT' process is the
 //! method called `Printer::print`.
 
+mod convenience;
 mod ring;
 
 use ring::RingBuffer;
@@ -147,7 +148,7 @@ pub enum Breaks {
     Inconsistent,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 enum IndentStyle {
     /// Vertically aligned under whatever column this block begins at.
     ///
@@ -163,19 +164,20 @@ enum IndentStyle {
     Block { offset: isize },
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default, PartialEq)]
 pub struct BreakToken {
     offset: isize,
     blank_space: isize,
+    pre_break: Option<char>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct BeginToken {
     indent: IndentStyle,
     breaks: Breaks,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub enum Token {
     // In practice a string token contains either a `&'static str` or a
     // `String`. `Cow` is overkill for this because we never modify the data,
@@ -184,12 +186,6 @@ pub enum Token {
     Break(BreakToken),
     Begin(BeginToken),
     End,
-}
-
-impl Token {
-    pub fn is_hardbreak_tok(&self) -> bool {
-        matches!(self, Token::Break(BreakToken { offset: 0, blank_space: SIZE_INFINITY }))
-    }
 }
 
 #[derive(Copy, Clone)]
@@ -318,6 +314,12 @@ impl Printer {
         }
     }
 
+    pub fn offset(&mut self, offset: isize) {
+        if let Some(BufEntry { token: Token::Break(token), .. }) = &mut self.buf.last_mut() {
+            token.offset += offset;
+        }
+    }
+
     fn check_stream(&mut self) {
         while self.right_total - self.left_total > self.space {
             if *self.scan_stack.front().unwrap() == self.buf.index_of_first() {
@@ -396,7 +398,9 @@ impl Printer {
         if size > self.space {
             self.print_stack.push(PrintFrame::Broken { indent: self.indent, breaks: token.breaks });
             self.indent = match token.indent {
-                IndentStyle::Block { offset } => (self.indent as isize + offset) as usize,
+                IndentStyle::Block { offset } => {
+                    usize::try_from(self.indent as isize + offset).unwrap()
+                }
                 IndentStyle::Visual => (MARGIN - self.space) as usize,
             };
         } else {
@@ -420,6 +424,9 @@ impl Printer {
             self.pending_indentation += token.blank_space;
             self.space -= token.blank_space;
         } else {
+            if let Some(pre_break) = token.pre_break {
+                self.out.push(pre_break);
+            }
             self.out.push('\n');
             let indent = self.indent as isize + token.offset;
             self.pending_indentation = indent;
@@ -440,74 +447,5 @@ impl Printer {
 
         self.out.push_str(string);
         self.space -= string.len() as isize;
-    }
-
-    // Convenience functions to talk to the printer.
-
-    /// "raw box"
-    pub fn rbox(&mut self, indent: usize, breaks: Breaks) {
-        self.scan_begin(BeginToken {
-            indent: IndentStyle::Block { offset: indent as isize },
-            breaks,
-        })
-    }
-
-    /// Inconsistent breaking box
-    pub fn ibox(&mut self, indent: usize) {
-        self.rbox(indent, Breaks::Inconsistent)
-    }
-
-    /// Consistent breaking box
-    pub fn cbox(&mut self, indent: usize) {
-        self.rbox(indent, Breaks::Consistent)
-    }
-
-    pub fn visual_align(&mut self) {
-        self.scan_begin(BeginToken { indent: IndentStyle::Visual, breaks: Breaks::Consistent });
-    }
-
-    pub fn break_offset(&mut self, n: usize, off: isize) {
-        self.scan_break(BreakToken { offset: off, blank_space: n as isize })
-    }
-
-    pub fn end(&mut self) {
-        self.scan_end()
-    }
-
-    pub fn eof(mut self) -> String {
-        self.scan_eof();
-        self.out
-    }
-
-    pub fn word<S: Into<Cow<'static, str>>>(&mut self, wrd: S) {
-        let string = wrd.into();
-        self.scan_string(string)
-    }
-
-    fn spaces(&mut self, n: usize) {
-        self.break_offset(n, 0)
-    }
-
-    pub fn zerobreak(&mut self) {
-        self.spaces(0)
-    }
-
-    pub fn space(&mut self) {
-        self.spaces(1)
-    }
-
-    pub fn hardbreak(&mut self) {
-        self.spaces(SIZE_INFINITY as usize)
-    }
-
-    pub fn is_beginning_of_line(&self) -> bool {
-        match self.last_token() {
-            Some(last_token) => last_token.is_hardbreak_tok(),
-            None => true,
-        }
-    }
-
-    pub fn hardbreak_tok_offset(off: isize) -> Token {
-        Token::Break(BreakToken { offset: off, blank_space: SIZE_INFINITY })
     }
 }
