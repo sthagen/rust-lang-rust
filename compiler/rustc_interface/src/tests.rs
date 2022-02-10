@@ -684,7 +684,6 @@ fn test_debugging_options_tracking_hash() {
     untracked!(print_type_sizes, true);
     untracked!(proc_macro_backtrace, true);
     untracked!(query_dep_graph, true);
-    untracked!(query_stats, true);
     untracked!(save_analysis, true);
     untracked!(self_profile, SwitchWithOptPath::Enabled(None));
     untracked!(self_profile_events, Some(vec![String::new()]));
@@ -730,6 +729,7 @@ fn test_debugging_options_tracking_hash() {
     tracked!(debug_info_for_profiling, true);
     tracked!(debug_macros, true);
     tracked!(dep_info_omit_d_target, true);
+    tracked!(drop_tracking, true);
     tracked!(dual_proc_macros, true);
     tracked!(fewer_names, Some(true));
     tracked!(force_unstable_if_unmarked, true);
