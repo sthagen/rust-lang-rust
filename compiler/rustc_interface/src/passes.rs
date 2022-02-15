@@ -286,8 +286,7 @@ pub fn configure_and_expand(
     rustc_builtin_macros::register_builtin_macros(resolver);
 
     krate = sess.time("crate_injection", || {
-        let alt_std_name = sess.opts.alt_std_name.as_ref().map(|s| Symbol::intern(s));
-        rustc_builtin_macros::standard_library_imports::inject(krate, resolver, sess, alt_std_name)
+        rustc_builtin_macros::standard_library_imports::inject(krate, resolver, sess)
     });
 
     util::check_attr_crate_type(sess, &krate.attrs, &mut resolver.lint_buffer());
@@ -658,13 +657,13 @@ fn write_out_deps(
             boxed_resolver.borrow_mut().access(|resolver| {
                 for cnum in resolver.cstore().crates_untracked() {
                     let source = resolver.cstore().crate_source_untracked(cnum);
-                    if let Some((path, _)) = source.dylib {
+                    if let Some((path, _)) = &source.dylib {
                         files.push(escape_dep_filename(&path.display().to_string()));
                     }
-                    if let Some((path, _)) = source.rlib {
+                    if let Some((path, _)) = &source.rlib {
                         files.push(escape_dep_filename(&path.display().to_string()));
                     }
-                    if let Some((path, _)) = source.rmeta {
+                    if let Some((path, _)) = &source.rmeta {
                         files.push(escape_dep_filename(&path.display().to_string()));
                     }
                 }

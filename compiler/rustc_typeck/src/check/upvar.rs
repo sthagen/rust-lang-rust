@@ -335,6 +335,11 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
     // Returns a list of `Ty`s for each upvar.
     fn final_upvar_tys(&self, closure_id: DefId) -> Vec<Ty<'tcx>> {
+        // Presently an unboxed closure type cannot "escape" out of a
+        // function, so we will only encounter ones that originated in the
+        // local crate or were inlined into it along with some function.
+        // This may change if abstract return types of some sort are
+        // implemented.
         self.typeck_results
             .borrow()
             .closure_min_captures_flattened(closure_id)
@@ -1648,7 +1653,8 @@ fn restrict_repr_packed_field_ref_capture<'tcx>(
         match p.kind {
             ProjectionKind::Field(..) => match ty.kind() {
                 ty::Adt(def, _) if def.repr.packed() => {
-                    match tcx.layout_of(param_env.and(p.ty)) {
+                    // We erase regions here because they cannot be hashed
+                    match tcx.layout_of(param_env.and(tcx.erase_regions(p.ty))) {
                         Ok(layout) if layout.align.abi.bytes() == 1 => {
                             // if the alignment is 1, the type can't be further
                             // disaligned.

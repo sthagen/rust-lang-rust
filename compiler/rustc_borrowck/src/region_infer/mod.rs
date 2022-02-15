@@ -44,7 +44,6 @@ mod reverse_sccs;
 pub mod values;
 
 pub struct RegionInferenceContext<'tcx> {
-    pub var_infos: VarInfos,
     /// Contains the definition for every region variable. Region
     /// variables are identified by their index (`RegionVid`). The
     /// definition contains information about where the region came
@@ -267,7 +266,7 @@ impl<'tcx> RegionInferenceContext<'tcx> {
     ) -> Self {
         // Create a RegionDefinition for each inference variable.
         let definitions: IndexVec<_, _> = var_infos
-            .iter()
+            .into_iter()
             .map(|info| RegionDefinition::new(info.universe, info.origin))
             .collect();
 
@@ -292,7 +291,6 @@ impl<'tcx> RegionInferenceContext<'tcx> {
             Rc::new(member_constraints_in.into_mapped(|r| constraint_sccs.scc(r)));
 
         let mut result = Self {
-            var_infos,
             definitions,
             liveness_constraints,
             constraints,
@@ -2155,6 +2153,24 @@ impl<'tcx> RegionInferenceContext<'tcx> {
                 if let Some(field) = field {
                     categorized_path[i].category =
                         ConstraintCategory::Return(ReturnConstraint::ClosureUpvar(field));
+                }
+            }
+
+            // When in async fn, prefer errors that come from inside the closure.
+            if !categorized_path[i].from_closure {
+                let span = categorized_path.iter().find_map(|p| {
+                    if p.from_closure
+                        && p.category == categorized_path[i].category
+                        && categorized_path[i].cause.span.contains(p.cause.span)
+                    {
+                        Some(p.cause.span)
+                    } else {
+                        None
+                    }
+                });
+
+                if let Some(span) = span {
+                    categorized_path[i].cause.span = span;
                 }
             }
 

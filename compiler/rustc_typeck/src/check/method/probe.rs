@@ -9,7 +9,6 @@ use crate::hir::def::DefKind;
 use crate::hir::def_id::DefId;
 
 use rustc_data_structures::fx::FxHashSet;
-use rustc_data_structures::sync::Lrc;
 use rustc_errors::Applicability;
 use rustc_hir as hir;
 use rustc_hir::def::Namespace;
@@ -59,7 +58,7 @@ struct ProbeContext<'a, 'tcx> {
     /// This is the OriginalQueryValues for the steps queries
     /// that are answered in steps.
     orig_steps_var_values: OriginalQueryValues<'tcx>,
-    steps: Lrc<Vec<CandidateStep<'tcx>>>,
+    steps: &'tcx [CandidateStep<'tcx>],
 
     inherent_candidates: Vec<Candidate<'tcx>>,
     extension_candidates: Vec<Candidate<'tcx>>,
@@ -364,7 +363,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     param_env_and_self_ty, self_ty
                 );
                 MethodAutoderefStepsResult {
-                    steps: Lrc::new(vec![CandidateStep {
+                    steps: infcx.tcx.arena.alloc_from_iter([CandidateStep {
                         self_ty: self.make_query_response_ignoring_pending_obligations(
                             canonical_inference_vars,
                             self_ty,
@@ -533,8 +532,8 @@ fn method_autoderef_steps<'tcx>(
         debug!("method_autoderef_steps: steps={:?} opt_bad_ty={:?}", steps, opt_bad_ty);
 
         MethodAutoderefStepsResult {
-            steps: Lrc::new(steps),
-            opt_bad_ty: opt_bad_ty.map(Lrc::new),
+            steps: tcx.arena.alloc_from_iter(steps),
+            opt_bad_ty: opt_bad_ty.map(|ty| &*tcx.arena.alloc(ty)),
             reached_recursion_limit: autoderef.reached_recursion_limit(),
         }
     })
@@ -548,7 +547,7 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
         method_name: Option<Ident>,
         return_type: Option<Ty<'tcx>>,
         orig_steps_var_values: OriginalQueryValues<'tcx>,
-        steps: Lrc<Vec<CandidateStep<'tcx>>>,
+        steps: &'tcx [CandidateStep<'tcx>],
         is_suggestion: IsSuggestion,
         scope_expr_id: hir::HirId,
     ) -> ProbeContext<'a, 'tcx> {
@@ -605,8 +604,7 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
     }
 
     fn assemble_inherent_candidates(&mut self) {
-        let steps = Lrc::clone(&self.steps);
-        for step in steps.iter() {
+        for step in self.steps.iter() {
             self.assemble_probe(&step.self_ty);
         }
     }
@@ -858,7 +856,6 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
                 | ty::PredicateKind::TypeOutlives(..)
                 | ty::PredicateKind::ConstEvaluatable(..)
                 | ty::PredicateKind::ConstEquate(..)
-                | ty::PredicateKind::OpaqueType(..)
                 | ty::PredicateKind::TypeWellFormedFromEnv(..) => None,
             }
         });
@@ -1478,7 +1475,6 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
             TraitCandidate(trait_ref) => self.probe(|_| {
                 let _ = self
                     .at(&ObligationCause::dummy(), self.param_env)
-                    .define_opaque_types(false)
                     .sup(candidate.xform_self_ty, self_ty);
                 match self.select_trait_candidate(trait_ref) {
                     Ok(Some(traits::ImplSource::UserDefined(ref impl_data))) => {
@@ -1508,7 +1504,6 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
             // First check that the self type can be related.
             let sub_obligations = match self
                 .at(&ObligationCause::dummy(), self.param_env)
-                .define_opaque_types(false)
                 .sup(probe.xform_self_ty, self_ty)
             {
                 Ok(InferOk { obligations, value: () }) => obligations,
@@ -1656,7 +1651,6 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
                     );
                     if self
                         .at(&ObligationCause::dummy(), self.param_env)
-                        .define_opaque_types(false)
                         .sup(return_ty, xform_ret_ty)
                         .is_err()
                     {

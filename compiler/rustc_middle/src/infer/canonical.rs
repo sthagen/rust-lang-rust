@@ -64,9 +64,9 @@ pub struct CanonicalVarValues<'tcx> {
 /// result.
 #[derive(Clone, Debug)]
 pub struct OriginalQueryValues<'tcx> {
-    /// Map from the universes that appear in the query to the
-    /// universes in the caller context. For the time being, we only
-    /// ever put ROOT values into the query, so this map is very
+    /// Map from the universes that appear in the query to the universes in the
+    /// caller context. For all queries except `evaluate_goal` (used by Chalk),
+    /// we only ever put ROOT values into the query, so this map is very
     /// simple.
     pub universe_map: SmallVec<[ty::UniverseIndex; 4]>,
 
@@ -178,12 +178,6 @@ pub struct QueryResponse<'tcx, R> {
     pub var_values: CanonicalVarValues<'tcx>,
     pub region_constraints: QueryRegionConstraints<'tcx>,
     pub certainty: Certainty,
-    /// List of opaque types which we tried to compare to another type.
-    /// Inside the query we don't know yet whether the opaque type actually
-    /// should get its hidden type inferred. So we bubble the opaque type
-    /// and the type it was compared against upwards and let the query caller
-    /// handle it.
-    pub opaque_types: Vec<(Ty<'tcx>, Ty<'tcx>)>,
     pub value: R,
 }
 

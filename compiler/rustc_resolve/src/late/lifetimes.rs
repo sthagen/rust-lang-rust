@@ -41,9 +41,9 @@ pub enum LifetimeUseSet<'tcx> {
 }
 
 trait RegionExt {
-    fn early(hir_map: &Map<'_>, index: &mut u32, param: &GenericParam<'_>) -> (ParamName, Region);
+    fn early(hir_map: Map<'_>, index: &mut u32, param: &GenericParam<'_>) -> (ParamName, Region);
 
-    fn late(index: u32, hir_map: &Map<'_>, param: &GenericParam<'_>) -> (ParamName, Region);
+    fn late(index: u32, hir_map: Map<'_>, param: &GenericParam<'_>) -> (ParamName, Region);
 
     fn late_anon(named_late_bound_vars: u32, index: &Cell<u32>) -> Region;
 
@@ -59,7 +59,7 @@ trait RegionExt {
 }
 
 impl RegionExt for Region {
-    fn early(hir_map: &Map<'_>, index: &mut u32, param: &GenericParam<'_>) -> (ParamName, Region) {
+    fn early(hir_map: Map<'_>, index: &mut u32, param: &GenericParam<'_>) -> (ParamName, Region) {
         let i = *index;
         *index += 1;
         let def_id = hir_map.local_def_id(param.hir_id);
@@ -68,7 +68,7 @@ impl RegionExt for Region {
         (param.name.normalize_to_macros_2_0(), Region::EarlyBound(i, def_id.to_def_id(), origin))
     }
 
-    fn late(idx: u32, hir_map: &Map<'_>, param: &GenericParam<'_>) -> (ParamName, Region) {
+    fn late(idx: u32, hir_map: Map<'_>, param: &GenericParam<'_>) -> (ParamName, Region) {
         let depth = ty::INNERMOST;
         let def_id = hir_map.local_def_id(param.hir_id);
         let origin = LifetimeDefOrigin::from_param(param);
@@ -377,7 +377,7 @@ pub fn provide(providers: &mut ty::query::Providers) {
 
         named_region_map: |tcx, id| resolve_lifetimes_for(tcx, id).defs.get(&id),
         is_late_bound_map,
-        object_lifetime_defaults_map: |tcx, id| match tcx.hir().find_by_def_id(id) {
+        object_lifetime_defaults: |tcx, id| match tcx.hir().find_by_def_id(id) {
             Some(Node::Item(item)) => compute_object_lifetime_defaults(tcx, item),
             _ => None,
         },
@@ -729,9 +729,16 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
         match item.kind {
             hir::ItemKind::Fn(ref sig, ref generics, _) => {
                 self.missing_named_lifetime_spots.push(generics.into());
-                self.visit_early_late(None, item.hir_id(), &sig.decl, generics, |this| {
-                    intravisit::walk_item(this, item);
-                });
+                self.visit_early_late(
+                    None,
+                    item.hir_id(),
+                    &sig.decl,
+                    generics,
+                    sig.header.asyncness,
+                    |this| {
+                        intravisit::walk_item(this, item);
+                    },
+                );
                 self.missing_named_lifetime_spots.pop();
             }
 
@@ -817,7 +824,7 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
                     .iter()
                     .filter_map(|param| match param.kind {
                         GenericParamKind::Lifetime { .. } => {
-                            Some(Region::early(&self.tcx.hir(), &mut index, param))
+                            Some(Region::early(self.tcx.hir(), &mut index, param))
                         }
                         GenericParamKind::Type { .. } | GenericParamKind::Const { .. } => {
                             non_lifetime_count += 1;
@@ -849,11 +856,16 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
 
     fn visit_foreign_item(&mut self, item: &'tcx hir::ForeignItem<'tcx>) {
         match item.kind {
-            hir::ForeignItemKind::Fn(ref decl, _, ref generics) => {
-                self.visit_early_late(None, item.hir_id(), decl, generics, |this| {
+            hir::ForeignItemKind::Fn(ref decl, _, ref generics) => self.visit_early_late(
+                None,
+                item.hir_id(),
+                decl,
+                generics,
+                hir::IsAsync::NotAsync,
+                |this| {
                     intravisit::walk_foreign_item(this, item);
-                })
-            }
+                },
+            ),
             hir::ForeignItemKind::Static(..) => {
                 intravisit::walk_foreign_item(self, item);
             }
@@ -888,7 +900,7 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
                     .filter(|param| matches!(param.kind, GenericParamKind::Lifetime { .. }))
                     .enumerate()
                     .map(|(late_bound_idx, param)| {
-                        let pair = Region::late(late_bound_idx as u32, &self.tcx.hir(), param);
+                        let pair = Region::late(late_bound_idx as u32, self.tcx.hir(), param);
                         let r = late_region_as_bound_region(self.tcx, &pair.1);
                         (pair, r)
                     })
@@ -1045,7 +1057,7 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
                 for param in generics.params {
                     match param.kind {
                         GenericParamKind::Lifetime { .. } => {
-                            let (name, reg) = Region::early(&self.tcx.hir(), &mut index, &param);
+                            let (name, reg) = Region::early(self.tcx.hir(), &mut index, &param);
                             let Region::EarlyBound(_, def_id, _) = reg else {
                                 bug!();
                             };
@@ -1130,6 +1142,7 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
                     trait_item.hir_id(),
                     &sig.decl,
                     &trait_item.generics,
+                    sig.header.asyncness,
                     |this| intravisit::walk_trait_item(this, trait_item),
                 );
                 self.missing_named_lifetime_spots.pop();
@@ -1145,7 +1158,7 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
                     .iter()
                     .filter_map(|param| match param.kind {
                         GenericParamKind::Lifetime { .. } => {
-                            Some(Region::early(&self.tcx.hir(), &mut index, param))
+                            Some(Region::early(self.tcx.hir(), &mut index, param))
                         }
                         GenericParamKind::Type { .. } | GenericParamKind::Const { .. } => {
                             non_lifetime_count += 1;
@@ -1199,6 +1212,7 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
                     impl_item.hir_id(),
                     &sig.decl,
                     &impl_item.generics,
+                    sig.header.asyncness,
                     |this| intravisit::walk_impl_item(this, impl_item),
                 );
                 self.missing_named_lifetime_spots.pop();
@@ -1214,7 +1228,7 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
                     .iter()
                     .filter_map(|param| match param.kind {
                         GenericParamKind::Lifetime { .. } => {
-                            Some(Region::early(&self.tcx.hir(), &mut index, param))
+                            Some(Region::early(self.tcx.hir(), &mut index, param))
                         }
                         GenericParamKind::Const { .. } | GenericParamKind::Type { .. } => {
                             non_lifetime_count += 1;
@@ -1368,7 +1382,7 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
                                 .enumerate()
                                 .map(|(late_bound_idx, param)| {
                                     let pair =
-                                        Region::late(late_bound_idx as u32, &this.tcx.hir(), param);
+                                        Region::late(late_bound_idx as u32, this.tcx.hir(), param);
                                     let r = late_region_as_bound_region(this.tcx, &pair.1);
                                     (pair, r)
                                 })
@@ -1463,11 +1477,8 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
             .filter(|param| matches!(param.kind, GenericParamKind::Lifetime { .. }))
             .enumerate()
             .map(|(late_bound_idx, param)| {
-                let pair = Region::late(
-                    initial_bound_vars + late_bound_idx as u32,
-                    &self.tcx.hir(),
-                    param,
-                );
+                let pair =
+                    Region::late(initial_bound_vars + late_bound_idx as u32, self.tcx.hir(), param);
                 let r = late_region_as_bound_region(self.tcx, &pair.1);
                 lifetimes.insert(pair.0, pair.1);
                 r
@@ -1673,10 +1684,10 @@ fn extract_labels(ctxt: &mut LifetimeContext<'_, '_>, body: &hir::Body<'_>) {
     }
 }
 
-fn compute_object_lifetime_defaults(
-    tcx: TyCtxt<'_>,
+fn compute_object_lifetime_defaults<'tcx>(
+    tcx: TyCtxt<'tcx>,
     item: &hir::Item<'_>,
-) -> Option<Vec<ObjectLifetimeDefault>> {
+) -> Option<&'tcx [ObjectLifetimeDefault]> {
     match item.kind {
         hir::ItemKind::Struct(_, ref generics)
         | hir::ItemKind::Union(_, ref generics)
@@ -1729,10 +1740,10 @@ fn compute_object_lifetime_defaults(
 /// Scan the bounds and where-clauses on parameters to extract bounds
 /// of the form `T:'a` so as to determine the `ObjectLifetimeDefault`
 /// for each type parameter.
-fn object_lifetime_defaults_for_item(
-    tcx: TyCtxt<'_>,
+fn object_lifetime_defaults_for_item<'tcx>(
+    tcx: TyCtxt<'tcx>,
     generics: &hir::Generics<'_>,
-) -> Vec<ObjectLifetimeDefault> {
+) -> &'tcx [ObjectLifetimeDefault] {
     fn add_bounds(set: &mut Set1<hir::LifetimeName>, bounds: &[hir::GenericBound<'_>]) {
         for bound in bounds {
             if let hir::GenericBound::Outlives(ref lifetime) = *bound {
@@ -1741,81 +1752,75 @@ fn object_lifetime_defaults_for_item(
         }
     }
 
-    generics
-        .params
-        .iter()
-        .filter_map(|param| match param.kind {
-            GenericParamKind::Lifetime { .. } => None,
-            GenericParamKind::Type { .. } => {
-                let mut set = Set1::Empty;
+    let process_param = |param: &hir::GenericParam<'_>| match param.kind {
+        GenericParamKind::Lifetime { .. } => None,
+        GenericParamKind::Type { .. } => {
+            let mut set = Set1::Empty;
 
-                add_bounds(&mut set, &param.bounds);
+            add_bounds(&mut set, &param.bounds);
 
-                let param_def_id = tcx.hir().local_def_id(param.hir_id);
-                for predicate in generics.where_clause.predicates {
-                    // Look for `type: ...` where clauses.
-                    let data = match *predicate {
-                        hir::WherePredicate::BoundPredicate(ref data) => data,
-                        _ => continue,
-                    };
+            let param_def_id = tcx.hir().local_def_id(param.hir_id);
+            for predicate in generics.where_clause.predicates {
+                // Look for `type: ...` where clauses.
+                let data = match *predicate {
+                    hir::WherePredicate::BoundPredicate(ref data) => data,
+                    _ => continue,
+                };
 
-                    // Ignore `for<'a> type: ...` as they can change what
-                    // lifetimes mean (although we could "just" handle it).
-                    if !data.bound_generic_params.is_empty() {
-                        continue;
-                    }
-
-                    let res = match data.bounded_ty.kind {
-                        hir::TyKind::Path(hir::QPath::Resolved(None, ref path)) => path.res,
-                        _ => continue,
-                    };
-
-                    if res == Res::Def(DefKind::TyParam, param_def_id.to_def_id()) {
-                        add_bounds(&mut set, &data.bounds);
-                    }
+                // Ignore `for<'a> type: ...` as they can change what
+                // lifetimes mean (although we could "just" handle it).
+                if !data.bound_generic_params.is_empty() {
+                    continue;
                 }
 
-                Some(match set {
-                    Set1::Empty => Set1::Empty,
-                    Set1::One(name) => {
-                        if name == hir::LifetimeName::Static {
-                            Set1::One(Region::Static)
-                        } else {
-                            generics
-                                .params
-                                .iter()
-                                .filter_map(|param| match param.kind {
-                                    GenericParamKind::Lifetime { .. } => Some((
-                                        param.hir_id,
-                                        hir::LifetimeName::Param(param.name),
-                                        LifetimeDefOrigin::from_param(param),
-                                    )),
-                                    _ => None,
-                                })
-                                .enumerate()
-                                .find(|&(_, (_, lt_name, _))| lt_name == name)
-                                .map_or(Set1::Many, |(i, (id, _, origin))| {
-                                    let def_id = tcx.hir().local_def_id(id);
-                                    Set1::One(Region::EarlyBound(
-                                        i as u32,
-                                        def_id.to_def_id(),
-                                        origin,
-                                    ))
-                                })
-                        }
+                let res = match data.bounded_ty.kind {
+                    hir::TyKind::Path(hir::QPath::Resolved(None, ref path)) => path.res,
+                    _ => continue,
+                };
+
+                if res == Res::Def(DefKind::TyParam, param_def_id.to_def_id()) {
+                    add_bounds(&mut set, &data.bounds);
+                }
+            }
+
+            Some(match set {
+                Set1::Empty => Set1::Empty,
+                Set1::One(name) => {
+                    if name == hir::LifetimeName::Static {
+                        Set1::One(Region::Static)
+                    } else {
+                        generics
+                            .params
+                            .iter()
+                            .filter_map(|param| match param.kind {
+                                GenericParamKind::Lifetime { .. } => Some((
+                                    param.hir_id,
+                                    hir::LifetimeName::Param(param.name),
+                                    LifetimeDefOrigin::from_param(param),
+                                )),
+                                _ => None,
+                            })
+                            .enumerate()
+                            .find(|&(_, (_, lt_name, _))| lt_name == name)
+                            .map_or(Set1::Many, |(i, (id, _, origin))| {
+                                let def_id = tcx.hir().local_def_id(id);
+                                Set1::One(Region::EarlyBound(i as u32, def_id.to_def_id(), origin))
+                            })
                     }
-                    Set1::Many => Set1::Many,
-                })
-            }
-            GenericParamKind::Const { .. } => {
-                // Generic consts don't impose any constraints.
-                //
-                // We still store a dummy value here to allow generic parameters
-                // in an arbitrary order.
-                Some(Set1::Empty)
-            }
-        })
-        .collect()
+                }
+                Set1::Many => Set1::Many,
+            })
+        }
+        GenericParamKind::Const { .. } => {
+            // Generic consts don't impose any constraints.
+            //
+            // We still store a dummy value here to allow generic parameters
+            // in an arbitrary order.
+            Some(Set1::Empty)
+        }
+    };
+
+    tcx.arena.alloc_from_iter(generics.params.iter().filter_map(process_param))
 }
 
 impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
@@ -2168,11 +2173,15 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
         hir_id: hir::HirId,
         decl: &'tcx hir::FnDecl<'tcx>,
         generics: &'tcx hir::Generics<'tcx>,
+        asyncness: hir::IsAsync,
         walk: F,
     ) where
         F: for<'b, 'c> FnOnce(&'b mut LifetimeContext<'c, 'tcx>),
     {
-        insert_late_bound_lifetimes(self.map, decl, generics);
+        // Async fns need all their lifetime parameters to be early bound.
+        if asyncness != hir::IsAsync::Async {
+            insert_late_bound_lifetimes(self.map, decl, generics);
+        }
 
         // Find the start of nested early scopes, e.g., in methods.
         let mut next_early_index = 0;
@@ -2200,9 +2209,9 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
                     if self.map.late_bound.contains(&param.hir_id) {
                         let late_bound_idx = named_late_bound_vars;
                         named_late_bound_vars += 1;
-                        Some(Region::late(late_bound_idx, &self.tcx.hir(), param))
+                        Some(Region::late(late_bound_idx, self.tcx.hir(), param))
                     } else {
-                        Some(Region::early(&self.tcx.hir(), &mut next_early_index, param))
+                        Some(Region::early(self.tcx.hir(), &mut next_early_index, param))
                     }
                 }
                 GenericParamKind::Type { .. } | GenericParamKind::Const { .. } => {
@@ -2222,7 +2231,7 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
             })
             .enumerate()
             .map(|(late_bound_idx, param)| {
-                let pair = Region::late(late_bound_idx as u32, &self.tcx.hir(), param);
+                let pair = Region::late(late_bound_idx as u32, self.tcx.hir(), param);
                 late_region_as_bound_region(self.tcx, &pair.1)
             })
             .collect();
@@ -2509,7 +2518,12 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
             };
             if let Some(def_id) = def_id.as_local() {
                 let id = self.tcx.hir().local_def_id_to_hir_id(def_id);
-                self.tcx.object_lifetime_defaults(id).unwrap().iter().map(set_to_region).collect()
+                self.tcx
+                    .object_lifetime_defaults(id.owner)
+                    .unwrap()
+                    .iter()
+                    .map(set_to_region)
+                    .collect()
             } else {
                 let tcx = self.tcx;
                 self.xcrate_object_lifetime_defaults
@@ -2797,7 +2811,7 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
                 // Look for `self: &'a Self` - also desugared from `&'a self`,
                 // and if that matches, use it for elision and return early.
                 fn is_self_ty(&self, res: Res) -> bool {
-                    if let Res::SelfTy(..) = res {
+                    if let Res::SelfTy { .. } = res {
                         return true;
                     }
 

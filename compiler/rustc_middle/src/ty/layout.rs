@@ -2839,7 +2839,7 @@ pub fn conv_from_spec_abi(tcx: TyCtxt<'_>, abi: SpecAbi) -> Conv {
 }
 
 /// Error produced by attempting to compute or adjust a `FnAbi`.
-#[derive(Clone, Debug, HashStable)]
+#[derive(Copy, Clone, Debug, HashStable)]
 pub enum FnAbiError<'tcx> {
     /// Error produced by a `layout_of` call, while computing `FnAbi` initially.
     Layout(LayoutError<'tcx>),
@@ -3051,9 +3051,10 @@ impl<'tcx> LayoutCx<'tcx, TyCtxt<'tcx>> {
                                       layout: TyAndLayout<'tcx>,
                                       offset: Size,
                                       is_return: bool| {
-            // Booleans are always an i1 that needs to be zero-extended.
+            // Booleans are always a noundef i1 that needs to be zero-extended.
             if scalar.is_bool() {
                 attrs.ext(ArgExtension::Zext);
+                attrs.set(ArgAttribute::NoUndef);
                 return;
             }
 
@@ -3077,6 +3078,11 @@ impl<'tcx> LayoutCx<'tcx, TyCtxt<'tcx>> {
                         PointerKind::UniqueOwned => Size::ZERO,
                         _ => pointee.size,
                     };
+
+                    // `Box`, `&T`, and `&mut T` cannot be undef.
+                    // Note that this only applies to the value of the pointer itself;
+                    // this attribute doesn't make it UB for the pointed-to data to be undef.
+                    attrs.set(ArgAttribute::NoUndef);
 
                     // `Box` pointer parameters never alias because ownership is transferred
                     // `&mut` pointer parameters never alias other parameters,

@@ -222,6 +222,7 @@
 // std is implemented with unstable features, many of which are internal
 // compiler details that will never be stable
 // NB: the following list is sorted to minimize merge conflicts.
+#![feature(absolute_path)]
 #![feature(alloc_error_handler)]
 #![feature(alloc_layout_extra)]
 #![feature(allocator_api)]
@@ -242,7 +243,7 @@
 #![feature(c_variadic)]
 #![feature(cfg_accessible)]
 #![feature(cfg_eval)]
-#![feature(cfg_target_has_atomic)]
+#![cfg_attr(bootstrap, feature(cfg_target_has_atomic))]
 #![feature(cfg_target_thread_local)]
 #![feature(char_error_internals)]
 #![feature(char_internals)]
@@ -546,13 +547,14 @@ pub mod arch {
     #[doc(no_inline)] // Note (#82861): required for correct documentation
     pub use core::arch::*;
 
+    #[stable(feature = "simd_aarch64", since = "1.60.0")]
+    pub use std_detect::is_aarch64_feature_detected;
     #[stable(feature = "simd_x86", since = "1.27.0")]
     pub use std_detect::is_x86_feature_detected;
     #[unstable(feature = "stdsimd", issue = "48556")]
     pub use std_detect::{
-        is_aarch64_feature_detected, is_arm_feature_detected, is_mips64_feature_detected,
-        is_mips_feature_detected, is_powerpc64_feature_detected, is_powerpc_feature_detected,
-        is_riscv_feature_detected,
+        is_arm_feature_detected, is_mips64_feature_detected, is_mips_feature_detected,
+        is_powerpc64_feature_detected, is_powerpc_feature_detected, is_riscv_feature_detected,
     };
 }
 

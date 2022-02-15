@@ -1041,7 +1041,7 @@ body.blur > :not(#help) {
 }
 
 .item-info .stab {
-	display: table;
+	display: inline-block;
 }
 .stab {
 	padding: 3px;
@@ -1141,16 +1141,6 @@ a.test-arrow {
 a.test-arrow:hover{
 	text-decoration: none;
 }
-.section-header:hover a:before {
-	position: absolute;
-	left: -25px;
-	padding-right: 10px; /* avoid gap that causes hover to disappear */
-	content: '\2002\00a7\2002';
-}
-
-.section-header:hover a {
-	text-decoration: none;
-}
 
 .code-attribute {
 	font-weight: 300;
@@ -1194,17 +1184,6 @@ h3.variant {
 	display: inline-block;
 	margin-left: 4px;
 	margin-top: 3px;
-}
-
-.top-doc .docblock > .section-header:first-child {
-	margin-left: 15px;
-}
-.top-doc .docblock > .section-header:first-child:hover > a:before {
-	left: -10px;
-}
-
-.docblock > .section-header:first-child {
-	margin-top: 0;
 }
 
 :target > code, :target > .code-header {
@@ -2039,7 +2018,8 @@ details.rustdoc-toggle[open] > summary.hideme::after {
 }
 
 .method-toggle summary,
-.implementors-toggle summary {
+.implementors-toggle summary,
+.impl {
 	margin-bottom: 0.75em;
 }
 

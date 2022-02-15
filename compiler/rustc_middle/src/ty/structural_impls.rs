@@ -191,9 +191,6 @@ impl<'tcx> fmt::Debug for ty::PredicateKind<'tcx> {
             ty::PredicateKind::TypeWellFormedFromEnv(ty) => {
                 write!(f, "TypeWellFormedFromEnv({:?})", ty)
             }
-            ty::PredicateKind::OpaqueType(a, b) => {
-                write!(f, "OpaqueType({:?}, {:?})", a.kind(), b.kind())
-            }
         }
     }
 }
@@ -256,6 +253,7 @@ TrivialTypeFoldableAndLiftImpls! {
     crate::ty::UniverseIndex,
     crate::ty::Variance,
     ::rustc_span::Span,
+    ::rustc_errors::ErrorReported,
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -465,9 +463,6 @@ impl<'a, 'tcx> Lift<'tcx> for ty::PredicateKind<'a> {
             }
             ty::PredicateKind::TypeWellFormedFromEnv(ty) => {
                 tcx.lift(ty).map(ty::PredicateKind::TypeWellFormedFromEnv)
-            }
-            ty::PredicateKind::OpaqueType(opaque, ty) => {
-                Some(ty::PredicateKind::OpaqueType(tcx.lift(opaque)?, tcx.lift(ty)?))
             }
         }
     }

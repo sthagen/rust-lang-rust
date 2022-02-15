@@ -1805,7 +1805,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         // Find the type of the associated item, and the trait where the associated
         // item is declared.
         let bound = match (&qself_ty.kind(), qself_res) {
-            (_, Res::SelfTy(Some(_), Some((impl_def_id, _)))) => {
+            (_, Res::SelfTy { trait_: Some(_), alias_to: Some((impl_def_id, _)) }) => {
                 // `Self` in an impl of a trait -- we have a concrete self type and a
                 // trait reference.
                 let trait_ref = match tcx.impl_trait_ref(impl_def_id) {
@@ -1826,7 +1826,8 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
             }
             (
                 &ty::Param(_),
-                Res::SelfTy(Some(param_did), None) | Res::Def(DefKind::TyParam, param_did),
+                Res::SelfTy { trait_: Some(param_did), alias_to: None }
+                | Res::Def(DefKind::TyParam, param_did),
             ) => self.find_bound_for_assoc_item(param_did.expect_local(), assoc_ident, span)?,
             _ => {
                 if variant_resolution.is_some() {
@@ -2270,19 +2271,38 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                 let index = generics.param_def_id_to_index[&def_id];
                 tcx.mk_ty_param(index, tcx.hir().name(hir_id))
             }
-            Res::SelfTy(Some(_), None) => {
+            Res::SelfTy { trait_: Some(_), alias_to: None } => {
                 // `Self` in trait or type alias.
                 assert_eq!(opt_self_ty, None);
                 self.prohibit_generics(path.segments);
                 tcx.types.self_param
             }
-            Res::SelfTy(_, Some((def_id, forbid_generic))) => {
+            Res::SelfTy { trait_: _, alias_to: Some((def_id, forbid_generic)) } => {
                 // `Self` in impl (we know the concrete type).
                 assert_eq!(opt_self_ty, None);
                 self.prohibit_generics(path.segments);
                 // Try to evaluate any array length constants.
-                let normalized_ty = self.normalize_ty(span, tcx.at(span).type_of(def_id));
-                if forbid_generic && normalized_ty.needs_subst() {
+                let ty = tcx.at(span).type_of(def_id);
+                // HACK(min_const_generics): Forbid generic `Self` types
+                // here as we can't easily do that during nameres.
+                //
+                // We do this before normalization as we otherwise allow
+                // ```rust
+                // trait AlwaysApplicable { type Assoc; }
+                // impl<T: ?Sized> AlwaysApplicable for T { type Assoc = usize; }
+                //
+                // trait BindsParam<T> {
+                //     type ArrayTy;
+                // }
+                // impl<T> BindsParam<T> for <T as AlwaysApplicable>::Assoc {
+                //    type ArrayTy = [u8; Self::MAX];
+                // }
+                // ```
+                // Note that the normalization happens in the param env of
+                // the anon const, which is empty. This is why the
+                // `AlwaysApplicable` impl needs a `T: ?Sized` bound for
+                // this to compile if we were to normalize here.
+                if forbid_generic && ty.needs_subst() {
                     let mut err = tcx.sess.struct_span_err(
                         path.span,
                         "generic `Self` types are currently not permitted in anonymous constants",
@@ -2297,7 +2317,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                     err.emit();
                     tcx.ty_error()
                 } else {
-                    normalized_ty
+                    self.normalize_ty(span, ty)
                 }
             }
             Res::Def(DefKind::AssocTy, def_id) => {
@@ -2389,16 +2409,11 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                 let def_id = item_id.def_id.to_def_id();
 
                 match opaque_ty.kind {
-                    hir::ItemKind::OpaqueTy(hir::OpaqueTy { origin, .. }) => self
-                        .impl_trait_ty_to_ty(
-                            def_id,
-                            lifetimes,
-                            matches!(
-                                origin,
-                                hir::OpaqueTyOrigin::FnReturn(..)
-                                    | hir::OpaqueTyOrigin::AsyncFn(..)
-                            ),
-                        ),
+                    hir::ItemKind::OpaqueTy(hir::OpaqueTy { origin, .. }) => {
+                        let replace_parent_lifetimes =
+                            matches!(origin, hir::OpaqueTyOrigin::FnReturn(..));
+                        self.impl_trait_ty_to_ty(def_id, lifetimes, replace_parent_lifetimes)
+                    }
                     ref i => bug!("`impl Trait` pointed to non-opaque type?? {:#?}", i),
                 }
             }
