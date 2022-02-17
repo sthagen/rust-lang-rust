@@ -8,7 +8,6 @@ use rustc_middle::hir::place::Place as HirPlace;
 use rustc_middle::hir::place::PlaceBase as HirPlaceBase;
 use rustc_middle::hir::place::ProjectionKind as HirProjectionKind;
 use rustc_middle::middle::region;
-use rustc_middle::mir::interpret::Scalar;
 use rustc_middle::mir::{BinOp, BorrowKind, Field, UnOp};
 use rustc_middle::thir::*;
 use rustc_middle::ty::adjustment::{
@@ -583,7 +582,7 @@ impl<'tcx> Cx<'tcx> {
                     _ => span_bug!(expr.span, "unexpected repeat expr ty: {:?}", ty),
                 };
 
-                ExprKind::Repeat { value: self.mirror_expr(v), count }
+                ExprKind::Repeat { value: self.mirror_expr(v), count: *count }
             }
             hir::ExprKind::Ret(ref v) => {
                 ExprKind::Return { value: v.as_ref().map(|v| self.mirror_expr(v)) }
@@ -708,7 +707,7 @@ impl<'tcx> Cx<'tcx> {
                                 // in case we are offsetting from a computed discriminant
                                 // and not the beginning of discriminants (which is always `0`)
                                 let substs = InternalSubsts::identity_for_item(self.tcx(), did);
-                                let lhs = ty::Const {
+                                let lhs = ty::ConstS {
                                     val: ty::ConstKind::Unevaluated(ty::Unevaluated::new(
                                         ty::WithOptConstParam::unknown(did),
                                         substs,
@@ -890,7 +889,7 @@ impl<'tcx> Cx<'tcx> {
                 let name = self.tcx.hir().name(hir_id);
                 let val = ty::ConstKind::Param(ty::ParamConst::new(index, name));
                 ExprKind::Literal {
-                    literal: self.tcx.mk_const(ty::Const {
+                    literal: self.tcx.mk_const(ty::ConstS {
                         val,
                         ty: self.typeck_results().node_type(expr.hir_id),
                     }),
@@ -903,7 +902,7 @@ impl<'tcx> Cx<'tcx> {
                 let user_ty = self.user_substs_applied_to_res(expr.hir_id, res);
                 debug!("convert_path_expr: (const) user_ty={:?}", user_ty);
                 ExprKind::Literal {
-                    literal: self.tcx.mk_const(ty::Const {
+                    literal: self.tcx.mk_const(ty::ConstS {
                         val: ty::ConstKind::Unevaluated(ty::Unevaluated::new(
                             ty::WithOptConstParam::unknown(def_id),
                             substs,
@@ -943,15 +942,8 @@ impl<'tcx> Cx<'tcx> {
                 let kind = if self.tcx.is_thread_local_static(id) {
                     ExprKind::ThreadLocalRef(id)
                 } else {
-                    let ptr = self.tcx.create_static_alloc(id);
-                    ExprKind::StaticRef {
-                        literal: ty::Const::from_scalar(
-                            self.tcx,
-                            Scalar::from_pointer(ptr.into(), &self.tcx),
-                            ty,
-                        ),
-                        def_id: id,
-                    }
+                    let alloc_id = self.tcx.create_static_alloc(id);
+                    ExprKind::StaticRef { alloc_id, ty, def_id: id }
                 };
                 ExprKind::Deref {
                     arg: self.thir.exprs.push(Expr { ty, temp_lifetime, span: expr.span, kind }),
