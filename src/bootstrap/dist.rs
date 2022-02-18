@@ -734,6 +734,8 @@ fn copy_src_dirs(
             "llvm-project\\llvm",
             "llvm-project/compiler-rt",
             "llvm-project\\compiler-rt",
+            "llvm-project/cmake",
+            "llvm-project\\cmake",
         ];
         if spath.contains("llvm-project")
             && !spath.ends_with("llvm-project")
@@ -1874,12 +1876,6 @@ fn add_env(builder: &Builder<'_>, cmd: &mut Command, target: TargetSelection) {
         cmd.env("CFG_MINGW", "1").env("CFG_ABI", "GNU");
     } else {
         cmd.env("CFG_MINGW", "0").env("CFG_ABI", "MSVC");
-    }
-
-    if target.contains("x86_64") {
-        cmd.env("CFG_PLATFORM", "x64");
-    } else {
-        cmd.env("CFG_PLATFORM", "x86");
     }
 }
 
