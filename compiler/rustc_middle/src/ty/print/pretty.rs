@@ -63,66 +63,59 @@ thread_local! {
     static NO_VISIBLE_PATH: Cell<bool> = const { Cell::new(false) };
 }
 
-/// Avoids running any queries during any prints that occur
-/// during the closure. This may alter the appearance of some
-/// types (e.g. forcing verbose printing for opaque types).
-/// This method is used during some queries (e.g. `explicit_item_bounds`
-/// for opaque types), to ensure that any debug printing that
-/// occurs during the query computation does not end up recursively
-/// calling the same query.
-pub fn with_no_queries<F: FnOnce() -> R, R>(f: F) -> R {
-    NO_QUERIES.with(|no_queries| {
-        let old = no_queries.replace(true);
-        let result = f();
-        no_queries.set(old);
-        result
-    })
+macro_rules! define_helper {
+    ($($(#[$a:meta])* fn $name:ident($helper:ident, $tl:ident);)+) => {
+        $(
+            #[must_use]
+            pub struct $helper(bool);
+
+            impl $helper {
+                pub fn new() -> $helper {
+                    $helper($tl.with(|c| c.replace(true)))
+                }
+            }
+
+            $(#[$a])*
+            pub macro $name($e:expr) {
+                {
+                    let _guard = $helper::new();
+                    $e
+                }
+            }
+
+            impl Drop for $helper {
+                fn drop(&mut self) {
+                    $tl.with(|c| c.set(self.0))
+                }
+            }
+        )+
+    }
 }
 
-/// Force us to name impls with just the filename/line number. We
-/// normally try to use types. But at some points, notably while printing
-/// cycle errors, this can result in extra or suboptimal error output,
-/// so this variable disables that check.
-pub fn with_forced_impl_filename_line<F: FnOnce() -> R, R>(f: F) -> R {
-    FORCE_IMPL_FILENAME_LINE.with(|force| {
-        let old = force.replace(true);
-        let result = f();
-        force.set(old);
-        result
-    })
-}
-
-/// Adds the `crate::` prefix to paths where appropriate.
-pub fn with_crate_prefix<F: FnOnce() -> R, R>(f: F) -> R {
-    SHOULD_PREFIX_WITH_CRATE.with(|flag| {
-        let old = flag.replace(true);
-        let result = f();
-        flag.set(old);
-        result
-    })
-}
-
-/// Prevent path trimming if it is turned on. Path trimming affects `Display` impl
-/// of various rustc types, for example `std::vec::Vec` would be trimmed to `Vec`,
-/// if no other `Vec` is found.
-pub fn with_no_trimmed_paths<F: FnOnce() -> R, R>(f: F) -> R {
-    NO_TRIMMED_PATH.with(|flag| {
-        let old = flag.replace(true);
-        let result = f();
-        flag.set(old);
-        result
-    })
-}
-
-/// Prevent selection of visible paths. `Display` impl of DefId will prefer visible (public) reexports of types as paths.
-pub fn with_no_visible_paths<F: FnOnce() -> R, R>(f: F) -> R {
-    NO_VISIBLE_PATH.with(|flag| {
-        let old = flag.replace(true);
-        let result = f();
-        flag.set(old);
-        result
-    })
-}
+define_helper!(
+    /// Avoids running any queries during any prints that occur
+    /// during the closure. This may alter the appearance of some
+    /// types (e.g. forcing verbose printing for opaque types).
+    /// This method is used during some queries (e.g. `explicit_item_bounds`
+    /// for opaque types), to ensure that any debug printing that
+    /// occurs during the query computation does not end up recursively
+    /// calling the same query.
+    fn with_no_queries(NoQueriesGuard, NO_QUERIES);
+    /// Force us to name impls with just the filename/line number. We
+    /// normally try to use types. But at some points, notably while printing
+    /// cycle errors, this can result in extra or suboptimal error output,
+    /// so this variable disables that check.
+    fn with_forced_impl_filename_line(ForcedImplGuard, FORCE_IMPL_FILENAME_LINE);
+    /// Adds the `crate::` prefix to paths where appropriate.
+    fn with_crate_prefix(CratePrefixGuard, SHOULD_PREFIX_WITH_CRATE);
+    /// Prevent path trimming if it is turned on. Path trimming affects `Display` impl
+    /// of various rustc types, for example `std::vec::Vec` would be trimmed to `Vec`,
+    /// if no other `Vec` is found.
+    fn with_no_trimmed_paths(NoTrimmedGuard, NO_TRIMMED_PATH);
+    /// Prevent selection of visible paths. `Display` impl of DefId will prefer
+    /// visible (public) reexports of types as paths.
+    fn with_no_visible_paths(NoVisibleGuard, NO_VISIBLE_PATH);
+);
 
 /// The "region highlights" are used to control region printing during
 /// specific error messages. When a "region highlight" is enabled, it
@@ -379,7 +372,7 @@ pub trait PrettyPrinter<'tcx>:
                         // in cases where the `extern crate foo` has non-trivial
                         // parents, e.g. it's nested in `impl foo::Trait for Bar`
                         // (see also issues #55779 and #87932).
-                        self = with_no_visible_paths(|| self.print_def_path(def_id, &[]))?;
+                        self = with_no_visible_paths!(self.print_def_path(def_id, &[])?);
 
                         return Ok((self, true));
                     }
@@ -415,9 +408,8 @@ pub trait PrettyPrinter<'tcx>:
             cur_def_key = self.tcx().def_key(parent);
         }
 
-        let visible_parent = match visible_parent_map.get(&def_id).cloned() {
-            Some(parent) => parent,
-            None => return Ok((self, false)),
+        let Some(visible_parent) = visible_parent_map.get(&def_id).cloned() else {
+            return Ok((self, false));
         };
 
         let actual_parent = self.tcx().parent(def_id);
@@ -606,7 +598,7 @@ pub trait PrettyPrinter<'tcx>:
             ty::Infer(infer_ty) => {
                 let verbose = self.tcx().sess.verbose();
                 if let ty::TyVar(ty_vid) = infer_ty {
-                    if let Some(name) = self.infer_ty_name(ty_vid) {
+                    if let Some(name) = self.ty_infer_name(ty_vid) {
                         p!(write("{}", name))
                     } else {
                         if verbose {
@@ -655,7 +647,7 @@ pub trait PrettyPrinter<'tcx>:
                     return Ok(self);
                 }
 
-                return with_no_queries(|| {
+                return with_no_queries!({
                     let def_key = self.tcx().def_key(def_id);
                     if let Some(name) = def_key.disambiguated_data.data.get_opt_name() {
                         p!(write("{}", name));
@@ -1015,7 +1007,11 @@ pub trait PrettyPrinter<'tcx>:
         }
     }
 
-    fn infer_ty_name(&self, _: ty::TyVid) -> Option<String> {
+    fn ty_infer_name(&self, _: ty::TyVid) -> Option<String> {
+        None
+    }
+
+    fn const_infer_name(&self, _: ty::ConstVid<'tcx>) -> Option<String> {
         None
     }
 
@@ -1203,7 +1199,14 @@ pub trait PrettyPrinter<'tcx>:
                     }
                 }
             }
-            ty::ConstKind::Infer(..) => print_underscore!(),
+            ty::ConstKind::Infer(infer_ct) => {
+                match infer_ct {
+                    ty::InferConst::Var(ct_vid)
+                        if let Some(name) = self.const_infer_name(ct_vid) =>
+                            p!(write("{}", name)),
+                    _ => print_underscore!(),
+                }
+            }
             ty::ConstKind::Param(ParamConst { name, .. }) => p!(write("{}", name)),
             ty::ConstKind::Value(value) => {
                 return self.pretty_print_const_value(value, ct.ty(), print_ty);
@@ -1559,7 +1562,8 @@ pub struct FmtPrinterData<'a, 'tcx, F> {
 
     pub region_highlight_mode: RegionHighlightMode<'tcx>,
 
-    pub name_resolver: Option<Box<&'a dyn Fn(ty::TyVid) -> Option<String>>>,
+    pub ty_infer_name_resolver: Option<Box<dyn Fn(ty::TyVid) -> Option<String> + 'a>>,
+    pub const_infer_name_resolver: Option<Box<dyn Fn(ty::ConstVid<'tcx>) -> Option<String> + 'a>>,
 }
 
 impl<'a, 'tcx, F> Deref for FmtPrinter<'a, 'tcx, F> {
@@ -1588,7 +1592,8 @@ impl<'a, 'tcx, F> FmtPrinter<'a, 'tcx, F> {
             binder_depth: 0,
             printed_type_count: 0,
             region_highlight_mode: RegionHighlightMode::new(tcx),
-            name_resolver: None,
+            ty_infer_name_resolver: None,
+            const_infer_name_resolver: None,
         }))
     }
 }
@@ -1843,8 +1848,12 @@ impl<'tcx, F: fmt::Write> Printer<'tcx> for FmtPrinter<'_, 'tcx, F> {
 }
 
 impl<'tcx, F: fmt::Write> PrettyPrinter<'tcx> for FmtPrinter<'_, 'tcx, F> {
-    fn infer_ty_name(&self, id: ty::TyVid) -> Option<String> {
-        self.0.name_resolver.as_ref().and_then(|func| func(id))
+    fn ty_infer_name(&self, id: ty::TyVid) -> Option<String> {
+        self.0.ty_infer_name_resolver.as_ref().and_then(|func| func(id))
+    }
+
+    fn const_infer_name(&self, id: ty::ConstVid<'tcx>) -> Option<String> {
+        self.0.const_infer_name_resolver.as_ref().and_then(|func| func(id))
     }
 
     fn print_value_path(

@@ -324,7 +324,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     let sole_field_ty = sole_field.ty(self.tcx, substs);
                     if self.can_coerce(expr_ty, sole_field_ty) {
                         let variant_path =
-                            with_no_trimmed_paths(|| self.tcx.def_path_str(variant.def_id));
+                            with_no_trimmed_paths!(self.tcx.def_path_str(variant.def_id));
                         // FIXME #56861: DRYer prelude filtering
                         if let Some(path) = variant_path.strip_prefix("std::prelude::") {
                             if let Some((_, path)) = path.split_once("::") {
@@ -340,7 +340,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
             let prefix = match self.maybe_get_struct_pattern_shorthand_field(expr) {
                 Some(ident) => format!("{}: ", ident),
-                None => format!(""),
+                None => String::new(),
             };
 
             match &compatible_variants[..] {
@@ -435,44 +435,39 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     /// opt.map(|param| { takes_ref(param) });
     /// ```
     fn can_use_as_ref(&self, expr: &hir::Expr<'_>) -> Option<(Span, &'static str, String)> {
-        let path = match expr.kind {
-            hir::ExprKind::Path(hir::QPath::Resolved(_, ref path)) => path,
-            _ => return None,
+        let hir::ExprKind::Path(hir::QPath::Resolved(_, ref path)) = expr.kind else {
+            return None;
         };
 
-        let local_id = match path.res {
-            hir::def::Res::Local(id) => id,
-            _ => return None,
+        let hir::def::Res::Local(local_id) = path.res else {
+            return None;
         };
 
         let local_parent = self.tcx.hir().get_parent_node(local_id);
-        let param_hir_id = match self.tcx.hir().find(local_parent) {
-            Some(Node::Param(hir::Param { hir_id, .. })) => hir_id,
-            _ => return None,
+        let Some(Node::Param(hir::Param { hir_id: param_hir_id, .. })) = self.tcx.hir().find(local_parent) else {
+            return None;
         };
 
         let param_parent = self.tcx.hir().get_parent_node(*param_hir_id);
-        let (expr_hir_id, closure_fn_decl) = match self.tcx.hir().find(param_parent) {
-            Some(Node::Expr(hir::Expr {
-                hir_id,
-                kind: hir::ExprKind::Closure(_, decl, ..),
-                ..
-            })) => (hir_id, decl),
-            _ => return None,
+        let Some(Node::Expr(hir::Expr {
+            hir_id: expr_hir_id,
+            kind: hir::ExprKind::Closure(_, closure_fn_decl, ..),
+            ..
+        })) = self.tcx.hir().find(param_parent) else {
+            return None;
         };
 
         let expr_parent = self.tcx.hir().get_parent_node(*expr_hir_id);
         let hir = self.tcx.hir().find(expr_parent);
         let closure_params_len = closure_fn_decl.inputs.len();
-        let (method_path, method_expr) = match (hir, closure_params_len) {
-            (
-                Some(Node::Expr(hir::Expr {
-                    kind: hir::ExprKind::MethodCall(segment, expr, _),
-                    ..
-                })),
-                1,
-            ) => (segment, expr),
-            _ => return None,
+        let (
+            Some(Node::Expr(hir::Expr {
+                kind: hir::ExprKind::MethodCall(method_path, method_expr, _),
+                ..
+            })),
+            1,
+        ) = (hir, closure_params_len) else {
+            return None;
         };
 
         let self_ty = self.typeck_results.borrow().node_type(method_expr[0].hir_id);
@@ -683,7 +678,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
                         let prefix = match self.maybe_get_struct_pattern_shorthand_field(expr) {
                             Some(ident) => format!("{}: ", ident),
-                            None => format!(""),
+                            None => String::new(),
                         };
 
                         if let Some(hir::Node::Expr(hir::Expr {
@@ -875,7 +870,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                             };
                             let prefix = match self.maybe_get_struct_pattern_shorthand_field(expr) {
                                 Some(ident) => format!("{}: ", ident),
-                                None => format!(""),
+                                None => String::new(),
                             };
                             let (span, suggestion) = if self.is_else_if_block(expr) {
                                 // Don't suggest nonsense like `else *if`

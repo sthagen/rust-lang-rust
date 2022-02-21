@@ -6,6 +6,7 @@
 
 #![doc(html_root_url = "https://doc.rust-lang.org/nightly/nightly-rustc/")]
 #![feature(nll)]
+#![feature(let_else)]
 #![feature(once_cell)]
 #![recursion_limit = "256"]
 #![cfg_attr(not(bootstrap), allow(rustc::potential_query_instability))]
@@ -203,10 +204,7 @@ fn run_compiler(
     let args = args::arg_expand_all(at_args);
 
     let diagnostic_output = emitter.map_or(DiagnosticOutput::Default, DiagnosticOutput::Raw);
-    let matches = match handle_options(&args) {
-        Some(matches) => matches,
-        None => return Ok(()),
-    };
+    let Some(matches) = handle_options(&args) else { return Ok(()) };
 
     let sopts = config::build_session_options(&matches);
 
@@ -216,10 +214,12 @@ fn run_compiler(
     }
 
     let cfg = interface::parse_cfgspecs(matches.opt_strs("cfg"));
+    let check_cfg = interface::parse_check_cfg(matches.opt_strs("check-cfg"));
     let (odir, ofile) = make_output(&matches);
     let mut config = interface::Config {
         opts: sopts,
         crate_cfg: cfg,
+        crate_check_cfg: check_cfg,
         input: Input::File(PathBuf::new()),
         input_path: None,
         output_file: ofile,

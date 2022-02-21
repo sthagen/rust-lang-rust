@@ -278,9 +278,8 @@ impl LintStore {
     /// This lint has been renamed; warn about using the new name and apply the lint.
     #[track_caller]
     pub fn register_renamed(&mut self, old_name: &str, new_name: &str) {
-        let target = match self.by_name.get(new_name) {
-            Some(&Id(lint_id)) => lint_id,
-            _ => bug!("invalid lint renaming of {} to {}", old_name, new_name),
+        let Some(&Id(target)) = self.by_name.get(new_name) else {
+            bug!("invalid lint renaming of {} to {}", old_name, new_name);
         };
         self.by_name.insert(old_name.to_string(), Renamed(new_name.to_string(), target));
     }
@@ -994,7 +993,7 @@ impl<'tcx> LateContext<'tcx> {
                 }
 
                 // This shouldn't ever be needed, but just in case:
-                with_no_trimmed_paths(|| {
+                with_no_trimmed_paths!({
                     Ok(vec![match trait_ref {
                         Some(trait_ref) => Symbol::intern(&format!("{:?}", trait_ref)),
                         None => Symbol::intern(&format!("<{}>", self_ty)),
@@ -1013,15 +1012,15 @@ impl<'tcx> LateContext<'tcx> {
 
                 // This shouldn't ever be needed, but just in case:
                 path.push(match trait_ref {
-                    Some(trait_ref) => with_no_trimmed_paths(|| {
-                        Symbol::intern(&format!(
+                    Some(trait_ref) => {
+                        with_no_trimmed_paths!(Symbol::intern(&format!(
                             "<impl {} for {}>",
                             trait_ref.print_only_trait_path(),
                             self_ty
-                        ))
-                    }),
+                        )))
+                    }
                     None => {
-                        with_no_trimmed_paths(|| Symbol::intern(&format!("<impl {}>", self_ty)))
+                        with_no_trimmed_paths!(Symbol::intern(&format!("<impl {}>", self_ty)))
                     }
                 });
 
