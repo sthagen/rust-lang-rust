@@ -109,7 +109,7 @@ fn external_generic_args(
 
     if cx.tcx.fn_trait_kind_from_lang_item(did).is_some() {
         let inputs = match ty_kind.unwrap() {
-            ty::Tuple(tys) => tys.iter().map(|t| t.expect_ty().clean(cx)).collect(),
+            ty::Tuple(tys) => tys.iter().map(|t| t.clean(cx)).collect(),
             _ => return GenericArgs::AngleBracketed { args, bindings: bindings.into() },
         };
         let output = None;
@@ -302,11 +302,7 @@ fn print_const_with_custom_print_scalar(tcx: TyCtxt<'_>, ct: ty::Const<'_>) -> S
     // For all other types, fallback to the original `pretty_print_const`.
     match (ct.val(), ct.ty().kind()) {
         (ty::ConstKind::Value(ConstValue::Scalar(int)), ty::Uint(ui)) => {
-            format!(
-                "{}{}",
-                format_integer_with_underscore_sep(&int.rustdoc_display()),
-                ui.name_str()
-            )
+            format!("{}{}", format_integer_with_underscore_sep(&int.to_string()), ui.name_str())
         }
         (ty::ConstKind::Value(ConstValue::Scalar(int)), ty::Int(i)) => {
             let ty = tcx.lift(ct.ty()).unwrap();

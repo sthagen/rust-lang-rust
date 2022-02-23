@@ -142,11 +142,11 @@ impl<Tag: Provenance> std::fmt::Display for ImmTy<'_, Tag> {
                         p(cx, s, ty)?;
                         return Ok(());
                     }
-                    write!(f, "{}: {}", s, self.layout.ty)
+                    write!(f, "{:x}: {}", s, self.layout.ty)
                 }
                 Immediate::ScalarPair(a, b) => {
                     // FIXME(oli-obk): at least print tuples and slices nicely
-                    write!(f, "({}, {}): {}", a, b, self.layout.ty,)
+                    write!(f, "({:x}, {:x}): {}", a, b, self.layout.ty,)
                 }
             }
         })
@@ -258,15 +258,12 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
             return Ok(None);
         }
 
-        let alloc = match self.get_alloc(mplace)? {
-            Some(ptr) => ptr,
-            None => {
-                return Ok(Some(ImmTy {
-                    // zero-sized type
-                    imm: Scalar::ZST.into(),
-                    layout: mplace.layout,
-                }));
-            }
+        let Some(alloc) = self.get_alloc(mplace)? else {
+            return Ok(Some(ImmTy {
+                // zero-sized type
+                imm: Scalar::ZST.into(),
+                layout: mplace.layout,
+            }));
         };
 
         match mplace.layout.abi {

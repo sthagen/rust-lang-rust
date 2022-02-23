@@ -1481,7 +1481,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             .map_err(|_| ())
     }
 
-    fn evaluate_where_clause<'o>(
+    fn where_clause_may_apply<'o>(
         &mut self,
         stack: &TraitObligationStack<'o, 'tcx>,
         where_clause_trait_ref: ty::PolyTraitRef<'tcx>,
@@ -1852,9 +1852,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             ty::Str | ty::Slice(_) | ty::Dynamic(..) | ty::Foreign(..) => None,
 
             ty::Tuple(tys) => Where(
-                obligation
-                    .predicate
-                    .rebind(tys.last().into_iter().map(|k| k.expect_ty()).collect()),
+                obligation.predicate.rebind(tys.last().map_or_else(Vec::new, |&last| vec![last])),
             ),
 
             ty::Adt(def, substs) => {
@@ -1917,7 +1915,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
 
             ty::Tuple(tys) => {
                 // (*) binder moved here
-                Where(obligation.predicate.rebind(tys.iter().map(|k| k.expect_ty()).collect()))
+                Where(obligation.predicate.rebind(tys.iter().collect()))
             }
 
             ty::Closure(_, substs) => {
@@ -1997,7 +1995,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
 
             ty::Tuple(ref tys) => {
                 // (T1, ..., Tn) -- meets any bound that all of T1...Tn meet
-                t.rebind(tys.iter().map(|k| k.expect_ty()).collect())
+                t.rebind(tys.iter().collect())
             }
 
             ty::Closure(_, ref substs) => {
