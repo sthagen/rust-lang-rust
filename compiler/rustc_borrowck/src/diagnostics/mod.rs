@@ -1,7 +1,7 @@
 //! Borrow checker diagnostics.
 
 use rustc_const_eval::util::call_kind;
-use rustc_errors::DiagnosticBuilder;
+use rustc_errors::Diagnostic;
 use rustc_hir as hir;
 use rustc_hir::def::Namespace;
 use rustc_hir::def_id::DefId;
@@ -57,7 +57,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         &self,
         location: Location,
         place: PlaceRef<'tcx>,
-        diag: &mut DiagnosticBuilder<'_>,
+        diag: &mut Diagnostic,
     ) {
         debug!("add_moved_or_invoked_closure_note: location={:?} place={:?}", location, place);
         let mut target = place.local_or_deref_local();
@@ -409,7 +409,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
     /// Add a note that a type does not implement `Copy`
     pub(super) fn note_type_does_not_implement_copy(
         &self,
-        err: &mut DiagnosticBuilder<'_>,
+        err: &mut Diagnostic,
         place_desc: &str,
         ty: Ty<'tcx>,
         span: Option<Span>,
@@ -488,8 +488,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
     /// Return the name of the provided `Ty` (that must be a reference) with a synthesized lifetime
     /// name where required.
     pub(super) fn get_name_for_ty(&self, ty: Ty<'tcx>, counter: usize) -> String {
-        let mut s = String::new();
-        let mut printer = ty::print::FmtPrinter::new(self.infcx.tcx, &mut s, Namespace::TypeNS);
+        let mut printer = ty::print::FmtPrinter::new(self.infcx.tcx, Namespace::TypeNS);
 
         // We need to add synthesized lifetimes where appropriate. We do
         // this by hooking into the pretty printer and telling it to label the
@@ -504,15 +503,13 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
             }
         }
 
-        let _ = ty.print(printer);
-        s
+        ty.print(printer).unwrap().into_buffer()
     }
 
     /// Returns the name of the provided `Ty` (that must be a reference)'s region with a
     /// synthesized lifetime name where required.
     pub(super) fn get_region_name_for_ty(&self, ty: Ty<'tcx>, counter: usize) -> String {
-        let mut s = String::new();
-        let mut printer = ty::print::FmtPrinter::new(self.infcx.tcx, &mut s, Namespace::TypeNS);
+        let mut printer = ty::print::FmtPrinter::new(self.infcx.tcx, Namespace::TypeNS);
 
         let region = if let ty::Ref(region, ..) = ty.kind() {
             match **region {
@@ -527,8 +524,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
             bug!("ty for annotation of borrow region is not a reference");
         };
 
-        let _ = region.print(printer);
-        s
+        region.print(printer).unwrap().into_buffer()
     }
 }
 
@@ -613,11 +609,7 @@ impl UseSpans<'_> {
     }
 
     // Add a span label to the arguments of the closure, if it exists.
-    pub(super) fn args_span_label(
-        self,
-        err: &mut DiagnosticBuilder<'_>,
-        message: impl Into<String>,
-    ) {
+    pub(super) fn args_span_label(self, err: &mut Diagnostic, message: impl Into<String>) {
         if let UseSpans::ClosureUse { args_span, .. } = self {
             err.span_label(args_span, message);
         }
@@ -625,11 +617,7 @@ impl UseSpans<'_> {
 
     // Add a span label to the use of the captured variable, if it exists.
     // only adds label to the `path_span`
-    pub(super) fn var_span_label_path_only(
-        self,
-        err: &mut DiagnosticBuilder<'_>,
-        message: impl Into<String>,
-    ) {
+    pub(super) fn var_span_label_path_only(self, err: &mut Diagnostic, message: impl Into<String>) {
         if let UseSpans::ClosureUse { path_span, .. } = self {
             err.span_label(path_span, message);
         }
@@ -638,7 +626,7 @@ impl UseSpans<'_> {
     // Add a span label to the use of the captured variable, if it exists.
     pub(super) fn var_span_label(
         self,
-        err: &mut DiagnosticBuilder<'_>,
+        err: &mut Diagnostic,
         message: impl Into<String>,
         kind_desc: impl Into<String>,
     ) {

@@ -40,7 +40,7 @@ use rustc_ast_pretty::pprust;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet, FxIndexMap};
 use rustc_data_structures::intern::Interned;
 use rustc_data_structures::sync::Lrc;
-use rustc_errors::{struct_span_err, Applicability, DiagnosticBuilder};
+use rustc_errors::{struct_span_err, Applicability, Diagnostic, DiagnosticBuilder, ErrorReported};
 use rustc_expand::base::{DeriveResolutions, SyntaxExtension, SyntaxExtensionKind};
 use rustc_hir::def::Namespace::*;
 use rustc_hir::def::{self, CtorOf, DefKind, NonMacroAttrKind, PartialRes};
@@ -713,7 +713,7 @@ struct PrivacyError<'a> {
 }
 
 struct UseError<'a> {
-    err: DiagnosticBuilder<'a>,
+    err: DiagnosticBuilder<'a, ErrorReported>,
     /// Candidates which user could `use` to access the missing type.
     candidates: Vec<ImportSuggestion>,
     /// The `DefId` of the module to place the use-statements in.
@@ -843,10 +843,6 @@ impl<'a> NameBinding<'a> {
             self.res(),
             Res::Def(DefKind::AssocConst | DefKind::AssocFn | DefKind::AssocTy, _)
         )
-    }
-
-    fn is_macro_def(&self) -> bool {
-        matches!(self.kind, NameBindingKind::Res(Res::Def(DefKind::Macro(..), _), _))
     }
 
     fn macro_kind(&self) -> Option<MacroKind> {
@@ -990,6 +986,9 @@ pub struct Resolver<'a> {
     crate_loader: CrateLoader<'a>,
     macro_names: FxHashSet<Ident>,
     builtin_macros: FxHashMap<Symbol, BuiltinMacroState>,
+    /// A small map keeping true kinds of built-in macros that appear to be fn-like on
+    /// the surface (`macro` items in libcore), but are actually attributes or derives.
+    builtin_macro_kinds: FxHashMap<LocalDefId, MacroKind>,
     registered_attrs: FxHashSet<Ident>,
     registered_tools: RegisteredTools,
     macro_use_prelude: FxHashMap<Symbol, &'a NameBinding<'a>>,
@@ -1261,6 +1260,10 @@ impl ResolverAstLowering for Resolver<'_> {
 
         def_id
     }
+
+    fn decl_macro_kind(&self, def_id: LocalDefId) -> MacroKind {
+        self.builtin_macro_kinds.get(&def_id).copied().unwrap_or(MacroKind::Bang)
+    }
 }
 
 impl<'a> Resolver<'a> {
@@ -1381,6 +1384,7 @@ impl<'a> Resolver<'a> {
             crate_loader: CrateLoader::new(session, metadata_loader, crate_name),
             macro_names: FxHashSet::default(),
             builtin_macros: Default::default(),
+            builtin_macro_kinds: Default::default(),
             registered_attrs,
             registered_tools,
             macro_use_prelude: FxHashMap::default(),
@@ -3169,7 +3173,7 @@ impl<'a> Resolver<'a> {
     /// ```
     fn add_suggestion_for_rename_of_use(
         &self,
-        err: &mut DiagnosticBuilder<'_>,
+        err: &mut Diagnostic,
         name: Symbol,
         import: &Import<'_>,
         binding_span: Span,
@@ -3248,7 +3252,7 @@ impl<'a> Resolver<'a> {
     /// as characters expected by span manipulations won't be present.
     fn add_suggestion_for_duplicate_nested_use(
         &self,
-        err: &mut DiagnosticBuilder<'_>,
+        err: &mut Diagnostic,
         import: &Import<'_>,
         binding_span: Span,
     ) {

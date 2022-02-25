@@ -319,7 +319,7 @@ impl LintStore {
     ) {
         let (tool_name, lint_name_only) = parse_lint_and_tool_name(lint_name);
         if lint_name_only == crate::WARNINGS.name_lower() && level == Level::ForceWarn {
-            return struct_span_err!(
+            struct_span_err!(
                 sess,
                 DUMMY_SP,
                 E0602,
@@ -327,6 +327,7 @@ impl LintStore {
                 crate::WARNINGS.name_lower()
             )
             .emit();
+            return;
         }
         let db = match self.check_lint_name(lint_name_only, tool_name, registered_tools) {
             CheckLintNameResult::Ok(_) => None,
@@ -339,7 +340,7 @@ impl LintStore {
                     err.help(&format!("did you mean: `{}`", suggestion));
                 }
 
-                Some(err)
+                Some(err.forget_guarantee())
             }
             CheckLintNameResult::Tool(result) => match result {
                 Err((Some(_), new_name)) => Some(sess.struct_warn(&format!(
@@ -350,13 +351,16 @@ impl LintStore {
                 ))),
                 _ => None,
             },
-            CheckLintNameResult::NoTool => Some(struct_span_err!(
-                sess,
-                DUMMY_SP,
-                E0602,
-                "unknown lint tool: `{}`",
-                tool_name.unwrap()
-            )),
+            CheckLintNameResult::NoTool => Some(
+                struct_span_err!(
+                    sess,
+                    DUMMY_SP,
+                    E0602,
+                    "unknown lint tool: `{}`",
+                    tool_name.unwrap()
+                )
+                .forget_guarantee(),
+            ),
         };
 
         if let Some(mut db) = db {
@@ -765,7 +769,40 @@ pub trait LintContext: Sized {
                 BuiltinLintDiagnostics::NamedAsmLabel(help) => {
                     db.help(&help);
                     db.note("see the asm section of Rust By Example <https://doc.rust-lang.org/nightly/rust-by-example/unsafe/asm.html#labels> for more information");
-                }
+                },
+                BuiltinLintDiagnostics::UnexpectedCfg(span, name, value) => {
+                    let possibilities: Vec<Symbol> = if value.is_some() {
+                        let Some(values) = &sess.parse_sess.check_config.values_valid.get(&name) else {
+                            bug!("it shouldn't be possible to have a diagnostic on a value whose name is not in values");
+                        };
+                        values.iter().map(|&s| s).collect()
+                    } else {
+                        let Some(names_valid) = &sess.parse_sess.check_config.names_valid else {
+                            bug!("it shouldn't be possible to have a diagnostic on a name if name checking is not enabled");
+                        };
+                        names_valid.iter().map(|s| *s).collect()
+                    };
+
+                    // Show the full list if all possible values for a given name, but don't do it
+                    // for names as the possibilities could be very long
+                    if value.is_some() {
+                        if !possibilities.is_empty() {
+                            let mut possibilities = possibilities.iter().map(Symbol::as_str).collect::<Vec<_>>();
+                            possibilities.sort();
+
+                            let possibilities = possibilities.join(", ");
+                            db.note(&format!("expected values for `{name}` are: {possibilities}"));
+                        } else {
+                            db.note(&format!("no expected value for `{name}`"));
+                        }
+                    }
+
+                    // Suggest the most probable if we found one
+                    if let Some(best_match) = find_best_match_for_name(&possibilities, value.unwrap_or(name), None) {
+                        let punctuation = if value.is_some() { "\"" } else { "" };
+                        db.span_suggestion(span, "did you mean", format!("{punctuation}{best_match}{punctuation}"), Applicability::MaybeIncorrect);
+                    }
+                },
             }
             // Rewrap `db`, and pass control to the user.
             decorate(LintDiagnosticBuilder::new(db));

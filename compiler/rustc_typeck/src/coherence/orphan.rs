@@ -159,7 +159,7 @@ fn emit_orphan_check_error<'tcx>(
     generics: &hir::Generics<'tcx>,
     err: traits::OrphanCheckErr<'tcx>,
 ) -> Result<!, ErrorReported> {
-    match err {
+    Err(match err {
         traits::OrphanCheckErr::NonLocalInputType(tys) => {
             let mut err = struct_span_err!(
                 tcx.sess,
@@ -269,9 +269,7 @@ fn emit_orphan_check_error<'tcx>(
                 .emit(),
             }
         }
-    }
-
-    Err(ErrorReported)
+    })
 }
 
 #[derive(Default)]
@@ -439,6 +437,7 @@ fn fast_reject_auto_impl<'tcx>(tcx: TyCtxt<'tcx>, trait_def_id: DefId, self_ty: 
             }
 
             match t.kind() {
+                ty::Adt(def, substs) if def.is_phantom_data() => substs.super_visit_with(self),
                 ty::Adt(def, substs) => {
                     // @lcnr: This is the only place where cycles can happen. We avoid this
                     // by only visiting each `DefId` once.

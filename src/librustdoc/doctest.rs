@@ -551,10 +551,7 @@ crate fn make_test(
             let mut parser = match maybe_new_parser_from_source_str(&sess, filename, source) {
                 Ok(p) => p,
                 Err(errs) => {
-                    for mut err in errs {
-                        err.cancel();
-                    }
-
+                    drop(errs);
                     return (found_main, found_extern_crate, found_macro);
                 }
             };
@@ -594,7 +591,7 @@ crate fn make_test(
                         }
                     }
                     Ok(None) => break,
-                    Err(mut e) => {
+                    Err(e) => {
                         e.cancel();
                         break;
                     }
@@ -949,6 +946,8 @@ impl Tester for Collector {
                     Ignore::None => false,
                     Ignore::Some(ref ignores) => ignores.iter().any(|s| target_str.contains(s)),
                 },
+                #[cfg(not(bootstrap))]
+                ignore_message: None,
                 // compiler failures are test failures
                 should_panic: test::ShouldPanic::No,
                 compile_fail: config.compile_fail,
@@ -1164,7 +1163,7 @@ impl<'a, 'hir, 'tcx> intravisit::Visitor<'hir> for HirCollector<'a, 'hir, 'tcx> 
 
     fn visit_item(&mut self, item: &'hir hir::Item<'_>) {
         let name = match &item.kind {
-            hir::ItemKind::Macro(ref macro_def) => {
+            hir::ItemKind::Macro(ref macro_def, _) => {
                 // FIXME(#88038): Non exported macros have historically not been tested,
                 // but we really ought to start testing them.
                 let def_id = item.def_id.to_def_id();

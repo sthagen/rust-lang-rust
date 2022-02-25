@@ -1,6 +1,8 @@
 use crate::infer::type_variable::TypeVariableOriginKind;
 use crate::infer::{InferCtxt, Symbol};
-use rustc_errors::{pluralize, struct_span_err, Applicability, DiagnosticBuilder};
+use rustc_errors::{
+    pluralize, struct_span_err, Applicability, Diagnostic, DiagnosticBuilder, ErrorReported,
+};
 use rustc_hir as hir;
 use rustc_hir::def::{DefKind, Namespace};
 use rustc_hir::def_id::DefId;
@@ -195,7 +197,7 @@ impl UseDiagnostic<'_> {
         }
     }
 
-    fn attach_note(&self, err: &mut DiagnosticBuilder<'_>) {
+    fn attach_note(&self, err: &mut Diagnostic) {
         match *self {
             Self::TryConversion { pre_ty, post_ty, .. } => {
                 let intro = "`?` implicitly converts the error value";
@@ -224,7 +226,7 @@ impl UseDiagnostic<'_> {
 
 /// Suggest giving an appropriate return type to a closure expression.
 fn closure_return_type_suggestion(
-    err: &mut DiagnosticBuilder<'_>,
+    err: &mut Diagnostic,
     output: &FnRetTy<'_>,
     body: &Body<'_>,
     ret: &str,
@@ -397,14 +399,13 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                     }
                 }
 
-                let mut s = String::new();
-                let mut printer = ty::print::FmtPrinter::new(self.tcx, &mut s, Namespace::TypeNS);
+                let mut printer = ty::print::FmtPrinter::new(self.tcx, Namespace::TypeNS);
                 if let Some(highlight) = highlight {
                     printer.region_highlight_mode = highlight;
                 }
-                let _ = ty.print(printer);
+                let name = ty.print(printer).unwrap().into_buffer();
                 InferenceDiagnosticsData {
-                    name: s,
+                    name,
                     span: None,
                     kind: UnderspecifiedArgKind::Type { prefix: ty.prefix_string(self.tcx) },
                     parent: None,
@@ -433,15 +434,13 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                         }
 
                         debug_assert!(!origin.span.is_dummy());
-                        let mut s = String::new();
-                        let mut printer =
-                            ty::print::FmtPrinter::new(self.tcx, &mut s, Namespace::ValueNS);
+                        let mut printer = ty::print::FmtPrinter::new(self.tcx, Namespace::ValueNS);
                         if let Some(highlight) = highlight {
                             printer.region_highlight_mode = highlight;
                         }
-                        let _ = ct.print(printer);
+                        let name = ct.print(printer).unwrap().into_buffer();
                         InferenceDiagnosticsData {
-                            name: s,
+                            name,
                             span: Some(origin.span),
                             kind: UnderspecifiedArgKind::Const { is_parameter: false },
                             parent: None,
@@ -491,14 +490,13 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         arg: GenericArg<'tcx>,
         impl_candidates: Vec<ty::TraitRef<'tcx>>,
         error_code: TypeAnnotationNeeded,
-    ) -> DiagnosticBuilder<'tcx> {
+    ) -> DiagnosticBuilder<'tcx, ErrorReported> {
         let arg = self.resolve_vars_if_possible(arg);
         let arg_data = self.extract_inference_diagnostics_data(arg, None);
 
         let mut local_visitor = FindHirNodeVisitor::new(&self, arg, span);
         let ty_to_string = |ty: Ty<'tcx>| -> String {
-            let mut s = String::new();
-            let mut printer = ty::print::FmtPrinter::new(self.tcx, &mut s, Namespace::TypeNS);
+            let mut printer = ty::print::FmtPrinter::new(self.tcx, Namespace::TypeNS);
             let ty_getter = move |ty_vid| {
                 if let TypeVariableOriginKind::TypeParameterDefinition(name, _) =
                     self.inner.borrow_mut().type_variables().var_origin(ty_vid).kind
@@ -525,14 +523,13 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             };
             printer.const_infer_name_resolver = Some(Box::new(const_getter));
 
-            let _ = if let ty::FnDef(..) = ty.kind() {
+            if let ty::FnDef(..) = ty.kind() {
                 // We don't want the regular output for `fn`s because it includes its path in
                 // invalid pseudo-syntax, we want the `fn`-pointer output instead.
-                ty.fn_sig(self.tcx).print(printer)
+                ty.fn_sig(self.tcx).print(printer).unwrap().into_buffer()
             } else {
-                ty.print(printer)
-            };
-            s
+                ty.print(printer).unwrap().into_buffer()
+            }
         };
 
         if let Some(body_id) = body_id {
@@ -873,7 +870,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         &self,
         segment: &hir::PathSegment<'_>,
         e: &Expr<'_>,
-        err: &mut DiagnosticBuilder<'_>,
+        err: &mut Diagnostic,
     ) {
         if let (Some(typeck_results), None) = (self.in_progress_typeck_results, &segment.args) {
             let borrow = typeck_results.borrow();
@@ -918,7 +915,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         kind: hir::GeneratorKind,
         span: Span,
         ty: Ty<'tcx>,
-    ) -> DiagnosticBuilder<'tcx> {
+    ) -> DiagnosticBuilder<'tcx, ErrorReported> {
         let ty = self.resolve_vars_if_possible(ty);
         let data = self.extract_inference_diagnostics_data(ty.into(), None);
 
