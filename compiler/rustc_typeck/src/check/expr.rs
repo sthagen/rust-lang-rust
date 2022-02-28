@@ -271,7 +271,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             ExprKind::Box(subexpr) => self.check_expr_box(subexpr, expected),
             ExprKind::Lit(ref lit) => self.check_lit(&lit, expected),
             ExprKind::Binary(op, lhs, rhs) => self.check_binop(expr, op, lhs, rhs),
-            ExprKind::Assign(lhs, rhs, ref span) => {
+            ExprKind::Assign(lhs, rhs, span) => {
                 self.check_expr_assign(expr, expected, lhs, rhs, span)
             }
             ExprKind::AssignOp(op, lhs, rhs) => self.check_binop_assign(expr, op, lhs, rhs),
@@ -810,10 +810,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         // Use the span of the trailing expression for our cause,
         // not the span of the entire function
         if !explicit_return {
-            if let ExprKind::Block(body, _) = return_expr.kind {
-                if let Some(last_expr) = body.expr {
-                    span = last_expr.span;
-                }
+            if let ExprKind::Block(body, _) = return_expr.kind && let Some(last_expr) = body.expr {
+                span = last_expr.span;
             }
         }
         ret_coercion.borrow_mut().coerce(
@@ -982,7 +980,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         expected: Expectation<'tcx>,
         lhs: &'tcx hir::Expr<'tcx>,
         rhs: &'tcx hir::Expr<'tcx>,
-        span: &Span,
+        span: Span,
     ) -> Ty<'tcx> {
         let expected_ty = expected.coercion_target_type(self, expr.span);
         if expected_ty == self.tcx.types.bool {
@@ -1014,7 +1012,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             }
             if eq {
                 err.span_suggestion_verbose(
-                    *span,
+                    span,
                     "you might have meant to compare for equality",
                     "==".to_string(),
                     applicability,
@@ -1031,7 +1029,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             return self.tcx.ty_error();
         }
 
-        self.check_lhs_assignable(lhs, "E0070", *span);
+        self.check_lhs_assignable(lhs, "E0070", span);
 
         let lhs_ty = self.check_expr_with_needs(&lhs, Needs::MutPlace);
         let rhs_ty = self.check_expr_coercable_to_type(&rhs, lhs_ty, Some(lhs));

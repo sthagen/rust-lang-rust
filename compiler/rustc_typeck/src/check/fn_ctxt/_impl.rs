@@ -313,6 +313,15 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     ) => {
                         // A reborrow has no effect before a dereference.
                     }
+                    // Catch cases which have Deref(None)
+                    // having them slip to bug! causes ICE
+                    // see #94291 for more info
+                    (&[Adjustment { kind: Adjust::Deref(None), .. }], _) => {
+                        self.tcx.sess.delay_span_bug(
+                            DUMMY_SP,
+                            &format!("Can't compose Deref(None) expressions"),
+                        )
+                    }
                     // FIXME: currently we never try to compose autoderefs
                     // and ReifyFnPointer/UnsafeFnPointer, but we could.
                     _ => bug!(
@@ -424,6 +433,30 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     {
         self.inh.partially_normalize_associated_types_in(
             ObligationCause::misc(span, self.body_id),
+            self.param_env,
+            value,
+        )
+    }
+
+    pub(in super::super) fn normalize_op_associated_types_in_as_infer_ok<T>(
+        &self,
+        span: Span,
+        value: T,
+        opt_input_expr: Option<&hir::Expr<'_>>,
+    ) -> InferOk<'tcx, T>
+    where
+        T: TypeFoldable<'tcx>,
+    {
+        self.inh.partially_normalize_associated_types_in(
+            ObligationCause::new(
+                span,
+                self.body_id,
+                traits::BinOp {
+                    rhs_span: opt_input_expr.map(|expr| expr.span),
+                    is_lit: opt_input_expr
+                        .map_or(false, |expr| matches!(expr.kind, ExprKind::Lit(_))),
+                },
+            ),
             self.param_env,
             value,
         )

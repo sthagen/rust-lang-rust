@@ -22,6 +22,7 @@
 #![recursion_limit = "256"]
 #![warn(rustc::internal)]
 #![allow(clippy::collapsible_if, clippy::collapsible_else_if)]
+#![allow(rustc::potential_query_instability)]
 
 #[macro_use]
 extern crate tracing;
@@ -259,6 +260,7 @@ fn opts() -> Vec<RustcOptGroup> {
             o.optmulti("L", "library-path", "directory to add to crate search path", "DIR")
         }),
         stable("cfg", |o| o.optmulti("", "cfg", "pass a --cfg to rustc", "")),
+        unstable("check-cfg", |o| o.optmulti("", "check-cfg", "pass a --check-cfg to rustc", "")),
         stable("extern", |o| o.optmulti("", "extern", "pass an --extern to rustc", "NAME[=PATH]")),
         unstable("extern-html-root-url", |o| {
             o.optmulti(

@@ -205,7 +205,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         let r = match tcx.named_region(lifetime.hir_id) {
             Some(rl::Region::Static) => tcx.lifetimes.re_static,
 
-            Some(rl::Region::LateBound(debruijn, index, def_id, _)) => {
+            Some(rl::Region::LateBound(debruijn, index, def_id)) => {
                 let name = lifetime_name(def_id.expect_local());
                 let br = ty::BoundRegion {
                     var: ty::BoundVar::from_u32(index),
@@ -222,7 +222,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                 tcx.mk_region(ty::ReLateBound(debruijn, br))
             }
 
-            Some(rl::Region::EarlyBound(index, id, _)) => {
+            Some(rl::Region::EarlyBound(index, id)) => {
                 let name = lifetime_name(id.expect_local());
                 tcx.mk_region(ty::ReEarlyBound(ty::EarlyBoundRegion { def_id: id, index, name }))
             }
@@ -1054,12 +1054,11 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         let mut result = Vec::new();
 
         for ast_bound in ast_bounds {
-            if let Some(trait_ref) = ast_bound.trait_ref() {
-                if let Some(trait_did) = trait_ref.trait_def_id() {
-                    if self.tcx().trait_may_define_assoc_type(trait_did, assoc_name) {
-                        result.push(ast_bound.clone());
-                    }
-                }
+            if let Some(trait_ref) = ast_bound.trait_ref()
+                && let Some(trait_did) = trait_ref.trait_def_id()
+                && self.tcx().trait_may_define_assoc_type(trait_did, assoc_name)
+            {
+                result.push(ast_bound.clone());
             }
         }
 

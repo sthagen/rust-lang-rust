@@ -14,7 +14,7 @@ use rustc_infer::infer::type_variable::{TypeVariableOrigin, TypeVariableOriginKi
 use rustc_infer::infer::{RegionVariableOrigin, TyCtxtInferExt};
 use rustc_middle::hir::nested_filter;
 use rustc_middle::ty::fold::TypeFoldable;
-use rustc_middle::ty::layout::MAX_SIMD_LANES;
+use rustc_middle::ty::layout::{LayoutError, MAX_SIMD_LANES};
 use rustc_middle::ty::subst::GenericArgKind;
 use rustc_middle::ty::util::{Discr, IntTypeExt};
 use rustc_middle::ty::{self, OpaqueTypeKey, ParamEnv, Ty, TyCtxt};
@@ -282,13 +282,12 @@ pub(super) fn check_fn<'a, 'tcx>(
                         sess.span_err(decl.inputs[0].span, "argument should be `&PanicInfo`");
                     }
 
-                    if let Node::Item(item) = hir.get(fn_id) {
-                        if let ItemKind::Fn(_, ref generics, _) = item.kind {
-                            if !generics.params.is_empty() {
+                    if let Node::Item(item) = hir.get(fn_id)
+                        && let ItemKind::Fn(_, ref generics, _) = item.kind
+                        && !generics.params.is_empty()
+                    {
                                 sess.span_err(span, "should have no type parameters");
                             }
-                        }
-                    }
                 } else {
                     let span = sess.source_map().guess_head_span(span);
                     sess.span_err(span, "function should have one argument");
@@ -319,17 +318,15 @@ pub(super) fn check_fn<'a, 'tcx>(
                         sess.span_err(decl.inputs[0].span, "argument should be `Layout`");
                     }
 
-                    if let Node::Item(item) = hir.get(fn_id) {
-                        if let ItemKind::Fn(_, ref generics, _) = item.kind {
-                            if !generics.params.is_empty() {
+                    if let Node::Item(item) = hir.get(fn_id)
+                        && let ItemKind::Fn(_, ref generics, _) = item.kind
+                        && !generics.params.is_empty()
+                    {
                                 sess.span_err(
                                     span,
-                                    "`#[alloc_error_handler]` function should have no type \
-                                     parameters",
+                            "`#[alloc_error_handler]` function should have no type parameters",
                                 );
                             }
-                        }
-                    }
                 } else {
                     let span = sess.source_map().guess_head_span(span);
                     sess.span_err(span, "function should have one argument");
@@ -417,10 +414,31 @@ fn check_static_inhabited<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId, span: Spa
     // have UB during initialization if they are uninhabited, but there also seems to be no good
     // reason to allow any statics to be uninhabited.
     let ty = tcx.type_of(def_id);
-    let Ok(layout) = tcx.layout_of(ParamEnv::reveal_all().and(ty)) else {
+    let layout = match tcx.layout_of(ParamEnv::reveal_all().and(ty)) {
+        Ok(l) => l,
+        // Foreign statics that overflow their allowed size should emit an error
+        Err(LayoutError::SizeOverflow(_))
+            if {
+                let node = tcx.hir().get_by_def_id(def_id);
+                matches!(
+                    node,
+                    hir::Node::ForeignItem(hir::ForeignItem {
+                        kind: hir::ForeignItemKind::Static(..),
+                        ..
+                    })
+                )
+            } =>
+        {
+            tcx.sess
+                .struct_span_err(span, "extern static is too large for the current architecture")
+                .emit();
+            return;
+        }
         // Generic statics are rejected, but we still reach this case.
-        tcx.sess.delay_span_bug(span, "generic static must be rejected");
-        return;
+        Err(e) => {
+            tcx.sess.delay_span_bug(span, &e.to_string());
+            return;
+        }
     };
     if layout.abi.is_uninhabited() {
         tcx.struct_span_lint_hir(
@@ -1125,9 +1143,10 @@ pub(super) fn check_packed(tcx: TyCtxt<'_>, sp: Span, def: &ty::AdtDef) {
     if repr.packed() {
         for attr in tcx.get_attrs(def.did).iter() {
             for r in attr::find_repr_attrs(&tcx.sess, attr) {
-                if let attr::ReprPacked(pack) = r {
-                    if let Some(repr_pack) = repr.pack {
-                        if pack as u64 != repr_pack.bytes() {
+                if let attr::ReprPacked(pack) = r
+                    && let Some(repr_pack) = repr.pack
+                    && pack as u64 != repr_pack.bytes()
+                {
                             struct_span_err!(
                                 tcx.sess,
                                 sp,
@@ -1135,8 +1154,6 @@ pub(super) fn check_packed(tcx: TyCtxt<'_>, sp: Span, def: &ty::AdtDef) {
                                 "type has conflicting packed representation hints"
                             )
                             .emit();
-                        }
-                    }
                 }
             }
         }
@@ -1378,12 +1395,11 @@ fn display_discriminant_value<'tcx>(
 ) -> String {
     if let Some(expr) = &variant.disr_expr {
         let body = &tcx.hir().body(expr.body).value;
-        if let hir::ExprKind::Lit(lit) = &body.kind {
-            if let rustc_ast::LitKind::Int(lit_value, _int_kind) = &lit.node {
-                if evaluated != *lit_value {
+        if let hir::ExprKind::Lit(lit) = &body.kind
+            && let rustc_ast::LitKind::Int(lit_value, _int_kind) = &lit.node
+            && evaluated != *lit_value
+        {
                     return format!("`{}` (overflowed from `{}`)", evaluated, lit_value);
-                }
-            }
         }
     }
     format!("`{}`", evaluated)
