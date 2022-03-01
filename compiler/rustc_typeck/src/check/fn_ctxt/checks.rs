@@ -133,7 +133,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let expected_arg_count = formal_input_tys.len();
 
         // expected_count, arg_count, error_code, sugg_unit, sugg_tuple_wrap_args
-        let mut error: Option<(usize, usize, &str, bool, Option<FnArgsAsTuple<'_>>)> = None;
+        let mut arg_count_error: Option<(usize, usize, &str, bool, Option<FnArgsAsTuple<'_>>)> =
+            None;
 
         // If the arguments should be wrapped in a tuple (ex: closures), unwrap them here
         let (formal_input_tys, expected_input_tys) = if tuple_arguments == TupleArguments {
@@ -143,7 +144,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 ty::Tuple(arg_types) => {
                     // Argument length differs
                     if arg_types.len() != provided_args.len() {
-                        error = Some((arg_types.len(), provided_args.len(), "E0057", false, None));
+                        arg_count_error =
+                            Some((arg_types.len(), provided_args.len(), "E0057", false, None));
                     }
                     let expected_input_tys = match expected_input_tys.get(0) {
                         Some(&ty) => match ty.kind() {
@@ -174,7 +176,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             if supplied_arg_count >= expected_arg_count {
                 (formal_input_tys.to_vec(), expected_input_tys)
             } else {
-                error = Some((expected_arg_count, supplied_arg_count, "E0060", false, None));
+                arg_count_error =
+                    Some((expected_arg_count, supplied_arg_count, "E0060", false, None));
                 (self.err_args(supplied_arg_count), vec![])
             }
         } else {
@@ -198,7 +201,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
             let sugg_tuple_wrap_args = self.suggested_tuple_wrap(expected_input_tys, provided_args);
 
-            error = Some((
+            arg_count_error = Some((
                 expected_arg_count,
                 supplied_arg_count,
                 "E0061",
@@ -231,6 +234,11 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         // This is more complicated than just checking type equality, as arguments could be coerced
         // This version writes those types back so further type checking uses the narrowed types
         let demand_compatible = |idx, final_arg_types: &mut Vec<Option<(Ty<'tcx>, Ty<'tcx>)>>| {
+            // Do not check argument compatibility if the number of args do not match
+            if arg_count_error.is_some() {
+                return;
+            }
+
             let formal_input_ty: Ty<'tcx> = formal_input_tys[idx];
             let expected_input_ty: Ty<'tcx> = expected_input_tys[idx];
             let provided_arg = &provided_args[idx];
@@ -328,7 +336,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         }
 
         // If there was an error in parameter count, emit that here
-        if let Some((expected_count, arg_count, err_code, sugg_unit, sugg_tuple_wrap_args)) = error
+        if let Some((expected_count, arg_count, err_code, sugg_unit, sugg_tuple_wrap_args)) =
+            arg_count_error
         {
             let (span, start_span, args, ctor_of) = match &call_expr.kind {
                 hir::ExprKind::Call(
@@ -768,55 +777,57 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let prev_diverges = self.diverges.get();
         let ctxt = BreakableCtxt { coerce: Some(coerce), may_break: false };
 
-        let (ctxt, ()) = self.with_breakable_ctxt(blk.hir_id, ctxt, || {
-            for (pos, s) in blk.stmts.iter().enumerate() {
-                self.check_stmt(s, blk.stmts.len() - 1 == pos);
-            }
+        let (ctxt, ()) =
+            self.with_breakable_ctxt(blk.hir_id, ctxt, || {
+                for (pos, s) in blk.stmts.iter().enumerate() {
+                    self.check_stmt(s, blk.stmts.len() - 1 == pos);
+                }
 
-            // check the tail expression **without** holding the
-            // `enclosing_breakables` lock below.
-            let tail_expr_ty = tail_expr.map(|t| self.check_expr_with_expectation(t, expected));
+                // check the tail expression **without** holding the
+                // `enclosing_breakables` lock below.
+                let tail_expr_ty = tail_expr.map(|t| self.check_expr_with_expectation(t, expected));
 
-            let mut enclosing_breakables = self.enclosing_breakables.borrow_mut();
-            let ctxt = enclosing_breakables.find_breakable(blk.hir_id);
-            let coerce = ctxt.coerce.as_mut().unwrap();
-            if let Some(tail_expr_ty) = tail_expr_ty {
-                let tail_expr = tail_expr.unwrap();
-                let span = self.get_expr_coercion_span(tail_expr);
-                let cause = self.cause(span, ObligationCauseCode::BlockTailExpression(blk.hir_id));
-                coerce.coerce(self, &cause, tail_expr, tail_expr_ty);
-            } else {
-                // Subtle: if there is no explicit tail expression,
-                // that is typically equivalent to a tail expression
-                // of `()` -- except if the block diverges. In that
-                // case, there is no value supplied from the tail
-                // expression (assuming there are no other breaks,
-                // this implies that the type of the block will be
-                // `!`).
-                //
-                // #41425 -- label the implicit `()` as being the
-                // "found type" here, rather than the "expected type".
-                if !self.diverges.get().is_always() {
-                    // #50009 -- Do not point at the entire fn block span, point at the return type
-                    // span, as it is the cause of the requirement, and
-                    // `consider_hint_about_removing_semicolon` will point at the last expression
-                    // if it were a relevant part of the error. This improves usability in editors
-                    // that highlight errors inline.
-                    let mut sp = blk.span;
-                    let mut fn_span = None;
-                    if let Some((decl, ident)) = self.get_parent_fn_decl(blk.hir_id) {
-                        let ret_sp = decl.output.span();
-                        if let Some(block_sp) = self.parent_item_span(blk.hir_id) {
-                            // HACK: on some cases (`ui/liveness/liveness-issue-2163.rs`) the
-                            // output would otherwise be incorrect and even misleading. Make sure
-                            // the span we're aiming at correspond to a `fn` body.
-                            if block_sp == blk.span {
-                                sp = ret_sp;
-                                fn_span = Some(ident.span);
+                let mut enclosing_breakables = self.enclosing_breakables.borrow_mut();
+                let ctxt = enclosing_breakables.find_breakable(blk.hir_id);
+                let coerce = ctxt.coerce.as_mut().unwrap();
+                if let Some(tail_expr_ty) = tail_expr_ty {
+                    let tail_expr = tail_expr.unwrap();
+                    let span = self.get_expr_coercion_span(tail_expr);
+                    let cause =
+                        self.cause(span, ObligationCauseCode::BlockTailExpression(blk.hir_id));
+                    coerce.coerce(self, &cause, tail_expr, tail_expr_ty);
+                } else {
+                    // Subtle: if there is no explicit tail expression,
+                    // that is typically equivalent to a tail expression
+                    // of `()` -- except if the block diverges. In that
+                    // case, there is no value supplied from the tail
+                    // expression (assuming there are no other breaks,
+                    // this implies that the type of the block will be
+                    // `!`).
+                    //
+                    // #41425 -- label the implicit `()` as being the
+                    // "found type" here, rather than the "expected type".
+                    if !self.diverges.get().is_always() {
+                        // #50009 -- Do not point at the entire fn block span, point at the return type
+                        // span, as it is the cause of the requirement, and
+                        // `consider_hint_about_removing_semicolon` will point at the last expression
+                        // if it were a relevant part of the error. This improves usability in editors
+                        // that highlight errors inline.
+                        let mut sp = blk.span;
+                        let mut fn_span = None;
+                        if let Some((decl, ident)) = self.get_parent_fn_decl(blk.hir_id) {
+                            let ret_sp = decl.output.span();
+                            if let Some(block_sp) = self.parent_item_span(blk.hir_id) {
+                                // HACK: on some cases (`ui/liveness/liveness-issue-2163.rs`) the
+                                // output would otherwise be incorrect and even misleading. Make sure
+                                // the span we're aiming at correspond to a `fn` body.
+                                if block_sp == blk.span {
+                                    sp = ret_sp;
+                                    fn_span = Some(ident.span);
+                                }
                             }
                         }
-                    }
-                    coerce.coerce_forced_unit(
+                        coerce.coerce_forced_unit(
                         self,
                         &self.misc(sp),
                         &mut |err| {
@@ -825,19 +836,31 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                                 if expected_ty == self.tcx.types.bool {
                                     // If this is caused by a missing `let` in a `while let`,
                                     // silence this redundant error, as we already emit E0070.
-                                    let parent = self.tcx.hir().get_parent_node(blk.hir_id);
-                                    let parent = self.tcx.hir().get_parent_node(parent);
-                                    let parent = self.tcx.hir().get_parent_node(parent);
-                                    let parent = self.tcx.hir().get_parent_node(parent);
-                                    let parent = self.tcx.hir().get_parent_node(parent);
-                                    match self.tcx.hir().find(parent) {
-                                        Some(hir::Node::Expr(hir::Expr {
-                                            kind: hir::ExprKind::Loop(_, _, hir::LoopSource::While, _),
-                                            ..
-                                        })) => {
+
+                                    // Our block must be a `assign desugar local; assignment`
+                                    if let Some(hir::Node::Block(hir::Block {
+                                        stmts:
+                                            [hir::Stmt {
+                                                kind:
+                                                    hir::StmtKind::Local(hir::Local {
+                                                        source: hir::LocalSource::AssignDesugar(_),
+                                                        ..
+                                                    }),
+                                                ..
+                                            }, hir::Stmt {
+                                                kind:
+                                                    hir::StmtKind::Expr(hir::Expr {
+                                                        kind: hir::ExprKind::Assign(..),
+                                                        ..
+                                                    }),
+                                                ..
+                                            }],
+                                        ..
+                                    })) = self.tcx.hir().find(blk.hir_id)
+                                    {
+                                        self.comes_from_while_condition(blk.hir_id, |_| {
                                             err.downgrade_to_delayed_bug();
-                                        }
-                                        _ => {}
+                                        })
                                     }
                                 }
                             }
@@ -851,9 +874,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         },
                         false,
                     );
+                    }
                 }
-            }
-        });
+            });
 
         if ctxt.may_break {
             // If we can break from the block, then the block's exit is always reachable
