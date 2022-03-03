@@ -11,7 +11,7 @@ use rustc_data_structures::fx::FxHashSet;
 use rustc_data_structures::stack::ensure_sufficient_stack;
 use rustc_errors::{
     error_code, pluralize, struct_span_err, Applicability, Diagnostic, DiagnosticBuilder,
-    ErrorReported, Style,
+    ErrorGuaranteed, Style,
 };
 use rustc_hir as hir;
 use rustc_hir::def::DefKind;
@@ -123,7 +123,7 @@ pub trait InferCtxtExt<'tcx> {
         found_span: Option<Span>,
         expected_ref: ty::PolyTraitRef<'tcx>,
         found: ty::PolyTraitRef<'tcx>,
-    ) -> DiagnosticBuilder<'tcx, ErrorReported>;
+    ) -> DiagnosticBuilder<'tcx, ErrorGuaranteed>;
 
     fn suggest_fully_qualified_path(
         &self,
@@ -891,23 +891,20 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                         }
                         if let Some(typeck_results) =
                             self.in_progress_typeck_results.map(|t| t.borrow())
+                            && let ty = typeck_results.expr_ty_adjusted(base)
+                            && let ty::FnDef(def_id, _substs) = ty.kind()
+                            && let Some(hir::Node::Item(hir::Item { span, ident, .. })) =
+                                hir.get_if_local(*def_id)
                         {
-                            let ty = typeck_results.expr_ty_adjusted(base);
-                            if let ty::FnDef(def_id, _substs) = ty.kind() {
-                                if let Some(hir::Node::Item(hir::Item { span, ident, .. })) =
-                                    hir.get_if_local(*def_id)
-                                {
-                                    err.span_suggestion_verbose(
-                                        span.shrink_to_lo(),
-                                        &format!(
-                                            "alternatively, consider making `fn {}` asynchronous",
-                                            ident
-                                        ),
-                                        "async ".to_string(),
-                                        Applicability::MaybeIncorrect,
-                                    );
-                                }
-                            }
+                            err.span_suggestion_verbose(
+                                span.shrink_to_lo(),
+                                &format!(
+                                    "alternatively, consider making `fn {}` asynchronous",
+                                    ident
+                                ),
+                                "async ".to_string(),
+                                Applicability::MaybeIncorrect,
+                            );
                         }
                     }
                 }
@@ -1000,34 +997,24 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
         span: Span,
         trait_pred: ty::PolyTraitPredicate<'tcx>,
     ) {
-        let is_empty_tuple =
-            |ty: ty::Binder<'tcx, Ty<'_>>| *ty.skip_binder().kind() == ty::Tuple(ty::List::empty());
-
         let hir = self.tcx.hir();
         let parent_node = hir.get_parent_node(obligation.cause.body_id);
         let node = hir.find(parent_node);
-        if let Some(hir::Node::Item(hir::Item {
-            kind: hir::ItemKind::Fn(sig, _, body_id), ..
-        })) = node
+        if let Some(hir::Node::Item(hir::Item { kind: hir::ItemKind::Fn(sig, _, body_id), .. })) = node
+            && let body = hir.body(*body_id)
+            && let hir::ExprKind::Block(blk, _) = &body.value.kind
+            && sig.decl.output.span().overlaps(span)
+            && blk.expr.is_none()
+            && *trait_pred.self_ty().skip_binder().kind() == ty::Tuple(ty::List::empty())
+            // FIXME(estebank): When encountering a method with a trait
+            // bound not satisfied in the return type with a body that has
+            // no return, suggest removal of semicolon on last statement.
+            // Once that is added, close #54771.
+            && let Some(stmt) = blk.stmts.last()
+            && let hir::StmtKind::Semi(_) = stmt.kind
         {
-            let body = hir.body(*body_id);
-            if let hir::ExprKind::Block(blk, _) = &body.value.kind {
-                if sig.decl.output.span().overlaps(span)
-                    && blk.expr.is_none()
-                    && is_empty_tuple(trait_pred.self_ty())
-                {
-                    // FIXME(estebank): When encountering a method with a trait
-                    // bound not satisfied in the return type with a body that has
-                    // no return, suggest removal of semicolon on last statement.
-                    // Once that is added, close #54771.
-                    if let Some(ref stmt) = blk.stmts.last() {
-                        if let hir::StmtKind::Semi(_) = stmt.kind {
-                            let sp = self.tcx.sess.source_map().end_point(stmt.span);
-                            err.span_label(sp, "consider removing this semicolon");
-                        }
-                    }
-                }
-            }
+            let sp = self.tcx.sess.source_map().end_point(stmt.span);
+            err.span_label(sp, "consider removing this semicolon");
         }
     }
 
@@ -1273,7 +1260,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
         found_span: Option<Span>,
         expected_ref: ty::PolyTraitRef<'tcx>,
         found: ty::PolyTraitRef<'tcx>,
-    ) -> DiagnosticBuilder<'tcx, ErrorReported> {
+    ) -> DiagnosticBuilder<'tcx, ErrorGuaranteed> {
         crate fn build_fn_sig_string<'tcx>(
             tcx: TyCtxt<'tcx>,
             trait_ref: ty::PolyTraitRef<'tcx>,
@@ -2481,17 +2468,15 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                 debug!("suggest_await_before_try: try_trait_obligation {:?}", try_obligation);
                 if self.predicate_may_hold(&try_obligation)
                     && impls_future.must_apply_modulo_regions()
+                    && let Ok(snippet) = self.tcx.sess.source_map().span_to_snippet(span)
+                    && snippet.ends_with('?')
                 {
-                    if let Ok(snippet) = self.tcx.sess.source_map().span_to_snippet(span) {
-                        if snippet.ends_with('?') {
-                            err.span_suggestion_verbose(
-                                span.with_hi(span.hi() - BytePos(1)).shrink_to_hi(),
-                                "consider `await`ing on the `Future`",
-                                ".await".to_string(),
-                                Applicability::MaybeIncorrect,
-                            );
-                        }
-                    }
+                    err.span_suggestion_verbose(
+                        span.with_hi(span.hi() - BytePos(1)).shrink_to_hi(),
+                        "consider `await`ing on the `Future`",
+                        ".await".to_string(),
+                        Applicability::MaybeIncorrect,
+                    );
                 }
             }
         }

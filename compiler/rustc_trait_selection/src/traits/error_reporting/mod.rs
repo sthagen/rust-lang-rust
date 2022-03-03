@@ -13,7 +13,7 @@ use crate::infer::type_variable::{TypeVariableOrigin, TypeVariableOriginKind};
 use crate::infer::{self, InferCtxt, TyCtxtInferExt};
 use rustc_data_structures::fx::FxHashMap;
 use rustc_errors::{
-    pluralize, struct_span_err, Applicability, Diagnostic, DiagnosticBuilder, ErrorReported,
+    pluralize, struct_span_err, Applicability, Diagnostic, DiagnosticBuilder, ErrorGuaranteed,
 };
 use rustc_hir as hir;
 use rustc_hir::def_id::DefId;
@@ -102,7 +102,7 @@ pub trait InferCtxtExt<'tcx> {
         expected_args: Vec<ArgKind>,
         found_args: Vec<ArgKind>,
         is_closure: bool,
-    ) -> DiagnosticBuilder<'tcx, ErrorReported>;
+    ) -> DiagnosticBuilder<'tcx, ErrorGuaranteed>;
 }
 
 impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
@@ -919,9 +919,9 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
             }
 
             // Already reported in the query.
-            SelectionError::NotConstEvaluatable(NotConstEvaluatable::Error(ErrorReported)) => {
-                // FIXME(eddyb) remove this once `ErrorReported` becomes a proof token.
-                self.tcx.sess.delay_span_bug(span, "`ErrorReported` without an error");
+            SelectionError::NotConstEvaluatable(NotConstEvaluatable::Error(ErrorGuaranteed)) => {
+                // FIXME(eddyb) remove this once `ErrorGuaranteed` becomes a proof token.
+                self.tcx.sess.delay_span_bug(span, "`ErrorGuaranteed` without an error");
                 return;
             }
 
@@ -1019,7 +1019,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
         expected_args: Vec<ArgKind>,
         found_args: Vec<ArgKind>,
         is_closure: bool,
-    ) -> DiagnosticBuilder<'tcx, ErrorReported> {
+    ) -> DiagnosticBuilder<'tcx, ErrorGuaranteed> {
         let kind = if is_closure { "closure" } else { "function" };
 
         let args_str = |arguments: &[ArgKind], other: &[ArgKind]| {
@@ -1098,42 +1098,43 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                     );
                 }
             }
-            if let &[ArgKind::Tuple(_, ref fields)] = &expected_args[..] {
-                if fields.len() == found_args.len() && is_closure {
-                    let sugg = format!(
-                        "|({}){}|",
-                        found_args
-                            .iter()
-                            .map(|arg| match arg {
-                                ArgKind::Arg(name, _) => name.to_owned(),
-                                _ => "_".to_owned(),
-                            })
-                            .collect::<Vec<String>>()
-                            .join(", "),
-                        // add type annotations if available
-                        if found_args.iter().any(|arg| match arg {
-                            ArgKind::Arg(_, ty) => ty != "_",
-                            _ => false,
-                        }) {
-                            format!(
-                                ": ({})",
-                                fields
-                                    .iter()
-                                    .map(|(_, ty)| ty.to_owned())
-                                    .collect::<Vec<String>>()
-                                    .join(", ")
-                            )
-                        } else {
-                            String::new()
-                        },
-                    );
-                    err.span_suggestion_verbose(
-                        found_span,
-                        "change the closure to accept a tuple instead of individual arguments",
-                        sugg,
-                        Applicability::MachineApplicable,
-                    );
-                }
+            if let &[ArgKind::Tuple(_, ref fields)] = &expected_args[..]
+                && fields.len() == found_args.len()
+                && is_closure
+            {
+                let sugg = format!(
+                    "|({}){}|",
+                    found_args
+                        .iter()
+                        .map(|arg| match arg {
+                            ArgKind::Arg(name, _) => name.to_owned(),
+                            _ => "_".to_owned(),
+                        })
+                        .collect::<Vec<String>>()
+                        .join(", "),
+                    // add type annotations if available
+                    if found_args.iter().any(|arg| match arg {
+                        ArgKind::Arg(_, ty) => ty != "_",
+                        _ => false,
+                    }) {
+                        format!(
+                            ": ({})",
+                            fields
+                                .iter()
+                                .map(|(_, ty)| ty.to_owned())
+                                .collect::<Vec<String>>()
+                                .join(", ")
+                        )
+                    } else {
+                        String::new()
+                    },
+                );
+                err.span_suggestion_verbose(
+                    found_span,
+                    "change the closure to accept a tuple instead of individual arguments",
+                    sugg,
+                    Applicability::MachineApplicable,
+                );
             }
         }
 
@@ -2231,16 +2232,13 @@ impl<'a, 'tcx> InferCtxtPrivExt<'a, 'tcx> for InferCtxt<'a, 'tcx> {
             if obligated_types.iter().any(|ot| ot == &self_ty) {
                 return true;
             }
-            if let ty::Adt(def, substs) = self_ty.kind() {
-                if let [arg] = &substs[..] {
-                    if let ty::subst::GenericArgKind::Type(ty) = arg.unpack() {
-                        if let ty::Adt(inner_def, _) = ty.kind() {
-                            if inner_def == def {
-                                return true;
-                            }
-                        }
-                    }
-                }
+            if let ty::Adt(def, substs) = self_ty.kind()
+                && let [arg] = &substs[..]
+                && let ty::subst::GenericArgKind::Type(ty) = arg.unpack()
+                && let ty::Adt(inner_def, _) = ty.kind()
+                && inner_def == def
+            {
+                return true;
             }
         }
         false

@@ -29,7 +29,7 @@ use crate::traits::project::ProjectionCacheKeyExt;
 use crate::traits::ProjectionCacheKey;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_data_structures::stack::ensure_sufficient_stack;
-use rustc_errors::{Diagnostic, ErrorReported};
+use rustc_errors::{Diagnostic, ErrorGuaranteed};
 use rustc_hir as hir;
 use rustc_hir::def_id::DefId;
 use rustc_infer::infer::LateBoundRegionConversionTime;
@@ -579,24 +579,22 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                                     previous_stack,
                                     subobligations,
                                 );
-                                if let Ok(res) = res {
-                                    if res == EvaluatedToOk || res == EvaluatedToOkModuloRegions {
-                                        if let Some(key) =
-                                            ProjectionCacheKey::from_poly_projection_predicate(
-                                                self, data,
-                                            )
-                                        {
-                                            // If the result is something that we can cache, then mark this
-                                            // entry as 'complete'. This will allow us to skip evaluating the
-                                            // suboligations at all the next time we evaluate the projection
-                                            // predicate.
-                                            self.infcx
-                                                .inner
-                                                .borrow_mut()
-                                                .projection_cache()
-                                                .complete(key, res);
-                                        }
-                                    }
+                                if let Ok(eval_rslt) = res
+                                    && (eval_rslt == EvaluatedToOk || eval_rslt == EvaluatedToOkModuloRegions)
+                                    && let Some(key) =
+                                        ProjectionCacheKey::from_poly_projection_predicate(
+                                            self, data,
+                                        )
+                                {
+                                    // If the result is something that we can cache, then mark this
+                                    // entry as 'complete'. This will allow us to skip evaluating the
+                                    // suboligations at all the next time we evaluate the projection
+                                    // predicate.
+                                    self.infcx
+                                        .inner
+                                        .borrow_mut()
+                                        .projection_cache()
+                                        .complete(key, eval_rslt);
                                 }
                                 res
                             }
@@ -676,8 +674,8 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                                 Err(_) => Ok(EvaluatedToErr),
                             }
                         }
-                        (Err(ErrorHandled::Reported(ErrorReported)), _)
-                        | (_, Err(ErrorHandled::Reported(ErrorReported))) => Ok(EvaluatedToErr),
+                        (Err(ErrorHandled::Reported(ErrorGuaranteed)), _)
+                        | (_, Err(ErrorHandled::Reported(ErrorGuaranteed))) => Ok(EvaluatedToErr),
                         (Err(ErrorHandled::Linted), _) | (_, Err(ErrorHandled::Linted)) => {
                             span_bug!(
                                 obligation.cause.span(self.tcx()),

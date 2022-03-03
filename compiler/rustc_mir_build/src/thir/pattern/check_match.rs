@@ -7,7 +7,7 @@ use super::{PatCtxt, PatternError};
 use rustc_arena::TypedArena;
 use rustc_ast::Mutability;
 use rustc_errors::{
-    error_code, struct_span_err, Applicability, Diagnostic, DiagnosticBuilder, ErrorReported,
+    error_code, struct_span_err, Applicability, Diagnostic, DiagnosticBuilder, ErrorGuaranteed,
 };
 use rustc_hir as hir;
 use rustc_hir::def::*;
@@ -42,7 +42,7 @@ fn create_e0004(
     sess: &Session,
     sp: Span,
     error_message: String,
-) -> DiagnosticBuilder<'_, ErrorReported> {
+) -> DiagnosticBuilder<'_, ErrorGuaranteed> {
     struct_span_err!(sess, sp, E0004, "{}", &error_message)
 }
 
@@ -315,47 +315,43 @@ fn check_for_bindings_named_same_as_variants(
     rf: RefutableFlag,
 ) {
     pat.walk_always(|p| {
-        if let hir::PatKind::Binding(_, _, ident, None) = p.kind {
-            if let Some(ty::BindByValue(hir::Mutability::Not)) =
+        if let hir::PatKind::Binding(_, _, ident, None) = p.kind
+            && let Some(ty::BindByValue(hir::Mutability::Not)) =
                 cx.typeck_results.extract_binding_mode(cx.tcx.sess, p.hir_id, p.span)
-            {
-                let pat_ty = cx.typeck_results.pat_ty(p).peel_refs();
-                if let ty::Adt(edef, _) = pat_ty.kind() {
-                    if edef.is_enum()
-                        && edef.variants.iter().any(|variant| {
-                            variant.ident(cx.tcx) == ident && variant.ctor_kind == CtorKind::Const
-                        })
-                    {
-                        let variant_count = edef.variants.len();
-                        cx.tcx.struct_span_lint_hir(
-                            BINDINGS_WITH_VARIANT_NAME,
-                            p.hir_id,
+            && let pat_ty = cx.typeck_results.pat_ty(p).peel_refs()
+            && let ty::Adt(edef, _) = pat_ty.kind()
+            && edef.is_enum()
+            && edef.variants.iter().any(|variant| {
+                variant.ident(cx.tcx) == ident && variant.ctor_kind == CtorKind::Const
+            })
+        {
+            let variant_count = edef.variants.len();
+            cx.tcx.struct_span_lint_hir(
+                BINDINGS_WITH_VARIANT_NAME,
+                p.hir_id,
+                p.span,
+                |lint| {
+                    let ty_path = cx.tcx.def_path_str(edef.did);
+                    let mut err = lint.build(&format!(
+                        "pattern binding `{}` is named the same as one \
+                                        of the variants of the type `{}`",
+                        ident, ty_path
+                    ));
+                    err.code(error_code!(E0170));
+                    // If this is an irrefutable pattern, and there's > 1 variant,
+                    // then we can't actually match on this. Applying the below
+                    // suggestion would produce code that breaks on `check_irrefutable`.
+                    if rf == Refutable || variant_count == 1 {
+                        err.span_suggestion(
                             p.span,
-                            |lint| {
-                                let ty_path = cx.tcx.def_path_str(edef.did);
-                                let mut err = lint.build(&format!(
-                                    "pattern binding `{}` is named the same as one \
-                                                    of the variants of the type `{}`",
-                                    ident, ty_path
-                                ));
-                                err.code(error_code!(E0170));
-                                // If this is an irrefutable pattern, and there's > 1 variant,
-                                // then we can't actually match on this. Applying the below
-                                // suggestion would produce code that breaks on `check_irrefutable`.
-                                if rf == Refutable || variant_count == 1 {
-                                    err.span_suggestion(
-                                        p.span,
-                                        "to match on the variant, qualify the path",
-                                        format!("{}::{}", ty_path, ident),
-                                        Applicability::MachineApplicable,
-                                    );
-                                }
-                                err.emit();
-                            },
-                        )
+                            "to match on the variant, qualify the path",
+                            format!("{}::{}", ty_path, ident),
+                            Applicability::MachineApplicable,
+                        );
                     }
-                }
-            }
+                    err.emit();
+                },
+            )
         }
     });
 }
@@ -622,10 +618,8 @@ fn maybe_point_at_variant<'a, 'p: 'a, 'tcx: 'a>(
     let mut covered = vec![];
     for pattern in patterns {
         if let Variant(variant_index) = pattern.ctor() {
-            if let ty::Adt(this_def, _) = pattern.ty().kind() {
-                if this_def.did != def.did {
-                    continue;
-                }
+            if let ty::Adt(this_def, _) = pattern.ty().kind() && this_def.did != def.did {
+                continue;
             }
             let sp = def.variants[*variant_index].ident(cx.tcx).span;
             if covered.contains(&sp) {

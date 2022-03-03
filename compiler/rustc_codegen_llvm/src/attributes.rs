@@ -28,12 +28,6 @@ pub fn apply_to_llfn(llfn: &Value, idx: AttributePlace, attrs: &[&Attribute]) {
     }
 }
 
-pub fn remove_from_llfn(llfn: &Value, idx: AttributePlace, attrs: &[AttributeKind]) {
-    if !attrs.is_empty() {
-        llvm::RemoveFunctionAttributes(llfn, idx, attrs);
-    }
-}
-
 pub fn apply_to_callsite(callsite: &Value, idx: AttributePlace, attrs: &[&Attribute]) {
     if !attrs.is_empty() {
         llvm::AddCallSiteAttributes(callsite, idx, attrs);
@@ -79,13 +73,11 @@ pub fn sanitize_attrs<'ll>(
     }
     if enabled.contains(SanitizerSet::MEMTAG) {
         // Check to make sure the mte target feature is actually enabled.
-        let sess = cx.tcx.sess;
-        let features = llvm_util::llvm_global_features(sess).join(",");
-        let mte_feature_enabled = features.rfind("+mte");
-        let mte_feature_disabled = features.rfind("-mte");
-
-        if mte_feature_enabled.is_none() || (mte_feature_disabled > mte_feature_enabled) {
-            sess.err("`-Zsanitizer=memtag` requires `-Ctarget-feature=+mte`");
+        let features = cx.tcx.global_backend_features(());
+        let mte_feature =
+            features.iter().map(|s| &s[..]).rfind(|n| ["+mte", "-mte"].contains(&&n[..]));
+        if let None | Some("-mte") = mte_feature {
+            cx.tcx.sess.err("`-Zsanitizer=memtag` requires `-Ctarget-feature=+mte`");
         }
 
         attrs.push(llvm::AttributeKind::SanitizeMemTag.create_attr(cx.llcx));
@@ -217,38 +209,23 @@ pub fn non_lazy_bind_attr<'ll>(cx: &CodegenCx<'ll, '_>) -> Option<&'ll Attribute
     }
 }
 
-/// Returns attributes to remove and to add, respectively,
-/// to set the default optimizations attrs on a function.
+/// Get the default optimizations attrs for a function.
 #[inline]
 pub(crate) fn default_optimisation_attrs<'ll>(
     cx: &CodegenCx<'ll, '_>,
-) -> (
-    // Attributes to remove
-    SmallVec<[AttributeKind; 3]>,
-    // Attributes to add
-    SmallVec<[&'ll Attribute; 2]>,
-) {
-    let mut to_remove = SmallVec::new();
-    let mut to_add = SmallVec::new();
+) -> SmallVec<[&'ll Attribute; 2]> {
+    let mut attrs = SmallVec::new();
     match cx.sess().opts.optimize {
         OptLevel::Size => {
-            to_remove.push(llvm::AttributeKind::MinSize);
-            to_add.push(llvm::AttributeKind::OptimizeForSize.create_attr(cx.llcx));
-            to_remove.push(llvm::AttributeKind::OptimizeNone);
+            attrs.push(llvm::AttributeKind::OptimizeForSize.create_attr(cx.llcx));
         }
         OptLevel::SizeMin => {
-            to_add.push(llvm::AttributeKind::MinSize.create_attr(cx.llcx));
-            to_add.push(llvm::AttributeKind::OptimizeForSize.create_attr(cx.llcx));
-            to_remove.push(llvm::AttributeKind::OptimizeNone);
-        }
-        OptLevel::No => {
-            to_remove.push(llvm::AttributeKind::MinSize);
-            to_remove.push(llvm::AttributeKind::OptimizeForSize);
-            to_remove.push(llvm::AttributeKind::OptimizeNone);
+            attrs.push(llvm::AttributeKind::MinSize.create_attr(cx.llcx));
+            attrs.push(llvm::AttributeKind::OptimizeForSize.create_attr(cx.llcx));
         }
         _ => {}
     }
-    (to_remove, to_add)
+    attrs
 }
 
 /// Composite function which sets LLVM attributes for function depending on its AST (`#[attribute]`)
@@ -260,25 +237,17 @@ pub fn from_fn_attrs<'ll, 'tcx>(
 ) {
     let codegen_fn_attrs = cx.tcx.codegen_fn_attrs(instance.def_id());
 
-    let mut to_remove = SmallVec::<[_; 4]>::new();
     let mut to_add = SmallVec::<[_; 16]>::new();
 
     match codegen_fn_attrs.optimize {
         OptimizeAttr::None => {
-            let (to_remove_opt, to_add_opt) = default_optimisation_attrs(cx);
-            to_remove.extend(to_remove_opt);
-            to_add.extend(to_add_opt);
-        }
-        OptimizeAttr::Speed => {
-            to_remove.push(llvm::AttributeKind::MinSize);
-            to_remove.push(llvm::AttributeKind::OptimizeForSize);
-            to_remove.push(llvm::AttributeKind::OptimizeNone);
+            to_add.extend(default_optimisation_attrs(cx));
         }
         OptimizeAttr::Size => {
             to_add.push(llvm::AttributeKind::MinSize.create_attr(cx.llcx));
             to_add.push(llvm::AttributeKind::OptimizeForSize.create_attr(cx.llcx));
-            to_remove.push(llvm::AttributeKind::OptimizeNone);
         }
+        OptimizeAttr::Speed => {}
     }
 
     let inline = if codegen_fn_attrs.flags.contains(CodegenFnAttrFlags::NAKED) {
@@ -382,10 +351,7 @@ pub fn from_fn_attrs<'ll, 'tcx>(
     let mut function_features = function_features
         .iter()
         .flat_map(|feat| {
-            llvm_util::to_llvm_feature(cx.tcx.sess, feat)
-                .into_iter()
-                .map(|f| format!("+{}", f))
-                .collect::<Vec<String>>()
+            llvm_util::to_llvm_features(cx.tcx.sess, feat).into_iter().map(|f| format!("+{}", f))
         })
         .chain(codegen_fn_attrs.instruction_set.iter().map(|x| match x {
             InstructionSetAttr::ArmA32 => "-thumb-mode".to_string(),
@@ -418,14 +384,14 @@ pub fn from_fn_attrs<'ll, 'tcx>(
     }
 
     if !function_features.is_empty() {
-        let mut global_features = llvm_util::llvm_global_features(cx.tcx.sess);
-        global_features.extend(function_features.into_iter());
-        let features = global_features.join(",");
-        let val = CString::new(features).unwrap();
+        let global_features = cx.tcx.global_backend_features(()).iter().map(|s| &s[..]);
+        let val = global_features
+            .chain(function_features.iter().map(|s| &s[..]))
+            .intersperse(",")
+            .collect::<SmallCStr>();
         to_add.push(llvm::CreateAttrStringValue(cx.llcx, cstr!("target-features"), &val));
     }
 
-    attributes::remove_from_llfn(llfn, Function, &to_remove);
     attributes::apply_to_llfn(llfn, Function, &to_add);
 }
 
