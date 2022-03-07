@@ -109,6 +109,7 @@ struct LintGroup {
     depr: Option<LintAlias>,
 }
 
+#[derive(Debug)]
 pub enum CheckLintNameResult<'a> {
     Ok(&'a [LintId]),
     /// Lint doesn't exist. Potentially contains a suggestion for a correct lint name.
@@ -377,6 +378,9 @@ impl LintStore {
                     Level::ForceWarn => "--force-warn",
                     Level::Deny => "-D",
                     Level::Forbid => "-F",
+                    Level::Expect(_) => {
+                        unreachable!("lints with the level of `expect` should not run this code");
+                    }
                 },
                 lint_name
             );
@@ -775,38 +779,54 @@ pub trait LintContext: Sized {
                     db.help(&help);
                     db.note("see the asm section of Rust By Example <https://doc.rust-lang.org/nightly/rust-by-example/unsafe/asm.html#labels> for more information");
                 },
-                BuiltinLintDiagnostics::UnexpectedCfg(span, name, value) => {
-                    let possibilities: Vec<Symbol> = if value.is_some() {
-                        let Some(values) = &sess.parse_sess.check_config.values_valid.get(&name) else {
-                            bug!("it shouldn't be possible to have a diagnostic on a value whose name is not in values");
-                        };
-                        values.iter().map(|&s| s).collect()
-                    } else {
-                        let Some(names_valid) = &sess.parse_sess.check_config.names_valid else {
-                            bug!("it shouldn't be possible to have a diagnostic on a name if name checking is not enabled");
-                        };
-                        names_valid.iter().map(|s| *s).collect()
+                BuiltinLintDiagnostics::UnexpectedCfg((name, name_span), None) => {
+                    let Some(names_valid) = &sess.parse_sess.check_config.names_valid else {
+                        bug!("it shouldn't be possible to have a diagnostic on a name if name checking is not enabled");
                     };
+                    let possibilities: Vec<Symbol> = names_valid.iter().map(|s| *s).collect();
+
+                    // Suggest the most probable if we found one
+                    if let Some(best_match) = find_best_match_for_name(&possibilities, name, None) {
+                        db.span_suggestion(name_span, "did you mean", format!("{best_match}"), Applicability::MaybeIncorrect);
+                    }
+                },
+                BuiltinLintDiagnostics::UnexpectedCfg((name, name_span), Some((value, value_span))) => {
+                    let Some(values) = &sess.parse_sess.check_config.values_valid.get(&name) else {
+                        bug!("it shouldn't be possible to have a diagnostic on a value whose name is not in values");
+                    };
+                    let possibilities: Vec<Symbol> = values.iter().map(|&s| s).collect();
 
                     // Show the full list if all possible values for a given name, but don't do it
                     // for names as the possibilities could be very long
-                    if value.is_some() {
-                        if !possibilities.is_empty() {
+                    if !possibilities.is_empty() {
+                        {
                             let mut possibilities = possibilities.iter().map(Symbol::as_str).collect::<Vec<_>>();
                             possibilities.sort();
 
                             let possibilities = possibilities.join(", ");
                             db.note(&format!("expected values for `{name}` are: {possibilities}"));
-                        } else {
-                            db.note(&format!("no expected value for `{name}`"));
+                        }
+
+                        // Suggest the most probable if we found one
+                        if let Some(best_match) = find_best_match_for_name(&possibilities, value, None) {
+                            db.span_suggestion(value_span, "did you mean", format!("\"{best_match}\""), Applicability::MaybeIncorrect);
+                        }
+                    } else {
+                        db.note(&format!("no expected value for `{name}`"));
+                        if name != sym::feature {
+                            db.span_suggestion(name_span.shrink_to_hi().to(value_span), "remove the value", String::new(), Applicability::MaybeIncorrect);
                         }
                     }
-
-                    // Suggest the most probable if we found one
-                    if let Some(best_match) = find_best_match_for_name(&possibilities, value.unwrap_or(name), None) {
-                        let punctuation = if value.is_some() { "\"" } else { "" };
-                        db.span_suggestion(span, "did you mean", format!("{punctuation}{best_match}{punctuation}"), Applicability::MaybeIncorrect);
-                    }
+                },
+                BuiltinLintDiagnostics::DeprecatedWhereclauseLocation(new_span, suggestion) => {
+                    db.multipart_suggestion(
+                        "move it to the end of the type declaration",
+                        vec![(db.span.primary_span().unwrap(), "".to_string()), (new_span, suggestion)],
+                        Applicability::MachineApplicable,
+                    );
+                    db.note(
+                        "see issue #89122 <https://github.com/rust-lang/rust/issues/89122> for more information",
+                    );
                 },
             }
             // Rewrap `db`, and pass control to the user.

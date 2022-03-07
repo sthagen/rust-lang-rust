@@ -496,6 +496,39 @@ declare_lint! {
 }
 
 declare_lint! {
+    /// The `unfulfilled_lint_expectations` lint detects lint trigger expectations
+    /// that have not been fulfilled.
+    ///
+    /// ### Example
+    ///
+    /// ```rust
+    /// #![feature(lint_reasons)]
+    ///
+    /// #[expect(unused_variables)]
+    /// let x = 10;
+    /// println!("{}", x);
+    /// ```
+    ///
+    /// {{produces}}
+    ///
+    /// ### Explanation
+    ///
+    /// It was expected that the marked code would emit a lint. This expectation
+    /// has not been fulfilled.
+    ///
+    /// The `expect` attribute can be removed if this is intended behavior otherwise
+    /// it should be investigated why the expected lint is no longer issued.
+    ///
+    /// Part of RFC 2383. The progress is being tracked in [#54503]
+    ///
+    /// [#54503]: https://github.com/rust-lang/rust/issues/54503
+    pub UNFULFILLED_LINT_EXPECTATIONS,
+    Warn,
+    "unfulfilled lint expectation",
+    @feature_gate = rustc_span::sym::lint_reasons;
+}
+
+declare_lint! {
     /// The `unused_variables` lint detects variables which are not used in
     /// any way.
     ///
@@ -3007,6 +3040,7 @@ declare_lint_pass! {
         UNUSED_CRATE_DEPENDENCIES,
         UNUSED_QUALIFICATIONS,
         UNKNOWN_LINTS,
+        UNFULFILLED_LINT_EXPECTATIONS,
         UNUSED_VARIABLES,
         UNUSED_ASSIGNMENTS,
         DEAD_CODE,
@@ -3093,6 +3127,7 @@ declare_lint_pass! {
         DUPLICATE_MACRO_ATTRIBUTES,
         SUSPICIOUS_AUTO_TRAIT_IMPLS,
         UNEXPECTED_CFGS,
+        DEPRECATED_WHERE_CLAUSE_LOCATION,
     ]
 }
 
@@ -3702,4 +3737,37 @@ declare_lint! {
         reason: FutureIncompatibilityReason::FutureReleaseSemanticsChange,
         reference: "issue #93367 <https://github.com/rust-lang/rust/issues/93367>",
     };
+}
+
+declare_lint! {
+    /// The `deprecated_where_clause_location` lint detects when a where clause in front of the equals
+    /// in an associated type.
+    ///
+    /// ### Example
+    ///
+    /// ```rust
+    /// #![feature(generic_associated_types)]
+    ///
+    /// trait Trait {
+    ///   type Assoc<'a> where Self: 'a;
+    /// }
+    ///
+    /// impl Trait for () {
+    ///   type Assoc<'a> where Self: 'a = ();
+    /// }
+    /// ```
+    ///
+    /// {{produces}}
+    ///
+    /// ### Explanation
+    ///
+    /// The preferred location for where clauses on associated types in impls
+    /// is after the type. However, for most of generic associated types development,
+    /// it was only accepted before the equals. To provide a transition period and
+    /// further evaluate this change, both are currently accepted. At some point in
+    /// the future, this may be disallowed at an edition boundary; but, that is
+    /// undecided currently.
+    pub DEPRECATED_WHERE_CLAUSE_LOCATION,
+    Warn,
+    "deprecated where clause location"
 }

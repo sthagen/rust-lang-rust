@@ -551,7 +551,7 @@ mod parse {
     crate fn parse_threads(slot: &mut usize, v: Option<&str>) -> bool {
         match v.and_then(|s| s.parse().ok()) {
             Some(0) => {
-                *slot = ::num_cpus::get();
+                *slot = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
                 true
             }
             Some(i) => {
@@ -1491,7 +1491,6 @@ options! {
         `normal`, `identified`,
         `expanded`, `expanded,identified`,
         `expanded,hygiene` (with internal representations),
-        `everybody_loops` (all function bodies replaced with `loop {}`),
         `ast-tree` (raw AST before expansion),
         `ast-tree,expanded` (raw AST after expansion),
         `hir` (the HIR), `hir,identified`,

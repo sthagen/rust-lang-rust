@@ -441,6 +441,7 @@ pub enum MetadataType {
     MD_nontemporal = 9,
     MD_mem_parallel_loop_access = 10,
     MD_nonnull = 11,
+    MD_align = 17,
     MD_type = 19,
     MD_noundef = 29,
 }
@@ -1175,11 +1176,12 @@ extern "C" {
 
     // Operations on attributes
     pub fn LLVMRustCreateAttrNoValue(C: &Context, attr: AttributeKind) -> &Attribute;
-    pub fn LLVMRustCreateAttrString(C: &Context, Name: *const c_char) -> &Attribute;
-    pub fn LLVMRustCreateAttrStringValue(
+    pub fn LLVMCreateStringAttribute(
         C: &Context,
         Name: *const c_char,
+        NameLen: c_uint,
         Value: *const c_char,
+        ValueLen: c_uint,
     ) -> &Attribute;
     pub fn LLVMRustCreateAlignmentAttr(C: &Context, bytes: u64) -> &Attribute;
     pub fn LLVMRustCreateDereferenceableAttr(C: &Context, bytes: u64) -> &Attribute;
