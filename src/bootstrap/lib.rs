@@ -193,7 +193,6 @@ const EXTRA_CHECK_CFGS: &[(Option<Mode>, &'static str, Option<&[&'static str]>)]
     (None, "bootstrap", None),
     (Some(Mode::Rustc), "parallel_compiler", None),
     (Some(Mode::ToolRustc), "parallel_compiler", None),
-    (Some(Mode::Std), "miri", None),
     (Some(Mode::Std), "stdarch_intel_sde", None),
     (Some(Mode::Std), "no_fp_fmt_parse", None),
     (Some(Mode::Std), "no_global_oom_handling", None),
@@ -261,6 +260,7 @@ pub struct Build {
     // Properties derived from the above configuration
     src: PathBuf,
     out: PathBuf,
+    bootstrap_out: PathBuf,
     rust_info: channel::GitInfo,
     cargo_info: channel::GitInfo,
     rls_info: channel::GitInfo,
@@ -435,6 +435,20 @@ impl Build {
             .expect("failed to read src/version");
         let version = version.trim();
 
+        let bootstrap_out = if std::env::var("BOOTSTRAP_PYTHON").is_ok() {
+            out.join("bootstrap").join("debug")
+        } else {
+            let workspace_target_dir = std::env::var("CARGO_TARGET_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| src.join("target"));
+            let bootstrap_out = workspace_target_dir.join("debug");
+            if !bootstrap_out.join("rustc").exists() {
+                // this restriction can be lifted whenever https://github.com/rust-lang/rfcs/pull/3028 is implemented
+                panic!("run `cargo build --bins` before `cargo run`")
+            }
+            bootstrap_out
+        };
+
         let mut build = Build {
             initial_rustc: config.initial_rustc.clone(),
             initial_cargo: config.initial_cargo.clone(),
@@ -453,6 +467,7 @@ impl Build {
             version: version.to_string(),
             src,
             out,
+            bootstrap_out,
 
             rust_info,
             cargo_info,
@@ -629,7 +644,7 @@ impl Build {
         }
 
         if let Subcommand::Setup { profile } = &self.config.cmd {
-            return setup::setup(&self.config.src, *profile);
+            return setup::setup(&self.config, *profile);
         }
 
         {

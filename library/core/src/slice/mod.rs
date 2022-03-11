@@ -16,7 +16,6 @@ use crate::option::Option::{None, Some};
 use crate::ptr;
 use crate::result::Result;
 use crate::result::Result::{Err, Ok};
-#[cfg(not(all(miri, doctest)))] // Miri skips SIMD doctests
 use crate::simd::{self, Simd};
 use crate::slice;
 
@@ -324,10 +323,11 @@ impl<T> [T] {
     /// assert_eq!(None, v.get(0..4));
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
+    #[rustc_const_unstable(feature = "const_slice_index", issue = "none")]
     #[inline]
-    pub fn get<I>(&self, index: I) -> Option<&I::Output>
+    pub const fn get<I>(&self, index: I) -> Option<&I::Output>
     where
-        I: SliceIndex<Self>,
+        I: ~const SliceIndex<Self>,
     {
         index.get(self)
     }
@@ -348,10 +348,11 @@ impl<T> [T] {
     /// assert_eq!(x, &[0, 42, 2]);
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
+    #[rustc_const_unstable(feature = "const_slice_index", issue = "none")]
     #[inline]
-    pub fn get_mut<I>(&mut self, index: I) -> Option<&mut I::Output>
+    pub const fn get_mut<I>(&mut self, index: I) -> Option<&mut I::Output>
     where
-        I: SliceIndex<Self>,
+        I: ~const SliceIndex<Self>,
     {
         index.get_mut(self)
     }
@@ -379,10 +380,11 @@ impl<T> [T] {
     /// }
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
+    #[rustc_const_unstable(feature = "const_slice_index", issue = "none")]
     #[inline]
-    pub unsafe fn get_unchecked<I>(&self, index: I) -> &I::Output
+    pub const unsafe fn get_unchecked<I>(&self, index: I) -> &I::Output
     where
-        I: SliceIndex<Self>,
+        I: ~const SliceIndex<Self>,
     {
         // SAFETY: the caller must uphold most of the safety requirements for `get_unchecked`;
         // the slice is dereferenceable because `self` is a safe reference.
@@ -415,10 +417,11 @@ impl<T> [T] {
     /// assert_eq!(x, &[1, 13, 4]);
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
+    #[rustc_const_unstable(feature = "const_slice_index", issue = "none")]
     #[inline]
-    pub unsafe fn get_unchecked_mut<I>(&mut self, index: I) -> &mut I::Output
+    pub const unsafe fn get_unchecked_mut<I>(&mut self, index: I) -> &mut I::Output
     where
-        I: SliceIndex<Self>,
+        I: ~const SliceIndex<Self>,
     {
         // SAFETY: the caller must uphold the safety requirements for `get_unchecked_mut`;
         // the slice is dereferenceable because `self` is a safe reference.
@@ -2008,7 +2011,7 @@ impl<T> [T] {
     /// let v = [10, 40, 30, 20, 60, 50];
     ///
     /// for group in v.splitn(2, |num| *num % 3 == 0) {
-    ///     println!("{:?}", group);
+    ///     println!("{group:?}");
     /// }
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
@@ -2063,7 +2066,7 @@ impl<T> [T] {
     /// let v = [10, 40, 30, 20, 60, 50];
     ///
     /// for group in v.rsplitn(2, |num| *num % 3 == 0) {
-    ///     println!("{:?}", group);
+    ///     println!("{group:?}");
     /// }
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
@@ -3540,7 +3543,6 @@ impl<T> [T] {
     /// assert_eq!(basic_simd_sum(&numbers[1..99]), 4949.0);
     /// ```
     #[unstable(feature = "portable_simd", issue = "86656")]
-    #[cfg(not(all(miri, doctest)))] // Miri skips SIMD doctests
     pub fn as_simd<const LANES: usize>(&self) -> (&[T], &[Simd<T, LANES>], &[T])
     where
         Simd<T, LANES>: AsRef<[T; LANES]>,
@@ -3584,7 +3586,6 @@ impl<T> [T] {
     /// be lifted in a way that would make it possible to see panics from this
     /// method for something like `LANES == 3`.
     #[unstable(feature = "portable_simd", issue = "86656")]
-    #[cfg(not(all(miri, doctest)))] // Miri skips SIMD doctests
     pub fn as_simd_mut<const LANES: usize>(&mut self) -> (&mut [T], &mut [Simd<T, LANES>], &mut [T])
     where
         Simd<T, LANES>: AsMut<[T; LANES]>,

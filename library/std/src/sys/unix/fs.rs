@@ -228,21 +228,52 @@ struct Dir(*mut libc::DIR);
 unsafe impl Send for Dir {}
 unsafe impl Sync for Dir {}
 
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "solaris",
+    target_os = "illumos",
+    target_os = "fuchsia",
+    target_os = "redox"
+))]
 pub struct DirEntry {
-    entry: dirent64,
     dir: Arc<InnerReadDir>,
+    entry: dirent64_min,
     // We need to store an owned copy of the entry name on platforms that use
     // readdir() (not readdir_r()), because a) struct dirent may use a flexible
     // array to store the name, b) it lives only until the next readdir() call.
-    #[cfg(any(
-        target_os = "android",
-        target_os = "linux",
-        target_os = "solaris",
-        target_os = "illumos",
-        target_os = "fuchsia",
-        target_os = "redox"
-    ))]
     name: CString,
+}
+
+// Define a minimal subset of fields we need from `dirent64`, especially since
+// we're not using the immediate `d_name` on these targets. Keeping this as an
+// `entry` field in `DirEntry` helps reduce the `cfg` boilerplate elsewhere.
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "solaris",
+    target_os = "illumos",
+    target_os = "fuchsia",
+    target_os = "redox"
+))]
+struct dirent64_min {
+    d_ino: u64,
+    #[cfg(not(any(target_os = "solaris", target_os = "illumos")))]
+    d_type: u8,
+}
+
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "solaris",
+    target_os = "illumos",
+    target_os = "fuchsia",
+    target_os = "redox"
+)))]
+pub struct DirEntry {
+    dir: Arc<InnerReadDir>,
+    // The full entry includes a fixed-length `d_name`.
+    entry: dirent64,
 }
 
 #[derive(Clone, Debug)]
@@ -501,8 +532,14 @@ impl Iterator for ReadDir {
                 let entry_name = entry_bytes.add(name_offset);
                 ptr::copy_nonoverlapping(entry_bytes, copy_bytes, name_offset);
 
+                let entry = dirent64_min {
+                    d_ino: copy.d_ino as u64,
+                    #[cfg(not(any(target_os = "solaris", target_os = "illumos")))]
+                    d_type: copy.d_type as u8,
+                };
+
                 let ret = DirEntry {
-                    entry: copy,
+                    entry,
                     // d_name is guaranteed to be null-terminated.
                     name: CStr::from_ptr(entry_name as *const _).to_owned(),
                     dir: Arc::clone(&self.inner),
@@ -1604,17 +1641,15 @@ mod remove_dir_impl {
         }
     }
 
-    fn remove_dir_all_recursive(parent_fd: Option<RawFd>, p: &Path) -> io::Result<()> {
-        let pcstr = cstr(p)?;
-
+    fn remove_dir_all_recursive(parent_fd: Option<RawFd>, path: &CStr) -> io::Result<()> {
         // try opening as directory
-        let fd = match openat_nofollow_dironly(parent_fd, &pcstr) {
+        let fd = match openat_nofollow_dironly(parent_fd, &path) {
             Err(err) if err.raw_os_error() == Some(libc::ENOTDIR) => {
                 // not a directory - don't traverse further
                 return match parent_fd {
                     // unlink...
                     Some(parent_fd) => {
-                        cvt(unsafe { unlinkat(parent_fd, pcstr.as_ptr(), 0) }).map(drop)
+                        cvt(unsafe { unlinkat(parent_fd, path.as_ptr(), 0) }).map(drop)
                     }
                     // ...unless this was supposed to be the deletion root directory
                     None => Err(err),
@@ -1627,26 +1662,27 @@ mod remove_dir_impl {
         let (dir, fd) = fdreaddir(fd)?;
         for child in dir {
             let child = child?;
+            let child_name = child.name_cstr();
             match is_dir(&child) {
                 Some(true) => {
-                    remove_dir_all_recursive(Some(fd), Path::new(&child.file_name()))?;
+                    remove_dir_all_recursive(Some(fd), child_name)?;
                 }
                 Some(false) => {
-                    cvt(unsafe { unlinkat(fd, child.name_cstr().as_ptr(), 0) })?;
+                    cvt(unsafe { unlinkat(fd, child_name.as_ptr(), 0) })?;
                 }
                 None => {
                     // POSIX specifies that calling unlink()/unlinkat(..., 0) on a directory can succeed
                     // if the process has the appropriate privileges. This however can causing orphaned
                     // directories requiring an fsck e.g. on Solaris and Illumos. So we try recursing
                     // into it first instead of trying to unlink() it.
-                    remove_dir_all_recursive(Some(fd), Path::new(&child.file_name()))?;
+                    remove_dir_all_recursive(Some(fd), child_name)?;
                 }
             }
         }
 
         // unlink the directory after removing its contents
         cvt(unsafe {
-            unlinkat(parent_fd.unwrap_or(libc::AT_FDCWD), pcstr.as_ptr(), libc::AT_REMOVEDIR)
+            unlinkat(parent_fd.unwrap_or(libc::AT_FDCWD), path.as_ptr(), libc::AT_REMOVEDIR)
         })?;
         Ok(())
     }
@@ -1659,7 +1695,7 @@ mod remove_dir_impl {
         if attr.file_type().is_symlink() {
             crate::fs::remove_file(p)
         } else {
-            remove_dir_all_recursive(None, p)
+            remove_dir_all_recursive(None, &cstr(p)?)
         }
     }
 
