@@ -109,7 +109,7 @@ pub enum TyKind<'tcx> {
     ///
     /// Note that generic parameters in fields only get lazily substituted
     /// by using something like `adt_def.all_fields().map(|field| field.ty(tcx, substs))`.
-    Adt(&'tcx AdtDef, SubstsRef<'tcx>),
+    Adt(AdtDef<'tcx>, SubstsRef<'tcx>),
 
     /// An unsized FFI type that is opaque to Rust. Written as `extern type T`.
     Foreign(DefId),
@@ -1903,7 +1903,7 @@ impl<'tcx> Ty<'tcx> {
     #[inline]
     pub fn is_simd(self) -> bool {
         match self.kind() {
-            Adt(def, _) => def.repr.simd(),
+            Adt(def, _) => def.repr().simd(),
             _ => false,
         }
     }
@@ -1919,7 +1919,7 @@ impl<'tcx> Ty<'tcx> {
     pub fn simd_size_and_type(self, tcx: TyCtxt<'tcx>) -> (u64, Ty<'tcx>) {
         match self.kind() {
             Adt(def, substs) => {
-                assert!(def.repr.simd(), "`simd_size_and_type` called on non-SIMD type");
+                assert!(def.repr().simd(), "`simd_size_and_type` called on non-SIMD type");
                 let variant = def.non_enum_variant();
                 let f0_ty = variant.fields[0].ty(tcx, substs);
 
@@ -2153,9 +2153,9 @@ impl<'tcx> Ty<'tcx> {
     }
 
     #[inline]
-    pub fn ty_adt_def(self) -> Option<&'tcx AdtDef> {
+    pub fn ty_adt_def(self) -> Option<AdtDef<'tcx>> {
         match self.kind() {
-            Adt(adt, _) => Some(adt),
+            Adt(adt, _) => Some(*adt),
             _ => None,
         }
     }
@@ -2194,7 +2194,7 @@ impl<'tcx> Ty<'tcx> {
         variant_index: VariantIdx,
     ) -> Option<Discr<'tcx>> {
         match self.kind() {
-            TyKind::Adt(adt, _) if adt.variants.is_empty() => {
+            TyKind::Adt(adt, _) if adt.variants().is_empty() => {
                 // This can actually happen during CTFE, see
                 // https://github.com/rust-lang/rust/issues/89765.
                 None
@@ -2212,7 +2212,7 @@ impl<'tcx> Ty<'tcx> {
     /// Returns the type of the discriminant of this type.
     pub fn discriminant_ty(self, tcx: TyCtxt<'tcx>) -> Ty<'tcx> {
         match self.kind() {
-            ty::Adt(adt, _) if adt.is_enum() => adt.repr.discr_type().to_ty(tcx),
+            ty::Adt(adt, _) if adt.is_enum() => adt.repr().discr_type().to_ty(tcx),
             ty::Generator(_, substs, _) => substs.as_generator().discr_ty(tcx),
 
             ty::Param(_) | ty::Projection(_) | ty::Opaque(..) | ty::Infer(ty::TyVar(_)) => {
@@ -2252,12 +2252,13 @@ impl<'tcx> Ty<'tcx> {
         }
     }
 
-    /// Returns the type of metadata for (potentially fat) pointers to this type.
+    /// Returns the type of metadata for (potentially fat) pointers to this type,
+    /// and a boolean signifying if this is conditional on this type being `Sized`.
     pub fn ptr_metadata_ty(
         self,
         tcx: TyCtxt<'tcx>,
         normalize: impl FnMut(Ty<'tcx>) -> Ty<'tcx>,
-    ) -> Ty<'tcx> {
+    ) -> (Ty<'tcx>, bool) {
         let tail = tcx.struct_tail_with_normalize(self, normalize);
         match tail.kind() {
             // Sized types
@@ -2277,28 +2278,30 @@ impl<'tcx> Ty<'tcx> {
             | ty::Closure(..)
             | ty::Never
             | ty::Error(_)
+            // Extern types have metadata = ().
             | ty::Foreign(..)
             // If returned by `struct_tail_without_normalization` this is a unit struct
             // without any fields, or not a struct, and therefore is Sized.
             | ty::Adt(..)
             // If returned by `struct_tail_without_normalization` this is the empty tuple,
             // a.k.a. unit type, which is Sized
-            | ty::Tuple(..) => tcx.types.unit,
+            | ty::Tuple(..) => (tcx.types.unit, false),
 
-            ty::Str | ty::Slice(_) => tcx.types.usize,
+            ty::Str | ty::Slice(_) => (tcx.types.usize, false),
             ty::Dynamic(..) => {
                 let dyn_metadata = tcx.lang_items().dyn_metadata().unwrap();
-                tcx.type_of(dyn_metadata).subst(tcx, &[tail.into()])
+                (tcx.type_of(dyn_metadata).subst(tcx, &[tail.into()]), false)
             },
 
-            ty::Projection(_)
-            | ty::Param(_)
-            | ty::Opaque(..)
-            | ty::Infer(ty::TyVar(_))
+            // type parameters only have unit metadata if they're sized, so return true
+            // to make sure we double check this during confirmation
+            ty::Param(_) |  ty::Projection(_) | ty::Opaque(..) => (tcx.types.unit, true),
+
+            ty::Infer(ty::TyVar(_))
             | ty::Bound(..)
             | ty::Placeholder(..)
             | ty::Infer(ty::FreshTy(_) | ty::FreshIntTy(_) | ty::FreshFloatTy(_)) => {
-                bug!("`ptr_metadata_ty` applied to unexpected type: {:?}", tail)
+                bug!("`ptr_metadata_ty` applied to unexpected type: {:?} (tail = {:?})", self, tail)
             }
         }
     }

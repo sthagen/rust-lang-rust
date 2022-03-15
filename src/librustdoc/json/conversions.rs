@@ -340,13 +340,15 @@ impl FromWithTcx<clean::GenericParamDefKind> for GenericParamDefKind {
             Lifetime { outlives } => GenericParamDefKind::Lifetime {
                 outlives: outlives.into_iter().map(|lt| lt.0.to_string()).collect(),
             },
-            Type { did: _, bounds, default, synthetic: _ } => GenericParamDefKind::Type {
+            Type { did: _, bounds, default, synthetic } => GenericParamDefKind::Type {
                 bounds: bounds.into_iter().map(|x| x.into_tcx(tcx)).collect(),
                 default: default.map(|x| (*x).into_tcx(tcx)),
+                synthetic,
             },
-            Const { did: _, ty, default } => {
-                GenericParamDefKind::Const { ty: (*ty).into_tcx(tcx), default: default.map(|x| *x) }
-            }
+            Const { did: _, ty, default } => GenericParamDefKind::Const {
+                type_: (*ty).into_tcx(tcx),
+                default: default.map(|x| *x),
+            },
         }
     }
 }
@@ -356,7 +358,7 @@ impl FromWithTcx<clean::WherePredicate> for WherePredicate {
         use clean::WherePredicate::*;
         match predicate {
             BoundPredicate { ty, bounds, .. } => WherePredicate::BoundPredicate {
-                ty: ty.into_tcx(tcx),
+                type_: ty.into_tcx(tcx),
                 bounds: bounds.into_iter().map(|x| x.into_tcx(tcx)).collect(),
                 // FIXME: add `bound_params` to rustdoc-json-params?
             },
@@ -515,7 +517,7 @@ impl FromWithTcx<clean::Trait> for Trait {
             items: ids(items),
             generics: generics.into_tcx(tcx),
             bounds: bounds.into_iter().map(|x| x.into_tcx(tcx)).collect(),
-            implementors: Vec::new(), // Added in JsonRenderer::item
+            implementations: Vec::new(), // Added in JsonRenderer::item
         }
     }
 }

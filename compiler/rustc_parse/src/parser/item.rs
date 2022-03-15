@@ -27,8 +27,8 @@ use tracing::debug;
 impl<'a> Parser<'a> {
     /// Parses a source module as a crate. This is the main entry point for the parser.
     pub fn parse_crate_mod(&mut self) -> PResult<'a, ast::Crate> {
-        let (attrs, items, span) = self.parse_mod(&token::Eof)?;
-        Ok(ast::Crate { attrs, items, span, id: DUMMY_NODE_ID, is_placeholder: false })
+        let (attrs, items, spans) = self.parse_mod(&token::Eof)?;
+        Ok(ast::Crate { attrs, items, spans, id: DUMMY_NODE_ID, is_placeholder: false })
     }
 
     /// Parses a `mod <foo> { ... }` or `mod <foo>;` item.
@@ -52,10 +52,11 @@ impl<'a> Parser<'a> {
     pub fn parse_mod(
         &mut self,
         term: &TokenKind,
-    ) -> PResult<'a, (Vec<Attribute>, Vec<P<Item>>, Span)> {
+    ) -> PResult<'a, (Vec<Attribute>, Vec<P<Item>>, ModSpans)> {
         let lo = self.token.span;
         let attrs = self.parse_inner_attributes()?;
 
+        let post_attr_lo = self.token.span;
         let mut items = vec![];
         while let Some(item) = self.parse_item(ForceCollect::No)? {
             items.push(item);
@@ -72,7 +73,9 @@ impl<'a> Parser<'a> {
             }
         }
 
-        Ok((attrs, items, lo.to(self.prev_token.span)))
+        let inject_use_span = post_attr_lo.data().with_hi(post_attr_lo.lo());
+        let mod_spans = ModSpans { inner_span: lo.to(self.prev_token.span), inject_use_span };
+        Ok((attrs, items, mod_spans))
     }
 }
 
@@ -1534,6 +1537,16 @@ impl<'a> Parser<'a> {
         let name = self.parse_field_ident(adt_ty, lo)?;
         self.expect_field_ty_separator()?;
         let ty = self.parse_ty()?;
+        if self.token.kind == token::Colon && self.look_ahead(1, |tok| tok.kind != token::Colon) {
+            self.struct_span_err(self.token.span, "found single colon in a struct field type path")
+                .span_suggestion_verbose(
+                    self.token.span,
+                    "write a path separator here",
+                    "::".to_string(),
+                    Applicability::MaybeIncorrect,
+                )
+                .emit();
+        }
         if self.token.kind == token::Eq {
             self.bump();
             let const_expr = self.parse_anon_const_expr()?;

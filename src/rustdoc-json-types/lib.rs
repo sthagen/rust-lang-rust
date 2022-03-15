@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 /// rustdoc format-version.
-pub const FORMAT_VERSION: u32 = 12;
+pub const FORMAT_VERSION: u32 = 14;
 
 /// A `Crate` is the root of the emitted JSON blob. It contains all type/documentation information
 /// about the language items in the local crate, as well as info about external items to allow
@@ -346,17 +346,60 @@ pub struct GenericParamDef {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum GenericParamDefKind {
-    Lifetime { outlives: Vec<String> },
-    Type { bounds: Vec<GenericBound>, default: Option<Type> },
-    Const { ty: Type, default: Option<String> },
+    Lifetime {
+        outlives: Vec<String>,
+    },
+    Type {
+        bounds: Vec<GenericBound>,
+        default: Option<Type>,
+        /// This is normally `false`, which means that this generic parameter is
+        /// declared in the Rust source text.
+        ///
+        /// If it is `true`, this generic parameter has been introduced by the
+        /// compiler behind the scenes.
+        ///
+        /// # Example
+        ///
+        /// Consider
+        ///
+        /// ```ignore (pseudo-rust)
+        /// pub fn f(_: impl Trait) {}
+        /// ```
+        ///
+        /// The compiler will transform this behind the scenes to
+        ///
+        /// ```ignore (pseudo-rust)
+        /// pub fn f<impl Trait: Trait>(_: impl Trait) {}
+        /// ```
+        ///
+        /// In this example, the generic parameter named `impl Trait` (and which
+        /// is bound by `Trait`) is synthetic, because it was not originally in
+        /// the Rust source text.
+        synthetic: bool,
+    },
+    Const {
+        #[serde(rename = "type")]
+        type_: Type,
+        default: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum WherePredicate {
-    BoundPredicate { ty: Type, bounds: Vec<GenericBound> },
-    RegionPredicate { lifetime: String, bounds: Vec<GenericBound> },
-    EqPredicate { lhs: Type, rhs: Term },
+    BoundPredicate {
+        #[serde(rename = "type")]
+        type_: Type,
+        bounds: Vec<GenericBound>,
+    },
+    RegionPredicate {
+        lifetime: String,
+        bounds: Vec<GenericBound>,
+    },
+    EqPredicate {
+        lhs: Type,
+        rhs: Term,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -462,7 +505,7 @@ pub struct Trait {
     pub items: Vec<Id>,
     pub generics: Generics,
     pub bounds: Vec<GenericBound>,
-    pub implementors: Vec<Id>,
+    pub implementations: Vec<Id>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

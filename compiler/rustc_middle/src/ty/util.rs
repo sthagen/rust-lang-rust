@@ -21,7 +21,7 @@ use rustc_hir::def::{CtorOf, DefKind, Res};
 use rustc_hir::def_id::DefId;
 use rustc_macros::HashStable;
 use rustc_query_system::ich::NodeIdHashingMode;
-use rustc_span::DUMMY_SP;
+use rustc_span::{sym, DUMMY_SP};
 use rustc_target::abi::{Integer, Size, TargetDataLayout};
 use smallvec::SmallVec;
 use std::{fmt, iter};
@@ -377,10 +377,10 @@ impl<'tcx> TyCtxt<'tcx> {
     /// Note that this returns only the constraints for the
     /// destructor of `def` itself. For the destructors of the
     /// contents, you need `adt_dtorck_constraint`.
-    pub fn destructor_constraints(self, def: &'tcx ty::AdtDef) -> Vec<ty::subst::GenericArg<'tcx>> {
+    pub fn destructor_constraints(self, def: ty::AdtDef<'tcx>) -> Vec<ty::subst::GenericArg<'tcx>> {
         let dtor = match def.destructor(self) {
             None => {
-                debug!("destructor_constraints({:?}) - no dtor", def.did);
+                debug!("destructor_constraints({:?}) - no dtor", def.did());
                 return vec![];
             }
             Some(dtor) => dtor.did,
@@ -415,7 +415,7 @@ impl<'tcx> TyCtxt<'tcx> {
             _ => bug!(),
         };
 
-        let item_substs = match *self.type_of(def.did).kind() {
+        let item_substs = match *self.type_of(def.did()).kind() {
             ty::Adt(def_, substs) if def_ == def => substs,
             _ => bug!(),
         };
@@ -445,7 +445,7 @@ impl<'tcx> TyCtxt<'tcx> {
             })
             .map(|(item_param, _)| item_param)
             .collect();
-        debug!("destructor_constraint({:?}) = {:?}", def.did, result);
+        debug!("destructor_constraint({:?}) = {:?}", def.did(), result);
         result
     }
 
@@ -1154,6 +1154,14 @@ pub fn normalize_opaque_types<'tcx>(
     val.fold_with(&mut visitor)
 }
 
+/// Determines whether an item is annotated with `doc(hidden)`.
+pub fn is_doc_hidden(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
+    tcx.get_attrs(def_id)
+        .iter()
+        .filter_map(|attr| if attr.has_name(sym::doc) { attr.meta_item_list() } else { None })
+        .any(|items| items.iter().any(|item| item.has_name(sym::hidden)))
+}
+
 pub fn provide(providers: &mut ty::query::Providers) {
-    *providers = ty::query::Providers { normalize_opaque_types, ..*providers }
+    *providers = ty::query::Providers { normalize_opaque_types, is_doc_hidden, ..*providers }
 }

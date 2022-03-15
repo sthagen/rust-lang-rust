@@ -699,7 +699,13 @@ fn short_item_info(
 
 // Render the list of items inside one of the sections "Trait Implementations",
 // "Auto Trait Implementations," "Blanket Trait Implementations" (on struct/enum pages).
-fn render_impls(cx: &Context<'_>, w: &mut Buffer, impls: &[&&Impl], containing_item: &clean::Item) {
+fn render_impls(
+    cx: &Context<'_>,
+    w: &mut Buffer,
+    impls: &[&&Impl],
+    containing_item: &clean::Item,
+    toggle_open_by_default: bool,
+) {
     let tcx = cx.tcx();
     let mut rendered_impls = impls
         .iter()
@@ -722,7 +728,7 @@ fn render_impls(cx: &Context<'_>, w: &mut Buffer, impls: &[&&Impl], containing_i
                     is_on_foreign_type: false,
                     show_default_items: true,
                     show_non_assoc_items: true,
-                    toggle_open_by_default: true,
+                    toggle_open_by_default,
                 },
             );
             buffer.into_inner()
@@ -1058,10 +1064,7 @@ fn render_assoc_items_inner(
 ) {
     info!("Documenting associated items of {:?}", containing_item.name);
     let cache = cx.cache();
-    let v = match cache.impls.get(&it) {
-        Some(v) => v,
-        None => return,
-    };
+    let Some(v) = cache.impls.get(&it) else { return };
     let (non_trait, traits): (Vec<_>, _) = v.iter().partition(|i| i.inner_impl().trait_.is_none());
     if !non_trait.is_empty() {
         let mut tmp_buf = Buffer::empty_from(w);
@@ -1143,7 +1146,7 @@ fn render_assoc_items_inner(
             concrete.into_iter().partition(|t| t.inner_impl().kind.is_blanket());
 
         let mut impls = Buffer::empty_from(w);
-        render_impls(cx, &mut impls, &concrete, containing_item);
+        render_impls(cx, &mut impls, &concrete, containing_item, true);
         let impls = impls.into_inner();
         if !impls.is_empty() {
             write!(
@@ -1165,7 +1168,7 @@ fn render_assoc_items_inner(
                  </h2>\
                  <div id=\"synthetic-implementations-list\">",
             );
-            render_impls(cx, w, &synthetic, containing_item);
+            render_impls(cx, w, &synthetic, containing_item, false);
             w.write_str("</div>");
         }
 
@@ -1177,7 +1180,7 @@ fn render_assoc_items_inner(
                  </h2>\
                  <div id=\"blanket-implementations-list\">",
             );
-            render_impls(cx, w, &blanket_impl, containing_item);
+            render_impls(cx, w, &blanket_impl, containing_item, false);
             w.write_str("</div>");
         }
     }
@@ -2658,12 +2661,7 @@ fn render_call_locations(w: &mut Buffer, cx: &Context<'_>, item: &clean::Item) {
     let tcx = cx.tcx();
     let def_id = item.def_id.expect_def_id();
     let key = tcx.def_path_hash(def_id);
-    let call_locations = match cx.shared.call_locations.get(&key) {
-        Some(call_locations) => call_locations,
-        _ => {
-            return;
-        }
-    };
+    let Some(call_locations) = cx.shared.call_locations.get(&key) else { return };
 
     // Generate a unique ID so users can link to this section for a given method
     let id = cx.id_map.borrow_mut().derive("scraped-examples");

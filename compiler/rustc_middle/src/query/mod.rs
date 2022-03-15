@@ -523,7 +523,7 @@ rustc_queries! {
         storage(ArenaCacheSelector<'tcx>)
         separate_provide_extern
     }
-    query adt_def(key: DefId) -> &'tcx ty::AdtDef {
+    query adt_def(key: DefId) -> ty::AdtDef<'tcx> {
         desc { |tcx| "computing ADT definition for `{}`", tcx.def_path_str(key) }
         cache_on_disk_if { key.is_local() }
         separate_provide_extern
@@ -1033,6 +1033,11 @@ rustc_queries! {
     query lookup_deprecation_entry(def_id: DefId) -> Option<DeprecationEntry> {
         desc { |tcx| "checking whether `{}` is deprecated", tcx.def_path_str(def_id) }
         separate_provide_extern
+    }
+
+    /// Determines whether an item is annotated with `doc(hidden)`.
+    query is_doc_hidden(def_id: DefId) -> bool {
+        desc { |tcx| "checking whether `{}` is `doc(hidden)`", tcx.def_path_str(def_id) }
     }
 
     query item_attrs(def_id: DefId) -> &'tcx [ast::Attribute] {

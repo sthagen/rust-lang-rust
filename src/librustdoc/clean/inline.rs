@@ -244,7 +244,7 @@ fn build_enum(cx: &mut DocContext<'_>, did: DefId) -> clean::Enum {
     clean::Enum {
         generics: clean_ty_generics(cx, cx.tcx.generics_of(did), predicates),
         variants_stripped: false,
-        variants: cx.tcx.adt_def(did).variants.iter().map(|v| v.clean(cx)).collect(),
+        variants: cx.tcx.adt_def(did).variants().iter().map(|v| v.clean(cx)).collect(),
     }
 }
 
@@ -327,7 +327,7 @@ fn merge_attrs(
 /// Inline an `impl`, inherent or of a trait. The `did` must be for an `impl`.
 crate fn build_impl(
     cx: &mut DocContext<'_>,
-    parent_module: impl Into<Option<DefId>>,
+    parent_module: Option<DefId>,
     did: DefId,
     attrs: Option<Attrs<'_>>,
     ret: &mut Vec<clean::Item>,
@@ -478,7 +478,7 @@ crate fn build_impl(
         record_extern_trait(cx, did);
     }
 
-    let (merged_attrs, cfg) = merge_attrs(cx, parent_module.into(), load_attrs(cx, did), attrs);
+    let (merged_attrs, cfg) = merge_attrs(cx, parent_module, load_attrs(cx, did), attrs);
     trace!("merged_attrs={:?}", merged_attrs);
 
     trace!(
