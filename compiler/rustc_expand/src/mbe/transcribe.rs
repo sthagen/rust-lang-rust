@@ -10,7 +10,7 @@ use rustc_errors::{pluralize, PResult};
 use rustc_errors::{DiagnosticBuilder, ErrorGuaranteed};
 use rustc_span::hygiene::{LocalExpnId, Transparency};
 use rustc_span::symbol::{sym, Ident, MacroRulesNormalizedIdent};
-use rustc_span::Span;
+use rustc_span::{Span, DUMMY_SP};
 
 use smallvec::{smallvec, SmallVec};
 use std::mem;
@@ -34,8 +34,14 @@ enum Frame {
 
 impl Frame {
     /// Construct a new frame around the delimited set of tokens.
-    fn new(tts: Vec<mbe::TokenTree>) -> Frame {
-        let forest = Lrc::new(mbe::Delimited { delim: token::NoDelim, tts });
+    fn new(mut tts: Vec<mbe::TokenTree>) -> Frame {
+        // Need to add empty delimeters.
+        let open_tt = mbe::TokenTree::token(token::OpenDelim(token::NoDelim), DUMMY_SP);
+        let close_tt = mbe::TokenTree::token(token::CloseDelim(token::NoDelim), DUMMY_SP);
+        tts.insert(0, open_tt);
+        tts.push(close_tt);
+
+        let forest = Lrc::new(mbe::Delimited { delim: token::NoDelim, all_tts: tts });
         Frame::Delimited { forest, idx: 0, span: DelimSpan::dummy() }
     }
 }
@@ -46,12 +52,14 @@ impl Iterator for Frame {
     fn next(&mut self) -> Option<mbe::TokenTree> {
         match *self {
             Frame::Delimited { ref forest, ref mut idx, .. } => {
+                let res = forest.inner_tts().get(*idx).cloned();
                 *idx += 1;
-                forest.tts.get(*idx - 1).cloned()
+                res
             }
             Frame::Sequence { ref forest, ref mut idx, .. } => {
+                let res = forest.tts.get(*idx).cloned();
                 *idx += 1;
-                forest.tts.get(*idx - 1).cloned()
+                res
             }
         }
     }
@@ -257,7 +265,7 @@ pub(super) fn transcribe<'a>(
 
             // Replace meta-variable expressions with the result of their expansion.
             mbe::TokenTree::MetaVarExpr(sp, expr) => {
-                transcribe_metavar_expr(cx, expr, interp, &repeats, &mut result, &sp)?;
+                transcribe_metavar_expr(cx, expr, interp, &mut marker, &repeats, &mut result, &sp)?;
             }
 
             // If we are entering a new delimiter, we push its contents to the `stack` to be
@@ -376,8 +384,8 @@ fn lockstep_iter_size(
 ) -> LockstepIterSize {
     use mbe::TokenTree;
     match *tree {
-        TokenTree::Delimited(_, ref delimed) => {
-            delimed.tts.iter().fold(LockstepIterSize::Unconstrained, |size, tt| {
+        TokenTree::Delimited(_, ref delimited) => {
+            delimited.inner_tts().iter().fold(LockstepIterSize::Unconstrained, |size, tt| {
                 size.with(lockstep_iter_size(tt, interpolations, repeats))
             })
         }
@@ -513,17 +521,23 @@ fn transcribe_metavar_expr<'a>(
     cx: &ExtCtxt<'a>,
     expr: MetaVarExpr,
     interp: &FxHashMap<MacroRulesNormalizedIdent, NamedMatch>,
+    marker: &mut Marker,
     repeats: &[(usize, usize)],
     result: &mut Vec<TreeAndSpacing>,
     sp: &DelimSpan,
 ) -> PResult<'a, ()> {
+    let mut visited_span = || {
+        let mut span = sp.entire();
+        marker.visit_span(&mut span);
+        span
+    };
     match expr {
         MetaVarExpr::Count(original_ident, depth_opt) => {
             let matched = matched_from_ident(cx, original_ident, interp)?;
             let count = count_repetitions(cx, depth_opt, matched, &repeats, sp)?;
             let tt = TokenTree::token(
                 TokenKind::lit(token::Integer, sym::integer(count), None),
-                sp.entire(),
+                visited_span(),
             );
             result.push(tt.into());
         }
@@ -536,7 +550,7 @@ fn transcribe_metavar_expr<'a>(
                 result.push(
                     TokenTree::token(
                         TokenKind::lit(token::Integer, sym::integer(*index), None),
-                        sp.entire(),
+                        visited_span(),
                     )
                     .into(),
                 );
@@ -548,7 +562,7 @@ fn transcribe_metavar_expr<'a>(
                 result.push(
                     TokenTree::token(
                         TokenKind::lit(token::Integer, sym::integer(*length), None),
-                        sp.entire(),
+                        visited_span(),
                     )
                     .into(),
                 );
