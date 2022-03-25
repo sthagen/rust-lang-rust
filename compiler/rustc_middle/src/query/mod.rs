@@ -331,12 +331,12 @@ rustc_queries! {
         }
     }
 
-    query try_unify_abstract_consts(key: (
-        ty::Unevaluated<'tcx, ()>, ty::Unevaluated<'tcx, ()>
-    )) -> bool {
+    query try_unify_abstract_consts(key:
+        ty::ParamEnvAnd<'tcx, (ty::Unevaluated<'tcx, ()>, ty::Unevaluated<'tcx, ()>
+    )>) -> bool {
         desc {
             |tcx| "trying to unify the generic constants {} and {}",
-            tcx.def_path_str(key.0.def.did), tcx.def_path_str(key.1.def.did)
+            tcx.def_path_str(key.value.0.def.did), tcx.def_path_str(key.value.1.def.did)
         }
     }
 
@@ -955,6 +955,7 @@ rustc_queries! {
         desc { "get a &core::panic::Location referring to a span" }
     }
 
+    // FIXME get rid of this with valtrees
     query lit_to_const(
         key: LitToConstInput<'tcx>
     ) -> Result<ty::Const<'tcx>, LitToConstError> {
