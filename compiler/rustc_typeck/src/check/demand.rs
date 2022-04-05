@@ -39,6 +39,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         self.suggest_no_capture_closure(err, expected, expr_ty);
         self.suggest_boxing_when_appropriate(err, expr, expected, expr_ty);
         self.suggest_missing_parentheses(err, expr);
+        self.suggest_block_to_brackets_peeling_refs(err, expr, expr_ty, expected);
         self.note_need_for_fn_pointer(err, expected, expr_ty);
         self.note_internal_mutation_in_method(err, expr, expected, expr_ty);
         self.report_closure_inferred_return_type(err, expected);
@@ -184,7 +185,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         hir::Path {
                             res:
                                 hir::def::Res::Def(
-                                    hir::def::DefKind::Static | hir::def::DefKind::Const,
+                                    hir::def::DefKind::Static(_) | hir::def::DefKind::Const,
                                     def_id,
                                 ),
                             ..
@@ -268,10 +269,6 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         expr_ty: Ty<'tcx>,
     ) {
         if let ty::Adt(expected_adt, substs) = expected.kind() {
-            if !expected_adt.is_enum() {
-                return;
-            }
-
             // If the expression is of type () and it's the return expression of a block,
             // we suggest adding a separate return expression instead.
             // (To avoid things like suggesting `Ok(while .. { .. })`.)
@@ -336,7 +333,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             let compatible_variants: Vec<String> = expected_adt
                 .variants()
                 .iter()
-                .filter(|variant| variant.fields.len() == 1)
+                .filter(|variant| {
+                    variant.fields.len() == 1 && variant.ctor_kind == hir::def::CtorKind::Fn
+                })
                 .filter_map(|variant| {
                     let sole_field = &variant.fields[0];
                     let sole_field_ty = sole_field.ty(self.tcx, substs);

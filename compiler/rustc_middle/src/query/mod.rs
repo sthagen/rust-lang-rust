@@ -124,7 +124,10 @@ rustc_queries! {
         separate_provide_extern
     }
 
-    /// Records the type of every item.
+    /// Returns the [`Ty`][rustc_middle::ty::Ty] of the given [`DefId`]. If the [`DefId`] points
+    /// to an alias, it will "skip" this alias to return the aliased type.
+    ///
+    /// [`DefId`]: rustc_hir::def_id::DefId
     query type_of(key: DefId) -> Ty<'tcx> {
         desc { |tcx|
             "{action} `{path}`",
@@ -549,7 +552,7 @@ rustc_queries! {
 
     query adt_dtorck_constraint(
         key: DefId
-    ) -> Result<&'tcx DtorckConstraint<'tcx>, NoSolution> {
+    ) -> Result<&'tcx DropckConstraint<'tcx>, NoSolution> {
         desc { |tcx| "computing drop-check constraints for `{}`", tcx.def_path_str(key) }
     }
 
@@ -559,7 +562,7 @@ rustc_queries! {
     ///
     /// **Do not call this function manually.** It is only meant to cache the base data for the
     /// `is_const_fn` function.
-    query is_const_fn_raw(key: DefId) -> bool {
+    query impl_constness(key: DefId) -> hir::Constness {
         desc { |tcx| "checking if item is const fn: `{}`", tcx.def_path_str(key) }
         separate_provide_extern
     }
@@ -583,12 +586,6 @@ rustc_queries! {
     /// Returns `true` if this is a foreign item (i.e., linked via `extern { ... }`).
     query is_foreign_item(key: DefId) -> bool {
         desc { |tcx| "checking if `{}` is a foreign item", tcx.def_path_str(key) }
-        separate_provide_extern
-    }
-
-    /// Returns `Some(mutability)` if the node pointed to by `def_id` is a static item.
-    query static_mutability(def_id: DefId) -> Option<hir::Mutability> {
-        desc { |tcx| "looking up static mutability of `{}`", tcx.def_path_str(def_id) }
         separate_provide_extern
     }
 
@@ -682,6 +679,10 @@ rustc_queries! {
     query inherent_impls(key: DefId) -> &'tcx [DefId] {
         desc { |tcx| "collecting inherent impls for `{}`", tcx.def_path_str(key) }
         separate_provide_extern
+    }
+
+    query incoherent_impls(key: SimplifiedType) -> &'tcx [DefId] {
+        desc { |tcx| "collecting all inherent impls for `{:?}`", key }
     }
 
     /// The result of unsafety-checking this `LocalDefId`.
@@ -1331,11 +1332,6 @@ rustc_queries! {
         separate_provide_extern
     }
 
-    query impl_constness(def_id: DefId) -> hir::Constness {
-        desc { |tcx| "looking up whether `{}` is a const impl", tcx.def_path_str(def_id) }
-        separate_provide_extern
-    }
-
     query check_item_well_formed(key: LocalDefId) -> () {
         desc { |tcx| "checking that `{}` is well-formed", tcx.def_path_str(key.to_def_id()) }
     }
@@ -1466,6 +1462,15 @@ rustc_queries! {
     /// Return `(impl_id, self_ty)`.
     query implementations_of_trait(_: (CrateNum, DefId)) -> &'tcx [(DefId, Option<SimplifiedType>)] {
         desc { "looking up implementations of a trait in a crate" }
+        separate_provide_extern
+    }
+
+    /// Collects all incoherent impls for the given crate and type.
+    ///
+    /// Do not call this directly, but instead use the `incoherent_impls` query.
+    /// This query is only used to get the data necessary for that query.
+    query crate_incoherent_impls(key: (CrateNum, SimplifiedType)) -> &'tcx [DefId] {
+        desc { |tcx| "collecting all impls for a type in a crate" }
         separate_provide_extern
     }
 

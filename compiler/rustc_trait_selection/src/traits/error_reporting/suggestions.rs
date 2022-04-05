@@ -77,6 +77,14 @@ pub trait InferCtxtExt<'tcx> {
         has_custom_message: bool,
     ) -> bool;
 
+    fn suggest_borrowing_for_object_cast(
+        &self,
+        err: &mut Diagnostic,
+        obligation: &PredicateObligation<'tcx>,
+        self_ty: Ty<'tcx>,
+        object_ty: Ty<'tcx>,
+    );
+
     fn suggest_remove_reference(
         &self,
         obligation: &PredicateObligation<'tcx>,
@@ -128,7 +136,7 @@ pub trait InferCtxtExt<'tcx> {
     fn suggest_fully_qualified_path(
         &self,
         err: &mut Diagnostic,
-        def_id: DefId,
+        item_def_id: DefId,
         span: Span,
         trait_ref: DefId,
     );
@@ -230,7 +238,7 @@ fn suggest_restriction<'tcx>(
     {
         // We know we have an `impl Trait` that doesn't satisfy a required projection.
 
-        // Find all of the ocurrences of `impl Trait` for `Trait` in the function arguments'
+        // Find all of the occurrences of `impl Trait` for `Trait` in the function arguments'
         // types. There should be at least one, but there might be *more* than one. In that
         // case we could just ignore it and try to identify which one needs the restriction,
         // but instead we choose to suggest replacing all instances of `impl Trait` with `T`
@@ -801,6 +809,35 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
         }
     }
 
+    // Suggest borrowing the type
+    fn suggest_borrowing_for_object_cast(
+        &self,
+        err: &mut Diagnostic,
+        obligation: &PredicateObligation<'tcx>,
+        self_ty: Ty<'tcx>,
+        object_ty: Ty<'tcx>,
+    ) {
+        let ty::Dynamic(predicates, _) = object_ty.kind() else { return; };
+        let self_ref_ty = self.tcx.mk_imm_ref(self.tcx.lifetimes.re_erased, self_ty);
+
+        for predicate in predicates.iter() {
+            if !self.predicate_must_hold_modulo_regions(
+                &obligation.with(predicate.with_self_ty(self.tcx, self_ref_ty)),
+            ) {
+                return;
+            }
+        }
+
+        err.span_suggestion(
+            obligation.cause.span.shrink_to_lo(),
+            &format!(
+                "consider borrowing the value, since `&{self_ty}` can be coerced into `{object_ty}`"
+            ),
+            "&".to_string(),
+            Applicability::MaybeIncorrect,
+        );
+    }
+
     /// Whenever references are used by mistake, like `for (i, e) in &vec.iter().enumerate()`,
     /// suggest removing these references until we reach a type that implements the trait.
     fn suggest_remove_reference(
@@ -1294,6 +1331,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
             ty::Generator(..) => "generator",
             _ => "function",
         };
+        let span = self.tcx.sess.source_map().guess_head_span(span);
         let mut err = struct_span_err!(
             self.tcx.sess,
             span,
@@ -1316,16 +1354,16 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
     fn suggest_fully_qualified_path(
         &self,
         err: &mut Diagnostic,
-        def_id: DefId,
+        item_def_id: DefId,
         span: Span,
         trait_ref: DefId,
     ) {
-        if let Some(assoc_item) = self.tcx.opt_associated_item(def_id) {
+        if let Some(assoc_item) = self.tcx.opt_associated_item(item_def_id) {
             if let ty::AssocKind::Const | ty::AssocKind::Type = assoc_item.kind {
                 err.note(&format!(
                     "{}s cannot be accessed directly on a `trait`, they can only be \
                         accessed through a specific `impl`",
-                    assoc_item.kind.as_def_kind().descr(def_id)
+                    assoc_item.kind.as_def_kind().descr(item_def_id)
                 ));
                 err.span_suggestion(
                     span,
@@ -1673,6 +1711,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
             ));
 
             let original_span = err.span.primary_span().unwrap();
+            let original_span = self.tcx.sess.source_map().guess_head_span(original_span);
             let mut span = MultiSpan::from_span(original_span);
 
             let message = outer_generator
@@ -1986,7 +2025,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
             ObligationCauseCode::Coercion { source: _, target } => {
                 err.note(&format!("required by cast to type `{}`", self.ty_to_string(target)));
             }
-            ObligationCauseCode::RepeatVec(is_const_fn) => {
+            ObligationCauseCode::RepeatElementCopy { is_const_fn } => {
                 err.note(
                     "the `Copy` trait is required because the repeated element will be copied",
                 );

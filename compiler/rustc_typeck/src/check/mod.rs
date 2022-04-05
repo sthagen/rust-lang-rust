@@ -343,6 +343,7 @@ fn diagnostic_only_typeck<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> &ty::T
     typeck_with_fallback(tcx, def_id, fallback)
 }
 
+#[instrument(skip(tcx, fallback))]
 fn typeck_with_fallback<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: LocalDefId,
@@ -664,7 +665,7 @@ fn missing_items_must_implement_one_of_err(
     err.emit();
 }
 
-/// Resugar `ty::GenericPredicates` in a way suitable to be used in structured suggestions.
+/// Re-sugar `ty::GenericPredicates` in a way suitable to be used in structured suggestions.
 fn bounds_from_generic_predicates<'tcx>(
     tcx: TyCtxt<'tcx>,
     predicates: ty::GenericPredicates<'tcx>,

@@ -659,7 +659,7 @@ impl OutputFilenames {
             single_output_file,
             temps_directory,
             outputs,
-            filestem: format!("{}{}", out_filestem, extra),
+            filestem: format!("{out_filestem}{extra}"),
         }
     }
 
@@ -956,7 +956,7 @@ fn default_configuration(sess: &Session) -> CrateConfig {
     ret.reserve(7); // the minimum number of insertions
     // Target bindings.
     ret.insert((sym::target_os, Some(Symbol::intern(os))));
-    for fam in &sess.target.families {
+    for fam in sess.target.families.as_ref() {
         ret.insert((sym::target_family, Some(Symbol::intern(fam))));
         if fam == "windows" {
             ret.insert((sym::windows, None));
@@ -1514,7 +1514,7 @@ pub fn get_cmd_lint_options(
 
     let lint_cap = matches.opt_str("cap-lints").map(|cap| {
         lint::Level::from_str(&cap)
-            .unwrap_or_else(|| early_error(error_format, &format!("unknown lint level: `{}`", cap)))
+            .unwrap_or_else(|| early_error(error_format, &format!("unknown lint level: `{cap}`")))
     });
 
     (lint_opts, describe_lints, lint_cap)
@@ -1533,8 +1533,7 @@ pub fn parse_color(matches: &getopts::Matches) -> ColorConfig {
             ErrorOutputType::default(),
             &format!(
                 "argument for `--color` must be auto, \
-                 always or never (instead was `{}`)",
-                arg
+                 always or never (instead was `{arg}`)"
             ),
         ),
     }
@@ -1579,7 +1578,7 @@ pub fn parse_json(matches: &getopts::Matches) -> JsonConfig {
                 "future-incompat" => json_future_incompat = true,
                 s => early_error(
                     ErrorOutputType::default(),
-                    &format!("unknown `--json` option `{}`", s),
+                    &format!("unknown `--json` option `{s}`"),
                 ),
             }
         }
@@ -1619,8 +1618,7 @@ pub fn parse_error_format(
                 ErrorOutputType::HumanReadable(HumanReadableErrorType::Default(color)),
                 &format!(
                     "argument for `--error-format` must be `human`, `json` or \
-                     `short` (instead was `{}`)",
-                    arg
+                     `short` (instead was `{arg}`)"
                 ),
             ),
         }
@@ -1654,8 +1652,7 @@ pub fn parse_crate_edition(matches: &getopts::Matches) -> Edition {
                 ErrorOutputType::default(),
                 &format!(
                     "argument for `--edition` must be one of: \
-                     {}. (instead was `{}`)",
-                    EDITION_NAME_LIST, arg
+                     {EDITION_NAME_LIST}. (instead was `{arg}`)"
                 ),
             )
         }),
@@ -1670,7 +1667,7 @@ pub fn parse_crate_edition(matches: &getopts::Matches) -> Edition {
                 edition, LATEST_STABLE_EDITION
             )
         } else {
-            format!("edition {} is unstable and only available with -Z unstable-options", edition)
+            format!("edition {edition} is unstable and only available with -Z unstable-options")
         };
         early_error(ErrorOutputType::default(), &msg)
     }
@@ -1718,9 +1715,8 @@ fn parse_output_types(
                     early_error(
                         error_format,
                         &format!(
-                            "unknown emission type: `{}` - expected one of: {}",
-                            shorthand,
-                            OutputType::shorthands_display(),
+                            "unknown emission type: `{shorthand}` - expected one of: {display}",
+                            display = OutputType::shorthands_display(),
                         ),
                     )
                 });
@@ -1758,9 +1754,8 @@ fn should_override_cgus_and_disable_thinlto(
                         early_warn(
                             error_format,
                             &format!(
-                                "`--emit={}` with `-o` incompatible with \
+                                "`--emit={ot}` with `-o` incompatible with \
                                  `-C codegen-units=N` for N > 1",
-                                ot
                             ),
                         );
                     }
@@ -1835,7 +1830,7 @@ fn collect_print_requests(
             }
         }
         "link-args" => PrintRequest::LinkArgs,
-        req => early_error(error_format, &format!("unknown print request `{}`", req)),
+        req => early_error(error_format, &format!("unknown print request `{req}`")),
     }));
 
     prints
@@ -1849,7 +1844,7 @@ pub fn parse_target_triple(
         Some(target) if target.ends_with(".json") => {
             let path = Path::new(&target);
             TargetTriple::from_path(&path).unwrap_or_else(|_| {
-                early_error(error_format, &format!("target file {:?} does not exist", path))
+                early_error(error_format, &format!("target file {path:?} does not exist"))
             })
         }
         Some(target) => TargetTriple::TargetTriple(target),
@@ -1892,8 +1887,7 @@ fn parse_opt_level(
                     error_format,
                     &format!(
                         "optimization level needs to be \
-                            between 0-3, s or z (instead was `{}`)",
-                        arg
+                            between 0-3, s or z (instead was `{arg}`)"
                     ),
                 );
             }
@@ -1927,8 +1921,7 @@ fn select_debuginfo(
                     error_format,
                     &format!(
                         "debug info level needs to be between \
-                         0-2 (instead was `{}`)",
-                        arg
+                         0-2 (instead was `{arg}`)"
                     ),
                 );
             }
@@ -1943,10 +1936,9 @@ crate fn parse_assert_incr_state(
     match opt_assertion {
         Some(s) if s.as_str() == "loaded" => Some(IncrementalStateAssertion::Loaded),
         Some(s) if s.as_str() == "not-loaded" => Some(IncrementalStateAssertion::NotLoaded),
-        Some(s) => early_error(
-            error_format,
-            &format!("unexpected incremental state assertion value: {}", s),
-        ),
+        Some(s) => {
+            early_error(error_format, &format!("unexpected incremental state assertion value: {s}"))
+        }
         None => None,
     }
 }
@@ -1956,9 +1948,6 @@ fn parse_native_lib_kind(
     kind: &str,
     error_format: ErrorOutputType,
 ) -> (NativeLibKind, Option<bool>) {
-    let is_nightly = nightly_options::match_is_nightly_build(matches);
-    let enable_unstable = nightly_options::is_unstable_enabled(matches);
-
     let (kind, modifiers) = match kind.split_once(':') {
         None => (kind, None),
         Some((kind, modifiers)) => (kind, Some(modifiers)),
@@ -1980,7 +1969,7 @@ fn parse_native_lib_kind(
                     "linking modifier can't be used with library kind `static-nobundle`",
                 )
             }
-            if !is_nightly {
+            if !nightly_options::match_is_nightly_build(matches) {
                 early_error(
                     error_format,
                     "library kind `static-nobundle` are currently unstable and only accepted on \
@@ -1991,28 +1980,12 @@ fn parse_native_lib_kind(
         }
         s => early_error(
             error_format,
-            &format!("unknown library kind `{}`, expected one of dylib, framework, or static", s),
+            &format!("unknown library kind `{s}`, expected one of dylib, framework, or static"),
         ),
     };
     match modifiers {
         None => (kind, None),
-        Some(modifiers) => {
-            if !is_nightly {
-                early_error(
-                    error_format,
-                    "linking modifiers are currently unstable and only accepted on \
-                the nightly compiler",
-                );
-            }
-            if !enable_unstable {
-                early_error(
-                    error_format,
-                    "linking modifiers are currently unstable, \
-                the `-Z unstable-options` flag must also be passed to use it",
-                )
-            }
-            parse_native_lib_modifiers(kind, modifiers, error_format)
-        }
+        Some(modifiers) => parse_native_lib_modifiers(kind, modifiers, error_format, matches),
     }
 }
 
@@ -2020,7 +1993,23 @@ fn parse_native_lib_modifiers(
     mut kind: NativeLibKind,
     modifiers: &str,
     error_format: ErrorOutputType,
+    matches: &getopts::Matches,
 ) -> (NativeLibKind, Option<bool>) {
+    let report_unstable_modifier = |modifier| {
+        if !nightly_options::is_unstable_enabled(matches) {
+            let why = if nightly_options::match_is_nightly_build(matches) {
+                " and only accepted on the nightly compiler"
+            } else {
+                ", the `-Z unstable-options` flag must also be passed to use it"
+            };
+            early_error(
+                error_format,
+                &format!("{modifier} linking modifier is currently unstable{why}"),
+            )
+        }
+    };
+
+    let mut has_duplicate_modifiers = false;
     let mut verbatim = None;
     for modifier in modifiers.split(',') {
         let (modifier, value) = match modifier.strip_prefix(&['+', '-']) {
@@ -2034,6 +2023,10 @@ fn parse_native_lib_modifiers(
 
         match (modifier, &mut kind) {
             ("bundle", NativeLibKind::Static { bundle, .. }) => {
+                report_unstable_modifier(modifier);
+                if bundle.is_some() {
+                    has_duplicate_modifiers = true;
+                }
                 *bundle = Some(value);
             }
             ("bundle", _) => early_error(
@@ -2042,9 +2035,18 @@ fn parse_native_lib_modifiers(
                     `static` linking kind",
             ),
 
-            ("verbatim", _) => verbatim = Some(value),
+            ("verbatim", _) => {
+                report_unstable_modifier(modifier);
+                if verbatim.is_some() {
+                    has_duplicate_modifiers = true;
+                }
+                verbatim = Some(value);
+            }
 
             ("whole-archive", NativeLibKind::Static { whole_archive, .. }) => {
+                if whole_archive.is_some() {
+                    has_duplicate_modifiers = true;
+                }
                 *whole_archive = Some(value);
             }
             ("whole-archive", _) => early_error(
@@ -2055,6 +2057,10 @@ fn parse_native_lib_modifiers(
 
             ("as-needed", NativeLibKind::Dylib { as_needed })
             | ("as-needed", NativeLibKind::Framework { as_needed }) => {
+                report_unstable_modifier(modifier);
+                if as_needed.is_some() {
+                    has_duplicate_modifiers = true;
+                }
                 *as_needed = Some(value);
             }
             ("as-needed", _) => early_error(
@@ -2063,15 +2069,19 @@ fn parse_native_lib_modifiers(
                     `dylib` and `framework` linking kinds",
             ),
 
+            // Note: this error also excludes the case with empty modifier
+            // string, like `modifiers = ""`.
             _ => early_error(
                 error_format,
                 &format!(
-                    "unrecognized linking modifier `{}`, expected one \
-                    of: bundle, verbatim, whole-archive, as-needed",
-                    modifier
+                    "unrecognized linking modifier `{modifier}`, expected one \
+                    of: bundle, verbatim, whole-archive, as-needed"
                 ),
             ),
         }
+    }
+    if has_duplicate_modifiers {
+        report_unstable_modifier("duplicating")
     }
 
     (kind, verbatim)
@@ -2109,7 +2119,7 @@ fn parse_borrowck_mode(dopts: &DebuggingOptions, error_format: ErrorOutputType) 
     match dopts.borrowck.as_ref() {
         "migrate" => BorrowckMode::Migrate,
         "mir" => BorrowckMode::Mir,
-        m => early_error(error_format, &format!("unknown borrowck mode `{}`", m)),
+        m => early_error(error_format, &format!("unknown borrowck mode `{m}`")),
     }
 }
 
@@ -2197,7 +2207,7 @@ pub fn parse_externs(
                             );
                         }
                     }
-                    _ => early_error(error_format, &format!("unknown --extern option `{}`", opt)),
+                    _ => early_error(error_format, &format!("unknown --extern option `{opt}`")),
                 }
             }
         }
@@ -2234,7 +2244,7 @@ fn parse_extern_dep_specs(
         let loc = parts.next().unwrap_or_else(|| {
             early_error(
                 error_format,
-                &format!("`--extern-location`: specify location for extern crate `{}`", name),
+                &format!("`--extern-location`: specify location for extern crate `{name}`"),
             )
         });
 
@@ -2255,14 +2265,14 @@ fn parse_extern_dep_specs(
                 let json = json::from_str(raw).unwrap_or_else(|_| {
                     early_error(
                         error_format,
-                        &format!("`--extern-location`: malformed json location `{}`", raw),
+                        &format!("`--extern-location`: malformed json location `{raw}`"),
                     )
                 });
                 ExternDepSpec::Json(json)
             }
             [bad, ..] => early_error(
                 error_format,
-                &format!("unknown location type `{}`: use `raw` or `json`", bad),
+                &format!("unknown location type `{bad}`: use `raw` or `json`"),
             ),
             [] => early_error(error_format, "missing location specification"),
         };
@@ -2527,9 +2537,7 @@ pub fn build_session_options(matches: &getopts::Matches) -> Options {
         && !target_triple.triple().contains("apple")
         && cg.split_debuginfo.is_some()
     {
-        {
-            early_error(error_format, "`-Csplit-debuginfo` is unstable on this platform");
-        }
+        early_error(error_format, "`-Csplit-debuginfo` is unstable on this platform");
     }
 
     // Try to find a directory containing the Rust `src`, for more details see
@@ -2561,7 +2569,7 @@ pub fn build_session_options(matches: &getopts::Matches) -> Options {
     };
 
     let working_dir = std::env::current_dir().unwrap_or_else(|e| {
-        early_error(error_format, &format!("Current directory is invalid: {}", e));
+        early_error(error_format, &format!("Current directory is invalid: {e}"));
     });
 
     let (path, remapped) =
@@ -2636,12 +2644,11 @@ fn parse_pretty(debugging_opts: &DebuggingOptions, efmt: ErrorOutputType) -> Opt
                 "argument to `unpretty` must be one of `normal`, `identified`, \
                             `expanded`, `expanded,identified`, `expanded,hygiene`, \
                             `ast-tree`, `ast-tree,expanded`, `hir`, `hir,identified`, \
-                            `hir,typed`, `hir-tree`, `thir-tree`, `mir` or `mir-cfg`; got {}",
-                name
+                            `hir,typed`, `hir-tree`, `thir-tree`, `mir` or `mir-cfg`; got {name}"
             ),
         ),
     };
-    tracing::debug!("got unpretty option: {:?}", first);
+    tracing::debug!("got unpretty option: {first:?}");
     Some(first)
 }
 
@@ -2667,7 +2674,7 @@ pub fn parse_crate_types_from_list(list_list: Vec<String>) -> Result<Vec<CrateTy
                 "cdylib" => CrateType::Cdylib,
                 "bin" => CrateType::Executable,
                 "proc-macro" => CrateType::ProcMacro,
-                _ => return Err(format!("unknown crate type: `{}`", part)),
+                _ => return Err(format!("unknown crate type: `{part}`")),
             };
             if !crate_types.contains(&new_part) {
                 crate_types.push(new_part)

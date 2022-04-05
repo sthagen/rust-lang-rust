@@ -6,6 +6,7 @@
 #![feature(if_let_guard)]
 #![feature(let_chains)]
 #![feature(let_else)]
+#![feature(never_type)]
 #![recursion_limit = "256"]
 
 #[macro_use]
@@ -49,8 +50,8 @@ macro_rules! panictry_buffer {
         match $e {
             Ok(e) => e,
             Err(errs) => {
-                for e in errs {
-                    $handler.emit_diagnostic(&e);
+                for mut e in errs {
+                    $handler.emit_diagnostic(&mut e);
                 }
                 FatalError.raise()
             }
@@ -167,8 +168,8 @@ fn try_file_to_source_file(
 fn file_to_source_file(sess: &ParseSess, path: &Path, spanopt: Option<Span>) -> Lrc<SourceFile> {
     match try_file_to_source_file(sess, path, spanopt) {
         Ok(source_file) => source_file,
-        Err(d) => {
-            sess.span_diagnostic.emit_diagnostic(&d);
+        Err(mut d) => {
+            sess.span_diagnostic.emit_diagnostic(&mut d);
             FatalError.raise();
         }
     }
@@ -289,7 +290,6 @@ pub fn nt_to_tokenstream(
         Nonterminal::NtMeta(ref attr) => convert_tokens(attr.tokens.as_ref()),
         Nonterminal::NtPath(ref path) => convert_tokens(path.tokens.as_ref()),
         Nonterminal::NtVis(ref vis) => convert_tokens(vis.tokens.as_ref()),
-        Nonterminal::NtTT(ref tt) => Some(tt.clone().into()),
         Nonterminal::NtExpr(ref expr) | Nonterminal::NtLiteral(ref expr) => {
             prepend_attrs(&expr.attrs, expr.tokens.as_ref())
         }

@@ -128,7 +128,7 @@ impl EmissionGuarantee for ErrorGuaranteed {
             DiagnosticBuilderState::Emittable(handler) => {
                 db.inner.state = DiagnosticBuilderState::AlreadyEmittedOrDuringCancellation;
 
-                let guar = handler.emit_diagnostic(&db.inner.diagnostic);
+                let guar = handler.emit_diagnostic(&mut db.inner.diagnostic);
 
                 // Only allow a guarantee if the `level` wasn't switched to a
                 // non-error - the field isn't `pub`, but the whole `Diagnostic`
@@ -190,11 +190,50 @@ impl EmissionGuarantee for () {
             DiagnosticBuilderState::Emittable(handler) => {
                 db.inner.state = DiagnosticBuilderState::AlreadyEmittedOrDuringCancellation;
 
-                handler.emit_diagnostic(&db.inner.diagnostic);
+                handler.emit_diagnostic(&mut db.inner.diagnostic);
             }
             // `.emit()` was previously called, disallowed from repeating it.
             DiagnosticBuilderState::AlreadyEmittedOrDuringCancellation => {}
         }
+    }
+}
+
+impl<'a> DiagnosticBuilder<'a, !> {
+    /// Convenience function for internal use, clients should use one of the
+    /// `struct_*` methods on [`Handler`].
+    crate fn new_fatal(handler: &'a Handler, message: &str) -> Self {
+        let diagnostic = Diagnostic::new_with_code(Level::Fatal, None, message);
+        Self::new_diagnostic_fatal(handler, diagnostic)
+    }
+
+    /// Creates a new `DiagnosticBuilder` with an already constructed
+    /// diagnostic.
+    crate fn new_diagnostic_fatal(handler: &'a Handler, diagnostic: Diagnostic) -> Self {
+        debug!("Created new diagnostic");
+        Self {
+            inner: DiagnosticBuilderInner {
+                state: DiagnosticBuilderState::Emittable(handler),
+                diagnostic: Box::new(diagnostic),
+            },
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl EmissionGuarantee for ! {
+    fn diagnostic_builder_emit_producing_guarantee(db: &mut DiagnosticBuilder<'_, Self>) -> Self {
+        match db.inner.state {
+            // First `.emit()` call, the `&Handler` is still available.
+            DiagnosticBuilderState::Emittable(handler) => {
+                db.inner.state = DiagnosticBuilderState::AlreadyEmittedOrDuringCancellation;
+
+                handler.emit_diagnostic(&mut db.inner.diagnostic);
+            }
+            // `.emit()` was previously called, disallowed from repeating it.
+            DiagnosticBuilderState::AlreadyEmittedOrDuringCancellation => {}
+        }
+        // Then fatally error, returning `!`
+        crate::FatalError.raise()
     }
 }
 
@@ -396,7 +435,13 @@ impl<'a, G: EmissionGuarantee> DiagnosticBuilder<'a, G> {
     ) -> &mut Self);
 
     forward!(pub fn note(&mut self, msg: &str) -> &mut Self);
+    forward!(pub fn note_once(&mut self, msg: &str) -> &mut Self);
     forward!(pub fn span_note(
+        &mut self,
+        sp: impl Into<MultiSpan>,
+        msg: &str,
+    ) -> &mut Self);
+    forward!(pub fn span_note_once(
         &mut self,
         sp: impl Into<MultiSpan>,
         msg: &str,
@@ -500,11 +545,11 @@ impl Drop for DiagnosticBuilderInner<'_> {
             // No `.emit()` or `.cancel()` calls.
             DiagnosticBuilderState::Emittable(handler) => {
                 if !panicking() {
-                    handler.emit_diagnostic(&Diagnostic::new(
+                    handler.emit_diagnostic(&mut Diagnostic::new(
                         Level::Bug,
                         "the following error was constructed but not emitted",
                     ));
-                    handler.emit_diagnostic(&self.diagnostic);
+                    handler.emit_diagnostic(&mut self.diagnostic);
                     panic!();
                 }
             }

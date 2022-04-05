@@ -431,7 +431,7 @@ pub trait PrettyPrinter<'tcx>:
             // For example, take `std::os::unix::process::CommandExt`, this trait is actually
             // defined at `std::sys::unix::ext::process::CommandExt` (at time of writing).
             //
-            // `std::os::unix` rexports the contents of `std::sys::unix::ext`. `std::sys` is
+            // `std::os::unix` reexports the contents of `std::sys::unix::ext`. `std::sys` is
             // private so the "true" path to `CommandExt` isn't accessible.
             //
             // In this case, the `visible_parent_map` will look something like this:
@@ -647,20 +647,23 @@ pub trait PrettyPrinter<'tcx>:
                     return Ok(self);
                 }
 
-                return with_no_queries!({
-                    let def_key = self.tcx().def_key(def_id);
-                    if let Some(name) = def_key.disambiguated_data.data.get_opt_name() {
-                        p!(write("{}", name));
-                        // FIXME(eddyb) print this with `print_def_path`.
-                        if !substs.is_empty() {
-                            p!("::");
-                            p!(generic_delimiters(|cx| cx.comma_sep(substs.iter())));
+                let parent = self.tcx().parent(def_id).expect("opaque types always have a parent");
+                match self.tcx().def_kind(parent) {
+                    DefKind::TyAlias | DefKind::AssocTy => {
+                        if let ty::Opaque(d, _) = *self.tcx().type_of(parent).kind() {
+                            if d == def_id {
+                                // If the type alias directly starts with the `impl` of the
+                                // opaque type we're printing, then skip the `::{opaque#1}`.
+                                p!(print_def_path(parent, substs));
+                                return Ok(self);
+                            }
                         }
+                        // Complex opaque type, e.g. `type Foo = (i32, impl Debug);`
+                        p!(print_def_path(def_id, substs));
                         return Ok(self);
                     }
-
-                    self.pretty_print_opaque_impl_type(def_id, substs)
-                });
+                    _ => return self.pretty_print_opaque_impl_type(def_id, substs),
+                }
             }
             ty::Str => p!("str"),
             ty::Generator(did, substs, movability) => {
@@ -909,12 +912,25 @@ pub trait PrettyPrinter<'tcx>:
                 }
 
                 for (assoc_item_def_id, term) in assoc_items {
-                    // Skip printing `<[generator@] as Generator<_>>::Return` from async blocks
-                    if let Some(ty) = term.skip_binder().ty() &&
-                       let ty::Projection(ty::ProjectionTy { item_def_id, .. }) = ty.kind() &&
-                       Some(*item_def_id) == self.tcx().lang_items().generator_return() {
-                        continue;
-                    }
+                    // Skip printing `<[generator@] as Generator<_>>::Return` from async blocks,
+                    // unless we can find out what generator return type it comes from.
+                    let term = if let Some(ty) = term.skip_binder().ty()
+                        && let ty::Projection(ty::ProjectionTy { item_def_id, substs }) = ty.kind()
+                        && Some(*item_def_id) == self.tcx().lang_items().generator_return()
+                    {
+                        if let ty::Generator(_, substs, _) = substs.type_at(0).kind() {
+                            let return_ty = substs.as_generator().return_ty();
+                            if !return_ty.is_ty_infer() {
+                                return_ty.into()
+                            } else {
+                                continue;
+                            }
+                        } else {
+                            continue;
+                        }
+                    } else {
+                        term.skip_binder()
+                    };
 
                     if first {
                         p!("<");
@@ -925,7 +941,7 @@ pub trait PrettyPrinter<'tcx>:
 
                     p!(write("{} = ", self.tcx().associated_item(assoc_item_def_id).name));
 
-                    match term.skip_binder() {
+                    match term {
                         Term::Ty(ty) => {
                             p!(print(ty))
                         }
@@ -1033,7 +1049,7 @@ pub trait PrettyPrinter<'tcx>:
 
                 let mut resugared = false;
 
-                // Special-case `Fn(...) -> ...` and resugar it.
+                // Special-case `Fn(...) -> ...` and re-sugar it.
                 let fn_trait_kind = cx.tcx().fn_trait_kind_from_lang_item(principal.def_id);
                 if !cx.tcx().sess.verbose() && fn_trait_kind.is_some() {
                     if let ty::Tuple(tys) = principal.substs.type_at(0).kind() {
@@ -1185,7 +1201,7 @@ pub trait PrettyPrinter<'tcx>:
             }
             ty::ConstKind::Unevaluated(ty::Unevaluated { def, substs, promoted: None }) => {
                 match self.tcx().def_kind(def.did) {
-                    DefKind::Static | DefKind::Const | DefKind::AssocConst => {
+                    DefKind::Static(..) | DefKind::Const | DefKind::AssocConst => {
                         p!(print_value_path(def.did, substs))
                     }
                     _ => {
@@ -2168,7 +2184,7 @@ impl<'tcx> FmtPrinter<'_, 'tcx> {
         define_scoped_cx!(self);
 
         let mut region_index = self.region_index;
-        // If we want to print verbosly, then print *all* binders, even if they
+        // If we want to print verbosely, then print *all* binders, even if they
         // aren't named. Eventually, we might just want this as the default, but
         // this is not *quite* right and changes the ordering of some output
         // anyways.

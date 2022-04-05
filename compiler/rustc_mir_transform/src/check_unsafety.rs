@@ -149,7 +149,7 @@ impl<'tcx> Visitor<'tcx> for UnsafetyChecker<'_, 'tcx> {
             self.check_mut_borrowing_layout_constrained_field(*place, context.is_mutating_use());
         }
 
-        // Some checks below need the extra metainfo of the local declaration.
+        // Some checks below need the extra meta info of the local declaration.
         let decl = &self.body.local_decls[place.local];
 
         // Check the base local: it might be an unsafe-to-access static. We only check derefs of the
@@ -554,7 +554,6 @@ fn report_unused_unsafe(tcx: TyCtxt<'_>, kind: UnusedUnsafe, id: HirId) {
                     tcx.lint_level_at_node(UNSAFE_OP_IN_UNSAFE_FN, usage_lint_root);
                 assert_eq!(level, Level::Allow);
                 lint::explain_lint_level_source(
-                    tcx.sess,
                     UNSAFE_OP_IN_UNSAFE_FN,
                     Level::Allow,
                     source,

@@ -7,7 +7,7 @@ use crate::unicode::{self, conversions};
 
 use super::*;
 
-#[lang = "char"]
+#[cfg_attr(bootstrap, lang = "char")]
 impl char {
     /// The highest valid code point a `char` can have, `'\u{10FFFF}'`.
     ///
@@ -421,6 +421,7 @@ impl char {
     #[inline]
     pub(crate) fn escape_debug_ext(self, args: EscapeDebugExtArgs) -> EscapeDebug {
         let init_state = match self {
+            '\0' => EscapeDefaultState::Backslash('0'),
             '\t' => EscapeDefaultState::Backslash('t'),
             '\r' => EscapeDefaultState::Backslash('r'),
             '\n' => EscapeDefaultState::Backslash('n'),
@@ -1091,7 +1092,7 @@ impl char {
     /// ```
     #[must_use]
     #[stable(feature = "ascii_methods_on_intrinsics", since = "1.23.0")]
-    #[rustc_const_stable(feature = "const_ascii_methods_on_intrinsics", since = "1.32.0")]
+    #[rustc_const_stable(feature = "const_char_is_ascii", since = "1.32.0")]
     #[inline]
     pub const fn is_ascii(&self) -> bool {
         *self as u32 <= 0x7F

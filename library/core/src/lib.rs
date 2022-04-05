@@ -84,6 +84,7 @@
     target_has_atomic_load_store = "ptr",
 ))]
 #![no_core]
+#![cfg_attr(not(bootstrap), rustc_coherence_is_core)]
 //
 // Lints:
 #![deny(rust_2021_incompatible_or_patterns)]
@@ -96,7 +97,6 @@
 // Library features:
 #![feature(const_align_offset)]
 #![feature(const_align_of_val)]
-#![feature(const_alloc_layout)]
 #![feature(const_arguments_as_str)]
 #![feature(const_array_into_iter_constructors)]
 #![feature(const_bigint_helper_methods)]
@@ -126,7 +126,6 @@
 #![feature(const_pin)]
 #![feature(const_replace)]
 #![feature(const_ptr_is_null)]
-#![feature(const_ptr_offset)]
 #![feature(const_ptr_offset_from)]
 #![feature(const_ptr_read)]
 #![feature(const_ptr_write)]
@@ -140,6 +139,7 @@
 #![feature(const_type_id)]
 #![feature(const_type_name)]
 #![feature(const_default_impls)]
+#![feature(const_unsafecell_get_mut)]
 #![feature(core_panic)]
 #![feature(duration_consts_float)]
 #![feature(maybe_uninit_uninit_array)]

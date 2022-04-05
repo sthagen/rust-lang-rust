@@ -120,6 +120,9 @@ impl CheckAttrVisitor<'_> {
                 sym::must_not_suspend => self.check_must_not_suspend(&attr, span, target),
                 sym::must_use => self.check_must_use(hir_id, &attr, span, target),
                 sym::rustc_pass_by_value => self.check_pass_by_value(&attr, span, target),
+                sym::rustc_allow_incoherent_impl => {
+                    self.check_allow_incoherent_impl(&attr, span, target)
+                }
                 sym::rustc_const_unstable
                 | sym::rustc_const_stable
                 | sym::unstable
@@ -1080,6 +1083,24 @@ impl CheckAttrVisitor<'_> {
         }
     }
 
+    /// Warns against some misuses of `#[pass_by_value]`
+    fn check_allow_incoherent_impl(&self, attr: &Attribute, span: Span, target: Target) -> bool {
+        match target {
+            Target::Method(MethodKind::Inherent) => true,
+            _ => {
+                self.tcx
+                    .sess
+                    .struct_span_err(
+                        attr.span,
+                        "`rustc_allow_incoherent_impl` attribute should be applied to impl items.",
+                    )
+                    .span_label(span, "the only currently supported targets are inherent methods")
+                    .emit();
+                false
+            }
+        }
+    }
+
     /// Warns against some misuses of `#[must_use]`
     fn check_must_use(&self, hir_id: HirId, attr: &Attribute, span: Span, target: Target) -> bool {
         let node = self.tcx.hir().get(hir_id);
@@ -1838,7 +1859,7 @@ impl CheckAttrVisitor<'_> {
     ) -> bool {
         match target {
             Target::Fn | Target::Method(_)
-                if self.tcx.is_const_fn_raw(self.tcx.hir().local_def_id(hir_id)) =>
+                if self.tcx.is_const_fn_raw(self.tcx.hir().local_def_id(hir_id).to_def_id()) =>
             {
                 true
             }

@@ -173,7 +173,7 @@ pub const PROGRESS_CONTINUE: DWORD = 0;
 
 pub const E_NOTIMPL: HRESULT = 0x80004001u32 as HRESULT;
 
-pub const INVALID_HANDLE_VALUE: HANDLE = !0 as HANDLE;
+pub const INVALID_HANDLE_VALUE: HANDLE = ptr::invalid_mut(!0);
 
 pub const FACILITY_NT_BIT: DWORD = 0x1000_0000;
 
@@ -325,6 +325,12 @@ impl Default for IO_STATUS_BLOCK {
         Self { Pointer: ptr::null_mut(), Information: 0 }
     }
 }
+
+pub type LPOVERLAPPED_COMPLETION_ROUTINE = unsafe extern "system" fn(
+    dwErrorCode: DWORD,
+    dwNumberOfBytesTransfered: DWORD,
+    lpOverlapped: *mut OVERLAPPED,
+);
 
 #[repr(C)]
 #[cfg(not(target_pointer_width = "64"))]
@@ -891,6 +897,7 @@ extern "system" {
     pub fn WaitForSingleObject(hHandle: HANDLE, dwMilliseconds: DWORD) -> DWORD;
     pub fn SwitchToThread() -> BOOL;
     pub fn Sleep(dwMilliseconds: DWORD);
+    pub fn SleepEx(dwMilliseconds: DWORD, bAlertable: BOOL) -> DWORD;
     pub fn GetProcessId(handle: HANDLE) -> DWORD;
     pub fn CopyFileExW(
         lpExistingFileName: LPCWSTR,
@@ -957,12 +964,26 @@ extern "system" {
         lpNumberOfBytesRead: LPDWORD,
         lpOverlapped: LPOVERLAPPED,
     ) -> BOOL;
+    pub fn ReadFileEx(
+        hFile: BorrowedHandle<'_>,
+        lpBuffer: LPVOID,
+        nNumberOfBytesToRead: DWORD,
+        lpOverlapped: LPOVERLAPPED,
+        lpCompletionRoutine: LPOVERLAPPED_COMPLETION_ROUTINE,
+    ) -> BOOL;
     pub fn WriteFile(
         hFile: BorrowedHandle<'_>,
         lpBuffer: LPVOID,
         nNumberOfBytesToWrite: DWORD,
         lpNumberOfBytesWritten: LPDWORD,
         lpOverlapped: LPOVERLAPPED,
+    ) -> BOOL;
+    pub fn WriteFileEx(
+        hFile: BorrowedHandle<'_>,
+        lpBuffer: LPVOID,
+        nNumberOfBytesToWrite: DWORD,
+        lpOverlapped: LPOVERLAPPED,
+        lpCompletionRoutine: LPOVERLAPPED_COMPLETION_ROUTINE,
     ) -> BOOL;
     pub fn CloseHandle(hObject: HANDLE) -> BOOL;
     pub fn MoveFileExW(lpExistingFileName: LPCWSTR, lpNewFileName: LPCWSTR, dwFlags: DWORD)

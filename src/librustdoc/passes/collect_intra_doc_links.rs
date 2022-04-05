@@ -10,6 +10,7 @@ use rustc_hir::def::{
     PerNS,
 };
 use rustc_hir::def_id::{CrateNum, DefId, CRATE_DEF_ID};
+use rustc_hir::Mutability;
 use rustc_middle::ty::{DefIdTree, Ty, TyCtxt};
 use rustc_middle::{bug, span_bug, ty};
 use rustc_session::lint::Lint;
@@ -130,7 +131,7 @@ impl Res {
             DefKind::Const | DefKind::ConstParam | DefKind::AssocConst | DefKind::AnonConst => {
                 "const"
             }
-            DefKind::Static => "static",
+            DefKind::Static(_) => "static",
             DefKind::Macro(MacroKind::Derive) => "derive",
             // Now handle things that don't have a specific disambiguator
             _ => match kind
@@ -467,7 +468,7 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
     ) -> Option<(Res, ItemFragment)> {
         let tcx = self.cx.tcx;
 
-        prim_ty.impls(tcx).into_iter().find_map(|&impl_| {
+        prim_ty.impls(tcx).find_map(|impl_| {
             tcx.associated_items(impl_)
                 .find_by_name_and_namespace(tcx, Ident::with_dummy_span(item_name), ns, impl_)
                 .map(|item| {
@@ -487,12 +488,10 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
         module_id: DefId,
     ) -> Result<Res, ResolutionFailure<'a>> {
         self.cx.enter_resolver(|resolver| {
-            // NOTE: this needs 2 separate lookups because `resolve_str_path_error` doesn't take
+            // NOTE: this needs 2 separate lookups because `resolve_rustdoc_path` doesn't take
             // lexical scope into account (it ignores all macros not defined at the mod-level)
             debug!("resolving {} as a macro in the module {:?}", path_str, module_id);
-            if let Ok((_, res)) =
-                resolver.resolve_str_path_error(DUMMY_SP, path_str, MacroNS, module_id)
-            {
+            if let Some(res) = resolver.resolve_rustdoc_path(path_str, MacroNS, module_id) {
                 // don't resolve builtins like `#[derive]`
                 if let Ok(res) = res.try_into() {
                     return Ok(res);
@@ -540,10 +539,10 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
             })
     }
 
-    /// Convenience wrapper around `resolve_str_path_error`.
+    /// Convenience wrapper around `resolve_rustdoc_path`.
     ///
     /// This also handles resolving `true` and `false` as booleans.
-    /// NOTE: `resolve_str_path_error` knows only about paths, not about types.
+    /// NOTE: `resolve_rustdoc_path` knows only about paths, not about types.
     /// Associated items will never be resolved by this function.
     fn resolve_path(
         &self,
@@ -556,18 +555,14 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
             return res;
         }
 
-        let result = self.cx.enter_resolver(|resolver| {
-            resolver
-                .resolve_str_path_error(DUMMY_SP, path_str, ns, module_id)
-                .and_then(|(_, res)| res.try_into())
-        });
+        // Resolver doesn't know about true, false, and types that aren't paths (e.g. `()`).
+        let result = self
+            .cx
+            .enter_resolver(|resolver| resolver.resolve_rustdoc_path(path_str, ns, module_id))
+            .and_then(|res| res.try_into().ok())
+            .or_else(|| resolve_primitive(path_str, ns));
         debug!("{} resolved to {:?} in namespace {:?}", path_str, result, ns);
-        match result {
-            // resolver doesn't know about true, false, and types that aren't paths (e.g. `()`)
-            // manually as bool
-            Err(()) => resolve_primitive(path_str, ns),
-            Ok(res) => Some(res),
-        }
+        result
     }
 
     /// Resolves a string as a path within a particular namespace. Returns an
@@ -1743,7 +1738,7 @@ impl Disambiguator {
                 "union" => Kind(DefKind::Union),
                 "module" | "mod" => Kind(DefKind::Mod),
                 "const" | "constant" => Kind(DefKind::Const),
-                "static" => Kind(DefKind::Static),
+                "static" => Kind(DefKind::Static(Mutability::Not)),
                 "function" | "fn" | "method" => Kind(DefKind::Fn),
                 "derive" => Kind(DefKind::Macro(MacroKind::Derive)),
                 "type" => NS(Namespace::TypeNS),
@@ -2097,7 +2092,7 @@ fn resolution_failure(
                                 return;
                             }
                             Trait | TyAlias | ForeignTy | OpaqueTy | TraitAlias | TyParam
-                            | Static => "associated item",
+                            | Static(_) => "associated item",
                             Impl | GlobalAsm => unreachable!("not a path"),
                         }
                     } else {

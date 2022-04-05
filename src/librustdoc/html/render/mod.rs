@@ -48,7 +48,6 @@ use std::string::ToString;
 use rustc_ast_pretty::pprust;
 use rustc_attr::{ConstStability, Deprecation, StabilityLevel};
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
-use rustc_hir as hir;
 use rustc_hir::def::CtorKind;
 use rustc_hir::def_id::DefId;
 use rustc_hir::Mutability;
@@ -806,7 +805,6 @@ fn assoc_type(
 fn assoc_method(
     w: &mut Buffer,
     meth: &clean::Item,
-    header: hir::FnHeader,
     g: &clean::Generics,
     d: &clean::FnDecl,
     link: AssocItemLink<'_>,
@@ -814,6 +812,7 @@ fn assoc_method(
     cx: &Context<'_>,
     render_mode: RenderMode,
 ) {
+    let header = meth.fn_header(cx.tcx()).expect("Trying to get header from a non-function item");
     let name = meth.name.as_ref().unwrap();
     let href = match link {
         AssocItemLink::Anchor(Some(ref id)) => Some(format!("#{}", id)),
@@ -972,10 +971,10 @@ fn render_assoc_item(
     match *item.kind {
         clean::StrippedItem(..) => {}
         clean::TyMethodItem(ref m) => {
-            assoc_method(w, item, m.header, &m.generics, &m.decl, link, parent, cx, render_mode)
+            assoc_method(w, item, &m.generics, &m.decl, link, parent, cx, render_mode)
         }
         clean::MethodItem(ref m, _) => {
-            assoc_method(w, item, m.header, &m.generics, &m.decl, link, parent, cx, render_mode)
+            assoc_method(w, item, &m.generics, &m.decl, link, parent, cx, render_mode)
         }
         clean::AssocConstItem(ref ty, _) => {
             assoc_const(w, item, ty, link, if parent == ItemType::Trait { "    " } else { "" }, cx)
@@ -1003,7 +1002,12 @@ fn attributes(it: &clean::Item) -> Vec<String> {
         .iter()
         .filter_map(|attr| {
             if ALLOWED_ATTRIBUTES.contains(&attr.name_or_empty()) {
-                Some(pprust::attribute_to_string(attr).replace('\n', "").replace("  ", " "))
+                Some(
+                    pprust::attribute_to_string(attr)
+                        .replace("\\\n", "")
+                        .replace('\n', "")
+                        .replace("  ", " "),
+                )
             } else {
                 None
             }
@@ -1988,6 +1992,7 @@ fn sidebar_assoc_items(cx: &Context<'_>, out: &mut Buffer, it: &clean::Item) {
             let used_links_bor = &mut used_links;
             let mut assoc_consts = v
                 .iter()
+                .filter(|i| i.inner_impl().trait_.is_none())
                 .flat_map(|i| get_associated_constants(i.inner_impl(), used_links_bor))
                 .collect::<Vec<_>>();
             if !assoc_consts.is_empty() {

@@ -168,8 +168,7 @@ pub fn is_const_evaluatable<'cx, 'tcx>(
                 "#![feature(generic_const_exprs)]\n".to_string(),
                 rustc_errors::Applicability::MaybeIncorrect,
             )
-            .emit();
-        rustc_errors::FatalError.raise();
+            .emit()
     }
 
     debug!(?concrete, "is_const_evaluatable");
@@ -409,7 +408,7 @@ impl<'a, 'tcx> AbstractConstBuilder<'a, 'tcx> {
     }
 
     /// Builds the abstract const by walking the thir and bailing out when
-    /// encountering an unspported operation.
+    /// encountering an unsupported operation.
     fn build(mut self) -> Result<&'tcx [Node<'tcx>], ErrorGuaranteed> {
         debug!("Abstractconstbuilder::build: body={:?}", &*self.body);
         self.recurse_build(self.body_id)?;
@@ -702,7 +701,7 @@ struct ConstUnifyCtxt<'tcx> {
 
 impl<'tcx> ConstUnifyCtxt<'tcx> {
     // Substitutes generics repeatedly to allow AbstractConsts to unify where a
-    // ConstKind::Unevalated could be turned into an AbstractConst that would unify e.g.
+    // ConstKind::Unevaluated could be turned into an AbstractConst that would unify e.g.
     // Param(N) should unify with Param(T), substs: [Unevaluated("T2", [Unevaluated("T3", [Param(N)])])]
     #[inline]
     #[instrument(skip(self), level = "debug")]

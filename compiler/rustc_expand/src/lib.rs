@@ -1,6 +1,5 @@
 #![feature(associated_type_bounds)]
 #![feature(associated_type_defaults)]
-#![feature(box_syntax)]
 #![feature(crate_visibility_modifier)]
 #![feature(decl_macro)]
 #![feature(if_let_guard)]
@@ -36,7 +35,7 @@ crate mod mbe;
 // HACK(Centril, #64197): These shouldn't really be here.
 // Rather, they should be with their respective modules which are defined in other crates.
 // However, since for now constructing a `ParseSess` sorta requires `config` from this crate,
-// these tests will need to live here in the iterim.
+// these tests will need to live here in the interim.
 
 #[cfg(test)]
 mod tests;
