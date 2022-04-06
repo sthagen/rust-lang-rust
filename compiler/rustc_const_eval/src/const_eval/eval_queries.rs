@@ -1,4 +1,4 @@
-use super::{CompileTimeEvalContext, CompileTimeInterpreter, ConstEvalErr, MemoryExtra};
+use super::{CompileTimeEvalContext, CompileTimeInterpreter, ConstEvalErr};
 use crate::interpret::eval_nullary_intrinsic;
 use crate::interpret::{
     intern_const_alloc_recursive, Allocation, ConstAlloc, ConstValue, CtfeValidationMode, GlobalId,
@@ -15,7 +15,7 @@ use rustc_middle::ty::layout::LayoutOf;
 use rustc_middle::ty::print::with_no_trimmed_paths;
 use rustc_middle::ty::{self, subst::Subst, TyCtxt};
 use rustc_span::source_map::Span;
-use rustc_target::abi::Abi;
+use rustc_target::abi::{self, Abi};
 use std::borrow::Cow;
 use std::convert::TryInto;
 
@@ -100,8 +100,7 @@ pub(super) fn mk_eval_cx<'mir, 'tcx>(
         tcx,
         root_span,
         param_env,
-        CompileTimeInterpreter::new(tcx.const_eval_limit()),
-        MemoryExtra { can_access_statics },
+        CompileTimeInterpreter::new(tcx.const_eval_limit(), can_access_statics),
     )
 }
 
@@ -119,7 +118,7 @@ pub(super) fn op_to_const<'tcx>(
     // the usual cases of extracting e.g. a `usize`, without there being a real use case for the
     // `Undef` situation.
     let try_as_immediate = match op.layout.abi {
-        Abi::Scalar(..) => true,
+        Abi::Scalar(abi::Scalar::Initialized { .. }) => true,
         Abi::ScalarPair(..) => match op.layout.ty.kind() {
             ty::Ref(_, inner, _) => match *inner.kind() {
                 ty::Slice(elem) => elem == ecx.tcx.types.u8,
@@ -285,10 +284,9 @@ pub fn eval_to_allocation_raw_provider<'tcx>(
         tcx,
         tcx.def_span(def.did),
         key.param_env,
-        CompileTimeInterpreter::new(tcx.const_eval_limit()),
         // Statics (and promoteds inside statics) may access other statics, because unlike consts
         // they do not have to behave "as if" they were evaluated at runtime.
-        MemoryExtra { can_access_statics: is_static },
+        CompileTimeInterpreter::new(tcx.const_eval_limit(), /*can_access_statics:*/ is_static),
     );
 
     let res = ecx.load_mir(cid.instance.def, cid.promoted);

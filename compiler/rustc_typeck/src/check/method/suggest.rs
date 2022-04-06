@@ -5,6 +5,7 @@ use crate::check::FnCtxt;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_errors::{
     pluralize, struct_span_err, Applicability, Diagnostic, DiagnosticBuilder, ErrorGuaranteed,
+    MultiSpan,
 };
 use rustc_hir as hir;
 use rustc_hir::def_id::{DefId, LocalDefId};
@@ -17,7 +18,7 @@ use rustc_middle::ty::print::with_crate_prefix;
 use rustc_middle::ty::ToPolyTraitRef;
 use rustc_middle::ty::{self, DefIdTree, ToPredicate, Ty, TyCtxt, TypeFoldable};
 use rustc_span::symbol::{kw, sym, Ident};
-use rustc_span::{lev_distance, source_map, ExpnKind, FileName, MacroKind, MultiSpan, Span};
+use rustc_span::{lev_distance, source_map, ExpnKind, FileName, MacroKind, Span};
 use rustc_trait_selection::traits::error_reporting::on_unimplemented::InferCtxtExt as _;
 use rustc_trait_selection::traits::query::evaluate_obligation::InferCtxtExt as _;
 use rustc_trait_selection::traits::{
@@ -110,7 +111,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
             for (idx, source) in sources.iter().take(limit).enumerate() {
                 match *source {
-                    CandidateSource::ImplSource(impl_did) => {
+                    CandidateSource::Impl(impl_did) => {
                         // Provide the best span we can. Use the item, if local to crate, else
                         // the impl, if local to crate (item may be defaulted), else nothing.
                         let Some(item) = self.associated_value(impl_did, item_name).or_else(|| {
@@ -193,7 +194,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                             );
                         }
                     }
-                    CandidateSource::TraitSource(trait_did) => {
+                    CandidateSource::Trait(trait_did) => {
                         let Some(item) = self.associated_value(trait_did, item_name) else { continue };
                         let item_span = self
                             .tcx
@@ -515,23 +516,22 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     custom_span_label = true;
                 }
                 if static_sources.len() == 1 {
-                    let ty_str = if let Some(CandidateSource::ImplSource(impl_did)) =
-                        static_sources.get(0)
-                    {
-                        // When the "method" is resolved through dereferencing, we really want the
-                        // original type that has the associated function for accurate suggestions.
-                        // (#61411)
-                        let ty = tcx.at(span).type_of(*impl_did);
-                        match (&ty.peel_refs().kind(), &actual.peel_refs().kind()) {
-                            (ty::Adt(def, _), ty::Adt(def_actual, _)) if def == def_actual => {
-                                // Use `actual` as it will have more `substs` filled in.
-                                self.ty_to_value_string(actual.peel_refs())
+                    let ty_str =
+                        if let Some(CandidateSource::Impl(impl_did)) = static_sources.get(0) {
+                            // When the "method" is resolved through dereferencing, we really want the
+                            // original type that has the associated function for accurate suggestions.
+                            // (#61411)
+                            let ty = tcx.at(span).type_of(*impl_did);
+                            match (&ty.peel_refs().kind(), &actual.peel_refs().kind()) {
+                                (ty::Adt(def, _), ty::Adt(def_actual, _)) if def == def_actual => {
+                                    // Use `actual` as it will have more `substs` filled in.
+                                    self.ty_to_value_string(actual.peel_refs())
+                                }
+                                _ => self.ty_to_value_string(ty.peel_refs()),
                             }
-                            _ => self.ty_to_value_string(ty.peel_refs()),
-                        }
-                    } else {
-                        self.ty_to_value_string(actual.peel_refs())
-                    };
+                        } else {
+                            self.ty_to_value_string(actual.peel_refs())
+                        };
                     if let SelfSource::MethodCall(expr) = source {
                         err.span_suggestion(
                             expr.span.to(span),

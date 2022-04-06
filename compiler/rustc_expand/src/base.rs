@@ -10,7 +10,7 @@ use rustc_ast::{self as ast, AstLike, Attribute, Item, NodeId, PatKind};
 use rustc_attr::{self as attr, Deprecation, Stability};
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_data_structures::sync::{self, Lrc};
-use rustc_errors::{Applicability, DiagnosticBuilder, ErrorGuaranteed};
+use rustc_errors::{Applicability, DiagnosticBuilder, ErrorGuaranteed, MultiSpan};
 use rustc_lint_defs::builtin::PROC_MACRO_BACK_COMPAT;
 use rustc_lint_defs::BuiltinLintDiagnostics;
 use rustc_parse::{self, nt_to_tokenstream, parser, MACRO_ARGUMENTS};
@@ -20,7 +20,7 @@ use rustc_span::edition::Edition;
 use rustc_span::hygiene::{AstPass, ExpnData, ExpnKind, LocalExpnId};
 use rustc_span::source_map::SourceMap;
 use rustc_span::symbol::{kw, sym, Ident, Symbol};
-use rustc_span::{MultiSpan, Span, DUMMY_SP};
+use rustc_span::{Span, DUMMY_SP};
 use smallvec::{smallvec, SmallVec};
 
 use std::default::Default;
@@ -1045,6 +1045,12 @@ impl<'a> ExtCtxt<'a> {
     }
     pub fn call_site(&self) -> Span {
         self.current_expansion.id.expn_data().call_site
+    }
+
+    /// Returns the current expansion kind's description.
+    pub(crate) fn expansion_descr(&self) -> String {
+        let expn_data = self.current_expansion.id.expn_data();
+        expn_data.kind.descr()
     }
 
     /// Equivalent of `Span::def_site` from the proc macro API,

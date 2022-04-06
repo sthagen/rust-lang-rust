@@ -306,25 +306,25 @@ where
     }
 
     #[inline]
-    pub(super) fn get_alloc(
+    pub(super) fn get_place_alloc(
         &self,
         place: &MPlaceTy<'tcx, M::PointerTag>,
     ) -> InterpResult<'tcx, Option<AllocRef<'_, 'tcx, M::PointerTag, M::AllocExtra>>> {
         assert!(!place.layout.is_unsized());
         assert!(!place.meta.has_meta());
         let size = place.layout.size;
-        self.memory.get(place.ptr, size, place.align)
+        self.get_ptr_alloc(place.ptr, size, place.align)
     }
 
     #[inline]
-    pub(super) fn get_alloc_mut(
+    pub(super) fn get_place_alloc_mut(
         &mut self,
         place: &MPlaceTy<'tcx, M::PointerTag>,
     ) -> InterpResult<'tcx, Option<AllocRefMut<'_, 'tcx, M::PointerTag, M::AllocExtra>>> {
         assert!(!place.layout.is_unsized());
         assert!(!place.meta.has_meta());
         let size = place.layout.size;
-        self.memory.get_mut(place.ptr, size, place.align)
+        self.get_ptr_alloc_mut(place.ptr, size, place.align)
     }
 
     /// Check if this mplace is dereferenceable and sufficiently aligned.
@@ -337,8 +337,8 @@ where
             .size_and_align_of_mplace(&mplace)?
             .unwrap_or((mplace.layout.size, mplace.layout.align.abi));
         assert!(mplace.mplace.align <= align, "dynamic alignment less strict than static one?");
-        let align = M::enforce_alignment(&self.memory.extra).then_some(align);
-        self.memory.check_ptr_access_align(mplace.ptr, size, align.unwrap_or(Align::ONE), msg)?;
+        let align = M::enforce_alignment(self).then_some(align);
+        self.check_ptr_access_align(mplace.ptr, size, align.unwrap_or(Align::ONE), msg)?;
         Ok(())
     }
 
@@ -748,7 +748,7 @@ where
 
         // Invalid places are a thing: the return place of a diverging function
         let tcx = *self.tcx;
-        let Some(mut alloc) = self.get_alloc_mut(dest)? else {
+        let Some(mut alloc) = self.get_place_alloc_mut(dest)? else {
             // zero-sized access
             return Ok(());
         };
@@ -772,13 +772,11 @@ where
                 // We checked `ptr_align` above, so all fields will have the alignment they need.
                 // We would anyway check against `ptr_align.restrict_for_offset(b_offset)`,
                 // which `ptr.offset(b_offset)` cannot possibly fail to satisfy.
-                let (a, b) = match dest.layout.abi {
-                    Abi::ScalarPair(a, b) => (a.value, b.value),
-                    _ => span_bug!(
+                let Abi::ScalarPair(a, b) = dest.layout.abi else { span_bug!(
                         self.cur_span(),
                         "write_immediate_to_mplace: invalid ScalarPair layout: {:#?}",
                         dest.layout
-                    ),
+                    )
                 };
                 let (a_size, b_size) = (a.size(&tcx), b.size(&tcx));
                 let b_offset = a_size.align_to(b.align(&tcx).abi);
@@ -857,8 +855,7 @@ where
         });
         assert_eq!(src.meta, dest.meta, "Can only copy between equally-sized instances");
 
-        self.memory
-            .copy(src.ptr, src.align, dest.ptr, dest.align, size, /*nonoverlapping*/ true)
+        self.mem_copy(src.ptr, src.align, dest.ptr, dest.align, size, /*nonoverlapping*/ true)
     }
 
     /// Copies the data from an operand to a place. The layouts may disagree, but they must
@@ -942,7 +939,7 @@ where
                         let (size, align) = self
                             .size_and_align_of(&meta, &local_layout)?
                             .expect("Cannot allocate for non-dyn-sized type");
-                        let ptr = self.memory.allocate(size, align, MemoryKind::Stack)?;
+                        let ptr = self.allocate_ptr(size, align, MemoryKind::Stack)?;
                         let mplace = MemPlace { ptr: ptr.into(), align, meta };
                         if let LocalValue::Live(Operand::Immediate(value)) = local_val {
                             // Preserve old value.
@@ -979,7 +976,7 @@ where
         layout: TyAndLayout<'tcx>,
         kind: MemoryKind<M::MemoryKind>,
     ) -> InterpResult<'static, MPlaceTy<'tcx, M::PointerTag>> {
-        let ptr = self.memory.allocate(layout.size, layout.align.abi, kind)?;
+        let ptr = self.allocate_ptr(layout.size, layout.align.abi, kind)?;
         Ok(MPlaceTy::from_aligned_ptr(ptr.into(), layout))
     }
 
@@ -990,7 +987,7 @@ where
         kind: MemoryKind<M::MemoryKind>,
         mutbl: Mutability,
     ) -> MPlaceTy<'tcx, M::PointerTag> {
-        let ptr = self.memory.allocate_bytes(str.as_bytes(), Align::ONE, kind, mutbl);
+        let ptr = self.allocate_bytes_ptr(str.as_bytes(), Align::ONE, kind, mutbl);
         let meta = Scalar::from_machine_usize(u64::try_from(str.len()).unwrap(), self);
         let mplace =
             MemPlace { ptr: ptr.into(), align: Align::ONE, meta: MemPlaceMeta::Meta(meta) };
@@ -1047,7 +1044,7 @@ where
                 // raw discriminants for enums are isize or bigger during
                 // their computation, but the in-memory tag is the smallest possible
                 // representation
-                let size = tag_layout.value.size(self);
+                let size = tag_layout.size(self);
                 let tag_val = size.truncate(discr_val);
 
                 let tag_dest = self.place_field(dest, tag_field)?;
@@ -1071,7 +1068,7 @@ where
                         .expect("overflow computing relative variant idx");
                     // We need to use machine arithmetic when taking into account `niche_start`:
                     // tag_val = variant_index_relative + niche_start_val
-                    let tag_layout = self.layout_of(tag_layout.value.to_int_ty(*self.tcx))?;
+                    let tag_layout = self.layout_of(tag_layout.primitive().to_int_ty(*self.tcx))?;
                     let niche_start_val = ImmTy::from_uint(niche_start, tag_layout);
                     let variant_index_relative_val =
                         ImmTy::from_uint(variant_index_relative, tag_layout);
