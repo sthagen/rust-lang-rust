@@ -597,11 +597,11 @@ fn document_item_info(
 ) {
     let item_infos = short_item_info(item, cx, parent);
     if !item_infos.is_empty() {
-        w.write_str("<div class=\"item-info\">");
+        w.write_str("<span class=\"item-info\">");
         for info in item_infos {
             w.write_str(&info);
         }
-        w.write_str("</div>");
+        w.write_str("</span>");
     }
 }
 
