@@ -26,7 +26,7 @@ use crate::ty::{
 use rustc_ast as ast;
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
-use rustc_data_structures::intern::Interned;
+use rustc_data_structures::intern::{Interned, WithStableHash};
 use rustc_data_structures::memmap::Mmap;
 use rustc_data_structures::profiling::SelfProfilerRef;
 use rustc_data_structures::sharded::{IntoPointer, ShardedHashMap};
@@ -105,7 +105,7 @@ pub struct CtxtInterners<'tcx> {
 
     // Specifically use a speedy hash algorithm for these hash sets, since
     // they're accessed quite often.
-    type_: InternedSet<'tcx, TyS<'tcx>>,
+    type_: InternedSet<'tcx, WithStableHash<TyS<'tcx>>>,
     substs: InternedSet<'tcx, InternalSubsts<'tcx>>,
     canonical_var_infos: InternedSet<'tcx, List<CanonicalVarInfo<'tcx>>>,
     region: InternedSet<'tcx, RegionKind>,
@@ -178,10 +178,11 @@ impl<'tcx> CtxtInterners<'tcx> {
                         kind,
                         flags: flags.flags,
                         outer_exclusive_binder: flags.outer_exclusive_binder,
-                        stable_hash,
                     };
 
-                    InternedInSet(self.arena.alloc(ty_struct))
+                    InternedInSet(
+                        self.arena.alloc(WithStableHash { internee: ty_struct, stable_hash }),
+                    )
                 })
                 .0,
         ))
@@ -2048,23 +2049,23 @@ impl<'tcx, T: 'tcx + ?Sized> IntoPointer for InternedInSet<'tcx, T> {
 }
 
 #[allow(rustc::usage_of_ty_tykind)]
-impl<'tcx> Borrow<TyKind<'tcx>> for InternedInSet<'tcx, TyS<'tcx>> {
+impl<'tcx> Borrow<TyKind<'tcx>> for InternedInSet<'tcx, WithStableHash<TyS<'tcx>>> {
     fn borrow<'a>(&'a self) -> &'a TyKind<'tcx> {
         &self.0.kind
     }
 }
 
-impl<'tcx> PartialEq for InternedInSet<'tcx, TyS<'tcx>> {
-    fn eq(&self, other: &InternedInSet<'tcx, TyS<'tcx>>) -> bool {
+impl<'tcx> PartialEq for InternedInSet<'tcx, WithStableHash<TyS<'tcx>>> {
+    fn eq(&self, other: &InternedInSet<'tcx, WithStableHash<TyS<'tcx>>>) -> bool {
         // The `Borrow` trait requires that `x.borrow() == y.borrow()` equals
         // `x == y`.
         self.0.kind == other.0.kind
     }
 }
 
-impl<'tcx> Eq for InternedInSet<'tcx, TyS<'tcx>> {}
+impl<'tcx> Eq for InternedInSet<'tcx, WithStableHash<TyS<'tcx>>> {}
 
-impl<'tcx> Hash for InternedInSet<'tcx, TyS<'tcx>> {
+impl<'tcx> Hash for InternedInSet<'tcx, WithStableHash<TyS<'tcx>>> {
     fn hash<H: Hasher>(&self, s: &mut H) {
         // The `Borrow` trait requires that `x.borrow().hash(s) == x.hash(s)`.
         self.0.kind.hash(s)
@@ -2769,11 +2770,6 @@ impl<'tcx> TyCtxt<'tcx> {
     pub fn named_region(self, id: HirId) -> Option<resolve_lifetime::Region> {
         debug!(?id, "named_region");
         self.named_region_map(id.owner).and_then(|map| map.get(&id.local_id).cloned())
-    }
-
-    pub fn is_late_bound(self, id: HirId) -> bool {
-        self.is_late_bound_map(id.owner)
-            .map_or(false, |(owner, set)| owner == id.owner && set.contains(&id.local_id))
     }
 
     pub fn late_bound_vars(self, id: HirId) -> &'tcx List<ty::BoundVariableKind> {

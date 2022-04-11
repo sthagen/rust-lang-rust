@@ -31,8 +31,8 @@ use crate::ty::util::Discr;
 use rustc_ast as ast;
 use rustc_attr as attr;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet, FxIndexMap};
-use rustc_data_structures::intern::Interned;
-use rustc_data_structures::stable_hasher::{HashStable, NodeIdHashingMode, StableHasher};
+use rustc_data_structures::intern::{Interned, WithStableHash};
+use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
 use rustc_data_structures::tagged_ptr::CopyTaggedPtr;
 use rustc_hir as hir;
 use rustc_hir::def::{CtorKind, CtorOf, DefKind, Res};
@@ -438,32 +438,36 @@ crate struct TyS<'tcx> {
     /// De Bruijn indices within the type are contained within `0..D`
     /// (exclusive).
     outer_exclusive_binder: ty::DebruijnIndex,
-
-    /// The stable hash of the type. This way hashing of types will not have to work
-    /// on the address of the type anymore, but can instead just read this field
-    stable_hash: Fingerprint,
 }
 
 // `TyS` is used a lot. Make sure it doesn't unintentionally get bigger.
 #[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
-static_assert_size!(TyS<'_>, 56);
+static_assert_size!(TyS<'_>, 40);
+
+// We are actually storing a stable hash cache next to the type, so let's
+// also check the full size
+#[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
+static_assert_size!(WithStableHash<TyS<'_>>, 56);
 
 /// Use this rather than `TyS`, whenever possible.
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, HashStable)]
 #[rustc_diagnostic_item = "Ty"]
 #[rustc_pass_by_value]
-pub struct Ty<'tcx>(Interned<'tcx, TyS<'tcx>>);
+pub struct Ty<'tcx>(Interned<'tcx, WithStableHash<TyS<'tcx>>>);
 
 // Statics only used for internal testing.
-pub static BOOL_TY: Ty<'static> = Ty(Interned::new_unchecked(&BOOL_TYS));
-static BOOL_TYS: TyS<'static> = TyS {
+pub static BOOL_TY: Ty<'static> = Ty(Interned::new_unchecked(&WithStableHash {
+    internee: BOOL_TYS,
+    stable_hash: Fingerprint::ZERO,
+}));
+const BOOL_TYS: TyS<'static> = TyS {
     kind: ty::Bool,
     flags: TypeFlags::empty(),
     outer_exclusive_binder: DebruijnIndex::from_usize(0),
-    stable_hash: Fingerprint::ZERO,
 };
 
-impl<'a, 'tcx> HashStable<StableHashingContext<'a>> for Ty<'tcx> {
+impl<'a, 'tcx> HashStable<StableHashingContext<'a>> for TyS<'tcx> {
+    #[inline]
     fn hash_stable(&self, hcx: &mut StableHashingContext<'a>, hasher: &mut StableHasher) {
         let TyS {
             kind,
@@ -473,28 +477,9 @@ impl<'a, 'tcx> HashStable<StableHashingContext<'a>> for Ty<'tcx> {
             flags: _,
 
             outer_exclusive_binder: _,
+        } = self;
 
-            stable_hash,
-        } = self.0.0;
-
-        if *stable_hash == Fingerprint::ZERO {
-            // No cached hash available. This can only mean that incremental is disabled.
-            // We don't cache stable hashes in non-incremental mode, because they are used
-            // so rarely that the performance actually suffers.
-
-            let stable_hash: Fingerprint = {
-                let mut hasher = StableHasher::new();
-                hcx.while_hashing_spans(false, |hcx| {
-                    hcx.with_node_id_hashing_mode(NodeIdHashingMode::HashDefPath, |hcx| {
-                        kind.hash_stable(hcx, &mut hasher)
-                    })
-                });
-                hasher.finish()
-            };
-            stable_hash.hash_stable(hcx, hasher);
-        } else {
-            stable_hash.hash_stable(hcx, hasher);
-        }
+        kind.hash_stable(hcx, hasher)
     }
 }
 
@@ -2006,27 +1991,25 @@ impl<'tcx> TyCtxt<'tcx> {
             .filter(|item| item.kind == AssocKind::Fn && item.defaultness.has_value())
     }
 
-    fn item_name_from_hir(self, def_id: DefId) -> Option<Ident> {
-        self.hir().get_if_local(def_id).and_then(|node| node.ident())
-    }
-
-    fn item_name_from_def_id(self, def_id: DefId) -> Option<Symbol> {
+    fn opt_item_name(self, def_id: DefId) -> Option<Symbol> {
         if def_id.index == CRATE_DEF_INDEX {
             Some(self.crate_name(def_id.krate))
         } else {
             let def_key = self.def_key(def_id);
             match def_key.disambiguated_data.data {
                 // The name of a constructor is that of its parent.
-                rustc_hir::definitions::DefPathData::Ctor => self.item_name_from_def_id(DefId {
-                    krate: def_id.krate,
-                    index: def_key.parent.unwrap(),
-                }),
-                _ => def_key.disambiguated_data.data.get_opt_name(),
+                rustc_hir::definitions::DefPathData::Ctor => self
+                    .opt_item_name(DefId { krate: def_id.krate, index: def_key.parent.unwrap() }),
+                // The name of opaque types only exists in HIR.
+                rustc_hir::definitions::DefPathData::ImplTrait
+                    if let Some(def_id) = def_id.as_local() =>
+                    self.hir().opt_name(self.hir().local_def_id_to_hir_id(def_id)),
+                _ => def_key.get_opt_name(),
             }
         }
     }
 
-    /// Look up the name of an item across crates. This does not look at HIR.
+    /// Look up the name of a definition across crates. This does not look at HIR.
     ///
     /// When possible, this function should be used for cross-crate lookups over
     /// [`opt_item_name`] to avoid invalidating the incremental cache. If you
@@ -2038,18 +2021,21 @@ impl<'tcx> TyCtxt<'tcx> {
     pub fn item_name(self, id: DefId) -> Symbol {
         // Look at cross-crate items first to avoid invalidating the incremental cache
         // unless we have to.
-        self.item_name_from_def_id(id).unwrap_or_else(|| {
+        self.opt_item_name(id).unwrap_or_else(|| {
             bug!("item_name: no name for {:?}", self.def_path(id));
         })
     }
 
-    /// Look up the name and span of an item or [`Node`].
+    /// Look up the name and span of a definition.
     ///
     /// See [`item_name`][Self::item_name] for more information.
-    pub fn opt_item_name(self, def_id: DefId) -> Option<Ident> {
-        // Look at the HIR first so the span will be correct if this is a local item.
-        self.item_name_from_hir(def_id)
-            .or_else(|| self.item_name_from_def_id(def_id).map(Ident::with_dummy_span))
+    pub fn opt_item_ident(self, def_id: DefId) -> Option<Ident> {
+        let def = self.opt_item_name(def_id)?;
+        let span = def_id
+            .as_local()
+            .and_then(|id| self.def_ident_span(id))
+            .unwrap_or(rustc_span::DUMMY_SP);
+        Some(Ident::new(def, span))
     }
 
     pub fn opt_associated_item(self, def_id: DefId) -> Option<&'tcx AssocItem> {

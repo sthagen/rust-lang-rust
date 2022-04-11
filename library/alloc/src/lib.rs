@@ -120,6 +120,7 @@
 #![feature(nonnull_slice_from_raw_parts)]
 #![feature(pattern)]
 #![feature(ptr_internals)]
+#![feature(ptr_metadata)]
 #![feature(receiver_trait)]
 #![feature(set_ptr_value)]
 #![feature(slice_group_by)]
@@ -131,6 +132,7 @@
 #![feature(trusted_len)]
 #![feature(trusted_random_access)]
 #![feature(try_trait_v2)]
+#![feature(unchecked_math)]
 #![feature(unicode_internals)]
 #![feature(unsize)]
 //
@@ -151,6 +153,7 @@
 #![feature(fundamental)]
 #![cfg_attr(not(test), feature(generator_trait))]
 #![feature(lang_items)]
+#![feature(let_else)]
 #![feature(min_specialization)]
 #![feature(negative_impls)]
 #![feature(never_type)]

@@ -151,9 +151,11 @@ pub(super) fn compute_locs(sess: &ParseSess, matcher: &[TokenTree]) -> Vec<Match
                 TokenTree::Token(token) => {
                     locs.push(MatcherLoc::Token { token: token.clone() });
                 }
-                TokenTree::Delimited(_, delimited) => {
+                TokenTree::Delimited(span, delimited) => {
                     locs.push(MatcherLoc::Delimited);
-                    inner(sess, &delimited.all_tts, locs, next_metavar, seq_depth);
+                    inner(sess, &[delimited.open_tt(*span)], locs, next_metavar, seq_depth);
+                    inner(sess, &delimited.tts, locs, next_metavar, seq_depth);
+                    inner(sess, &[delimited.close_tt(*span)], locs, next_metavar, seq_depth);
                 }
                 TokenTree::Sequence(_, seq) => {
                     // We can't determine `idx_first_after` and construct the final
@@ -293,7 +295,7 @@ pub(super) fn count_metavar_decls(matcher: &[TokenTree]) -> usize {
         .map(|tt| match tt {
             TokenTree::MetaVarDecl(..) => 1,
             TokenTree::Sequence(_, seq) => seq.num_captures,
-            TokenTree::Delimited(_, delim) => count_metavar_decls(delim.inner_tts()),
+            TokenTree::Delimited(_, delim) => count_metavar_decls(&delim.tts),
             TokenTree::Token(..) => 0,
             TokenTree::MetaVar(..) | TokenTree::MetaVarExpr(..) => unreachable!(),
         })
@@ -409,7 +411,6 @@ impl TtParser {
     /// track of through the mps generated.
     fn parse_tt_inner(
         &mut self,
-        sess: &ParseSess,
         matcher: &[MatcherLoc],
         token: &Token,
     ) -> Option<NamedParseResult> {
@@ -517,11 +518,9 @@ impl TtParser {
                             self.bb_mps.push(mp);
                         }
                     } else {
+                        // E.g. `$e` instead of `$e:expr`, reported as a hard error if actually used.
                         // Both this check and the one in `nameize` are necessary, surprisingly.
-                        if sess.missing_fragment_specifiers.borrow_mut().remove(&span).is_some() {
-                            // E.g. `$e` instead of `$e:expr`.
-                            return Some(Error(span, "missing fragment specifier".to_string()));
-                        }
+                        return Some(Error(span, "missing fragment specifier".to_string()));
                     }
                 }
                 MatcherLoc::Eof => {
@@ -547,7 +546,7 @@ impl TtParser {
                     // Need to take ownership of the matches from within the `Lrc`.
                     Lrc::make_mut(&mut eof_mp.matches);
                     let matches = Lrc::try_unwrap(eof_mp.matches).unwrap().into_iter();
-                    self.nameize(sess, matcher, matches)
+                    self.nameize(matcher, matches)
                 }
                 EofMatcherPositions::Multiple => {
                     Error(token.span, "ambiguity: multiple successful parses".to_string())
@@ -585,7 +584,7 @@ impl TtParser {
 
             // Process `cur_mps` until either we have finished the input or we need to get some
             // parsing from the black-box parser done.
-            if let Some(res) = self.parse_tt_inner(&parser.sess, matcher, &parser.token) {
+            if let Some(res) = self.parse_tt_inner(matcher, &parser.token) {
                 return res;
             }
 
@@ -692,7 +691,6 @@ impl TtParser {
 
     fn nameize<I: Iterator<Item = NamedMatch>>(
         &self,
-        sess: &ParseSess,
         matcher: &[MatcherLoc],
         mut res: I,
     ) -> NamedParseResult {
@@ -709,11 +707,9 @@ impl TtParser {
                         }
                     };
                 } else {
+                    // E.g. `$e` instead of `$e:expr`, reported as a hard error if actually used.
                     // Both this check and the one in `parse_tt_inner` are necessary, surprisingly.
-                    if sess.missing_fragment_specifiers.borrow_mut().remove(&span).is_some() {
-                        // E.g. `$e` instead of `$e:expr`.
-                        return Error(span, "missing fragment specifier".to_string());
-                    }
+                    return Error(span, "missing fragment specifier".to_string());
                 }
             }
         }
