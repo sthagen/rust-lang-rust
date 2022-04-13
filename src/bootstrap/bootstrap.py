@@ -122,6 +122,7 @@ def _download(path, url, probably_big, verbose, exception, help_on_error=None):
             option = "-s"
         require(["curl", "--version"])
         run(["curl", option,
+             "-L", # Follow redirect.
              "-y", "30", "-Y", "10",    # timeout if speed is < 10 bytes/sec for > 30 seconds
              "--connect-timeout", "30",  # timeout if cannot connect within 30 seconds
              "--retry", "3", "-Sf", "-o", path, url],
@@ -1172,9 +1173,9 @@ class RustBuild(object):
         """Check that vendoring is configured properly"""
         vendor_dir = os.path.join(self.rust_root, 'vendor')
         if 'SUDO_USER' in os.environ and not self.use_vendored_sources:
-            if os.environ.get('USER') != os.environ['SUDO_USER']:
+            if os.getuid() == 0:
                 self.use_vendored_sources = True
-                print('info: looks like you are running this command under `sudo`')
+                print('info: looks like you\'re trying to run this command as root')
                 print('      and so in order to preserve your $HOME this will now')
                 print('      use vendored sources by default.')
                 if not os.path.exists(vendor_dir):

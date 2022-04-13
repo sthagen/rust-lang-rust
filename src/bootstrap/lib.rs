@@ -865,8 +865,8 @@ impl Build {
                 }
             }
         } else {
-            let base = self.llvm_out(self.config.build).join("build");
-            let base = if !self.ninja() && self.config.build.contains("msvc") {
+            let base = self.llvm_out(target).join("build");
+            let base = if !self.ninja() && target.contains("msvc") {
                 if self.config.llvm_optimize {
                     if self.config.llvm_release_debuginfo {
                         base.join("RelWithDebInfo")
@@ -1176,7 +1176,17 @@ impl Build {
 
     /// Path to the python interpreter to use
     fn python(&self) -> &Path {
-        self.config.python.as_ref().unwrap()
+        if self.config.build.ends_with("apple-darwin") {
+            // Force /usr/bin/python3 on macOS for LLDB tests because we're loading the
+            // LLDB plugin's compiled module which only works with the system python
+            // (namely not Homebrew-installed python)
+            Path::new("/usr/bin/python3")
+        } else {
+            self.config
+                .python
+                .as_ref()
+                .expect("python is required for running LLDB or rustdoc tests")
+        }
     }
 
     /// Temporary directory that extended error information is emitted to.
