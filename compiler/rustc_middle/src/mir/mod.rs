@@ -15,7 +15,7 @@ use crate::ty::{AdtDef, InstanceDef, Region, ScalarInt, UserTypeAnnotationIndex}
 
 use rustc_errors::ErrorGuaranteed;
 use rustc_hir::def::{CtorKind, Namespace};
-use rustc_hir::def_id::{DefId, LocalDefId, CRATE_DEF_INDEX};
+use rustc_hir::def_id::{DefId, LocalDefId, CRATE_DEF_ID};
 use rustc_hir::{self, GeneratorKind};
 use rustc_hir::{self as hir, HirId};
 use rustc_session::Session;
@@ -385,7 +385,7 @@ impl<'tcx> Body<'tcx> {
     pub fn new_cfg_only(basic_blocks: IndexVec<BasicBlock, BasicBlockData<'tcx>>) -> Self {
         let mut body = Body {
             phase: MirPhase::Built,
-            source: MirSource::item(DefId::local(CRATE_DEF_INDEX)),
+            source: MirSource::item(CRATE_DEF_ID.to_def_id()),
             basic_blocks,
             source_scopes: IndexVec::new(),
             generator: None,
@@ -2518,7 +2518,8 @@ pub enum Rvalue<'tcx> {
     /// * `Offset` has the same semantics as [`offset`](pointer::offset), except that the second
     ///   parameter may be a `usize` as well.
     /// * The comparison operations accept `bool`s, `char`s, signed or unsigned integers, floats,
-    ///   raw pointers, or function pointers of matching types and return a `bool`.
+    ///   raw pointers, or function pointers and return a `bool`. The types of the operands must be
+    ///   matching, up to the usual caveat of the lifetimes in function pointers.
     /// * Left and right shift operations accept signed or unsigned integers not necessarily of the
     ///   same type and return a value of the same type as their LHS. Like in Rust, the RHS is
     ///   truncated as needed.

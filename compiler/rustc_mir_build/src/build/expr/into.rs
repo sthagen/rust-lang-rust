@@ -423,6 +423,11 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                         }
                         thir::InlineAsmOperand::Const { value, span } => {
                             mir::InlineAsmOperand::Const {
+                                value: Box::new(Constant { span, user_ty: None, literal: value }),
+                            }
+                        }
+                        thir::InlineAsmOperand::SymFn { value, span } => {
+                            mir::InlineAsmOperand::SymFn {
                                 value: Box::new(Constant {
                                     span,
                                     user_ty: None,
@@ -430,9 +435,6 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                                 }),
                             }
                         }
-                        thir::InlineAsmOperand::SymFn { expr } => mir::InlineAsmOperand::SymFn {
-                            value: Box::new(this.as_constant(&this.thir[expr])),
-                        },
                         thir::InlineAsmOperand::SymStatic { def_id } => {
                             mir::InlineAsmOperand::SymStatic { def_id }
                         }

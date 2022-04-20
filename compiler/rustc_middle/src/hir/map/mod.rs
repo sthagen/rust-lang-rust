@@ -18,7 +18,6 @@ use rustc_span::source_map::Spanned;
 use rustc_span::symbol::{kw, sym, Ident, Symbol};
 use rustc_span::Span;
 use rustc_target::spec::abi::Abi;
-use std::collections::VecDeque;
 
 fn fn_decl<'hir>(node: Node<'hir>) -> Option<&'hir FnDecl<'hir>> {
     match node {
@@ -159,12 +158,12 @@ impl<'hir> Map<'hir> {
         }
     }
 
-    pub fn items(self) -> impl Iterator<Item = &'hir Item<'hir>> + 'hir {
-        let krate = self.krate();
-        krate.owners.iter().filter_map(|owner| match owner.as_owner()?.node() {
-            OwnerNode::Item(item) => Some(item),
-            _ => None,
-        })
+    pub fn items(self) -> impl Iterator<Item = ItemId> + 'hir {
+        self.tcx.hir_crate_items(()).items.iter().copied()
+    }
+
+    pub fn par_for_each_item(self, f: impl Fn(ItemId) + Sync + Send) {
+        par_for_each_in(&self.tcx.hir_crate_items(()).items[..], |id| f(*id));
     }
 
     pub fn def_key(self, def_id: LocalDefId) -> DefKey {
@@ -584,7 +583,7 @@ impl<'hir> Map<'hir> {
             Some(OwnerNode::Item(&Item { span, kind: ItemKind::Mod(ref m), .. })) => {
                 (m, span, hir_id)
             }
-            Some(OwnerNode::Crate(item)) => (item, item.inner, hir_id),
+            Some(OwnerNode::Crate(item)) => (item, item.spans.inner_span, hir_id),
             node => panic!("not a module: {:?}", node),
         }
     }
@@ -675,13 +674,9 @@ impl<'hir> Map<'hir> {
     }
 
     pub fn for_each_module(self, f: impl Fn(LocalDefId)) {
-        let mut queue = VecDeque::new();
-        queue.push_back(CRATE_DEF_ID);
-
-        while let Some(id) = queue.pop_front() {
-            f(id);
-            let items = self.tcx.hir_module_items(id);
-            queue.extend(items.submodules.iter().copied())
+        let crate_items = self.tcx.hir_crate_items(());
+        for module in crate_items.submodules.iter() {
+            f(*module)
         }
     }
 
@@ -1012,7 +1007,7 @@ impl<'hir> Map<'hir> {
             Node::Infer(i) => i.span,
             Node::Visibility(v) => bug!("unexpected Visibility {:?}", v),
             Node::Local(local) => local.span,
-            Node::Crate(item) => item.inner,
+            Node::Crate(item) => item.spans.inner_span,
         };
         Some(span)
     }
@@ -1305,6 +1300,72 @@ pub(super) fn hir_module_items(tcx: TyCtxt<'_>, module_id: LocalDefId) -> Module
         fn visit_foreign_item(&mut self, item: &'hir ForeignItem<'hir>) {
             self.foreign_items.push(item.foreign_item_id());
             intravisit::walk_foreign_item(self, item)
+        }
+    }
+}
+
+pub(crate) fn hir_crate_items(tcx: TyCtxt<'_>, _: ()) -> ModuleItems {
+    let mut collector = CrateCollector {
+        tcx,
+        submodules: Vec::default(),
+        items: Vec::default(),
+        trait_items: Vec::default(),
+        impl_items: Vec::default(),
+        foreign_items: Vec::default(),
+    };
+
+    tcx.hir().walk_toplevel_module(&mut collector);
+
+    let CrateCollector { submodules, items, trait_items, impl_items, foreign_items, .. } =
+        collector;
+
+    return ModuleItems {
+        submodules: submodules.into_boxed_slice(),
+        items: items.into_boxed_slice(),
+        trait_items: trait_items.into_boxed_slice(),
+        impl_items: impl_items.into_boxed_slice(),
+        foreign_items: foreign_items.into_boxed_slice(),
+    };
+
+    struct CrateCollector<'tcx> {
+        tcx: TyCtxt<'tcx>,
+        submodules: Vec<LocalDefId>,
+        items: Vec<ItemId>,
+        trait_items: Vec<TraitItemId>,
+        impl_items: Vec<ImplItemId>,
+        foreign_items: Vec<ForeignItemId>,
+    }
+
+    impl<'hir> Visitor<'hir> for CrateCollector<'hir> {
+        type NestedFilter = nested_filter::All;
+
+        fn nested_visit_map(&mut self) -> Self::Map {
+            self.tcx.hir()
+        }
+
+        fn visit_item(&mut self, item: &'hir Item<'hir>) {
+            self.items.push(item.item_id());
+            intravisit::walk_item(self, item)
+        }
+
+        fn visit_mod(&mut self, m: &'hir Mod<'hir>, _s: Span, n: HirId) {
+            self.submodules.push(n.owner);
+            intravisit::walk_mod(self, m, n);
+        }
+
+        fn visit_foreign_item(&mut self, item: &'hir ForeignItem<'hir>) {
+            self.foreign_items.push(item.foreign_item_id());
+            intravisit::walk_foreign_item(self, item)
+        }
+
+        fn visit_trait_item(&mut self, item: &'hir TraitItem<'hir>) {
+            self.trait_items.push(item.trait_item_id());
+            intravisit::walk_trait_item(self, item)
+        }
+
+        fn visit_impl_item(&mut self, item: &'hir ImplItem<'hir>) {
+            self.impl_items.push(item.impl_item_id());
+            intravisit::walk_impl_item(self, item)
         }
     }
 }

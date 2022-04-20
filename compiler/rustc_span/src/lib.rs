@@ -684,6 +684,11 @@ impl Span {
         self.edition() >= edition::Edition::Edition2021
     }
 
+    #[inline]
+    pub fn rust_2024(self) -> bool {
+        self.edition() >= edition::Edition::Edition2024
+    }
+
     /// Returns the source callee.
     ///
     /// Returns `None` if the supplied span has no expansion trace,
@@ -1125,6 +1130,7 @@ impl ExternalSource {
 pub struct OffsetOverflowError;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encodable, Decodable)]
+#[derive(HashStable_Generic)]
 pub enum SourceFileHashAlgorithm {
     Md5,
     Sha1,
@@ -1143,8 +1149,6 @@ impl FromStr for SourceFileHashAlgorithm {
         }
     }
 }
-
-rustc_data_structures::impl_stable_hash_via_hash!(SourceFileHashAlgorithm);
 
 /// The hash of the on-disk source file used for debug info.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -1318,17 +1322,20 @@ impl<D: Decoder> Decodable<D> for SourceFile {
                 let mut line_start: BytePos = Decodable::decode(d);
                 lines.push(line_start);
 
-                for _ in 1..num_lines {
-                    let diff = match bytes_per_diff {
-                        1 => d.read_u8() as u32,
-                        2 => d.read_u16() as u32,
-                        4 => d.read_u32(),
-                        _ => unreachable!(),
-                    };
-
-                    line_start = line_start + BytePos(diff);
-
-                    lines.push(line_start);
+                match bytes_per_diff {
+                    1 => lines.extend((1..num_lines).map(|_| {
+                        line_start = line_start + BytePos(d.read_u8() as u32);
+                        line_start
+                    })),
+                    2 => lines.extend((1..num_lines).map(|_| {
+                        line_start = line_start + BytePos(d.read_u16() as u32);
+                        line_start
+                    })),
+                    4 => lines.extend((1..num_lines).map(|_| {
+                        line_start = line_start + BytePos(d.read_u32());
+                        line_start
+                    })),
+                    _ => unreachable!(),
                 }
             }
 

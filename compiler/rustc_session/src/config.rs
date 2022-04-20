@@ -3,19 +3,17 @@
 
 pub use crate::options::*;
 
-use crate::lint;
 use crate::search_paths::SearchPath;
 use crate::utils::{CanonicalizedPath, NativeLib, NativeLibKind};
 use crate::{early_error, early_warn, Session};
+use crate::{lint, HashStableContext};
 
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
-use rustc_data_structures::impl_stable_hash_via_hash;
 
+use rustc_data_structures::stable_hasher::ToStableHashKey;
 use rustc_target::abi::{Align, TargetDataLayout};
 use rustc_target::spec::{LinkerFlavor, SplitDebuginfo, Target, TargetTriple, TargetWarnings};
 use rustc_target::spec::{PanicStrategy, SanitizerSet, TARGETS};
-
-use rustc_serialize::json;
 
 use crate::parse::{CrateCheckConfig, CrateConfig};
 use rustc_feature::UnstableFeatures;
@@ -80,7 +78,7 @@ pub enum CFProtection {
     Full,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Hash, HashStable_Generic)]
 pub enum OptLevel {
     No,         // -O0
     Less,       // -O1
@@ -89,8 +87,6 @@ pub enum OptLevel {
     Size,       // -Os
     SizeMin,    // -Oz
 }
-
-impl_stable_hash_via_hash!(OptLevel);
 
 /// This is what the `LtoCli` values get mapped to after resolving defaults and
 /// and taking other command line options into account.
@@ -232,14 +228,12 @@ impl SwitchWithOptPath {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, HashStable_Generic)]
 #[derive(Encodable, Decodable)]
 pub enum SymbolManglingVersion {
     Legacy,
     V0,
 }
-
-impl_stable_hash_via_hash!(SymbolManglingVersion);
 
 #[derive(Clone, Copy, Debug, PartialEq, Hash)]
 pub enum DebugInfo {
@@ -279,7 +273,7 @@ impl FromStr for SplitDwarfKind {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord, HashStable_Generic)]
 #[derive(Encodable, Decodable)]
 pub enum OutputType {
     Bitcode,
@@ -292,7 +286,13 @@ pub enum OutputType {
     DepInfo,
 }
 
-impl_stable_hash_via_hash!(OutputType);
+impl<HCX: HashStableContext> ToStableHashKey<HCX> for OutputType {
+    type KeyType = Self;
+
+    fn to_stable_hash_key(&self, _: &HCX) -> Self::KeyType {
+        *self
+    }
+}
 
 impl OutputType {
     fn is_compatible_with_codegen_units_and_single_output_file(&self) -> bool {
@@ -398,7 +398,7 @@ pub enum TrimmedDefPaths {
 /// *Do not* switch `BTreeMap` out for an unsorted container type! That would break
 /// dependency tracking for command-line arguments. Also only hash keys, since tracking
 /// should only depend on the output types, not the paths they're written to.
-#[derive(Clone, Debug, Hash)]
+#[derive(Clone, Debug, Hash, HashStable_Generic)]
 pub struct OutputTypes(BTreeMap<OutputType, Option<PathBuf>>);
 
 impl OutputTypes {
@@ -460,9 +460,6 @@ impl OutputTypes {
 #[derive(Clone)]
 pub struct Externs(BTreeMap<String, ExternEntry>);
 
-#[derive(Clone)]
-pub struct ExternDepSpecs(BTreeMap<String, ExternDepSpec>);
-
 #[derive(Clone, Debug)]
 pub struct ExternEntry {
     pub location: ExternLocation,
@@ -494,27 +491,6 @@ pub enum ExternLocation {
     ExactPaths(BTreeSet<CanonicalizedPath>),
 }
 
-/// Supplied source location of a dependency - for example in a build specification
-/// file like Cargo.toml. We support several syntaxes: if it makes sense to reference
-/// a file and line, then the build system can specify that. On the other hand, it may
-/// make more sense to have an arbitrary raw string.
-#[derive(Clone, PartialEq)]
-pub enum ExternDepSpec {
-    /// Raw string
-    Raw(String),
-    /// Raw data in json format
-    Json(json::Json),
-}
-
-impl<'a> From<&'a ExternDepSpec> for rustc_lint_defs::ExternDepSpec {
-    fn from(from: &'a ExternDepSpec) -> Self {
-        match from {
-            ExternDepSpec::Raw(s) => rustc_lint_defs::ExternDepSpec::Raw(s.clone()),
-            ExternDepSpec::Json(json) => rustc_lint_defs::ExternDepSpec::Json(json.clone()),
-        }
-    }
-}
-
 impl Externs {
     /// Used for testing.
     pub fn new(data: BTreeMap<String, ExternEntry>) -> Externs {
@@ -543,25 +519,6 @@ impl ExternEntry {
         match &self.location {
             ExternLocation::ExactPaths(set) => Some(set.iter()),
             _ => None,
-        }
-    }
-}
-
-impl ExternDepSpecs {
-    pub fn new(data: BTreeMap<String, ExternDepSpec>) -> ExternDepSpecs {
-        ExternDepSpecs(data)
-    }
-
-    pub fn get(&self, key: &str) -> Option<&ExternDepSpec> {
-        self.0.get(key)
-    }
-}
-
-impl fmt::Display for ExternDepSpec {
-    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ExternDepSpec::Raw(raw) => fmt.write_str(raw),
-            ExternDepSpec::Json(json) => json::as_json(json).fmt(fmt),
         }
     }
 }
@@ -630,7 +587,7 @@ impl Input {
     }
 }
 
-#[derive(Clone, Hash, Debug)]
+#[derive(Clone, Hash, Debug, HashStable_Generic)]
 pub struct OutputFilenames {
     pub out_directory: PathBuf,
     filestem: String,
@@ -638,8 +595,6 @@ pub struct OutputFilenames {
     pub temps_directory: Option<PathBuf>,
     pub outputs: OutputTypes,
 }
-
-impl_stable_hash_via_hash!(OutputFilenames);
 
 pub const RLINK_EXT: &str = "rlink";
 pub const RUST_CGU_EXT: &str = "rcgu";
@@ -785,7 +740,6 @@ impl Default for Options {
             cg: Default::default(),
             error_format: ErrorOutputType::default(),
             externs: Externs(BTreeMap::new()),
-            extern_dep_specs: ExternDepSpecs(BTreeMap::new()),
             crate_name: None,
             libs: Vec::new(),
             unstable_features: UnstableFeatures::Disallow,
@@ -854,15 +808,14 @@ impl DebuggingOptions {
 }
 
 // The type of entry function, so users can have their own entry functions
-#[derive(Copy, Clone, PartialEq, Hash, Debug)]
+#[derive(Copy, Clone, PartialEq, Hash, Debug, HashStable_Generic)]
 pub enum EntryFnType {
     Main,
     Start,
 }
 
-impl_stable_hash_via_hash!(EntryFnType);
-
 #[derive(Copy, PartialEq, PartialOrd, Clone, Ord, Eq, Hash, Debug, Encodable, Decodable)]
+#[derive(HashStable_Generic)]
 pub enum CrateType {
     Executable,
     Dylib,
@@ -871,8 +824,6 @@ pub enum CrateType {
     Cdylib,
     ProcMacro,
 }
-
-impl_stable_hash_via_hash!(CrateType);
 
 impl CrateType {
     /// When generated, is this crate type an archive?
@@ -1453,12 +1404,6 @@ pub fn rustc_optgroups() -> Vec<RustcOptGroup> {
             "extern",
             "Specify where an external rust library is located",
             "NAME[=PATH]",
-        ),
-        opt::multi_s(
-            "",
-            "extern-location",
-            "Location where an external crate dependency is specified",
-            "NAME=LOCATION",
         ),
         opt::opt_s("", "sysroot", "Override the system root", "PATH"),
         opt::multi("Z", "", "Set internal debugging options", "FLAG"),
@@ -2221,68 +2166,6 @@ pub fn parse_externs(
     Externs(externs)
 }
 
-fn parse_extern_dep_specs(
-    matches: &getopts::Matches,
-    debugging_opts: &DebuggingOptions,
-    error_format: ErrorOutputType,
-) -> ExternDepSpecs {
-    let is_unstable_enabled = debugging_opts.unstable_options;
-    let mut map = BTreeMap::new();
-
-    for arg in matches.opt_strs("extern-location") {
-        if !is_unstable_enabled {
-            early_error(
-                error_format,
-                "`--extern-location` option is unstable: set `-Z unstable-options`",
-            );
-        }
-
-        let mut parts = arg.splitn(2, '=');
-        let name = parts.next().unwrap_or_else(|| {
-            early_error(error_format, "`--extern-location` value must not be empty")
-        });
-        let loc = parts.next().unwrap_or_else(|| {
-            early_error(
-                error_format,
-                &format!("`--extern-location`: specify location for extern crate `{name}`"),
-            )
-        });
-
-        let locparts: Vec<_> = loc.split(':').collect();
-        let spec = match &locparts[..] {
-            ["raw", ..] => {
-                // Don't want `:` split string
-                let raw = loc.splitn(2, ':').nth(1).unwrap_or_else(|| {
-                    early_error(error_format, "`--extern-location`: missing `raw` location")
-                });
-                ExternDepSpec::Raw(raw.to_string())
-            }
-            ["json", ..] => {
-                // Don't want `:` split string
-                let raw = loc.splitn(2, ':').nth(1).unwrap_or_else(|| {
-                    early_error(error_format, "`--extern-location`: missing `json` location")
-                });
-                let json = json::from_str(raw).unwrap_or_else(|_| {
-                    early_error(
-                        error_format,
-                        &format!("`--extern-location`: malformed json location `{raw}`"),
-                    )
-                });
-                ExternDepSpec::Json(json)
-            }
-            [bad, ..] => early_error(
-                error_format,
-                &format!("unknown location type `{bad}`: use `raw` or `json`"),
-            ),
-            [] => early_error(error_format, "missing location specification"),
-        };
-
-        map.insert(name.to_string(), spec);
-    }
-
-    ExternDepSpecs::new(map)
-}
-
 fn parse_remap_path_prefix(
     matches: &getopts::Matches,
     debugging_opts: &DebuggingOptions,
@@ -2525,7 +2408,6 @@ pub fn build_session_options(matches: &getopts::Matches) -> Options {
     }
 
     let externs = parse_externs(matches, &debugging_opts, error_format);
-    let extern_dep_specs = parse_extern_dep_specs(matches, &debugging_opts, error_format);
 
     let crate_name = matches.opt_str("crate-name");
 
@@ -2601,7 +2483,6 @@ pub fn build_session_options(matches: &getopts::Matches) -> Options {
         error_format,
         externs,
         unstable_features: UnstableFeatures::from_environment(crate_name.as_deref()),
-        extern_dep_specs,
         crate_name,
         libs,
         debug_assertions,

@@ -95,7 +95,7 @@ pub enum LifetimeName {
     /// User wrote nothing (e.g., the lifetime in `&u32`).
     ///
     /// The bool indicates whether the user should have written something.
-    Implicit(bool),
+    Implicit,
 
     /// Implicit lifetime in a context like `dyn Foo`. This is
     /// distinguished from implicit lifetimes elsewhere because the
@@ -125,7 +125,7 @@ impl LifetimeName {
     pub fn ident(&self) -> Ident {
         match *self {
             LifetimeName::ImplicitObjectLifetimeDefault
-            | LifetimeName::Implicit(_)
+            | LifetimeName::Implicit
             | LifetimeName::Error => Ident::empty(),
             LifetimeName::Underscore => Ident::with_dummy_span(kw::UnderscoreLifetime),
             LifetimeName::Static => Ident::with_dummy_span(kw::StaticLifetime),
@@ -136,7 +136,7 @@ impl LifetimeName {
     pub fn is_elided(&self) -> bool {
         match self {
             LifetimeName::ImplicitObjectLifetimeDefault
-            | LifetimeName::Implicit(_)
+            | LifetimeName::Implicit
             | LifetimeName::Underscore => true,
 
             // It might seem surprising that `Fresh(_)` counts as
@@ -1299,7 +1299,7 @@ pub struct BodyId {
 ///
 /// All bodies have an **owner**, which can be accessed via the HIR
 /// map using `body_owner_def_id()`.
-#[derive(Debug)]
+#[derive(Debug, HashStable_Generic)]
 pub struct Body<'hir> {
     pub params: &'hir [Param<'hir>],
     pub value: Expr<'hir>,
@@ -2059,7 +2059,7 @@ pub struct FnSig<'hir> {
 // The bodies for items are stored "out of line", in a separate
 // hashmap in the `Crate`. Here we just record the hir-id of the item
 // so it can fetched later.
-#[derive(Copy, Clone, PartialEq, Eq, Encodable, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Encodable, Debug, HashStable_Generic)]
 pub struct TraitItemId {
     pub def_id: LocalDefId,
 }
@@ -2076,7 +2076,7 @@ impl TraitItemId {
 /// possibly including a default implementation. A trait item is
 /// either required (meaning it doesn't have an implementation, just a
 /// signature) or provided (meaning it has a default implementation).
-#[derive(Debug)]
+#[derive(Debug, HashStable_Generic)]
 pub struct TraitItem<'hir> {
     pub ident: Ident,
     pub def_id: LocalDefId,
@@ -2122,7 +2122,7 @@ pub enum TraitItemKind<'hir> {
 // The bodies for items are stored "out of line", in a separate
 // hashmap in the `Crate`. Here we just record the hir-id of the item
 // so it can fetched later.
-#[derive(Copy, Clone, PartialEq, Eq, Encodable, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Encodable, Debug, HashStable_Generic)]
 pub struct ImplItemId {
     pub def_id: LocalDefId,
 }
@@ -2136,7 +2136,7 @@ impl ImplItemId {
 }
 
 /// Represents anything within an `impl` block.
-#[derive(Debug)]
+#[derive(Debug, HashStable_Generic)]
 pub struct ImplItem<'hir> {
     pub ident: Ident,
     pub def_id: LocalDefId,
@@ -2425,8 +2425,12 @@ pub enum InlineAsmOperand<'hir> {
     Const {
         anon_const: AnonConst,
     },
-    Sym {
-        expr: Expr<'hir>,
+    SymFn {
+        anon_const: AnonConst,
+    },
+    SymStatic {
+        path: QPath<'hir>,
+        def_id: DefId,
     },
 }
 
@@ -2437,7 +2441,7 @@ impl<'hir> InlineAsmOperand<'hir> {
             | Self::Out { reg, .. }
             | Self::InOut { reg, .. }
             | Self::SplitInOut { reg, .. } => Some(reg),
-            Self::Const { .. } | Self::Sym { .. } => None,
+            Self::Const { .. } | Self::SymFn { .. } | Self::SymStatic { .. } => None,
         }
     }
 
@@ -2557,11 +2561,17 @@ impl FnRetTy<'_> {
 
 #[derive(Encodable, Debug, HashStable_Generic)]
 pub struct Mod<'hir> {
+    pub spans: ModSpans,
+    pub item_ids: &'hir [ItemId],
+}
+
+#[derive(Copy, Clone, Debug, HashStable_Generic, Encodable)]
+pub struct ModSpans {
     /// A span from the first token past `{` to the last token until `}`.
     /// For `mod foo;`, the inner span ranges from the first token
     /// to the last token in the external file.
-    pub inner: Span,
-    pub item_ids: &'hir [ItemId],
+    pub inner_span: Span,
+    pub inject_use_span: Span,
 }
 
 #[derive(Debug, HashStable_Generic)]
@@ -2637,7 +2647,7 @@ pub struct PolyTraitRef<'hir> {
 
 pub type Visibility<'hir> = Spanned<VisibilityKind<'hir>>;
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, HashStable_Generic)]
 pub enum VisibilityKind<'hir> {
     Public,
     Crate(CrateSugar),
@@ -2713,7 +2723,7 @@ impl<'hir> VariantData<'hir> {
 // The bodies for items are stored "out of line", in a separate
 // hashmap in the `Crate`. Here we just record the hir-id of the item
 // so it can fetched later.
-#[derive(Copy, Clone, PartialEq, Eq, Encodable, Debug, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Encodable, Debug, Hash, HashStable_Generic)]
 pub struct ItemId {
     pub def_id: LocalDefId,
 }
@@ -2729,7 +2739,7 @@ impl ItemId {
 /// An item
 ///
 /// The name might be a dummy name in case of anonymous items
-#[derive(Debug)]
+#[derive(Debug, HashStable_Generic)]
 pub struct Item<'hir> {
     pub ident: Ident,
     pub def_id: LocalDefId,
@@ -2960,7 +2970,7 @@ pub enum AssocItemKind {
 // The bodies for items are stored "out of line", in a separate
 // hashmap in the `Crate`. Here we just record the hir-id of the item
 // so it can fetched later.
-#[derive(Copy, Clone, PartialEq, Eq, Encodable, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Encodable, Debug, HashStable_Generic)]
 pub struct ForeignItemId {
     pub def_id: LocalDefId,
 }
@@ -2986,7 +2996,7 @@ pub struct ForeignItemRef {
     pub span: Span,
 }
 
-#[derive(Debug)]
+#[derive(Debug, HashStable_Generic)]
 pub struct ForeignItem<'hir> {
     pub ident: Ident,
     pub kind: ForeignItemKind<'hir>,
@@ -3028,7 +3038,7 @@ pub struct Upvar {
 // The TraitCandidate's import_ids is empty if the trait is defined in the same module, and
 // has length > 0 if the trait is found through an chain of imports, starting with the
 // import/use statement in the scope where the trait is used.
-#[derive(Encodable, Decodable, Clone, Debug)]
+#[derive(Encodable, Decodable, Clone, Debug, HashStable_Generic)]
 pub struct TraitCandidate {
     pub def_id: DefId,
     pub import_ids: SmallVec<[LocalDefId; 1]>,
@@ -3059,8 +3069,8 @@ impl<'hir> OwnerNode<'hir> {
             OwnerNode::Item(Item { span, .. })
             | OwnerNode::ForeignItem(ForeignItem { span, .. })
             | OwnerNode::ImplItem(ImplItem { span, .. })
-            | OwnerNode::TraitItem(TraitItem { span, .. })
-            | OwnerNode::Crate(Mod { inner: span, .. }) => *span,
+            | OwnerNode::TraitItem(TraitItem { span, .. }) => *span,
+            OwnerNode::Crate(Mod { spans: ModSpans { inner_span, .. }, .. }) => *inner_span,
         }
     }
 

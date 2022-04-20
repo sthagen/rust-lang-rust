@@ -4,7 +4,7 @@ use rustc_data_structures::sync::{self, Lrc};
 use rustc_errors::emitter::{Emitter, EmitterWriter};
 use rustc_errors::json::JsonEmitter;
 use rustc_feature::UnstableFeatures;
-use rustc_hir::def::Res;
+use rustc_hir::def::{Namespace, Res};
 use rustc_hir::def_id::{DefId, DefIdMap, LocalDefId};
 use rustc_hir::intravisit::{self, Visitor};
 use rustc_hir::{HirId, Path, TraitCandidate};
@@ -29,11 +29,14 @@ use crate::clean::inline::build_external_trait;
 use crate::clean::{self, ItemId, TraitWithExtraInfo};
 use crate::config::{Options as RustdocOptions, OutputFormat, RenderOptions};
 use crate::formats::cache::Cache;
+use crate::passes::collect_intra_doc_links::PreprocessedMarkdownLink;
 use crate::passes::{self, Condition::*};
 
 crate use rustc_session::config::{DebuggingOptions, Input, Options};
 
 crate struct ResolverCaches {
+    crate markdown_links: Option<FxHashMap<String, Vec<PreprocessedMarkdownLink>>>,
+    crate doc_link_resolutions: FxHashMap<(Symbol, Namespace, DefId), Option<Res<NodeId>>>,
     /// Traits in scope for a given module.
     /// See `collect_intra_doc_links::traits_implemented_by` for more details.
     crate traits_in_scope: DefIdMap<Vec<TraitCandidate>>,
@@ -113,8 +116,8 @@ impl<'tcx> DocContext<'tcx> {
 
     /// Like `hir().local_def_id_to_hir_id()`, but skips calling it on fake DefIds.
     /// (This avoids a slice-index-out-of-bounds panic.)
-    crate fn as_local_hir_id(tcx: TyCtxt<'_>, def_id: ItemId) -> Option<HirId> {
-        match def_id {
+    crate fn as_local_hir_id(tcx: TyCtxt<'_>, item_id: ItemId) -> Option<HirId> {
+        match item_id {
             ItemId::DefId(real_id) => {
                 real_id.as_local().map(|def_id| tcx.hir().local_def_id_to_hir_id(def_id))
             }
@@ -146,7 +149,7 @@ crate fn new_handler(
     debugging_opts: &DebuggingOptions,
 ) -> rustc_errors::Handler {
     let fallback_bundle =
-        rustc_errors::fallback_fluent_bundle(false).expect("failed to load fallback fluent bundle");
+        rustc_errors::fallback_fluent_bundle(rustc_errors::DEFAULT_LOCALE_RESOURCES, false);
     let emitter: Box<dyn Emitter + sync::Send> = match error_format {
         ErrorOutputType::HumanReadable(kind) => {
             let (short, color_config) = kind.unzip();
@@ -390,7 +393,7 @@ crate fn run_global_ctxt(
         );
         tcx.struct_lint_node(
             crate::lint::MISSING_CRATE_LEVEL_DOCS,
-            DocContext::as_local_hir_id(tcx, krate.module.def_id).unwrap(),
+            DocContext::as_local_hir_id(tcx, krate.module.item_id).unwrap(),
             |lint| {
                 let mut diag =
                     lint.build("no documentation found for this crate's top-level module");

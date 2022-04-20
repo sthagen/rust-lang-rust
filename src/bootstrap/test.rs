@@ -1892,7 +1892,8 @@ impl Step for CrateLibrustc {
 
     fn make_run(run: RunConfig<'_>) {
         let builder = run.builder;
-        let compiler = builder.compiler(builder.top_stage, run.build_triple());
+        let host = run.build_triple();
+        let compiler = builder.compiler_for(builder.top_stage, host, host);
         let krate = builder.crate_paths[&run.path];
         let test_kind = builder.kind.into();
 
@@ -1929,7 +1930,8 @@ impl Step for Crate {
 
     fn make_run(run: RunConfig<'_>) {
         let builder = run.builder;
-        let compiler = builder.compiler(builder.top_stage, run.build_triple());
+        let host = run.build_triple();
+        let compiler = builder.compiler_for(builder.top_stage, host, host);
         let test_kind = builder.kind.into();
         let krate = builder.crate_paths[&run.path];
 
@@ -2288,7 +2290,7 @@ impl Step for Distcheck {
     type Output = ();
 
     fn should_run(run: ShouldRun<'_>) -> ShouldRun<'_> {
-        run.path("distcheck")
+        run.alias("distcheck")
     }
 
     fn make_run(run: RunConfig<'_>) {

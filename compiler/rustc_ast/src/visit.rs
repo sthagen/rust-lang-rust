@@ -35,7 +35,7 @@ pub enum FnCtxt {
 #[derive(Copy, Clone, Debug)]
 pub enum FnKind<'a> {
     /// E.g., `fn foo()`, `fn foo(&self)`, or `extern "Abi" fn foo()`.
-    Fn(FnCtxt, Ident, &'a FnSig, &'a Visibility, Option<&'a Block>),
+    Fn(FnCtxt, Ident, &'a FnSig, &'a Visibility, &'a Generics, Option<&'a Block>),
 
     /// E.g., `|x, y| body`.
     Closure(&'a FnDecl, &'a Expr),
@@ -44,7 +44,7 @@ pub enum FnKind<'a> {
 impl<'a> FnKind<'a> {
     pub fn header(&self) -> Option<&'a FnHeader> {
         match *self {
-            FnKind::Fn(_, _, sig, _, _) => Some(&sig.header),
+            FnKind::Fn(_, _, sig, _, _, _) => Some(&sig.header),
             FnKind::Closure(_, _) => None,
         }
     }
@@ -58,7 +58,7 @@ impl<'a> FnKind<'a> {
 
     pub fn decl(&self) -> &'a FnDecl {
         match self {
-            FnKind::Fn(_, _, sig, _, _) => &sig.decl,
+            FnKind::Fn(_, _, sig, _, _, _) => &sig.decl,
             FnKind::Closure(decl, _) => decl,
         }
     }
@@ -214,6 +214,12 @@ pub trait Visitor<'ast>: Sized {
     fn visit_crate(&mut self, krate: &'ast Crate) {
         walk_crate(self, krate)
     }
+    fn visit_inline_asm(&mut self, asm: &'ast InlineAsm) {
+        walk_inline_asm(self, asm)
+    }
+    fn visit_inline_asm_sym(&mut self, sym: &'ast InlineAsmSym) {
+        walk_inline_asm_sym(self, sym)
+    }
 }
 
 #[macro_export]
@@ -289,8 +295,8 @@ pub fn walk_item<'a, V: Visitor<'a>>(visitor: &mut V, item: &'a Item) {
             walk_list!(visitor, visit_expr, expr);
         }
         ItemKind::Fn(box Fn { defaultness: _, ref generics, ref sig, ref body }) => {
-            visitor.visit_generics(generics);
-            let kind = FnKind::Fn(FnCtxt::Free, item.ident, sig, &item.vis, body.as_deref());
+            let kind =
+                FnKind::Fn(FnCtxt::Free, item.ident, sig, &item.vis, generics, body.as_deref());
             visitor.visit_fn(kind, item.span, item.id)
         }
         ItemKind::Mod(_unsafety, ref mod_kind) => match mod_kind {
@@ -555,8 +561,7 @@ pub fn walk_foreign_item<'a, V: Visitor<'a>>(visitor: &mut V, item: &'a ForeignI
             walk_list!(visitor, visit_expr, expr);
         }
         ForeignItemKind::Fn(box Fn { defaultness: _, ref generics, ref sig, ref body }) => {
-            visitor.visit_generics(generics);
-            let kind = FnKind::Fn(FnCtxt::Foreign, ident, sig, vis, body.as_deref());
+            let kind = FnKind::Fn(FnCtxt::Foreign, ident, sig, vis, generics, body.as_deref());
             visitor.visit_fn(kind, span, id);
         }
         ForeignItemKind::TyAlias(box TyAlias { generics, bounds, ty, .. }) => {
@@ -638,7 +643,8 @@ pub fn walk_fn_decl<'a, V: Visitor<'a>>(visitor: &mut V, function_declaration: &
 
 pub fn walk_fn<'a, V: Visitor<'a>>(visitor: &mut V, kind: FnKind<'a>, _span: Span) {
     match kind {
-        FnKind::Fn(_, _, sig, _, body) => {
+        FnKind::Fn(_, _, sig, _, generics, body) => {
+            visitor.visit_generics(generics);
             visitor.visit_fn_header(&sig.header);
             walk_fn_decl(visitor, &sig.decl);
             walk_list!(visitor, visit_block, body);
@@ -661,8 +667,7 @@ pub fn walk_assoc_item<'a, V: Visitor<'a>>(visitor: &mut V, item: &'a AssocItem,
             walk_list!(visitor, visit_expr, expr);
         }
         AssocItemKind::Fn(box Fn { defaultness: _, ref generics, ref sig, ref body }) => {
-            visitor.visit_generics(generics);
-            let kind = FnKind::Fn(FnCtxt::Assoc(ctxt), ident, sig, vis, body.as_deref());
+            let kind = FnKind::Fn(FnCtxt::Assoc(ctxt), ident, sig, vis, generics, body.as_deref());
             visitor.visit_fn(kind, span, id);
         }
         AssocItemKind::TyAlias(box TyAlias { generics, bounds, ty, .. }) => {
@@ -717,13 +722,12 @@ pub fn walk_anon_const<'a, V: Visitor<'a>>(visitor: &mut V, constant: &'a AnonCo
     visitor.visit_expr(&constant.value);
 }
 
-fn walk_inline_asm<'a, V: Visitor<'a>>(visitor: &mut V, asm: &'a InlineAsm) {
+pub fn walk_inline_asm<'a, V: Visitor<'a>>(visitor: &mut V, asm: &'a InlineAsm) {
     for (op, _) in &asm.operands {
         match op {
             InlineAsmOperand::In { expr, .. }
             | InlineAsmOperand::Out { expr: Some(expr), .. }
-            | InlineAsmOperand::InOut { expr, .. }
-            | InlineAsmOperand::Sym { expr, .. } => visitor.visit_expr(expr),
+            | InlineAsmOperand::InOut { expr, .. } => visitor.visit_expr(expr),
             InlineAsmOperand::Out { expr: None, .. } => {}
             InlineAsmOperand::SplitInOut { in_expr, out_expr, .. } => {
                 visitor.visit_expr(in_expr);
@@ -732,8 +736,16 @@ fn walk_inline_asm<'a, V: Visitor<'a>>(visitor: &mut V, asm: &'a InlineAsm) {
                 }
             }
             InlineAsmOperand::Const { anon_const, .. } => visitor.visit_anon_const(anon_const),
+            InlineAsmOperand::Sym { sym } => visitor.visit_inline_asm_sym(sym),
         }
     }
+}
+
+pub fn walk_inline_asm_sym<'a, V: Visitor<'a>>(visitor: &mut V, sym: &'a InlineAsmSym) {
+    if let Some(ref qself) = sym.qself {
+        visitor.visit_ty(&qself.ty);
+    }
+    visitor.visit_path(&sym.path, sym.id);
 }
 
 pub fn walk_expr<'a, V: Visitor<'a>>(visitor: &mut V, expression: &'a Expr) {

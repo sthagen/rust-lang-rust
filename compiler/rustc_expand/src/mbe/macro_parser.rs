@@ -77,7 +77,6 @@ use crate::mbe::{KleeneOp, TokenTree};
 
 use rustc_ast::token::{self, DocComment, Nonterminal, NonterminalKind, Token};
 use rustc_parse::parser::{NtOrTt, Parser};
-use rustc_session::parse::ParseSess;
 use rustc_span::symbol::MacroRulesNormalizedIdent;
 use rustc_span::Span;
 
@@ -128,9 +127,8 @@ pub(super) enum MatcherLoc {
     Eof,
 }
 
-pub(super) fn compute_locs(sess: &ParseSess, matcher: &[TokenTree]) -> Vec<MatcherLoc> {
+pub(super) fn compute_locs(matcher: &[TokenTree]) -> Vec<MatcherLoc> {
     fn inner(
-        sess: &ParseSess,
         tts: &[TokenTree],
         locs: &mut Vec<MatcherLoc>,
         next_metavar: &mut usize,
@@ -142,10 +140,13 @@ pub(super) fn compute_locs(sess: &ParseSess, matcher: &[TokenTree]) -> Vec<Match
                     locs.push(MatcherLoc::Token { token: token.clone() });
                 }
                 TokenTree::Delimited(span, delimited) => {
+                    let open_token = Token::new(token::OpenDelim(delimited.delim), span.open);
+                    let close_token = Token::new(token::CloseDelim(delimited.delim), span.close);
+
                     locs.push(MatcherLoc::Delimited);
-                    inner(sess, &[delimited.open_tt(*span)], locs, next_metavar, seq_depth);
-                    inner(sess, &delimited.tts, locs, next_metavar, seq_depth);
-                    inner(sess, &[delimited.close_tt(*span)], locs, next_metavar, seq_depth);
+                    locs.push(MatcherLoc::Token { token: open_token });
+                    inner(&delimited.tts, locs, next_metavar, seq_depth);
+                    locs.push(MatcherLoc::Token { token: close_token });
                 }
                 TokenTree::Sequence(_, seq) => {
                     // We can't determine `idx_first_after` and construct the final
@@ -159,7 +160,7 @@ pub(super) fn compute_locs(sess: &ParseSess, matcher: &[TokenTree]) -> Vec<Match
                     let op = seq.kleene.op;
                     let idx_first = locs.len();
                     let idx_seq = idx_first - 1;
-                    inner(sess, &seq.tts, locs, next_metavar, seq_depth + 1);
+                    inner(&seq.tts, locs, next_metavar, seq_depth + 1);
 
                     if let Some(separator) = &seq.separator {
                         locs.push(MatcherLoc::SequenceSep { separator: separator.clone() });
@@ -194,7 +195,7 @@ pub(super) fn compute_locs(sess: &ParseSess, matcher: &[TokenTree]) -> Vec<Match
 
     let mut locs = vec![];
     let mut next_metavar = 0;
-    inner(sess, matcher, &mut locs, &mut next_metavar, /* seq_depth */ 0);
+    inner(matcher, &mut locs, &mut next_metavar, /* seq_depth */ 0);
 
     // A final entry is needed for eof.
     locs.push(MatcherLoc::Eof);
@@ -589,7 +590,7 @@ impl TtParser {
                 (_, 0) => {
                     // Dump all possible `next_mps` into `cur_mps` for the next iteration. Then
                     // process the next token.
-                    self.cur_mps.extend(self.next_mps.drain(..));
+                    self.cur_mps.append(&mut self.next_mps);
                     parser.to_mut().bump();
                 }
 

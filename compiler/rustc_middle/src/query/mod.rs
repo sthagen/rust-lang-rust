@@ -45,6 +45,13 @@ rustc_queries! {
         desc { "get the crate HIR" }
     }
 
+    /// All items in the crate.
+    query hir_crate_items(_: ()) -> rustc_middle::hir::ModuleItems {
+        storage(ArenaCacheSelector<'tcx>)
+        eval_always
+        desc { "get HIR crate items" }
+    }
+
     /// The items in a module.
     ///
     /// This can be conveniently accessed by `tcx.hir().visit_item_likes_in_module`.
@@ -1961,5 +1968,11 @@ rustc_queries! {
         storage(ArenaCacheSelector<'tcx>)
         eval_always
         desc { "computing the backend features for CLI flags" }
+    }
+
+    query generator_diagnostic_data(key: DefId) -> Option<GeneratorDiagnosticData<'tcx>> {
+        storage(ArenaCacheSelector<'tcx>)
+        desc { |tcx| "looking up generator diagnostic data of `{}`", tcx.def_path_str(key) }
+        separate_provide_extern
     }
 }

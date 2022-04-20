@@ -437,6 +437,7 @@ pub fn check_platform_intrinsic_type(tcx: TyCtxt<'_>, it: &hir::ForeignItem<'_>)
         | sym::simd_fpow
         | sym::simd_saturating_add
         | sym::simd_saturating_sub => (1, vec![param(0), param(0)], param(0)),
+        sym::simd_arith_offset => (2, vec![param(0), param(1)], param(0)),
         sym::simd_neg
         | sym::simd_fsqrt
         | sym::simd_fsin
@@ -484,14 +485,14 @@ pub fn check_platform_intrinsic_type(tcx: TyCtxt<'_>, it: &hir::ForeignItem<'_>)
                 }
                 Err(_) => {
                     let msg =
-                        format!("unrecognized platform-specific intrinsic function: `{}`", name);
+                        format!("unrecognized platform-specific intrinsic function: `{name}`");
                     tcx.sess.struct_span_err(it.span, &msg).emit();
                     return;
                 }
             }
         }
         _ => {
-            let msg = format!("unrecognized platform-specific intrinsic function: `{}`", name);
+            let msg = format!("unrecognized platform-specific intrinsic function: `{name}`");
             tcx.sess.struct_span_err(it.span, &msg).emit();
             return;
         }
