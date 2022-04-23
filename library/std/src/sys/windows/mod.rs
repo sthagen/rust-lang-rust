@@ -156,7 +156,13 @@ pub fn unrolled_find_u16s(needle: u16, haystack: &[u16]) -> Option<usize> {
 
 pub fn to_u16s<S: AsRef<OsStr>>(s: S) -> crate::io::Result<Vec<u16>> {
     fn inner(s: &OsStr) -> crate::io::Result<Vec<u16>> {
-        let mut maybe_result: Vec<u16> = s.encode_wide().collect();
+        // Most paths are ASCII, so reserve capacity for as much as there are bytes
+        // in the OsStr plus one for the null-terminating character. We are not
+        // wasting bytes here as paths created by this function are primarily used
+        // in an ephemeral fashion.
+        let mut maybe_result = Vec::with_capacity(s.len() + 1);
+        maybe_result.extend(s.encode_wide());
+
         if unrolled_find_u16s(0, &maybe_result).is_some() {
             return Err(crate::io::const_io_error!(
                 ErrorKind::InvalidInput,
@@ -190,6 +196,10 @@ where
 {
     // Start off with a stack buf but then spill over to the heap if we end up
     // needing more space.
+    //
+    // This initial size also works around `GetFullPathNameW` returning
+    // incorrect size hints for some short paths:
+    // https://github.com/dylni/normpath/issues/5
     let mut stack_buf = [0u16; 512];
     let mut heap_buf = Vec::new();
     unsafe {
