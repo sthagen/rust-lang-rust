@@ -21,11 +21,13 @@ use crate::errors::{
 };
 use crate::type_error_struct;
 
+use super::suggest_call_constructor;
 use crate::errors::{AddressOfTemporaryTaken, ReturnStmtOutsideOfFnBody, StructExprNonExhaustive};
 use rustc_ast as ast;
 use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::stack::ensure_sufficient_stack;
 use rustc_errors::Diagnostic;
+use rustc_errors::EmissionGuarantee;
 use rustc_errors::ErrorGuaranteed;
 use rustc_errors::{pluralize, struct_span_err, Applicability, DiagnosticBuilder, DiagnosticId};
 use rustc_hir as hir;
@@ -1986,6 +1988,26 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         self.tcx().ty_error()
     }
 
+    fn check_call_constructor<G: EmissionGuarantee>(
+        &self,
+        err: &mut DiagnosticBuilder<'_, G>,
+        base: &'tcx hir::Expr<'tcx>,
+        def_id: DefId,
+    ) {
+        let local_id = def_id.expect_local();
+        let hir_id = self.tcx.hir().local_def_id_to_hir_id(local_id);
+        let node = self.tcx.hir().get(hir_id);
+
+        if let Some(fields) = node.tuple_fields() {
+            let kind = match self.tcx.opt_def_kind(local_id) {
+                Some(DefKind::Ctor(of, _)) => of,
+                _ => return,
+            };
+
+            suggest_call_constructor(base.span, kind, fields.len(), err);
+        }
+    }
+
     fn suggest_await_on_field_access(
         &self,
         err: &mut Diagnostic,
@@ -2054,6 +2076,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             }
             ty::Opaque(_, _) => {
                 self.suggest_await_on_field_access(&mut err, field, base, expr_t.peel_refs());
+            }
+            ty::FnDef(def_id, _) => {
+                self.check_call_constructor(&mut err, base, def_id);
             }
             _ => {}
         }
@@ -2285,14 +2310,17 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         // try to add a suggestion in case the field is a nested field of a field of the Adt
         if let Some((fields, substs)) = self.get_field_candidates(span, expr_t) {
             for candidate_field in fields.iter() {
-                if let Some(field_path) = self.check_for_nested_field(
+                if let Some(mut field_path) = self.check_for_nested_field_satisfying(
                     span,
-                    field,
+                    &|candidate_field, _| candidate_field.ident(self.tcx()) == field,
                     candidate_field,
                     substs,
                     vec![],
                     self.tcx.parent_module(id).to_def_id(),
                 ) {
+                    // field_path includes `field` that we're looking for, so pop it.
+                    field_path.pop();
+
                     let field_path_str = field_path
                         .iter()
                         .map(|id| id.name.to_ident_string())
@@ -2312,7 +2340,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         err
     }
 
-    fn get_field_candidates(
+    crate fn get_field_candidates(
         &self,
         span: Span,
         base_t: Ty<'tcx>,
@@ -2337,49 +2365,42 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
     /// This method is called after we have encountered a missing field error to recursively
     /// search for the field
-    fn check_for_nested_field(
+    crate fn check_for_nested_field_satisfying(
         &self,
         span: Span,
-        target_field: Ident,
+        matches: &impl Fn(&ty::FieldDef, Ty<'tcx>) -> bool,
         candidate_field: &ty::FieldDef,
         subst: SubstsRef<'tcx>,
         mut field_path: Vec<Ident>,
         id: DefId,
     ) -> Option<Vec<Ident>> {
         debug!(
-            "check_for_nested_field(span: {:?}, candidate_field: {:?}, field_path: {:?}",
+            "check_for_nested_field_satisfying(span: {:?}, candidate_field: {:?}, field_path: {:?}",
             span, candidate_field, field_path
         );
 
-        if candidate_field.ident(self.tcx) == target_field {
-            Some(field_path)
-        } else if field_path.len() > 3 {
+        if field_path.len() > 3 {
             // For compile-time reasons and to avoid infinite recursion we only check for fields
             // up to a depth of three
             None
         } else {
             // recursively search fields of `candidate_field` if it's a ty::Adt
-
             field_path.push(candidate_field.ident(self.tcx).normalize_to_macros_2_0());
             let field_ty = candidate_field.ty(self.tcx, subst);
             if let Some((nested_fields, subst)) = self.get_field_candidates(span, field_ty) {
                 for field in nested_fields.iter() {
-                    let accessible = field.vis.is_accessible_from(id, self.tcx);
-                    if accessible {
-                        let ident = field.ident(self.tcx).normalize_to_macros_2_0();
-                        if ident == target_field {
+                    if field.vis.is_accessible_from(id, self.tcx) {
+                        if matches(candidate_field, field_ty) {
                             return Some(field_path);
-                        }
-                        let field_path = field_path.clone();
-                        if let Some(path) = self.check_for_nested_field(
+                        } else if let Some(field_path) = self.check_for_nested_field_satisfying(
                             span,
-                            target_field,
+                            matches,
                             field,
                             subst,
-                            field_path,
+                            field_path.clone(),
                             id,
                         ) {
-                            return Some(path);
+                            return Some(field_path);
                         }
                     }
                 }
