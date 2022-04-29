@@ -8,7 +8,7 @@ use crate::mbe::macro_parser::{MatchedSeq, MatchedTokenTree, MatcherLoc};
 use crate::mbe::transcribe::transcribe;
 
 use rustc_ast as ast;
-use rustc_ast::token::{self, NonterminalKind, Token, TokenKind, TokenKind::*};
+use rustc_ast::token::{self, Delimiter, NonterminalKind, Token, TokenKind, TokenKind::*};
 use rustc_ast::tokenstream::{DelimSpan, TokenStream};
 use rustc_ast::{NodeId, DUMMY_NODE_ID};
 use rustc_ast_pretty::pprust;
@@ -260,16 +260,15 @@ fn generic_extension<'cx, 'tt>(
                 // Merge the gated spans from parsing the matcher with the pre-existing ones.
                 sess.gated_spans.merge(gated_spans_snapshot);
 
-                // Ignore the delimiters on the RHS.
-                let rhs = match &rhses[i] {
-                    mbe::TokenTree::Delimited(_, delimited) => &delimited.tts,
+                let (rhs, rhs_span): (&mbe::Delimited, DelimSpan) = match &rhses[i] {
+                    mbe::TokenTree::Delimited(span, delimited) => (&delimited, *span),
                     _ => cx.span_bug(sp, "malformed macro rhs"),
                 };
                 let arm_span = rhses[i].span();
 
-                let rhs_spans = rhs.iter().map(|t| t.span()).collect::<Vec<_>>();
+                let rhs_spans = rhs.tts.iter().map(|t| t.span()).collect::<Vec<_>>();
                 // rhs has holes ( `$id` and `$(...)` that need filled)
-                let mut tts = match transcribe(cx, &named_matches, &rhs, transparency) {
+                let mut tts = match transcribe(cx, &named_matches, &rhs, rhs_span, transparency) {
                     Ok(tts) => tts,
                     Err(mut err) => {
                         err.emit();
@@ -1251,8 +1250,8 @@ fn is_in_follow(tok: &mbe::TokenTree, kind: NonterminalKind) -> IsInFollow {
                 ];
                 match tok {
                     TokenTree::Token(token) => match token.kind {
-                        OpenDelim(token::DelimToken::Brace)
-                        | OpenDelim(token::DelimToken::Bracket)
+                        OpenDelim(Delimiter::Brace)
+                        | OpenDelim(Delimiter::Bracket)
                         | Comma
                         | FatArrow
                         | Colon

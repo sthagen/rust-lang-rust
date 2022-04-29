@@ -1183,9 +1183,7 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
         ident: Symbol,
         kind: &AssocItemKind,
     ) -> Option<Symbol> {
-        let Some((module, _)) = &self.current_trait_ref else {
-            return None;
-        };
+        let (module, _) = self.current_trait_ref.as_ref()?;
         if ident == kw::Underscore {
             // We do nothing for `_`.
             return None;
@@ -1824,7 +1822,7 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
 
         for rib in self.lifetime_ribs.iter().rev() {
             match rib.kind {
-                LifetimeRibKind::Generics { span, kind } => {
+                LifetimeRibKind::Generics { parent: _, span, kind } => {
                     if !span.can_be_used_for_suggestions() && suggest_note {
                         suggest_note = false; // Avoid displaying the same help multiple times.
                         err.span_label(

@@ -19,7 +19,7 @@ pub use pat::{CommaRecoveryMode, RecoverColon, RecoverComma};
 pub use path::PathStyle;
 
 use rustc_ast::ptr::P;
-use rustc_ast::token::{self, DelimToken, Nonterminal, Token, TokenKind};
+use rustc_ast::token::{self, Delimiter, Nonterminal, Token, TokenKind};
 use rustc_ast::tokenstream::AttributesData;
 use rustc_ast::tokenstream::{self, DelimSpan, Spacing};
 use rustc_ast::tokenstream::{TokenStream, TokenTree};
@@ -244,14 +244,13 @@ struct TokenCursor {
 
 #[derive(Clone)]
 struct TokenCursorFrame {
-    delim: token::DelimToken,
-    span: DelimSpan,
+    delim_sp: Option<(Delimiter, DelimSpan)>,
     tree_cursor: tokenstream::Cursor,
 }
 
 impl TokenCursorFrame {
-    fn new(span: DelimSpan, delim: DelimToken, tts: TokenStream) -> Self {
-        TokenCursorFrame { delim, span, tree_cursor: tts.into_trees() }
+    fn new(delim_sp: Option<(Delimiter, DelimSpan)>, tts: TokenStream) -> Self {
+        TokenCursorFrame { delim_sp, tree_cursor: tts.into_trees() }
     }
 }
 
@@ -264,9 +263,9 @@ impl TokenCursor {
     #[inline(always)]
     fn inlined_next(&mut self, desugar_doc_comments: bool) -> (Token, Spacing) {
         loop {
-            // FIXME: we currently don't return `NoDelim` open/close delims. To fix #67062 we will
-            // need to, whereupon the `delim != DelimToken::NoDelim` conditions below can be
-            // removed, as well as the loop.
+            // FIXME: we currently don't return `Delimiter` open/close delims. To fix #67062 we will
+            // need to, whereupon the `delim != Delimiter::Invisible` conditions below can be
+            // removed.
             if let Some((tree, spacing)) = self.frame.tree_cursor.next_with_spacing_ref() {
                 match tree {
                     &TokenTree::Token(ref token) => match (desugar_doc_comments, token) {
@@ -277,21 +276,20 @@ impl TokenCursor {
                     },
                     &TokenTree::Delimited(sp, delim, ref tts) => {
                         // Set `open_delim` to true here because we deal with it immediately.
-                        let frame = TokenCursorFrame::new(sp, delim, tts.clone());
+                        let frame = TokenCursorFrame::new(Some((delim, sp)), tts.clone());
                         self.stack.push(mem::replace(&mut self.frame, frame));
-                        if delim != DelimToken::NoDelim {
+                        if delim != Delimiter::Invisible {
                             return (Token::new(token::OpenDelim(delim), sp.open), Spacing::Alone);
                         }
                         // No open delimeter to return; continue on to the next iteration.
                     }
                 };
             } else if let Some(frame) = self.stack.pop() {
-                let delim = self.frame.delim;
-                let span = self.frame.span;
-                self.frame = frame;
-                if delim != DelimToken::NoDelim {
+                if let Some((delim, span)) = self.frame.delim_sp && delim != Delimiter::Invisible {
+                    self.frame = frame;
                     return (Token::new(token::CloseDelim(delim), span.close), Spacing::Alone);
                 }
+                self.frame = frame;
                 // No close delimiter to return; continue on to the next iteration.
             } else {
                 return (Token::new(token::Eof, DUMMY_SP), Spacing::Alone);
@@ -316,7 +314,7 @@ impl TokenCursor {
         let delim_span = DelimSpan::from_single(span);
         let body = TokenTree::Delimited(
             delim_span,
-            token::Bracket,
+            Delimiter::Bracket,
             [
                 TokenTree::token(token::Ident(sym::doc, false), span),
                 TokenTree::token(token::Eq, span),
@@ -330,8 +328,7 @@ impl TokenCursor {
         self.stack.push(mem::replace(
             &mut self.frame,
             TokenCursorFrame::new(
-                delim_span,
-                token::NoDelim,
+                None,
                 if attr_style == AttrStyle::Inner {
                     [TokenTree::token(token::Pound, span), TokenTree::token(token::Not, span), body]
                         .iter()
@@ -431,10 +428,6 @@ impl<'a> Parser<'a> {
         desugar_doc_comments: bool,
         subparser_name: Option<&'static str>,
     ) -> Self {
-        // Note: because of the way `TokenCursor::inlined_next` is structured, the `span` and
-        // `delim` arguments here are never used.
-        let start_frame = TokenCursorFrame::new(DelimSpan::dummy(), token::NoDelim, tokens);
-
         let mut parser = Parser {
             sess,
             token: Token::dummy(),
@@ -444,7 +437,7 @@ impl<'a> Parser<'a> {
             restrictions: Restrictions::empty(),
             expected_tokens: Vec::new(),
             token_cursor: TokenCursor {
-                frame: start_frame,
+                frame: TokenCursorFrame::new(None, tokens),
                 stack: Vec::new(),
                 num_next_calls: 0,
                 desugar_doc_comments,
@@ -633,7 +626,7 @@ impl<'a> Parser<'a> {
         self.is_keyword_ahead(dist, &[kw::Const])
             && self.look_ahead(dist + 1, |t| match t.kind {
                 token::Interpolated(ref nt) => matches!(**nt, token::NtBlock(..)),
-                token::OpenDelim(DelimToken::Brace) => true,
+                token::OpenDelim(Delimiter::Brace) => true,
                 _ => false,
             })
     }
@@ -961,7 +954,7 @@ impl<'a> Parser<'a> {
 
     fn parse_delim_comma_seq<T>(
         &mut self,
-        delim: DelimToken,
+        delim: Delimiter,
         f: impl FnMut(&mut Parser<'a>) -> PResult<'a, T>,
     ) -> PResult<'a, (Vec<T>, bool)> {
         self.parse_unspanned_seq(
@@ -976,7 +969,7 @@ impl<'a> Parser<'a> {
         &mut self,
         f: impl FnMut(&mut Parser<'a>) -> PResult<'a, T>,
     ) -> PResult<'a, (Vec<T>, bool)> {
-        self.parse_delim_comma_seq(token::Paren, f)
+        self.parse_delim_comma_seq(Delimiter::Parenthesis, f)
     }
 
     /// Advance the parser by one token using provided token as the next one.
@@ -1012,7 +1005,7 @@ impl<'a> Parser<'a> {
         }
         debug_assert!(!matches!(
             next.0.kind,
-            token::OpenDelim(token::NoDelim) | token::CloseDelim(token::NoDelim)
+            token::OpenDelim(Delimiter::Invisible) | token::CloseDelim(Delimiter::Invisible)
         ));
         self.inlined_bump_with(next)
     }
@@ -1025,10 +1018,10 @@ impl<'a> Parser<'a> {
         }
 
         let frame = &self.token_cursor.frame;
-        if frame.delim != DelimToken::NoDelim {
+        if let Some((delim, span)) = frame.delim_sp && delim != Delimiter::Invisible {
             let all_normal = (0..dist).all(|i| {
                 let token = frame.tree_cursor.look_ahead(i);
-                !matches!(token, Some(TokenTree::Delimited(_, DelimToken::NoDelim, _)))
+                !matches!(token, Some(TokenTree::Delimited(_, Delimiter::Invisible, _)))
             });
             if all_normal {
                 return match frame.tree_cursor.look_ahead(dist - 1) {
@@ -1038,7 +1031,7 @@ impl<'a> Parser<'a> {
                             looker(&Token::new(token::OpenDelim(*delim), dspan.open))
                         }
                     },
-                    None => looker(&Token::new(token::CloseDelim(frame.delim), frame.span.close)),
+                    None => looker(&Token::new(token::CloseDelim(delim), span.close)),
                 };
             }
         }
@@ -1050,7 +1043,7 @@ impl<'a> Parser<'a> {
             token = cursor.next(/* desugar_doc_comments */ false).0;
             if matches!(
                 token.kind,
-                token::OpenDelim(token::NoDelim) | token::CloseDelim(token::NoDelim)
+                token::OpenDelim(Delimiter::Invisible) | token::CloseDelim(Delimiter::Invisible)
             ) {
                 continue;
             }
@@ -1086,7 +1079,7 @@ impl<'a> Parser<'a> {
     /// Parses constness: `const` or nothing.
     fn parse_constness(&mut self) -> Const {
         // Avoid const blocks to be parsed as const items
-        if self.look_ahead(1, |t| t != &token::OpenDelim(DelimToken::Brace))
+        if self.look_ahead(1, |t| t != &token::OpenDelim(Delimiter::Brace))
             && self.eat_keyword(kw::Const)
         {
             Const::Yes(self.prev_token.uninterpolated_span())
@@ -1149,9 +1142,9 @@ impl<'a> Parser<'a> {
 
     fn parse_mac_args_common(&mut self, delimited_only: bool) -> PResult<'a, MacArgs> {
         Ok(
-            if self.check(&token::OpenDelim(DelimToken::Paren))
-                || self.check(&token::OpenDelim(DelimToken::Bracket))
-                || self.check(&token::OpenDelim(DelimToken::Brace))
+            if self.check(&token::OpenDelim(Delimiter::Parenthesis))
+                || self.check(&token::OpenDelim(Delimiter::Bracket))
+                || self.check(&token::OpenDelim(Delimiter::Brace))
             {
                 match self.parse_token_tree() {
                     TokenTree::Delimited(dspan, delim, tokens) =>
@@ -1198,8 +1191,7 @@ impl<'a> Parser<'a> {
                 // Grab the tokens from this frame.
                 let frame = &self.token_cursor.frame;
                 let stream = frame.tree_cursor.stream.clone();
-                let span = frame.span;
-                let delim = frame.delim;
+                let (delim, span) = frame.delim_sp.unwrap();
 
                 // Advance the token cursor through the entire delimited
                 // sequence. After getting the `OpenDelim` we are *within* the
@@ -1296,7 +1288,7 @@ impl<'a> Parser<'a> {
         }
         let lo = self.prev_token.span;
 
-        if self.check(&token::OpenDelim(token::Paren)) {
+        if self.check(&token::OpenDelim(Delimiter::Parenthesis)) {
             // We don't `self.bump()` the `(` yet because this might be a struct definition where
             // `()` or a tuple might be allowed. For example, `struct Struct(pub (), pub (usize));`.
             // Because of this, we only `bump` the `(` if we're assured it is appropriate to do so
@@ -1307,7 +1299,7 @@ impl<'a> Parser<'a> {
                 // Parse `pub(crate)`.
                 self.bump(); // `(`
                 self.bump(); // `crate`
-                self.expect(&token::CloseDelim(token::Paren))?; // `)`
+                self.expect(&token::CloseDelim(Delimiter::Parenthesis))?; // `)`
                 let vis = VisibilityKind::Crate(CrateSugar::PubCrate);
                 return Ok(Visibility {
                     span: lo.to(self.prev_token.span),
@@ -1319,20 +1311,20 @@ impl<'a> Parser<'a> {
                 self.bump(); // `(`
                 self.bump(); // `in`
                 let path = self.parse_path(PathStyle::Mod)?; // `path`
-                self.expect(&token::CloseDelim(token::Paren))?; // `)`
+                self.expect(&token::CloseDelim(Delimiter::Parenthesis))?; // `)`
                 let vis = VisibilityKind::Restricted { path: P(path), id: ast::DUMMY_NODE_ID };
                 return Ok(Visibility {
                     span: lo.to(self.prev_token.span),
                     kind: vis,
                     tokens: None,
                 });
-            } else if self.look_ahead(2, |t| t == &token::CloseDelim(token::Paren))
+            } else if self.look_ahead(2, |t| t == &token::CloseDelim(Delimiter::Parenthesis))
                 && self.is_keyword_ahead(1, &[kw::Super, kw::SelfLower])
             {
                 // Parse `pub(self)` or `pub(super)`.
                 self.bump(); // `(`
                 let path = self.parse_path(PathStyle::Mod)?; // `super`/`self`
-                self.expect(&token::CloseDelim(token::Paren))?; // `)`
+                self.expect(&token::CloseDelim(Delimiter::Parenthesis))?; // `)`
                 let vis = VisibilityKind::Restricted { path: P(path), id: ast::DUMMY_NODE_ID };
                 return Ok(Visibility {
                     span: lo.to(self.prev_token.span),
@@ -1354,7 +1346,7 @@ impl<'a> Parser<'a> {
     fn recover_incorrect_vis_restriction(&mut self) -> PResult<'a, ()> {
         self.bump(); // `(`
         let path = self.parse_path(PathStyle::Mod)?;
-        self.expect(&token::CloseDelim(token::Paren))?; // `)`
+        self.expect(&token::CloseDelim(Delimiter::Parenthesis))?; // `)`
 
         let msg = "incorrect visibility restriction";
         let suggestion = r##"some possible visibility restrictions are:
@@ -1421,7 +1413,7 @@ impl<'a> Parser<'a> {
     fn is_import_coupler(&mut self) -> bool {
         self.check(&token::ModSep)
             && self.look_ahead(1, |t| {
-                *t == token::OpenDelim(token::Brace) || *t == token::BinOp(token::Star)
+                *t == token::OpenDelim(Delimiter::Brace) || *t == token::BinOp(token::Star)
             })
     }
 

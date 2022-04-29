@@ -1,11 +1,11 @@
 use super::{Capturing, FlatToken, ForceCollect, Parser, ReplaceRange, TokenCursor, TrailingToken};
-use rustc_ast::token::{self, DelimToken, Token, TokenKind};
+use rustc_ast::token::{self, Delimiter, Token, TokenKind};
 use rustc_ast::tokenstream::{AttrAnnotatedTokenStream, AttributesData, CreateTokenStream};
 use rustc_ast::tokenstream::{AttrAnnotatedTokenTree, DelimSpan, LazyTokenStream, Spacing};
 use rustc_ast::{self as ast};
 use rustc_ast::{AstLike, AttrVec, Attribute};
 use rustc_errors::PResult;
-use rustc_span::{sym, Span, DUMMY_SP};
+use rustc_span::{sym, Span};
 
 use std::convert::TryInto;
 use std::ops::Range;
@@ -388,11 +388,11 @@ impl<'a> Parser<'a> {
 /// Converts a flattened iterator of tokens (including open and close delimiter tokens)
 /// into a `TokenStream`, creating a `TokenTree::Delimited` for each matching pair
 /// of open and close delims.
-// FIXME(#67062): Currently, we don't parse `None`-delimited groups correctly,
-// which can cause us to end up with mismatched `None` delimiters in our
+// FIXME(#67062): Currently, we don't parse `Invisible`-delimited groups correctly,
+// which can cause us to end up with mismatched `Invisible` delimiters in our
 // captured tokens. This function contains several hacks to work around this -
-// essentially, we throw away mismatched `None` delimiters when we encounter them.
-// Once we properly parse `None` delimiters, they can be captured just like any
+// essentially, we throw away mismatched `Invisible` delimiters when we encounter them.
+// Once we properly parse `Invisible` delimiters, they can be captured just like any
 // other tokens, and these hacks can be removed.
 fn make_token_stream(
     mut iter: impl Iterator<Item = (FlatToken, Spacing)>,
@@ -400,24 +400,26 @@ fn make_token_stream(
 ) -> AttrAnnotatedTokenStream {
     #[derive(Debug)]
     struct FrameData {
-        open: Span,
-        open_delim: DelimToken,
+        // This is `None` for the first frame, `Some` for all others.
+        open_delim_sp: Option<(Delimiter, Span)>,
         inner: Vec<(AttrAnnotatedTokenTree, Spacing)>,
     }
-    let mut stack =
-        vec![FrameData { open: DUMMY_SP, open_delim: DelimToken::NoDelim, inner: vec![] }];
+    let mut stack = vec![FrameData { open_delim_sp: None, inner: vec![] }];
     let mut token_and_spacing = iter.next();
     while let Some((token, spacing)) = token_and_spacing {
         match token {
             FlatToken::Token(Token { kind: TokenKind::OpenDelim(delim), span }) => {
-                stack.push(FrameData { open: span, open_delim: delim, inner: vec![] });
+                stack.push(FrameData { open_delim_sp: Some((delim, span)), inner: vec![] });
             }
             FlatToken::Token(Token { kind: TokenKind::CloseDelim(delim), span }) => {
-                // HACK: If we encounter a mismatched `None` delimiter at the top
+                // HACK: If we encounter a mismatched `Invisible` delimiter at the top
                 // level, just ignore it.
-                if matches!(delim, DelimToken::NoDelim)
+                if matches!(delim, Delimiter::Invisible)
                     && (stack.len() == 1
-                        || !matches!(stack.last_mut().unwrap().open_delim, DelimToken::NoDelim))
+                        || !matches!(
+                            stack.last_mut().unwrap().open_delim_sp.unwrap().0,
+                            Delimiter::Invisible
+                        ))
                 {
                     token_and_spacing = iter.next();
                     continue;
@@ -426,11 +428,11 @@ fn make_token_stream(
                     .pop()
                     .unwrap_or_else(|| panic!("Token stack was empty for token: {:?}", token));
 
-                // HACK: If our current frame has a mismatched opening `None` delimiter,
+                // HACK: If our current frame has a mismatched opening `Invisible` delimiter,
                 // merge our current frame with the one above it. That is, transform
                 // `[ { < first second } third ]` into `[ { first second } third ]`
-                if !matches!(delim, DelimToken::NoDelim)
-                    && matches!(frame_data.open_delim, DelimToken::NoDelim)
+                if !matches!(delim, Delimiter::Invisible)
+                    && matches!(frame_data.open_delim_sp.unwrap().0, Delimiter::Invisible)
                 {
                     stack.last_mut().unwrap().inner.extend(frame_data.inner);
                     // Process our closing delimiter again, this time at the previous
@@ -439,12 +441,13 @@ fn make_token_stream(
                     continue;
                 }
 
+                let (open_delim, open_sp) = frame_data.open_delim_sp.unwrap();
                 assert_eq!(
-                    frame_data.open_delim, delim,
+                    open_delim, delim,
                     "Mismatched open/close delims: open={:?} close={:?}",
-                    frame_data.open, span
+                    open_delim, span
                 );
-                let dspan = DelimSpan::from_pair(frame_data.open, span);
+                let dspan = DelimSpan::from_pair(open_sp, span);
                 let stream = AttrAnnotatedTokenStream::new(frame_data.inner);
                 let delimited = AttrAnnotatedTokenTree::Delimited(dspan, delim, stream);
                 stack
@@ -469,10 +472,10 @@ fn make_token_stream(
         }
         token_and_spacing = iter.next();
     }
-    // HACK: If we don't have a closing `None` delimiter for our last
+    // HACK: If we don't have a closing `Invisible` delimiter for our last
     // frame, merge the frame with the top-level frame. That is,
     // turn `< first second` into `first second`
-    if stack.len() == 2 && stack[1].open_delim == DelimToken::NoDelim {
+    if stack.len() == 2 && stack[1].open_delim_sp.unwrap().0 == Delimiter::Invisible {
         let temp_buf = stack.pop().unwrap();
         stack.last_mut().unwrap().inner.extend(temp_buf.inner);
     }
