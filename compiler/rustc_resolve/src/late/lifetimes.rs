@@ -164,8 +164,6 @@ crate struct LifetimeContext<'a, 'tcx> {
     map: &'a mut NamedRegionMap,
     scope: ScopeRef<'a>,
 
-    is_in_const_generic: bool,
-
     /// Indicates that we only care about the definition of a trait. This should
     /// be false if the `Item` we are resolving lifetimes for is not a trait or
     /// we eventually need lifetimes resolve for trait items.
@@ -452,7 +450,6 @@ fn do_resolve(
         tcx,
         map: &mut named_region_map,
         scope: ROOT_SCOPE,
-        is_in_const_generic: false,
         trait_definition_only,
         labels_in_fn: vec![],
         xcrate_object_lifetime_defaults: Default::default(),
@@ -1266,10 +1263,6 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
             self.insert_lifetime(lifetime_ref, Region::Static);
             return;
         }
-        if self.is_in_const_generic && lifetime_ref.name != LifetimeName::Error {
-            self.emit_non_static_lt_in_const_generic_error(lifetime_ref);
-            return;
-        }
         self.resolve_lifetime_ref(lifetime_ref);
     }
 
@@ -1335,24 +1328,19 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
                 match param.kind {
                     GenericParamKind::Lifetime { .. } => {}
                     GenericParamKind::Type { ref default, .. } => {
-                        walk_list!(this, visit_param_bound, param.bounds);
                         if let Some(ref ty) = default {
                             this.visit_ty(&ty);
                         }
                     }
                     GenericParamKind::Const { ref ty, default } => {
-                        let was_in_const_generic = this.is_in_const_generic;
-                        this.is_in_const_generic = true;
-                        walk_list!(this, visit_param_bound, param.bounds);
                         this.visit_ty(&ty);
                         if let Some(default) = default {
                             this.visit_body(this.tcx.hir().body(default.body));
                         }
-                        this.is_in_const_generic = was_in_const_generic;
                     }
                 }
             }
-            for predicate in generics.where_clause.predicates {
+            for predicate in generics.predicates {
                 match predicate {
                     &hir::WherePredicate::BoundPredicate(hir::WhereBoundPredicate {
                         ref bounded_ty,
@@ -1403,6 +1391,32 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
                     }) => {
                         this.visit_lifetime(lifetime);
                         walk_list!(this, visit_param_bound, bounds);
+
+                        if lifetime.name != hir::LifetimeName::Static {
+                            for bound in bounds {
+                                let hir::GenericBound::Outlives(ref lt) = bound else {
+                                    continue;
+                                };
+                                if lt.name != hir::LifetimeName::Static {
+                                    continue;
+                                }
+                                this.insert_lifetime(lt, Region::Static);
+                                this.tcx
+                                    .sess
+                                    .struct_span_warn(
+                                        lifetime.span,
+                                        &format!(
+                                            "unnecessary lifetime parameter `{}`",
+                                            lifetime.name.ident(),
+                                        ),
+                                    )
+                                    .help(&format!(
+                                        "you can use the `'static` lifetime directly, in place of `{}`",
+                                        lifetime.name.ident(),
+                                    ))
+                                    .emit();
+                            }
+                        }
                     }
                     &hir::WherePredicate::EqPredicate(hir::WhereEqPredicate {
                         ref lhs_ty,
@@ -1724,10 +1738,8 @@ fn object_lifetime_defaults_for_item<'tcx>(
         GenericParamKind::Type { .. } => {
             let mut set = Set1::Empty;
 
-            add_bounds(&mut set, &param.bounds);
-
             let param_def_id = tcx.hir().local_def_id(param.hir_id);
-            for predicate in generics.where_clause.predicates {
+            for predicate in generics.predicates {
                 // Look for `type: ...` where clauses.
                 let hir::WherePredicate::BoundPredicate(ref data) = *predicate else { continue };
 
@@ -1798,7 +1810,6 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
             tcx: *tcx,
             map,
             scope: &wrap_scope,
-            is_in_const_generic: self.is_in_const_generic,
             trait_definition_only: self.trait_definition_only,
             labels_in_fn,
             xcrate_object_lifetime_defaults,
@@ -2254,10 +2265,6 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
         let result = loop {
             match *scope {
                 Scope::Body { id, s } => {
-                    // Non-static lifetimes are prohibited in anonymous constants without
-                    // `generic_const_exprs`.
-                    self.maybe_emit_forbidden_non_static_lifetime_error(id, lifetime_ref);
-
                     outermost_body = Some(id);
                     scope = s;
                 }
@@ -3139,50 +3146,6 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
 
             // It is a soft error to shadow a lifetime within a parent scope.
             self.check_lifetime_param_for_shadowing(old_scope, &lifetime_i);
-
-            for bound in lifetime_i.bounds {
-                match bound {
-                    hir::GenericBound::Outlives(ref lt) => match lt.name {
-                        hir::LifetimeName::Underscore => {
-                            self.tcx.sess.delay_span_bug(
-                                lt.span,
-                                "use of `'_` in illegal place, but not caught by lowering",
-                            );
-                        }
-                        hir::LifetimeName::Static => {
-                            self.insert_lifetime(lt, Region::Static);
-                            self.tcx
-                                .sess
-                                .struct_span_warn(
-                                    lifetime_i.span.to(lt.span),
-                                    &format!(
-                                        "unnecessary lifetime parameter `{}`",
-                                        lifetime_i.name.ident(),
-                                    ),
-                                )
-                                .help(&format!(
-                                    "you can use the `'static` lifetime directly, in place of `{}`",
-                                    lifetime_i.name.ident(),
-                                ))
-                                .emit();
-                        }
-                        hir::LifetimeName::Param(_) | hir::LifetimeName::Implicit => {
-                            self.resolve_lifetime_ref(lt);
-                        }
-                        hir::LifetimeName::ImplicitObjectLifetimeDefault => {
-                            self.tcx.sess.delay_span_bug(
-                                lt.span,
-                                "lowering generated `ImplicitObjectLifetimeDefault` \
-                                 outside of an object type",
-                            );
-                        }
-                        hir::LifetimeName::Error => {
-                            // No need to do anything, error already reported.
-                        }
-                    },
-                    _ => bug!(),
-                }
-            }
         }
     }
 
@@ -3341,18 +3304,6 @@ fn insert_late_bound_lifetimes(
     // ignore binders here and scrape up all names we see.
     let mut appears_in_where_clause = AllCollector::default();
     appears_in_where_clause.visit_generics(generics);
-
-    for param in generics.params {
-        if let hir::GenericParamKind::Lifetime { .. } = param.kind {
-            if !param.bounds.is_empty() {
-                // `'a: 'b` means both `'a` and `'b` are referenced
-                appears_in_where_clause
-                    .regions
-                    .insert(hir::LifetimeName::Param(param.name.normalize_to_macros_2_0()));
-            }
-        }
-    }
-
     debug!(?appears_in_where_clause.regions);
 
     // Late bound regions are those that:
