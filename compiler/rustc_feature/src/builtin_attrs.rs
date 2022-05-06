@@ -379,6 +379,12 @@ pub const BUILTIN_ATTRIBUTES: &[BuiltinAttribute] = &[
     // Unstable attributes:
     // ==========================================================================
 
+    // RFC #3191: #[debugger_visualizer] support
+    gated!(
+        debugger_visualizer, Normal, template!(List: r#"natvis_file = "...""#),
+        DuplicatesOk, experimental!(debugger_visualizer)
+    ),
+
     // Linking:
     gated!(naked, Normal, template!(Word), WarnFollowing, naked_functions, experimental!(naked)),
     gated!(
@@ -643,6 +649,11 @@ pub const BUILTIN_ATTRIBUTES: &[BuiltinAttribute] = &[
     rustc_attr!(
         rustc_allow_incoherent_impl, AttributeType::Normal, template!(Word), ErrorFollowing,
         "#[rustc_allow_incoherent_impl] has to be added to all impl items of an incoherent inherent impl."
+    ),
+    rustc_attr!(
+        rustc_has_incoherent_inherent_impls, AttributeType::Normal, template!(Word), ErrorFollowing,
+        "#[rustc_has_incoherent_inherent_impls] allows the addition of incoherent inherent impls for \
+         the given type by annotating all impl items with #[rustc_allow_incoherent_impl]."
     ),
     BuiltinAttribute {
         name: sym::rustc_diagnostic_item,

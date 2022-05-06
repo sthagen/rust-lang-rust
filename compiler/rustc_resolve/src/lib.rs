@@ -9,7 +9,6 @@
 #![doc(html_root_url = "https://doc.rust-lang.org/nightly/nightly-rustc/")]
 #![feature(box_patterns)]
 #![feature(drain_filter)]
-#![feature(bool_to_option)]
 #![feature(crate_visibility_modifier)]
 #![feature(if_let_guard)]
 #![feature(let_chains)]
@@ -696,6 +695,9 @@ struct UseError<'a> {
     instead: bool,
     /// Extra free-form suggestion.
     suggestion: Option<(Span, &'static str, String, Applicability)>,
+    /// Path `Segment`s at the place of use that failed. Used for accurate suggestion after telling
+    /// the user to import the item directly.
+    path: Vec<Segment>,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -1111,7 +1113,8 @@ impl<'a> AsMut<Resolver<'a>> for Resolver<'a> {
 }
 
 impl<'a, 'b> DefIdTree for &'a Resolver<'b> {
-    fn parent(self, id: DefId) -> Option<DefId> {
+    #[inline]
+    fn opt_parent(self, id: DefId) -> Option<DefId> {
         match id.as_local() {
             Some(id) => self.definitions.def_key(id).parent,
             None => self.cstore().def_key(id).parent,

@@ -191,7 +191,7 @@ impl<'ra> EarlyDocLinkResolver<'_, 'ra> {
             return;
         }
         // FIXME: actually resolve links, not just add traits in scope.
-        if let Some(parent_id) = self.resolver.parent(scope_id) {
+        if let Some(parent_id) = self.resolver.opt_parent(scope_id) {
             self.add_traits_in_scope(parent_id);
         }
     }
@@ -286,16 +286,28 @@ impl<'ra> EarlyDocLinkResolver<'_, 'ra> {
             {
                 if let Some(def_id) = child.res.opt_def_id() && !def_id.is_local() {
                     let scope_id = match child.res {
-                        Res::Def(DefKind::Variant, ..) => self.resolver.parent(def_id).unwrap(),
+                        Res::Def(DefKind::Variant, ..) => self.resolver.parent(def_id),
                         _ => def_id,
                     };
                     self.resolve_doc_links_extern_outer(def_id, scope_id); // Outer attribute scope
                     if let Res::Def(DefKind::Mod, ..) = child.res {
                         self.resolve_doc_links_extern_inner(def_id); // Inner attribute scope
                     }
-                    // Traits are processed in `add_extern_traits_in_scope`.
+                    // `DefKind::Trait`s are processed in `process_extern_impls`.
                     if let Res::Def(DefKind::Mod | DefKind::Enum, ..) = child.res {
                         self.process_module_children_or_reexports(def_id);
+                    }
+                    if let Res::Def(DefKind::Struct | DefKind::Union | DefKind::Variant, _) =
+                        child.res
+                    {
+                        let field_def_ids = Vec::from_iter(
+                            self.resolver
+                                .cstore()
+                                .associated_item_def_ids_untracked(def_id, self.sess),
+                        );
+                        for field_def_id in field_def_ids {
+                            self.resolve_doc_links_extern_outer(field_def_id, scope_id);
+                        }
                     }
                 }
             }
