@@ -1,7 +1,3 @@
-/* eslint-env es6 */
-/* eslint no-var: "error" */
-/* eslint prefer-const: "error" */
-/* eslint prefer-arrow-callback: "error" */
 // Local js definitions:
 /* global getSettingValue, getVirtualKey, updateLocalStorage, updateSystemTheme */
 /* global addClass, removeClass, onEach, onEachLazy, NOT_DISPLAYED_ID */
@@ -112,7 +108,7 @@
         let output = "";
 
         for (const setting of settings) {
-            output += `<div class="setting-line">`;
+            output += "<div class=\"setting-line\">";
             const js_data_name = setting["js_name"];
             const setting_name = setting["name"];
 
@@ -221,11 +217,10 @@
 
         if (isSettingsPage) {
             innerHTML +=
-                `<a id="back" href="javascript:void(0)" onclick="history.back();">Back</a>`;
+                "<a id=\"back\" href=\"javascript:void(0)\" onclick=\"history.back();\">Back</a>";
         } else {
-            innerHTML +=
-                `<a id="back" href="javascript:void(0)" onclick="switchDisplayedElement(null);">\
-                    Back</a>`;
+            innerHTML += "<a id=\"back\" href=\"javascript:void(0)\" " +
+                "onclick=\"switchDisplayedElement(null);\">Back</a>";
         }
         innerHTML += `</span>
             </div>
