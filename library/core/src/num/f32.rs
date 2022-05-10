@@ -31,7 +31,7 @@ use crate::num::FpCategory;
 /// let r = f32::RADIX;
 /// ```
 #[stable(feature = "rust1", since = "1.0.0")]
-#[rustc_deprecated(since = "TBD", reason = "replaced by the `RADIX` associated constant on `f32`")]
+#[deprecated(since = "TBD", note = "replaced by the `RADIX` associated constant on `f32`")]
 pub const RADIX: u32 = f32::RADIX;
 
 /// Number of significant digits in base 2.
@@ -48,9 +48,9 @@ pub const RADIX: u32 = f32::RADIX;
 /// let d = f32::MANTISSA_DIGITS;
 /// ```
 #[stable(feature = "rust1", since = "1.0.0")]
-#[rustc_deprecated(
+#[deprecated(
     since = "TBD",
-    reason = "replaced by the `MANTISSA_DIGITS` associated constant on `f32`"
+    note = "replaced by the `MANTISSA_DIGITS` associated constant on `f32`"
 )]
 pub const MANTISSA_DIGITS: u32 = f32::MANTISSA_DIGITS;
 
@@ -68,7 +68,7 @@ pub const MANTISSA_DIGITS: u32 = f32::MANTISSA_DIGITS;
 /// let d = f32::DIGITS;
 /// ```
 #[stable(feature = "rust1", since = "1.0.0")]
-#[rustc_deprecated(since = "TBD", reason = "replaced by the `DIGITS` associated constant on `f32`")]
+#[deprecated(since = "TBD", note = "replaced by the `DIGITS` associated constant on `f32`")]
 pub const DIGITS: u32 = f32::DIGITS;
 
 /// [Machine epsilon] value for `f32`.
@@ -89,10 +89,7 @@ pub const DIGITS: u32 = f32::DIGITS;
 /// let e = f32::EPSILON;
 /// ```
 #[stable(feature = "rust1", since = "1.0.0")]
-#[rustc_deprecated(
-    since = "TBD",
-    reason = "replaced by the `EPSILON` associated constant on `f32`"
-)]
+#[deprecated(since = "TBD", note = "replaced by the `EPSILON` associated constant on `f32`")]
 pub const EPSILON: f32 = f32::EPSILON;
 
 /// Smallest finite `f32` value.
@@ -109,7 +106,7 @@ pub const EPSILON: f32 = f32::EPSILON;
 /// let min = f32::MIN;
 /// ```
 #[stable(feature = "rust1", since = "1.0.0")]
-#[rustc_deprecated(since = "TBD", reason = "replaced by the `MIN` associated constant on `f32`")]
+#[deprecated(since = "TBD", note = "replaced by the `MIN` associated constant on `f32`")]
 pub const MIN: f32 = f32::MIN;
 
 /// Smallest positive normal `f32` value.
@@ -126,10 +123,7 @@ pub const MIN: f32 = f32::MIN;
 /// let min = f32::MIN_POSITIVE;
 /// ```
 #[stable(feature = "rust1", since = "1.0.0")]
-#[rustc_deprecated(
-    since = "TBD",
-    reason = "replaced by the `MIN_POSITIVE` associated constant on `f32`"
-)]
+#[deprecated(since = "TBD", note = "replaced by the `MIN_POSITIVE` associated constant on `f32`")]
 pub const MIN_POSITIVE: f32 = f32::MIN_POSITIVE;
 
 /// Largest finite `f32` value.
@@ -146,7 +140,7 @@ pub const MIN_POSITIVE: f32 = f32::MIN_POSITIVE;
 /// let max = f32::MAX;
 /// ```
 #[stable(feature = "rust1", since = "1.0.0")]
-#[rustc_deprecated(since = "TBD", reason = "replaced by the `MAX` associated constant on `f32`")]
+#[deprecated(since = "TBD", note = "replaced by the `MAX` associated constant on `f32`")]
 pub const MAX: f32 = f32::MAX;
 
 /// One greater than the minimum possible normal power of 2 exponent.
@@ -163,10 +157,7 @@ pub const MAX: f32 = f32::MAX;
 /// let min = f32::MIN_EXP;
 /// ```
 #[stable(feature = "rust1", since = "1.0.0")]
-#[rustc_deprecated(
-    since = "TBD",
-    reason = "replaced by the `MIN_EXP` associated constant on `f32`"
-)]
+#[deprecated(since = "TBD", note = "replaced by the `MIN_EXP` associated constant on `f32`")]
 pub const MIN_EXP: i32 = f32::MIN_EXP;
 
 /// Maximum possible power of 2 exponent.
@@ -183,10 +174,7 @@ pub const MIN_EXP: i32 = f32::MIN_EXP;
 /// let max = f32::MAX_EXP;
 /// ```
 #[stable(feature = "rust1", since = "1.0.0")]
-#[rustc_deprecated(
-    since = "TBD",
-    reason = "replaced by the `MAX_EXP` associated constant on `f32`"
-)]
+#[deprecated(since = "TBD", note = "replaced by the `MAX_EXP` associated constant on `f32`")]
 pub const MAX_EXP: i32 = f32::MAX_EXP;
 
 /// Minimum possible normal power of 10 exponent.
@@ -203,10 +191,7 @@ pub const MAX_EXP: i32 = f32::MAX_EXP;
 /// let min = f32::MIN_10_EXP;
 /// ```
 #[stable(feature = "rust1", since = "1.0.0")]
-#[rustc_deprecated(
-    since = "TBD",
-    reason = "replaced by the `MIN_10_EXP` associated constant on `f32`"
-)]
+#[deprecated(since = "TBD", note = "replaced by the `MIN_10_EXP` associated constant on `f32`")]
 pub const MIN_10_EXP: i32 = f32::MIN_10_EXP;
 
 /// Maximum possible power of 10 exponent.
@@ -223,10 +208,7 @@ pub const MIN_10_EXP: i32 = f32::MIN_10_EXP;
 /// let max = f32::MAX_10_EXP;
 /// ```
 #[stable(feature = "rust1", since = "1.0.0")]
-#[rustc_deprecated(
-    since = "TBD",
-    reason = "replaced by the `MAX_10_EXP` associated constant on `f32`"
-)]
+#[deprecated(since = "TBD", note = "replaced by the `MAX_10_EXP` associated constant on `f32`")]
 pub const MAX_10_EXP: i32 = f32::MAX_10_EXP;
 
 /// Not a Number (NaN).
@@ -243,7 +225,7 @@ pub const MAX_10_EXP: i32 = f32::MAX_10_EXP;
 /// let nan = f32::NAN;
 /// ```
 #[stable(feature = "rust1", since = "1.0.0")]
-#[rustc_deprecated(since = "TBD", reason = "replaced by the `NAN` associated constant on `f32`")]
+#[deprecated(since = "TBD", note = "replaced by the `NAN` associated constant on `f32`")]
 pub const NAN: f32 = f32::NAN;
 
 /// Infinity (∞).
@@ -260,10 +242,7 @@ pub const NAN: f32 = f32::NAN;
 /// let inf = f32::INFINITY;
 /// ```
 #[stable(feature = "rust1", since = "1.0.0")]
-#[rustc_deprecated(
-    since = "TBD",
-    reason = "replaced by the `INFINITY` associated constant on `f32`"
-)]
+#[deprecated(since = "TBD", note = "replaced by the `INFINITY` associated constant on `f32`")]
 pub const INFINITY: f32 = f32::INFINITY;
 
 /// Negative infinity (−∞).
@@ -280,10 +259,7 @@ pub const INFINITY: f32 = f32::INFINITY;
 /// let ninf = f32::NEG_INFINITY;
 /// ```
 #[stable(feature = "rust1", since = "1.0.0")]
-#[rustc_deprecated(
-    since = "TBD",
-    reason = "replaced by the `NEG_INFINITY` associated constant on `f32`"
-)]
+#[deprecated(since = "TBD", note = "replaced by the `NEG_INFINITY` associated constant on `f32`")]
 pub const NEG_INFINITY: f32 = f32::NEG_INFINITY;
 
 /// Basic mathematical constants.
@@ -417,6 +393,15 @@ impl f32 {
     pub const MAX_10_EXP: i32 = 38;
 
     /// Not a Number (NaN).
+    ///
+    /// Note that IEEE-745 doesn't define just a single NaN value;
+    /// a plethora of bit patterns are considered to be NaN.
+    /// Furthermore, the standard makes a difference
+    /// between a "signaling" and a "quiet" NaN,
+    /// and allows inspecting its "payload" (the unspecified bits in the bit pattern).
+    /// This constant isn't guaranteed to equal to any specific NaN bitpattern,
+    /// and the stability of its representation over Rust versions
+    /// and target platforms isn't guaranteed.
     #[stable(feature = "assoc_int_consts", since = "1.43.0")]
     pub const NAN: f32 = 0.0_f32 / 0.0_f32;
     /// Infinity (∞).
@@ -426,7 +411,7 @@ impl f32 {
     #[stable(feature = "assoc_int_consts", since = "1.43.0")]
     pub const NEG_INFINITY: f32 = -1.0_f32 / 0.0_f32;
 
-    /// Returns `true` if this value is `NaN`.
+    /// Returns `true` if this value is NaN.
     ///
     /// ```
     /// let nan = f32::NAN;
@@ -479,7 +464,7 @@ impl f32 {
         (self == f32::INFINITY) | (self == f32::NEG_INFINITY)
     }
 
-    /// Returns `true` if this number is neither infinite nor `NaN`.
+    /// Returns `true` if this number is neither infinite nor NaN.
     ///
     /// ```
     /// let f = 7.0f32;
@@ -530,7 +515,7 @@ impl f32 {
     }
 
     /// Returns `true` if the number is neither zero, infinite,
-    /// [subnormal], or `NaN`.
+    /// [subnormal], or NaN.
     ///
     /// ```
     /// let min = f32::MIN_POSITIVE; // 1.17549435e-38f32
@@ -646,8 +631,12 @@ impl f32 {
         }
     }
 
-    /// Returns `true` if `self` has a positive sign, including `+0.0`, `NaN`s with
-    /// positive sign bit and positive infinity.
+    /// Returns `true` if `self` has a positive sign, including `+0.0`, NaNs with
+    /// positive sign bit and positive infinity. Note that IEEE-745 doesn't assign any
+    /// meaning to the sign bit in case of a NaN, and as Rust doesn't guarantee that
+    /// the bit pattern of NaNs are conserved over arithmetic operations, the result of
+    /// `is_sign_positive` on a NaN might produce an unexpected result in some cases.
+    /// See [explanation of NaN as a special value](f32) for more info.
     ///
     /// ```
     /// let f = 7.0_f32;
@@ -664,8 +653,12 @@ impl f32 {
         !self.is_sign_negative()
     }
 
-    /// Returns `true` if `self` has a negative sign, including `-0.0`, `NaN`s with
-    /// negative sign bit and negative infinity.
+    /// Returns `true` if `self` has a negative sign, including `-0.0`, NaNs with
+    /// negative sign bit and negative infinity. Note that IEEE-745 doesn't assign any
+    /// meaning to the sign bit in case of a NaN, and as Rust doesn't guarantee that
+    /// the bit pattern of NaNs are conserved over arithmetic operations, the result of
+    /// `is_sign_negative` on a NaN might produce an unexpected result in some cases.
+    /// See [explanation of NaN as a special value](f32) for more info.
     ///
     /// ```
     /// let f = 7.0f32;
@@ -737,10 +730,12 @@ impl f32 {
         self * (value / 180.0f32)
     }
 
-    /// Returns the maximum of the two numbers.
+    /// Returns the maximum of the two numbers, ignoring NaN.
     ///
-    /// Follows the IEEE-754 2008 semantics for maxNum, except for handling of signaling NaNs.
-    /// This matches the behavior of libm’s fmax.
+    /// If one of the arguments is NaN, then the other argument is returned.
+    /// This follows the IEEE-754 2008 semantics for maxNum, except for handling of signaling NaNs;
+    /// this function handles all NaNs the same way and avoids maxNum's problems with associativity.
+    /// This also matches the behavior of libm’s fmax.
     ///
     /// ```
     /// let x = 1.0f32;
@@ -748,8 +743,6 @@ impl f32 {
     ///
     /// assert_eq!(x.max(y), y);
     /// ```
-    ///
-    /// If one of the arguments is NaN, then the other argument is returned.
     #[must_use = "this returns the result of the comparison, without modifying either input"]
     #[stable(feature = "rust1", since = "1.0.0")]
     #[inline]
@@ -757,10 +750,12 @@ impl f32 {
         intrinsics::maxnumf32(self, other)
     }
 
-    /// Returns the minimum of the two numbers.
+    /// Returns the minimum of the two numbers, ignoring NaN.
     ///
-    /// Follows the IEEE-754 2008 semantics for minNum, except for handling of signaling NaNs.
-    /// This matches the behavior of libm’s fmin.
+    /// If one of the arguments is NaN, then the other argument is returned.
+    /// This follows the IEEE-754 2008 semantics for minNum, except for handling of signaling NaNs;
+    /// this function handles all NaNs the same way and avoids minNum's problems with associativity.
+    /// This also matches the behavior of libm’s fmin.
     ///
     /// ```
     /// let x = 1.0f32;
@@ -768,8 +763,6 @@ impl f32 {
     ///
     /// assert_eq!(x.min(y), x);
     /// ```
-    ///
-    /// If one of the arguments is NaN, then the other argument is returned.
     #[must_use = "this returns the result of the comparison, without modifying either input"]
     #[stable(feature = "rust1", since = "1.0.0")]
     #[inline]
@@ -777,7 +770,7 @@ impl f32 {
         intrinsics::minnumf32(self, other)
     }
 
-    /// Returns the maximum of the two numbers, propagating NaNs.
+    /// Returns the maximum of the two numbers, propagating NaN.
     ///
     /// This returns NaN when *either* argument is NaN, as opposed to
     /// [`f32::max`] which only returns NaN when *both* arguments are NaN.
@@ -794,6 +787,9 @@ impl f32 {
     /// If one of the arguments is NaN, then NaN is returned. Otherwise this returns the greater
     /// of the two numbers. For this operation, -0.0 is considered to be less than +0.0.
     /// Note that this follows the semantics specified in IEEE 754-2019.
+    ///
+    /// Also note that "propagation" of NaNs here doesn't necessarily mean that the bitpattern of a NaN
+    /// operand is conserved; see [explanation of NaN as a special value](f32) for more info.
     #[must_use = "this returns the result of the comparison, without modifying either input"]
     #[unstable(feature = "float_minimum_maximum", issue = "91079")]
     #[inline]
@@ -809,7 +805,7 @@ impl f32 {
         }
     }
 
-    /// Returns the minimum of the two numbers, propagating NaNs.
+    /// Returns the minimum of the two numbers, propagating NaN.
     ///
     /// This returns NaN when *either* argument is NaN, as opposed to
     /// [`f32::min`] which only returns NaN when *both* arguments are NaN.
@@ -826,6 +822,9 @@ impl f32 {
     /// If one of the arguments is NaN, then NaN is returned. Otherwise this returns the lesser
     /// of the two numbers. For this operation, -0.0 is considered to be less than +0.0.
     /// Note that this follows the semantics specified in IEEE 754-2019.
+    ///
+    /// Also note that "propagation" of NaNs here doesn't necessarily mean that the bitpattern of a NaN
+    /// operand is conserved; see [explanation of NaN as a special value](f32) for more info.
     #[must_use = "this returns the result of the comparison, without modifying either input"]
     #[unstable(feature = "float_minimum_maximum", issue = "91079")]
     #[inline]
@@ -1033,6 +1032,9 @@ impl f32 {
     /// Return the memory representation of this floating point number as a byte array in
     /// big-endian (network) byte order.
     ///
+    /// See [`from_bits`](Self::from_bits) for some discussion of the
+    /// portability of this operation (there are almost no issues).
+    ///
     /// # Examples
     ///
     /// ```
@@ -1050,6 +1052,9 @@ impl f32 {
 
     /// Return the memory representation of this floating point number as a byte array in
     /// little-endian byte order.
+    ///
+    /// See [`from_bits`](Self::from_bits) for some discussion of the
+    /// portability of this operation (there are almost no issues).
     ///
     /// # Examples
     ///
@@ -1075,6 +1080,9 @@ impl f32 {
     /// [`to_be_bytes`]: f32::to_be_bytes
     /// [`to_le_bytes`]: f32::to_le_bytes
     ///
+    /// See [`from_bits`](Self::from_bits) for some discussion of the
+    /// portability of this operation (there are almost no issues).
+    ///
     /// # Examples
     ///
     /// ```
@@ -1099,6 +1107,9 @@ impl f32 {
 
     /// Create a floating point value from its representation as a byte array in big endian.
     ///
+    /// See [`from_bits`](Self::from_bits) for some discussion of the
+    /// portability of this operation (there are almost no issues).
+    ///
     /// # Examples
     ///
     /// ```
@@ -1114,6 +1125,9 @@ impl f32 {
     }
 
     /// Create a floating point value from its representation as a byte array in little endian.
+    ///
+    /// See [`from_bits`](Self::from_bits) for some discussion of the
+    /// portability of this operation (there are almost no issues).
     ///
     /// # Examples
     ///
@@ -1137,6 +1151,9 @@ impl f32 {
     ///
     /// [`from_be_bytes`]: f32::from_be_bytes
     /// [`from_le_bytes`]: f32::from_le_bytes
+    ///
+    /// See [`from_bits`](Self::from_bits) for some discussion of the
+    /// portability of this operation (there are almost no issues).
     ///
     /// # Examples
     ///

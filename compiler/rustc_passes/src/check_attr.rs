@@ -4,7 +4,8 @@
 //! conflicts between multiple such attributes attached to the same
 //! item.
 
-use rustc_ast::{ast, AttrStyle, Attribute, Lit, LitKind, MetaItemKind, NestedMetaItem};
+use rustc_ast::tokenstream::DelimSpan;
+use rustc_ast::{ast, AttrStyle, Attribute, Lit, LitKind, MacArgs, MetaItemKind, NestedMetaItem};
 use rustc_data_structures::fx::FxHashMap;
 use rustc_errors::{pluralize, struct_span_err, Applicability, MultiSpan};
 use rustc_feature::{AttributeDuplicates, AttributeType, BuiltinAttribute, BUILTIN_ATTRIBUTE_MAP};
@@ -104,6 +105,9 @@ impl CheckAttrVisitor<'_> {
                 sym::rustc_allow_const_fn_unstable => {
                     self.check_rustc_allow_const_fn_unstable(hir_id, &attr, span, target)
                 }
+                sym::rustc_std_internal_symbol => {
+                    self.check_rustc_std_internal_symbol(&attr, span, target)
+                }
                 sym::naked => self.check_naked(hir_id, attr, span, target),
                 sym::rustc_legacy_const_generics => {
                     self.check_rustc_legacy_const_generics(&attr, span, target, item)
@@ -193,6 +197,7 @@ impl CheckAttrVisitor<'_> {
             return;
         }
 
+        // FIXME(@lcnr): this doesn't belong here.
         if matches!(target, Target::Closure | Target::Fn | Target::Method(_) | Target::ForeignFn) {
             self.tcx.ensure().codegen_fn_attrs(self.tcx.hir().local_def_id(hir_id));
         }
@@ -810,6 +815,68 @@ impl CheckAttrVisitor<'_> {
         }
     }
 
+    /// Checks `#[doc(hidden)]` attributes. Returns `true` if valid.
+    fn check_doc_hidden(
+        &self,
+        attr: &Attribute,
+        meta_index: usize,
+        meta: &NestedMetaItem,
+        hir_id: HirId,
+        target: Target,
+    ) -> bool {
+        if let Target::AssocConst
+        | Target::AssocTy
+        | Target::Method(MethodKind::Trait { body: true }) = target
+        {
+            let parent_hir_id = self.tcx.hir().get_parent_item(hir_id);
+            let containing_item = self.tcx.hir().expect_item(parent_hir_id);
+
+            if Target::from_item(containing_item) == Target::Impl {
+                let meta_items = attr.meta_item_list().unwrap();
+
+                let (span, replacement_span) = if meta_items.len() == 1 {
+                    (attr.span, attr.span)
+                } else {
+                    let meta_span = meta.span();
+                    (
+                        meta_span,
+                        meta_span.until(match meta_items.get(meta_index + 1) {
+                            Some(next_item) => next_item.span(),
+                            None => match attr.get_normal_item().args {
+                                MacArgs::Delimited(DelimSpan { close, .. }, ..) => close,
+                                _ => unreachable!(),
+                            },
+                        }),
+                    )
+                };
+
+                // FIXME: #[doc(hidden)] was previously erroneously allowed on trait impl items,
+                // so for backward compatibility only emit a warning and do not mark it as invalid.
+                self.tcx.struct_span_lint_hir(UNUSED_ATTRIBUTES, hir_id, span, |lint| {
+                    lint.build("`#[doc(hidden)]` is ignored on trait impl items")
+                        .warn(
+                            "this was previously accepted by the compiler but is \
+                             being phased out; it will become a hard error in \
+                             a future release!",
+                        )
+                        .note(
+                            "whether the impl item is `doc(hidden)` or not \
+                             entirely depends on the corresponding trait item",
+                        )
+                        .span_suggestion(
+                            replacement_span,
+                            "remove this attribute",
+                            String::new(),
+                            Applicability::MachineApplicable,
+                        )
+                        .emit();
+                });
+            }
+        }
+
+        true
+    }
+
     /// Checks that an attribute is *not* used at the crate level. Returns `true` if valid.
     fn check_attr_not_crate_level(
         &self,
@@ -928,7 +995,7 @@ impl CheckAttrVisitor<'_> {
         let mut is_valid = true;
 
         if let Some(mi) = attr.meta() && let Some(list) = mi.meta_item_list() {
-            for meta in list {
+            for (meta_index, meta) in list.into_iter().enumerate() {
                 if let Some(i_meta) = meta.meta_item() {
                     match i_meta.name_or_empty() {
                         sym::alias
@@ -966,6 +1033,15 @@ impl CheckAttrVisitor<'_> {
                                 specified_inline,
                             ) =>
                         {
+                            is_valid = false;
+                        }
+
+                        sym::hidden if !self.check_doc_hidden(attr,
+                            meta_index,
+                            meta,
+                            hir_id,
+                            target,
+                            ) => {
                             is_valid = false;
                         }
 
@@ -1659,7 +1735,7 @@ impl CheckAttrVisitor<'_> {
                     }
                 }
                 sym::align => {
-                    if let (Target::Fn, true) = (target, !self.tcx.features().fn_align) {
+                    if let (Target::Fn, false) = (target, self.tcx.features().fn_align) {
                         feature_err(
                             &self.tcx.sess.parse_sess,
                             sym::fn_align,
@@ -1974,6 +2050,25 @@ impl CheckAttrVisitor<'_> {
                     .sess
                     .struct_span_err(attr.span, "attribute should be applied to `const fn`")
                     .span_label(span, "not a `const fn`")
+                    .emit();
+                false
+            }
+        }
+    }
+
+    fn check_rustc_std_internal_symbol(
+        &self,
+        attr: &Attribute,
+        span: Span,
+        target: Target,
+    ) -> bool {
+        match target {
+            Target::Fn | Target::Static => true,
+            _ => {
+                self.tcx
+                    .sess
+                    .struct_span_err(attr.span, "attribute should be applied functions or statics")
+                    .span_label(span, "not a function or static")
                     .emit();
                 false
             }

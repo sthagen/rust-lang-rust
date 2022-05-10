@@ -523,11 +523,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                                 self.astconv
                                     .normalize_ty(
                                         self.span,
-                                        tcx.at(self.span).type_of(param.def_id).subst_spanned(
-                                            tcx,
-                                            substs,
-                                            Some(self.span),
-                                        ),
+                                        tcx.at(self.span).type_of(param.def_id).subst(tcx, substs),
                                     )
                                     .into()
                             }
@@ -547,9 +543,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                     GenericParamDefKind::Const { has_default } => {
                         let ty = tcx.at(self.span).type_of(param.def_id);
                         if !infer_args && has_default {
-                            tcx.const_param_default(param.def_id)
-                                .subst_spanned(tcx, substs.unwrap(), Some(self.span))
-                                .into()
+                            tcx.const_param_default(param.def_id).subst(tcx, substs.unwrap()).into()
                         } else {
                             if infer_args {
                                 self.astconv.ct_infer(ty, Some(param), self.span).into()
@@ -1070,6 +1064,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         let mut bounds = Bounds::default();
 
         self.add_bounds(param_ty, ast_bounds.iter(), &mut bounds, ty::List::empty());
+        debug!(?bounds);
 
         bounds
     }
@@ -1333,8 +1328,9 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         // is used and no 'maybe' bounds are used.
         let expanded_traits =
             traits::expand_trait_aliases(tcx, bounds.trait_bounds.iter().map(|&(a, b, _)| (a, b)));
-        let (mut auto_traits, regular_traits): (Vec<_>, Vec<_>) =
-            expanded_traits.partition(|i| tcx.trait_is_auto(i.trait_ref().def_id()));
+        let (mut auto_traits, regular_traits): (Vec<_>, Vec<_>) = expanded_traits
+            .filter(|i| i.trait_ref().self_ty().skip_binder() == dummy_self)
+            .partition(|i| tcx.trait_is_auto(i.trait_ref().def_id()));
         if regular_traits.len() > 1 {
             let first_trait = &regular_traits[0];
             let additional_trait = &regular_traits[1];
@@ -1368,7 +1364,13 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         }
 
         if regular_traits.is_empty() && auto_traits.is_empty() {
-            tcx.sess.emit_err(TraitObjectDeclaredWithNoTraits { span });
+            let trait_alias_span = bounds
+                .trait_bounds
+                .iter()
+                .map(|&(trait_ref, _, _)| trait_ref.def_id())
+                .find(|&trait_ref| tcx.is_trait_alias(trait_ref))
+                .map(|trait_ref| tcx.def_span(trait_ref));
+            tcx.sess.emit_err(TraitObjectDeclaredWithNoTraits { span, trait_alias_span });
             return tcx.ty_error();
         }
 
