@@ -3,7 +3,6 @@
 #![unstable(feature = "io_safety", issue = "87074")]
 
 use super::raw::{AsRawHandle, FromRawHandle, IntoRawHandle, RawHandle};
-use crate::convert::TryFrom;
 use crate::fmt;
 use crate::fs;
 use crate::io;
@@ -137,7 +136,7 @@ impl BorrowedHandle<'_> {
     /// [here]: https://devblogs.microsoft.com/oldnewthing/20040302-00/?p=40443
     #[inline]
     #[unstable(feature = "io_safety", issue = "87074")]
-    pub unsafe fn borrow_raw(handle: RawHandle) -> Self {
+    pub const unsafe fn borrow_raw(handle: RawHandle) -> Self {
         Self { handle, _phantom: PhantomData }
     }
 }
