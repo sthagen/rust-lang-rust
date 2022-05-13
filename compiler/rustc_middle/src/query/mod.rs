@@ -1072,6 +1072,9 @@ rustc_queries! {
         desc { |tcx| "checking whether `{}` is `doc(hidden)`", tcx.def_path_str(def_id) }
     }
 
+    /// Returns the attributes on the item at `def_id`.
+    ///
+    /// Do not use this directly, use `tcx.get_attrs` instead.
     query item_attrs(def_id: DefId) -> &'tcx [ast::Attribute] {
         desc { |tcx| "collecting attributes of `{}`", tcx.def_path_str(def_id) }
         separate_provide_extern
@@ -1145,7 +1148,7 @@ rustc_queries! {
 
     query codegen_fulfill_obligation(
         key: (ty::ParamEnv<'tcx>, ty::PolyTraitRef<'tcx>)
-    ) -> Result<&'tcx ImplSource<'tcx, ()>, ErrorGuaranteed> {
+    ) -> Result<&'tcx ImplSource<'tcx, ()>, traits::CodegenObligationError> {
         cache_on_disk_if { true }
         desc { |tcx|
             "checking if `{}` fulfills its obligations",
