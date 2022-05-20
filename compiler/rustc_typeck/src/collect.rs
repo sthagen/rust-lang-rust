@@ -59,10 +59,7 @@ struct OnlySelfBounds(bool);
 // Main entry point
 
 fn collect_mod_item_types(tcx: TyCtxt<'_>, module_def_id: LocalDefId) {
-    tcx.hir().visit_item_likes_in_module(
-        module_def_id,
-        &mut CollectItemTypesVisitor { tcx }.as_deep_visitor(),
-    );
+    tcx.hir().deep_visit_item_likes_in_module(module_def_id, &mut CollectItemTypesVisitor { tcx });
 }
 
 pub fn provide(providers: &mut Providers) {
@@ -1558,6 +1555,18 @@ fn generics_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::Generics {
                     }
                     Node::Expr(&Expr { kind: ExprKind::ConstBlock(_), .. }) => {
                         Some(tcx.typeck_root_def_id(def_id))
+                    }
+                    // Exclude `GlobalAsm` here which cannot have generics.
+                    Node::Expr(&Expr { kind: ExprKind::InlineAsm(asm), .. })
+                        if asm.operands.iter().any(|(op, _op_sp)| match op {
+                            hir::InlineAsmOperand::Const { anon_const }
+                            | hir::InlineAsmOperand::SymFn { anon_const } => {
+                                anon_const.hir_id == hir_id
+                            }
+                            _ => false,
+                        }) =>
+                    {
+                        Some(parent_def_id.to_def_id())
                     }
                     _ => None,
                 }

@@ -3,7 +3,7 @@
 //! [rustc dev guide]: https://rustc-dev-guide.rust-lang.org/mir/index.html
 
 use crate::mir::coverage::{CodeRegion, CoverageKind};
-use crate::mir::interpret::{ConstAllocation, ConstValue, GlobalAlloc, Scalar};
+use crate::mir::interpret::{ConstAllocation, ConstValue, GlobalAlloc, LitToConstInput, Scalar};
 use crate::mir::visit::MirVisitable;
 use crate::ty::adjustment::PointerCast;
 use crate::ty::codec::{TyDecoder, TyEncoder};
@@ -1355,10 +1355,7 @@ pub enum InlineAsmOperand<'tcx> {
 /// Type for MIR `Assert` terminator error messages.
 pub type AssertMessage<'tcx> = AssertKind<Operand<'tcx>>;
 
-// FIXME: Change `Successors` to `impl Iterator<Item = BasicBlock>`.
-#[allow(rustc::pass_by_value)]
-pub type Successors<'a> =
-    iter::Chain<option::IntoIter<&'a BasicBlock>, slice::Iter<'a, BasicBlock>>;
+pub type Successors<'a> = impl Iterator<Item = BasicBlock> + 'a;
 pub type SuccessorsMut<'a> =
     iter::Chain<option::IntoIter<&'a mut BasicBlock>, slice::IterMut<'a, BasicBlock>>;
 
@@ -3079,6 +3076,58 @@ impl<'tcx> ConstantKind<'tcx> {
     }
 
     #[instrument(skip(tcx), level = "debug")]
+    pub fn from_inline_const(tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> Self {
+        let hir_id = tcx.hir().local_def_id_to_hir_id(def_id);
+        let body_id = match tcx.hir().get(hir_id) {
+            hir::Node::AnonConst(ac) => ac.body,
+            _ => span_bug!(
+                tcx.def_span(def_id.to_def_id()),
+                "from_inline_const can only process anonymous constants"
+            ),
+        };
+        let expr = &tcx.hir().body(body_id).value;
+        let ty = tcx.typeck(def_id).node_type(hir_id);
+
+        let lit_input = match expr.kind {
+            hir::ExprKind::Lit(ref lit) => Some(LitToConstInput { lit: &lit.node, ty, neg: false }),
+            hir::ExprKind::Unary(hir::UnOp::Neg, ref expr) => match expr.kind {
+                hir::ExprKind::Lit(ref lit) => {
+                    Some(LitToConstInput { lit: &lit.node, ty, neg: true })
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(lit_input) = lit_input {
+            // If an error occurred, ignore that it's a literal and leave reporting the error up to
+            // mir.
+            match tcx.at(expr.span).lit_to_mir_constant(lit_input) {
+                Ok(c) => return c,
+                Err(_) => {}
+            }
+        }
+
+        let typeck_root_def_id = tcx.typeck_root_def_id(def_id.to_def_id());
+        let parent_substs =
+            tcx.erase_regions(InternalSubsts::identity_for_item(tcx, typeck_root_def_id));
+        let substs =
+            ty::InlineConstSubsts::new(tcx, ty::InlineConstSubstsParts { parent_substs, ty })
+                .substs;
+        let uneval_const = tcx.mk_const(ty::ConstS {
+            val: ty::ConstKind::Unevaluated(ty::Unevaluated {
+                def: ty::WithOptConstParam::unknown(def_id).to_global(),
+                substs,
+                promoted: None,
+            }),
+            ty,
+        });
+        debug!(?uneval_const);
+        debug_assert!(!uneval_const.has_free_regions());
+
+        Self::Ty(uneval_const)
+    }
+
+    #[instrument(skip(tcx), level = "debug")]
     fn from_opt_const_arg_anon_const(
         tcx: TyCtxt<'tcx>,
         def: ty::WithOptConstParam<LocalDefId>,
@@ -3434,13 +3483,13 @@ impl<'tcx> graph::WithStartNode for Body<'tcx> {
 impl<'tcx> graph::WithSuccessors for Body<'tcx> {
     #[inline]
     fn successors(&self, node: Self::Node) -> <Self as GraphSuccessors<'_>>::Iter {
-        self.basic_blocks[node].terminator().successors().cloned()
+        self.basic_blocks[node].terminator().successors()
     }
 }
 
 impl<'a, 'b> graph::GraphSuccessors<'b> for Body<'a> {
     type Item = BasicBlock;
-    type Iter = iter::Cloned<Successors<'b>>;
+    type Iter = Successors<'b>;
 }
 
 impl<'tcx, 'graph> graph::GraphPredecessors<'graph> for Body<'tcx> {

@@ -788,6 +788,10 @@ if #[cfg(not(target_vendor = "uwp"))] {
 
     #[link(name = "advapi32")]
     extern "system" {
+        // Forbidden when targeting UWP
+        #[link_name = "SystemFunction036"]
+        pub fn RtlGenRandom(RandomBuffer: *mut u8, RandomBufferLength: ULONG) -> BOOLEAN;
+
         // Allowed but unused by UWP
         pub fn OpenProcessToken(
             ProcessHandle: HANDLE,
@@ -1022,12 +1026,6 @@ extern "system" {
         bWaitAll: BOOL,
         dwMilliseconds: DWORD,
     ) -> DWORD;
-    pub fn CreatePipe(
-        hReadPipe: *mut HANDLE,
-        hWritePipe: *mut HANDLE,
-        lpPipeAttributes: *const SECURITY_ATTRIBUTES,
-        nSize: DWORD,
-    ) -> BOOL;
     pub fn CreateNamedPipeW(
         lpName: LPCWSTR,
         dwOpenMode: DWORD,
