@@ -1,16 +1,17 @@
 use crate::diagnostics::{ImportSuggestion, LabelSuggestion, TypoSuggestion};
 use crate::late::lifetimes::{ElisionFailureInfo, LifetimeContext};
 use crate::late::{AliasPossibility, LateResolutionVisitor, RibKind};
-use crate::late::{LifetimeBinderKind, LifetimeRibKind};
+use crate::late::{LifetimeBinderKind, LifetimeRibKind, LifetimeUseSet};
 use crate::path_names_to_string;
 use crate::{Module, ModuleKind, ModuleOrUniformRoot};
 use crate::{PathResult, PathSource, Segment};
 
-use rustc_ast::visit::{FnCtxt, FnKind};
+use rustc_ast::visit::{FnCtxt, FnKind, LifetimeCtxt};
 use rustc_ast::{
     self as ast, AssocItemKind, Expr, ExprKind, GenericParam, GenericParamKind, Item, ItemKind,
     NodeId, Path, Ty, TyKind,
 };
+use rustc_ast_lowering::ResolverAstLowering;
 use rustc_ast_pretty::pprust::path_segment_to_string;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_errors::{
@@ -22,6 +23,7 @@ use rustc_hir::def::Namespace::{self, *};
 use rustc_hir::def::{self, CtorKind, CtorOf, DefKind};
 use rustc_hir::def_id::{DefId, CRATE_DEF_ID, LOCAL_CRATE};
 use rustc_hir::PrimTy;
+use rustc_session::lint;
 use rustc_session::parse::feature_err;
 use rustc_span::edition::Edition;
 use rustc_span::hygiene::MacroKind;
@@ -57,13 +59,13 @@ impl AssocSuggestion {
     }
 }
 
-crate enum MissingLifetimeSpot<'tcx> {
+pub(crate) enum MissingLifetimeSpot<'tcx> {
     Generics(&'tcx hir::Generics<'tcx>),
     HigherRanked { span: Span, span_type: ForLifetimeSpanType },
     Static,
 }
 
-crate enum ForLifetimeSpanType {
+pub(crate) enum ForLifetimeSpanType {
     BoundEmpty,
     BoundTail,
     TypeEmpty,
@@ -71,14 +73,14 @@ crate enum ForLifetimeSpanType {
 }
 
 impl ForLifetimeSpanType {
-    crate fn descr(&self) -> &'static str {
+    pub(crate) fn descr(&self) -> &'static str {
         match self {
             Self::BoundEmpty | Self::BoundTail => "bound",
             Self::TypeEmpty | Self::TypeTail => "type",
         }
     }
 
-    crate fn suggestion(&self, sugg: &str) -> String {
+    pub(crate) fn suggestion(&self, sugg: &str) -> String {
         match self {
             Self::BoundEmpty | Self::TypeEmpty => format!("for<{}> ", sugg),
             Self::BoundTail | Self::TypeTail => format!(", {}", sugg),
@@ -1219,7 +1221,7 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
 
     /// Given the target `ident` and `kind`, search for the similarly named associated item
     /// in `self.current_trait_ref`.
-    crate fn find_similarly_named_assoc_item(
+    pub(crate) fn find_similarly_named_assoc_item(
         &mut self,
         ident: Symbol,
         kind: &AssocItemKind,
@@ -1727,7 +1729,7 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
         }
     }
 
-    crate fn report_missing_type_error(
+    pub(crate) fn report_missing_type_error(
         &self,
         path: &[Segment],
     ) -> Option<(Span, &'static str, String, Applicability)> {
@@ -1807,7 +1809,7 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
 
     /// Given the target `label`, search the `rib_index`th label rib for similarly named labels,
     /// optionally returning the closest match and whether it is reachable.
-    crate fn suggestion_for_label_in_rib(
+    pub(crate) fn suggestion_for_label_in_rib(
         &self,
         rib_index: usize,
         label: Ident,
@@ -1832,7 +1834,77 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
         })
     }
 
-    crate fn emit_undeclared_lifetime_error(
+    pub(crate) fn maybe_report_lifetime_uses(
+        &mut self,
+        generics_span: Span,
+        params: &[ast::GenericParam],
+    ) {
+        for (param_index, param) in params.iter().enumerate() {
+            let GenericParamKind::Lifetime = param.kind else { continue };
+
+            let def_id = self.r.local_def_id(param.id);
+
+            let use_set = self.lifetime_uses.remove(&def_id);
+            debug!(
+                "Use set for {:?}({:?} at {:?}) is {:?}",
+                def_id, param.ident, param.ident.span, use_set
+            );
+
+            let deletion_span = || {
+                if params.len() == 1 {
+                    // if sole lifetime, remove the entire `<>` brackets
+                    generics_span
+                } else if param_index == 0 {
+                    // if removing within `<>` brackets, we also want to
+                    // delete a leading or trailing comma as appropriate
+                    param.span().to(params[param_index + 1].span().shrink_to_lo())
+                } else {
+                    // if removing within `<>` brackets, we also want to
+                    // delete a leading or trailing comma as appropriate
+                    params[param_index - 1].span().shrink_to_hi().to(param.span())
+                }
+            };
+            match use_set {
+                Some(LifetimeUseSet::Many) => {}
+                Some(LifetimeUseSet::One { use_span, use_ctxt }) => {
+                    debug!(?param.ident, ?param.ident.span, ?use_span);
+
+                    let elidable = matches!(use_ctxt, LifetimeCtxt::Rptr);
+
+                    let deletion_span = deletion_span();
+                    self.r.lint_buffer.buffer_lint_with_diagnostic(
+                        lint::builtin::SINGLE_USE_LIFETIMES,
+                        param.id,
+                        param.ident.span,
+                        &format!("lifetime parameter `{}` only used once", param.ident),
+                        lint::BuiltinLintDiagnostics::SingleUseLifetime {
+                            param_span: param.ident.span,
+                            use_span: Some((use_span, elidable)),
+                            deletion_span,
+                        },
+                    );
+                }
+                None => {
+                    debug!(?param.ident, ?param.ident.span);
+
+                    let deletion_span = deletion_span();
+                    self.r.lint_buffer.buffer_lint_with_diagnostic(
+                        lint::builtin::UNUSED_LIFETIMES,
+                        param.id,
+                        param.ident.span,
+                        &format!("lifetime parameter `{}` never used", param.ident),
+                        lint::BuiltinLintDiagnostics::SingleUseLifetime {
+                            param_span: param.ident.span,
+                            use_span: None,
+                            deletion_span,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    pub(crate) fn emit_undeclared_lifetime_error(
         &self,
         lifetime_ref: &ast::Lifetime,
         outer_lifetime_ref: Option<Ident>,
@@ -1863,7 +1935,7 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
 
         for rib in self.lifetime_ribs.iter().rev() {
             match rib.kind {
-                LifetimeRibKind::Generics { parent: _, span, kind } => {
+                LifetimeRibKind::Generics { binder: _, span, kind } => {
                     if !span.can_be_used_for_suggestions() && suggest_note {
                         suggest_note = false; // Avoid displaying the same help multiple times.
                         err.span_label(
@@ -1928,7 +2000,7 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
         err.emit();
     }
 
-    crate fn emit_non_static_lt_in_const_generic_error(&self, lifetime_ref: &ast::Lifetime) {
+    pub(crate) fn emit_non_static_lt_in_const_generic_error(&self, lifetime_ref: &ast::Lifetime) {
         struct_span_err!(
             self.r.session,
             lifetime_ref.ident.span,
@@ -1946,7 +2018,10 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
     /// Non-static lifetimes are prohibited in anonymous constants under `min_const_generics`.
     /// This function will emit an error if `generic_const_exprs` is not enabled, the body identified by
     /// `body_id` is an anonymous constant and `lifetime_ref` is non-static.
-    crate fn maybe_emit_forbidden_non_static_lifetime_error(&self, lifetime_ref: &ast::Lifetime) {
+    pub(crate) fn maybe_emit_forbidden_non_static_lifetime_error(
+        &self,
+        lifetime_ref: &ast::Lifetime,
+    ) {
         let feature_active = self.r.session.features_untracked().generic_const_exprs;
         if !feature_active {
             feature_err(
@@ -1961,7 +2036,7 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
 }
 
 impl<'tcx> LifetimeContext<'_, 'tcx> {
-    crate fn report_missing_lifetime_specifiers(
+    pub(crate) fn report_missing_lifetime_specifiers(
         &self,
         spans: Vec<Span>,
         count: usize,
@@ -1976,7 +2051,7 @@ impl<'tcx> LifetimeContext<'_, 'tcx> {
     }
 
     /// Returns whether to add `'static` lifetime to the suggested lifetime list.
-    crate fn report_elision_failure(
+    pub(crate) fn report_elision_failure(
         &mut self,
         diag: &mut Diagnostic,
         params: &[ElisionFailureInfo],
@@ -2054,7 +2129,10 @@ impl<'tcx> LifetimeContext<'_, 'tcx> {
         }
     }
 
-    crate fn is_trait_ref_fn_scope(&mut self, trait_ref: &'tcx hir::PolyTraitRef<'tcx>) -> bool {
+    pub(crate) fn is_trait_ref_fn_scope(
+        &mut self,
+        trait_ref: &'tcx hir::PolyTraitRef<'tcx>,
+    ) -> bool {
         if let def::Res::Def(_, did) = trait_ref.trait_ref.path.res {
             if [
                 self.tcx.lang_items().fn_once_trait(),
@@ -2075,7 +2153,7 @@ impl<'tcx> LifetimeContext<'_, 'tcx> {
         false
     }
 
-    crate fn add_missing_lifetime_specifiers_label(
+    pub(crate) fn add_missing_lifetime_specifiers_label(
         &self,
         err: &mut Diagnostic,
         mut spans_with_counts: Vec<(Span, usize)>,
