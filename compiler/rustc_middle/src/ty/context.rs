@@ -6,6 +6,7 @@ use crate::hir::place::Place as HirPlace;
 use crate::infer::canonical::{Canonical, CanonicalVarInfo, CanonicalVarInfos};
 use crate::lint::{struct_lint_level, LintDiagnosticBuilder, LintLevelSource};
 use crate::middle::codegen_fn_attrs::CodegenFnAttrs;
+use crate::middle::region::ScopeTree;
 use crate::middle::resolve_lifetime::{self, LifetimeScopeForPath};
 use crate::middle::stability;
 use crate::mir::interpret::{self, Allocation, ConstAllocation, ConstValue, Scalar};
@@ -73,6 +74,8 @@ use std::iter;
 use std::mem;
 use std::ops::{Bound, Deref};
 use std::sync::Arc;
+
+use super::RvalueScopes;
 
 pub trait OnDiskCache<'tcx>: rustc_data_structures::sync::Sync {
     /// Creates a new `OnDiskCache` instance from the serialized data in `data`.
@@ -535,6 +538,17 @@ pub struct TypeckResults<'tcx> {
     /// issue by fake reading `t`.
     pub closure_fake_reads: FxHashMap<DefId, Vec<(HirPlace<'tcx>, FakeReadCause, hir::HirId)>>,
 
+    /// Tracks critical information about regions in a body.
+    /// This includes containment relationship between regions,
+    /// liveness relationship between variables and regions and
+    /// information about yield points.
+    pub region_scope_tree: ScopeTree,
+
+    /// Tracks the rvalue scoping rules which defines finer scoping for rvalue expressions
+    /// by applying extended parameter rules.
+    /// Details may be find in `rustc_typeck::check::rvalue_scopes`.
+    pub rvalue_scopes: RvalueScopes,
+
     /// Stores the type, expression, span and optional scope span of all types
     /// that are live across the yield of this generator (if a generator).
     pub generator_interior_types: ty::Binder<'tcx, Vec<GeneratorInteriorTypeCause<'tcx>>>,
@@ -572,6 +586,8 @@ impl<'tcx> TypeckResults<'tcx> {
             concrete_opaque_types: Default::default(),
             closure_min_captures: Default::default(),
             closure_fake_reads: Default::default(),
+            region_scope_tree: Default::default(),
+            rvalue_scopes: Default::default(),
             generator_interior_types: ty::Binder::dummy(Default::default()),
             treat_byte_string_as_slice: Default::default(),
             closure_size_eval: Default::default(),
@@ -2791,7 +2807,7 @@ impl<'tcx> TyCtxt<'tcx> {
     pub fn is_const_fn(self, def_id: DefId) -> bool {
         if self.is_const_fn_raw(def_id) {
             match self.lookup_const_stability(def_id) {
-                Some(stability) if stability.level.is_unstable() => {
+                Some(stability) if stability.is_const_unstable() => {
                     // has a `rustc_const_unstable` attribute, check whether the user enabled the
                     // corresponding feature gate.
                     self.features()
@@ -2807,6 +2823,21 @@ impl<'tcx> TyCtxt<'tcx> {
         } else {
             false
         }
+    }
+
+    /// Whether the trait impl is marked const. This does not consider stability or feature gates.
+    pub fn is_const_trait_impl_raw(self, def_id: DefId) -> bool {
+        let Some(local_def_id) = def_id.as_local() else { return false };
+        let hir_id = self.local_def_id_to_hir_id(local_def_id);
+        let node = self.hir().get(hir_id);
+
+        matches!(
+            node,
+            hir::Node::Item(hir::Item {
+                kind: hir::ItemKind::Impl(hir::Impl { constness: hir::Constness::Const, .. }),
+                ..
+            })
+        )
     }
 }
 
