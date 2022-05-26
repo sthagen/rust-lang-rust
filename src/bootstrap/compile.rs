@@ -176,7 +176,7 @@ fn copy_third_party_objects(
 
     if target == "x86_64-fortanix-unknown-sgx"
         || target.contains("pc-windows-gnullvm")
-        || builder.config.llvm_libunwind == LlvmLibunwind::InTree
+        || builder.config.llvm_libunwind(target) == LlvmLibunwind::InTree
             && (target.contains("linux") || target.contains("fuchsia"))
     {
         let libunwind_path =
@@ -1164,14 +1164,11 @@ impl Step for Assemble {
             // for `-Z gcc-ld=lld`
             let gcc_ld_dir = libdir_bin.join("gcc-ld");
             t!(fs::create_dir(&gcc_ld_dir));
-            for flavor in ["ld", "ld64"] {
-                let lld_wrapper_exe = builder.ensure(crate::tool::LldWrapper {
-                    compiler: build_compiler,
-                    target: target_compiler.host,
-                    flavor_feature: flavor,
-                });
-                builder.copy(&lld_wrapper_exe, &gcc_ld_dir.join(exe(flavor, target_compiler.host)));
-            }
+            let lld_wrapper_exe = builder.ensure(crate::tool::LldWrapper {
+                compiler: build_compiler,
+                target: target_compiler.host,
+            });
+            builder.copy(&lld_wrapper_exe, &gcc_ld_dir.join(exe("ld", target_compiler.host)));
         }
 
         if builder.config.rust_codegen_backends.contains(&INTERNER.intern_str("llvm")) {
