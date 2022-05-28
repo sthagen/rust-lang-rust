@@ -227,7 +227,7 @@ impl StepDescription {
 
     fn is_excluded(&self, builder: &Builder<'_>, pathset: &PathSet) -> bool {
         if builder.config.exclude.iter().any(|e| pathset.has(&e.path, e.kind)) {
-            eprintln!("Skipping {:?} because it is excluded", pathset);
+            println!("Skipping {:?} because it is excluded", pathset);
             return true;
         }
 
@@ -1232,7 +1232,12 @@ impl<'a> Builder<'a> {
                 // HACK: because anyhow does feature detection in build.rs, we need to allow the backtrace feature too.
                 rustflags.arg("-Zallow-features=binary-dep-depinfo,backtrace");
             }
-            Mode::Std | Mode::Rustc | Mode::ToolStd | Mode::Codegen | Mode::ToolRustc => {}
+            Mode::ToolStd => {
+                // Right now this is just compiletest and a few other tools that build on stable.
+                // Allow them to use `feature(test)`, but nothing else.
+                rustflags.arg("-Zallow-features=binary-dep-depinfo,test,backtrace");
+            }
+            Mode::Std | Mode::Rustc | Mode::Codegen | Mode::ToolRustc => {}
         }
 
         cargo.arg("-j").arg(self.jobs().to_string());
