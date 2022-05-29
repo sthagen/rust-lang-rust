@@ -879,6 +879,9 @@ impl Step for PlainSourceTarball {
 
         // If we're building from git sources, we need to vendor a complete distribution.
         if builder.rust_info.is_git() {
+            // Ensure we have the submodules checked out.
+            builder.update_submodule(Path::new("src/tools/rust-analyzer"));
+
             // Vendor all Cargo dependencies
             let mut cmd = Command::new(&builder.initial_cargo);
             cmd.arg("vendor")
@@ -891,29 +894,6 @@ impl Step for PlainSourceTarball {
         }
 
         tarball.bare()
-    }
-}
-
-// We have to run a few shell scripts, which choke quite a bit on both `\`
-// characters and on `C:\` paths, so normalize both of them away.
-pub fn sanitize_sh(path: &Path) -> String {
-    let path = path.to_str().unwrap().replace("\\", "/");
-    return change_drive(unc_to_lfs(&path)).unwrap_or(path);
-
-    fn unc_to_lfs(s: &str) -> &str {
-        s.strip_prefix("//?/").unwrap_or(s)
-    }
-
-    fn change_drive(s: &str) -> Option<String> {
-        let mut ch = s.chars();
-        let drive = ch.next().unwrap_or('C');
-        if ch.next() != Some(':') {
-            return None;
-        }
-        if ch.next() != Some('/') {
-            return None;
-        }
-        Some(format!("/{}/{}", drive, &s[drive.len_utf8() + 2..]))
     }
 }
 
