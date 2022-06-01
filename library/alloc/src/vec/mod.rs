@@ -1107,7 +1107,8 @@ impl<T, A: Allocator> Vec<T, A> {
         self
     }
 
-    /// Returns a raw pointer to the vector's buffer.
+    /// Returns a raw pointer to the vector's buffer, or a dangling raw pointer
+    /// valid for zero sized reads if the vector didn't allocate.
     ///
     /// The caller must ensure that the vector outlives the pointer this
     /// function returns, or else it will end up pointing to garbage.
@@ -1144,7 +1145,8 @@ impl<T, A: Allocator> Vec<T, A> {
         ptr
     }
 
-    /// Returns an unsafe mutable pointer to the vector's buffer.
+    /// Returns an unsafe mutable pointer to the vector's buffer, or a dangling
+    /// raw pointer valid for zero sized reads if the vector didn't allocate.
     ///
     /// The caller must ensure that the vector outlives the pointer this
     /// function returns, or else it will end up pointing to garbage.
@@ -2470,7 +2472,7 @@ impl<T: Copy, A: Allocator> ExtendFromWithinSpec for Vec<T, A> {
             // SAFETY:
             // - Both pointers are created from unique slice references (`&mut [_]`)
             //   so they are valid and do not overlap.
-            // - Elements are :Copy so it's OK to to copy them, without doing
+            // - Elements are :Copy so it's OK to copy them, without doing
             //   anything with the original values
             // - `count` is equal to the len of `source`, so source is valid for
             //   `count` reads
@@ -2493,6 +2495,7 @@ impl<T: Copy, A: Allocator> ExtendFromWithinSpec for Vec<T, A> {
 impl<T, A: Allocator> ops::Deref for Vec<T, A> {
     type Target = [T];
 
+    #[inline]
     fn deref(&self) -> &[T] {
         unsafe { slice::from_raw_parts(self.as_ptr(), self.len) }
     }
@@ -2500,6 +2503,7 @@ impl<T, A: Allocator> ops::Deref for Vec<T, A> {
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<T, A: Allocator> ops::DerefMut for Vec<T, A> {
+    #[inline]
     fn deref_mut(&mut self) -> &mut [T] {
         unsafe { slice::from_raw_parts_mut(self.as_mut_ptr(), self.len) }
     }
