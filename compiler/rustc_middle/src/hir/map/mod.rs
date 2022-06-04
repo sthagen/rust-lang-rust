@@ -361,23 +361,7 @@ impl<'hir> Map<'hir> {
 
     pub fn get_generics(self, id: LocalDefId) -> Option<&'hir Generics<'hir>> {
         let node = self.tcx.hir_owner(id)?;
-        match node.node {
-            OwnerNode::ImplItem(impl_item) => Some(&impl_item.generics),
-            OwnerNode::TraitItem(trait_item) => Some(&trait_item.generics),
-            OwnerNode::Item(Item {
-                kind:
-                    ItemKind::Fn(_, generics, _)
-                    | ItemKind::TyAlias(_, generics)
-                    | ItemKind::Enum(_, generics)
-                    | ItemKind::Struct(_, generics)
-                    | ItemKind::Union(_, generics)
-                    | ItemKind::Trait(_, _, generics, ..)
-                    | ItemKind::TraitAlias(generics, _)
-                    | ItemKind::Impl(Impl { generics, .. }),
-                ..
-            }) => Some(generics),
-            _ => None,
-        }
+        node.node.generics()
     }
 
     pub fn item(self, id: ItemId) -> &'hir Item<'hir> {
@@ -983,7 +967,11 @@ impl<'hir> Map<'hir> {
             Node::AnonConst(constant) => self.body(constant.body).value.span,
             Node::Expr(expr) => expr.span,
             Node::Stmt(stmt) => stmt.span,
-            Node::PathSegment(seg) => seg.ident.span,
+            Node::PathSegment(seg) => {
+                let ident_span = seg.ident.span;
+                ident_span
+                    .with_hi(seg.args.map_or_else(|| ident_span.hi(), |args| args.span_ext.hi()))
+            }
             Node::Ty(ty) => ty.span,
             Node::TraitRef(tr) => tr.path.span,
             Node::Binding(pat) => pat.span,

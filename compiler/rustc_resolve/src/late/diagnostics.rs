@@ -13,7 +13,7 @@ use rustc_ast::{
 };
 use rustc_ast_lowering::ResolverAstLowering;
 use rustc_ast_pretty::pprust::path_segment_to_string;
-use rustc_data_structures::fx::FxHashSet;
+use rustc_data_structures::fx::{FxHashSet, FxIndexSet};
 use rustc_errors::{
     pluralize, struct_span_err, Applicability, Diagnostic, DiagnosticBuilder, ErrorGuaranteed,
     MultiSpan,
@@ -21,10 +21,11 @@ use rustc_errors::{
 use rustc_hir as hir;
 use rustc_hir::def::Namespace::{self, *};
 use rustc_hir::def::{self, CtorKind, CtorOf, DefKind};
-use rustc_hir::def_id::{DefId, CRATE_DEF_ID, LOCAL_CRATE};
+use rustc_hir::def_id::{DefId, LocalDefId, CRATE_DEF_ID, LOCAL_CRATE};
 use rustc_hir::PrimTy;
 use rustc_session::lint;
 use rustc_session::parse::feature_err;
+use rustc_session::Session;
 use rustc_span::edition::Edition;
 use rustc_span::hygiene::MacroKind;
 use rustc_span::lev_distance::find_best_match_for_name;
@@ -2036,6 +2037,34 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
     }
 }
 
+/// Report lifetime/lifetime shadowing as an error.
+pub fn signal_lifetime_shadowing(sess: &Session, orig: Ident, shadower: Ident) {
+    let mut err = struct_span_err!(
+        sess,
+        shadower.span,
+        E0496,
+        "lifetime name `{}` shadows a lifetime name that is already in scope",
+        orig.name,
+    );
+    err.span_label(orig.span, "first declared here");
+    err.span_label(shadower.span, format!("lifetime `{}` already in scope", orig.name));
+    err.emit();
+}
+
+/// Shadowing involving a label is only a warning for historical reasons.
+//FIXME: make this a proper lint.
+pub fn signal_label_shadowing(sess: &Session, orig: Span, shadower: Ident) {
+    let name = shadower.name;
+    let shadower = shadower.span;
+    let mut err = sess.struct_span_warn(
+        shadower,
+        &format!("label name `{}` shadows a label name that is already in scope", name),
+    );
+    err.span_label(orig, "first declared here");
+    err.span_label(shadower, format!("label `{}` already in scope", name));
+    err.emit();
+}
+
 impl<'tcx> LifetimeContext<'_, 'tcx> {
     pub(crate) fn report_missing_lifetime_specifiers(
         &self,
@@ -2053,7 +2082,7 @@ impl<'tcx> LifetimeContext<'_, 'tcx> {
 
     /// Returns whether to add `'static` lifetime to the suggested lifetime list.
     pub(crate) fn report_elision_failure(
-        &mut self,
+        &self,
         diag: &mut Diagnostic,
         params: &[ElisionFailureInfo],
     ) -> bool {
@@ -2158,10 +2187,27 @@ impl<'tcx> LifetimeContext<'_, 'tcx> {
         &self,
         err: &mut Diagnostic,
         mut spans_with_counts: Vec<(Span, usize)>,
-        lifetime_names: &FxHashSet<Symbol>,
-        lifetime_spans: Vec<Span>,
-        params: &[ElisionFailureInfo],
+        in_scope_lifetimes: FxIndexSet<LocalDefId>,
+        params: Option<&[ElisionFailureInfo]>,
     ) {
+        let (mut lifetime_names, lifetime_spans): (FxHashSet<_>, Vec<_>) = in_scope_lifetimes
+            .iter()
+            .filter_map(|def_id| {
+                let name = self.tcx.item_name(def_id.to_def_id());
+                let span = self.tcx.def_ident_span(def_id.to_def_id())?;
+                Some((name, span))
+            })
+            .filter(|&(n, _)| n != kw::UnderscoreLifetime)
+            .unzip();
+
+        if let Some(params) = params {
+            // If there's no lifetime available, suggest `'static`.
+            if self.report_elision_failure(err, params) && lifetime_names.is_empty() {
+                lifetime_names.insert(kw::StaticLifetime);
+            }
+        }
+        let params = params.unwrap_or(&[]);
+
         let snippets: Vec<Option<String>> = spans_with_counts
             .iter()
             .map(|(span, _)| self.tcx.sess.source_map().span_to_snippet(*span).ok())

@@ -2607,17 +2607,24 @@ static_assert_size!(Rvalue<'_>, 40);
 impl<'tcx> Rvalue<'tcx> {
     #[inline]
     pub fn is_pointer_int_cast(&self) -> bool {
-        matches!(self, Rvalue::Cast(CastKind::PointerAddress, _, _))
+        matches!(self, Rvalue::Cast(CastKind::PointerExposeAddress, _, _))
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, TyEncodable, TyDecodable, Hash, HashStable)]
 pub enum CastKind {
-    Misc,
-    /// A pointer to address cast. A cast between a pointer and an integer type,
-    /// or between a function pointer and an integer type.
-    PointerAddress,
+    /// An exposing pointer to address cast. A cast between a pointer and an integer type, or
+    /// between a function pointer and an integer type.
+    /// See the docs on `expose_addr` for more details.
+    PointerExposeAddress,
+    /// An address-to-pointer cast that picks up an exposed provenance.
+    /// See the docs on `from_exposed_addr` for more details.
+    PointerFromExposedAddress,
+    /// All sorts of pointer-to-pointer casts. Note that reference-to-raw-ptr casts are
+    /// translated into `&raw mut/const *r`, i.e., they are not actually casts.
     Pointer(PointerCast),
+    /// Remaining unclassified casts.
+    Misc,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, TyEncodable, TyDecodable, Hash, HashStable)]
