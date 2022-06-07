@@ -461,8 +461,6 @@ declare_features! (
     (active, never_type, "1.13.0", Some(35121), None),
     /// Allows diverging expressions to fall back to `!` rather than `()`.
     (active, never_type_fallback, "1.41.0", Some(65992), None),
-    /// Allows using non lexical lifetimes (RFC 2094).
-    (active, nll, "1.0.0", Some(43234), None),
     /// Allows `#![no_core]`.
     (active, no_core, "1.3.0", Some(29639), None),
     /// Allows function attribute `#[no_coverage]`, to bypass coverage
@@ -498,6 +496,8 @@ declare_features! (
     (incomplete, repr128, "1.16.0", Some(56071), None),
     /// Allows `repr(simd)` and importing the various simd intrinsics.
     (active, repr_simd, "1.4.0", Some(27731), None),
+    /// Allows `extern "rust-cold"`.
+    (active, rust_cold_cc, "1.63.0", Some(97544), None),
     /// Allows the use of SIMD types in functions declared in `extern` blocks.
     (active, simd_ffi, "1.0.0", Some(27731), None),
     /// Allows specialization of implementations (RFC 1210).
