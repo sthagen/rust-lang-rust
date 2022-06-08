@@ -7,7 +7,7 @@ use crate::mir::interpret::{ConstAllocation, ConstValue, GlobalAlloc, LitToConst
 use crate::mir::visit::MirVisitable;
 use crate::ty::adjustment::PointerCast;
 use crate::ty::codec::{TyDecoder, TyEncoder};
-use crate::ty::fold::{FallibleTypeFolder, TypeFoldable, TypeVisitor};
+use crate::ty::fold::{FallibleTypeFolder, TypeFoldable, TypeSuperFoldable, TypeVisitor};
 use crate::ty::print::{FmtPrinter, Printer};
 use crate::ty::subst::{GenericArg, InternalSubsts, Subst, SubstsRef};
 use crate::ty::{self, List, Ty, TyCtxt};
@@ -672,16 +672,16 @@ const TAG_CLEAR_CROSS_CRATE_SET: u8 = 1;
 
 impl<E: TyEncoder, T: Encodable<E>> Encodable<E> for ClearCrossCrate<T> {
     #[inline]
-    fn encode(&self, e: &mut E) -> Result<(), E::Error> {
+    fn encode(&self, e: &mut E) {
         if E::CLEAR_CROSS_CRATE {
-            return Ok(());
+            return;
         }
 
         match *self {
             ClearCrossCrate::Clear => TAG_CLEAR_CROSS_CRATE_CLEAR.encode(e),
             ClearCrossCrate::Set(ref val) => {
-                TAG_CLEAR_CROSS_CRATE_SET.encode(e)?;
-                val.encode(e)
+                TAG_CLEAR_CROSS_CRATE_SET.encode(e);
+                val.encode(e);
             }
         }
     }
@@ -2605,9 +2605,34 @@ pub enum Rvalue<'tcx> {
 static_assert_size!(Rvalue<'_>, 40);
 
 impl<'tcx> Rvalue<'tcx> {
+    /// Returns true if rvalue can be safely removed when the result is unused.
     #[inline]
-    pub fn is_pointer_int_cast(&self) -> bool {
-        matches!(self, Rvalue::Cast(CastKind::PointerExposeAddress, _, _))
+    pub fn is_safe_to_remove(&self) -> bool {
+        match self {
+            // Pointer to int casts may be side-effects due to exposing the provenance.
+            // While the model is undecided, we should be conservative. See
+            // <https://www.ralfj.de/blog/2022/04/11/provenance-exposed.html>
+            Rvalue::Cast(CastKind::PointerExposeAddress, _, _) => false,
+
+            Rvalue::Use(_)
+            | Rvalue::Repeat(_, _)
+            | Rvalue::Ref(_, _, _)
+            | Rvalue::ThreadLocalRef(_)
+            | Rvalue::AddressOf(_, _)
+            | Rvalue::Len(_)
+            | Rvalue::Cast(
+                CastKind::Misc | CastKind::Pointer(_) | CastKind::PointerFromExposedAddress,
+                _,
+                _,
+            )
+            | Rvalue::BinaryOp(_, _)
+            | Rvalue::CheckedBinaryOp(_, _)
+            | Rvalue::NullaryOp(_, _)
+            | Rvalue::UnaryOp(_, _)
+            | Rvalue::Discriminant(_)
+            | Rvalue::Aggregate(_, _)
+            | Rvalue::ShallowInitBox(_, _) => true,
+        }
     }
 }
 
@@ -3399,20 +3424,14 @@ impl UserTypeProjection {
 TrivialTypeFoldableAndLiftImpls! { ProjectionKind, }
 
 impl<'tcx> TypeFoldable<'tcx> for UserTypeProjection {
-    fn try_super_fold_with<F: FallibleTypeFolder<'tcx>>(
-        self,
-        folder: &mut F,
-    ) -> Result<Self, F::Error> {
+    fn try_fold_with<F: FallibleTypeFolder<'tcx>>(self, folder: &mut F) -> Result<Self, F::Error> {
         Ok(UserTypeProjection {
             base: self.base.try_fold_with(folder)?,
             projs: self.projs.try_fold_with(folder)?,
         })
     }
 
-    fn super_visit_with<Vs: TypeVisitor<'tcx>>(
-        &self,
-        visitor: &mut Vs,
-    ) -> ControlFlow<Vs::BreakTy> {
+    fn visit_with<Vs: TypeVisitor<'tcx>>(&self, visitor: &mut Vs) -> ControlFlow<Vs::BreakTy> {
         self.base.visit_with(visitor)
         // Note: there's nothing in `self.proj` to visit.
     }

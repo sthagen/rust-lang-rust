@@ -3,7 +3,9 @@ use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_infer::infer::TyCtxtInferExt;
 use rustc_middle::traits::CodegenObligationError;
 use rustc_middle::ty::subst::SubstsRef;
-use rustc_middle::ty::{self, Binder, Instance, Ty, TyCtxt, TypeFoldable, TypeVisitor};
+use rustc_middle::ty::{
+    self, Binder, Instance, Ty, TyCtxt, TypeFoldable, TypeSuperFoldable, TypeVisitor,
+};
 use rustc_span::{sym, DUMMY_SP};
 use rustc_trait_selection::traits;
 use traits::{translate_substs, Reveal};
@@ -347,11 +349,15 @@ fn resolve_associated_item<'tcx>(
             _ => None,
         },
         traits::ImplSource::Object(ref data) => {
-            let index = traits::get_vtable_index_of_object_method(tcx, data, trait_item_id);
-            Some(Instance {
-                def: ty::InstanceDef::Virtual(trait_item_id, index),
-                substs: rcvr_substs,
-            })
+            if let Some(index) = traits::get_vtable_index_of_object_method(tcx, data, trait_item_id)
+            {
+                Some(Instance {
+                    def: ty::InstanceDef::Virtual(trait_item_id, index),
+                    substs: rcvr_substs,
+                })
+            } else {
+                None
+            }
         }
         traits::ImplSource::Builtin(..) => {
             if Some(trait_ref.def_id) == tcx.lang_items().clone_trait() {
