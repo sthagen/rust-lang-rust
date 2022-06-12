@@ -774,17 +774,8 @@ impl<'a, 'tcx> CrateMetadataRef<'a> {
 
     fn opt_item_ident(self, item_index: DefIndex, sess: &Session) -> Option<Ident> {
         let name = self.opt_item_name(item_index)?;
-        let span = match self.root.tables.def_ident_span.get(self, item_index) {
-            Some(lazy_span) => lazy_span.decode((self, sess)),
-            None => {
-                // FIXME: this weird case of a name with no span is specific to `extern crate`
-                // items, which are supposed to be treated like `use` items and only be encoded
-                // to metadata as `Export`s, return `None` because that's what all the callers
-                // expect in this case.
-                assert_eq!(self.def_kind(item_index), DefKind::ExternCrate);
-                return None;
-            }
-        };
+        let span =
+            self.root.tables.def_ident_span.get(self, item_index).unwrap().decode((self, sess));
         Some(Ident::new(name, span))
     }
 
@@ -1486,6 +1477,8 @@ impl<'a, 'tcx> CrateMetadataRef<'a> {
             .filter(|_| {
                 // Only spend time on further checks if we have what to translate *to*.
                 sess.opts.real_rust_source_base_dir.is_some()
+                    // Some tests need the translation to be always skipped.
+                    && sess.opts.debugging_opts.translate_remapped_path_to_local_path
             })
             .filter(|virtual_dir| {
                 // Don't translate away `/rustc/$hash` if we're still remapping to it,

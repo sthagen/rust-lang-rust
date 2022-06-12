@@ -1588,7 +1588,9 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                             Mismatch::Variable(infer::ExpectedFound { expected, found }),
                         )
                     }
-                    ValuePairs::TraitRefs(_) => (false, Mismatch::Fixed("trait")),
+                    ValuePairs::TraitRefs(_) | ValuePairs::PolyTraitRefs(_) => {
+                        (false, Mismatch::Fixed("trait"))
+                    }
                     _ => (false, Mismatch::Fixed("type")),
                 };
                 let vals = match self.values_str(values) {
@@ -2509,11 +2511,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                     labeled_user_string
                 );
                 let pred = format!("{}: {}", bound_kind, sub);
-                let suggestion = format!(
-                    "{} {}",
-                    if !generics.predicates.is_empty() { "," } else { " where" },
-                    pred,
-                );
+                let suggestion = format!("{} {}", generics.add_where_or_trailing_comma(), pred,);
                 err.span_suggestion(
                     generics.tail_span_for_predicate_suggestion(),
                     "consider adding a where clause",
