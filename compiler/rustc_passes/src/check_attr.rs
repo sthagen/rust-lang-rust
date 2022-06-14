@@ -118,6 +118,9 @@ impl CheckAttrVisitor<'_> {
                 sym::rustc_lint_query_instability => {
                     self.check_rustc_lint_query_instability(&attr, span, target)
                 }
+                sym::rustc_lint_diagnostics => {
+                    self.check_rustc_lint_diagnostics(&attr, span, target)
+                }
                 sym::rustc_clean
                 | sym::rustc_dirty
                 | sym::rustc_if_this_changed
@@ -918,7 +921,7 @@ impl CheckAttrVisitor<'_> {
                         .span_suggestion(
                             replacement_span,
                             "remove this attribute",
-                            String::new(),
+                            "",
                             Applicability::MachineApplicable,
                         )
                         .emit();
@@ -1158,7 +1161,7 @@ impl CheckAttrVisitor<'_> {
                                         diag.span_suggestion_short(
                                             i_meta.span,
                                             "use `notable_trait` instead",
-                                            String::from("notable_trait"),
+                                            "notable_trait",
                                             Applicability::MachineApplicable,
                                         );
                                         diag.note("`doc(spotlight)` is now a no-op");
@@ -1624,12 +1627,9 @@ impl CheckAttrVisitor<'_> {
         }
     }
 
-    fn check_rustc_lint_query_instability(
-        &self,
-        attr: &Attribute,
-        span: Span,
-        target: Target,
-    ) -> bool {
+    /// Helper function for checking that the provided attribute is only applied to a function or
+    /// method.
+    fn check_applied_to_fn_or_method(&self, attr: &Attribute, span: Span, target: Target) -> bool {
         let is_function = matches!(target, Target::Fn | Target::Method(..));
         if !is_function {
             self.tcx
@@ -1641,6 +1641,23 @@ impl CheckAttrVisitor<'_> {
         } else {
             true
         }
+    }
+
+    /// Checks that the `#[rustc_lint_query_instability]` attribute is only applied to a function
+    /// or method.
+    fn check_rustc_lint_query_instability(
+        &self,
+        attr: &Attribute,
+        span: Span,
+        target: Target,
+    ) -> bool {
+        self.check_applied_to_fn_or_method(attr, span, target)
+    }
+
+    /// Checks that the `#[rustc_lint_diagnostics]` attribute is only applied to a function or
+    /// method.
+    fn check_rustc_lint_diagnostics(&self, attr: &Attribute, span: Span, target: Target) -> bool {
+        self.check_applied_to_fn_or_method(attr, span, target)
     }
 
     /// Checks that the dep-graph debugging attributes are only present when the query-dep-graph
@@ -1720,7 +1737,7 @@ impl CheckAttrVisitor<'_> {
                     .span_suggestion(
                         attr.span,
                         "remove this attribute",
-                        String::new(),
+                        "",
                         Applicability::MachineApplicable,
                     )
                     .emit();
@@ -2259,7 +2276,7 @@ impl CheckAttrVisitor<'_> {
                 .span_suggestion(
                     attr.span,
                     "remove this attribute",
-                    String::new(),
+                    "",
                     Applicability::MachineApplicable,
                 )
                 .note(&note)
@@ -2487,7 +2504,7 @@ fn check_duplicates(
                         db.span_note(other, "attribute also specified here").span_suggestion(
                             this,
                             "remove this attribute",
-                            String::new(),
+                            "",
                             Applicability::MachineApplicable,
                         );
                         if matches!(duplicates, FutureWarnFollowing | FutureWarnPreceding) {
@@ -2522,7 +2539,7 @@ fn check_duplicates(
                     .span_suggestion(
                         this,
                         "remove this attribute",
-                        String::new(),
+                        "",
                         Applicability::MachineApplicable,
                     )
                     .emit();

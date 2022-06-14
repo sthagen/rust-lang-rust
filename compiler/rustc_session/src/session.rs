@@ -209,6 +209,7 @@ pub struct PerfStats {
 
 /// Trait implemented by error types. This should not be implemented manually. Instead, use
 /// `#[derive(SessionDiagnostic)]` -- see [rustc_macros::SessionDiagnostic].
+#[rustc_diagnostic_item = "SessionDiagnostic"]
 pub trait SessionDiagnostic<'a, T: EmissionGuarantee = ErrorGuaranteed> {
     /// Write out as a diagnostic out of `sess`.
     #[must_use]
@@ -1252,7 +1253,8 @@ pub fn build_session(
         let profiler = SelfProfiler::new(
             directory,
             sopts.crate_name.as_deref(),
-            &sopts.debugging_opts.self_profile_events,
+            sopts.debugging_opts.self_profile_events.as_ref().map(|xs| &xs[..]),
+            &sopts.debugging_opts.self_profile_counter,
         );
         match profiler {
             Ok(profiler) => Some(Arc::new(profiler)),

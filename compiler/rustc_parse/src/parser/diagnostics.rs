@@ -28,6 +28,7 @@ use std::ops::{Deref, DerefMut};
 
 use std::mem::take;
 
+use crate::parser;
 use tracing::{debug, trace};
 
 const TURBOFISH_SUGGESTION_STR: &str =
@@ -431,7 +432,7 @@ impl<'a> Parser<'a> {
                 err.span_suggestion_verbose(
                     ident.span.shrink_to_lo(),
                     &format!("escape `{}` to use it as an identifier", ident.name),
-                    "r#".to_owned(),
+                    "r#",
                     Applicability::MaybeIncorrect,
                 );
             }
@@ -445,7 +446,7 @@ impl<'a> Parser<'a> {
                 err.span_suggestion(
                     self.token.span,
                     "remove this comma",
-                    String::new(),
+                    "",
                     Applicability::MachineApplicable,
                 );
             }
@@ -481,6 +482,35 @@ impl<'a> Parser<'a> {
             .map(|x| TokenType::Token(x.clone()))
             .chain(inedible.iter().map(|x| TokenType::Token(x.clone())))
             .chain(self.expected_tokens.iter().cloned())
+            .filter_map(|token| {
+                // filter out suggestions which suggest the same token which was found and deemed incorrect
+                fn is_ident_eq_keyword(found: &TokenKind, expected: &TokenType) -> bool {
+                    if let TokenKind::Ident(current_sym, _) = found {
+                        if let TokenType::Keyword(suggested_sym) = expected {
+                            return current_sym == suggested_sym;
+                        }
+                    }
+                    false
+                }
+                if token != parser::TokenType::Token(self.token.kind.clone()) {
+                    let eq = is_ident_eq_keyword(&self.token.kind, &token);
+                    // if the suggestion is a keyword and the found token is an ident,
+                    // the content of which are equal to the suggestion's content,
+                    // we can remove that suggestion (see the return None statement below)
+
+                    // if this isn't the case however, and the suggestion is a token the
+                    // content of which is the same as the found token's, we remove it as well
+                    if !eq {
+                        if let TokenType::Token(kind) = &token {
+                            if kind == &self.token.kind {
+                                return None;
+                            }
+                        }
+                        return Some(token);
+                    }
+                }
+                return None;
+            })
             .collect::<Vec<_>>();
         expected.sort_by_cached_key(|x| x.to_string());
         expected.dedup();
@@ -518,7 +548,7 @@ impl<'a> Parser<'a> {
                 self.bump();
                 let sp = self.prev_token.span;
                 self.struct_span_err(sp, &msg)
-                    .span_suggestion_short(sp, "change this to `;`", ";".to_string(), appl)
+                    .span_suggestion_short(sp, "change this to `;`", ";", appl)
                     .emit();
                 return Ok(true);
             } else if self.look_ahead(0, |t| {
@@ -537,7 +567,7 @@ impl<'a> Parser<'a> {
                 let sp = self.prev_token.span.shrink_to_hi();
                 self.struct_span_err(sp, &msg)
                     .span_label(self.token.span, "unexpected token")
-                    .span_suggestion_short(sp, "add `;` here", ";".to_string(), appl)
+                    .span_suggestion_short(sp, "add `;` here", ";", appl)
                     .emit();
                 return Ok(true);
             }
@@ -664,7 +694,7 @@ impl<'a> Parser<'a> {
                 err.span_suggestion(
                     span,
                     &format!("remove the extra `#`{}", pluralize!(count)),
-                    String::new(),
+                    "",
                     Applicability::MachineApplicable,
                 );
                 err.span_label(
@@ -761,7 +791,7 @@ impl<'a> Parser<'a> {
                 err.span_suggestion(
                     sp,
                     "maybe write a path separator here",
-                    "::".to_string(),
+                    "::",
                     if allow_unstable {
                         Applicability::MaybeIncorrect
                     } else {
@@ -773,7 +803,7 @@ impl<'a> Parser<'a> {
                 err.span_suggestion(
                     sp,
                     "try using a semicolon",
-                    ";".to_string(),
+                    ";",
                     Applicability::MaybeIncorrect,
                 );
             } else if allow_unstable {
@@ -917,7 +947,7 @@ impl<'a> Parser<'a> {
             .span_suggestion(
                 span,
                 &format!("remove extra angle bracket{}", pluralize!(total_num_of_gt)),
-                String::new(),
+                "",
                 Applicability::MachineApplicable,
             )
             .emit();
@@ -999,7 +1029,7 @@ impl<'a> Parser<'a> {
                         e.span_suggestion_verbose(
                             binop.span.shrink_to_lo(),
                             TURBOFISH_SUGGESTION_STR,
-                            "::".to_string(),
+                            "::",
                             Applicability::MaybeIncorrect,
                         )
                         .emit();
@@ -1158,7 +1188,7 @@ impl<'a> Parser<'a> {
                     err.span_suggestion_verbose(
                         op.span.shrink_to_lo(),
                         TURBOFISH_SUGGESTION_STR,
-                        "::".to_string(),
+                        "::",
                         Applicability::MaybeIncorrect,
                     );
                 };
@@ -1701,7 +1731,7 @@ impl<'a> Parser<'a> {
                     Applicability::MachineApplicable,
                 );
             }
-            err.span_suggestion(lo.shrink_to_lo(), &format!("{prefix}you can still access the deprecated `try!()` macro using the \"raw identifier\" syntax"), "r#".to_string(), Applicability::MachineApplicable);
+            err.span_suggestion(lo.shrink_to_lo(), &format!("{prefix}you can still access the deprecated `try!()` macro using the \"raw identifier\" syntax"), "r#", Applicability::MachineApplicable);
             err.emit();
             Ok(self.mk_expr_err(lo.to(hi)))
         } else {
@@ -1997,7 +2027,7 @@ impl<'a> Parser<'a> {
             err.span_suggestion(
                 span,
                 "declare the type after the parameter binding",
-                String::from("<identifier>: <type>"),
+                "<identifier>: <type>",
                 Applicability::HasPlaceholders,
             );
             return Some(ident);
@@ -2102,7 +2132,7 @@ impl<'a> Parser<'a> {
         .span_suggestion_short(
             pat.span,
             "give this argument a name or use an underscore to ignore it",
-            "_".to_owned(),
+            "_",
             Applicability::MachineApplicable,
         )
         .emit();
@@ -2336,7 +2366,7 @@ impl<'a> Parser<'a> {
             err.span_suggestion_verbose(
                 start.until(self.token.span),
                 "the `const` keyword is only needed in the definition of the type",
-                String::new(),
+                "",
                 Applicability::MaybeIncorrect,
             );
             err.emit();
@@ -2394,7 +2424,7 @@ impl<'a> Parser<'a> {
                     err.span_suggestion(
                         snapshot.token.span,
                         "if you meant to use an associated type binding, replace `==` with `=`",
-                        "=".to_string(),
+                        "=",
                         Applicability::MaybeIncorrect,
                     );
                     let value = self.mk_expr_err(start.to(expr.span));
@@ -2408,7 +2438,7 @@ impl<'a> Parser<'a> {
                     err.span_suggestion(
                         snapshot.token.span,
                         "write a path separator here",
-                        "::".to_string(),
+                        "::",
                         Applicability::MaybeIncorrect,
                     );
                     err.emit();
@@ -2461,7 +2491,7 @@ impl<'a> Parser<'a> {
         err.span_suggestion_verbose(
             move_async_span,
             "try switching the order",
-            "async move".to_owned(),
+            "async move",
             Applicability::MaybeIncorrect,
         );
         err
@@ -2566,7 +2596,7 @@ impl<'a> Parser<'a> {
                             err.span_suggestion(
                                 span,
                                 "maybe write a path separator here",
-                                "::".to_string(),
+                                "::",
                                 Applicability::MaybeIncorrect,
                             );
                         } else {
@@ -2596,7 +2626,7 @@ impl<'a> Parser<'a> {
         err.tool_only_span_suggestion(
             label.ident.span.until(self.token.span),
             "remove this block label",
-            String::new(),
+            "",
             Applicability::MachineApplicable,
         );
         err.emit();
@@ -2669,7 +2699,7 @@ impl<'a> Parser<'a> {
                     err.span_suggestion(
                         between_span,
                         "use single colon",
-                        ": ".to_owned(),
+                        ": ",
                         Applicability::MachineApplicable,
                     );
                     return Err(err);

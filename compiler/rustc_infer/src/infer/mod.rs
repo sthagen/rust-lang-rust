@@ -20,7 +20,7 @@ use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_middle::infer::canonical::{Canonical, CanonicalVarValues};
 use rustc_middle::infer::unify_key::{ConstVarValue, ConstVariableValue};
 use rustc_middle::infer::unify_key::{ConstVariableOrigin, ConstVariableOriginKind, ToType};
-use rustc_middle::mir::interpret::{ErrorHandled, EvalToConstValueResult};
+use rustc_middle::mir::interpret::{ErrorHandled, EvalToValTreeResult};
 use rustc_middle::traits::select;
 use rustc_middle::ty::error::{ExpectedFound, TypeError};
 use rustc_middle::ty::fold::{TypeFoldable, TypeFolder, TypeSuperFoldable};
@@ -83,20 +83,6 @@ pub type FixupResult<'tcx, T> = Result<T, FixupError<'tcx>>; // "fixup result"
 pub(crate) type UnificationTable<'a, 'tcx, T> = ut::UnificationTable<
     ut::InPlace<T, &'a mut ut::UnificationStorage<T>, &'a mut InferCtxtUndoLogs<'tcx>>,
 >;
-
-/// How we should handle region solving.
-///
-/// This is used so that the region values inferred by HIR region solving are
-/// not exposed, and so that we can avoid doing work in HIR typeck that MIR
-/// typeck will also do.
-#[derive(Copy, Clone, Debug, Default)]
-pub enum RegionckMode {
-    /// The default mode: report region errors, don't erase regions.
-    #[default]
-    Solve,
-    /// Erase the results of region after solving.
-    Erase,
-}
 
 /// This type contains all the things within `InferCtxt` that sit within a
 /// `RefCell` and are involved with taking/rolling back snapshots. Snapshot
@@ -1248,6 +1234,33 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         self.tainted_by_errors_flag.set(true)
     }
 
+    pub fn skip_region_resolution(&self) {
+        let (var_infos, _) = {
+            let mut inner = self.inner.borrow_mut();
+            let inner = &mut *inner;
+            // Note: `inner.region_obligations` may not be empty, because we
+            // didn't necessarily call `process_registered_region_obligations`.
+            // This is okay, because that doesn't introduce new vars.
+            inner
+                .region_constraint_storage
+                .take()
+                .expect("regions already resolved")
+                .with_log(&mut inner.undo_log)
+                .into_infos_and_data()
+        };
+
+        let lexical_region_resolutions = LexicalRegionResolutions {
+            error_region: self.tcx.lifetimes.re_static,
+            values: rustc_index::vec::IndexVec::from_elem_n(
+                crate::infer::lexical_region_resolve::VarValue::Value(self.tcx.lifetimes.re_erased),
+                var_infos.len(),
+            ),
+        };
+
+        let old_value = self.lexical_region_resolutions.replace(Some(lexical_region_resolutions));
+        assert!(old_value.is_none());
+    }
+
     /// Process the region constraints and return any any errors that
     /// result. After this, no more unification operations should be
     /// done -- or the compiler will panic -- but it is legal to use
@@ -1256,7 +1269,6 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         &self,
         region_context: DefId,
         outlives_env: &OutlivesEnvironment<'tcx>,
-        mode: RegionckMode,
     ) -> Vec<RegionResolutionError<'tcx>> {
         let (var_infos, data) = {
             let mut inner = self.inner.borrow_mut();
@@ -1278,7 +1290,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             &RegionRelations::new(self.tcx, region_context, outlives_env.free_region_map());
 
         let (lexical_region_resolutions, errors) =
-            lexical_region_resolve::resolve(region_rels, var_infos, data, mode);
+            lexical_region_resolve::resolve(region_rels, var_infos, data);
 
         let old_value = self.lexical_region_resolutions.replace(Some(lexical_region_resolutions));
         assert!(old_value.is_none());
@@ -1294,9 +1306,8 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         &self,
         region_context: DefId,
         outlives_env: &OutlivesEnvironment<'tcx>,
-        mode: RegionckMode,
     ) {
-        let errors = self.resolve_regions(region_context, outlives_env, mode);
+        let errors = self.resolve_regions(region_context, outlives_env);
 
         if !self.is_tainted_by_errors() {
             // As a heuristic, just skip reporting region errors
@@ -1605,6 +1616,28 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         u
     }
 
+    pub fn try_const_eval_resolve(
+        &self,
+        param_env: ty::ParamEnv<'tcx>,
+        unevaluated: ty::Unevaluated<'tcx>,
+        ty: Ty<'tcx>,
+        span: Option<Span>,
+    ) -> Result<ty::Const<'tcx>, ErrorHandled> {
+        match self.const_eval_resolve(param_env, unevaluated, span) {
+            Ok(Some(val)) => Ok(ty::Const::from_value(self.tcx, val, ty)),
+            Ok(None) => {
+                let tcx = self.tcx;
+                let def_id = unevaluated.def.did;
+                span_bug!(
+                    tcx.def_span(def_id),
+                    "unable to construct a constant value for the unevaluated constant {:?}",
+                    unevaluated
+                );
+            }
+            Err(err) => Err(err),
+        }
+    }
+
     /// Resolves and evaluates a constant.
     ///
     /// The constant can be located on a trait like `<A as B>::C`, in which case the given
@@ -1623,7 +1656,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         param_env: ty::ParamEnv<'tcx>,
         unevaluated: ty::Unevaluated<'tcx>,
         span: Option<Span>,
-    ) -> EvalToConstValueResult<'tcx> {
+    ) -> EvalToValTreeResult<'tcx> {
         let substs = self.resolve_vars_if_possible(unevaluated.substs);
         debug!(?substs);
 
@@ -1647,7 +1680,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
 
         // The return value is the evaluated value which doesn't contain any reference to inference
         // variables, thus we don't need to substitute back the original values.
-        self.tcx.const_eval_resolve(param_env_erased, unevaluated, span)
+        self.tcx.const_eval_resolve_for_typeck(param_env_erased, unevaluated, span)
     }
 
     /// `ty_or_const_infer_var_changed` is equivalent to one of these two:
@@ -1743,7 +1776,7 @@ impl<'tcx> TyOrConstInferVar<'tcx> {
     /// Tries to extract an inference variable from a constant, returns `None`
     /// for constants other than `ty::ConstKind::Infer(_)` (or `InferConst::Fresh`).
     pub fn maybe_from_const(ct: ty::Const<'tcx>) -> Option<Self> {
-        match ct.val() {
+        match ct.kind() {
             ty::ConstKind::Infer(InferConst::Var(v)) => Some(TyOrConstInferVar::Const(v)),
             _ => None,
         }
@@ -1822,7 +1855,7 @@ impl<'a, 'tcx> TypeFolder<'tcx> for ShallowResolver<'a, 'tcx> {
     }
 
     fn fold_const(&mut self, ct: ty::Const<'tcx>) -> ty::Const<'tcx> {
-        if let ty::ConstKind::Infer(InferConst::Var(vid)) = ct.val() {
+        if let ty::ConstKind::Infer(InferConst::Var(vid)) = ct.kind() {
             self.infcx
                 .inner
                 .borrow_mut()

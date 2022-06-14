@@ -230,7 +230,7 @@ impl<'a> Parser<'a> {
                     .span_suggestion_short(
                         sp,
                         &format!("`{s}=` is not a valid comparison operator, use `{s}`", s = sugg),
-                        sugg.to_string(),
+                        sugg,
                         Applicability::MachineApplicable,
                     )
                     .emit();
@@ -247,7 +247,7 @@ impl<'a> Parser<'a> {
                     .span_suggestion_short(
                         sp,
                         "`<>` is not a valid comparison operator, use `!=`",
-                        "!=".to_string(),
+                        "!=",
                         Applicability::MachineApplicable,
                     )
                     .emit();
@@ -459,7 +459,7 @@ impl<'a> Parser<'a> {
             .span_suggestion_short(
                 self.token.span,
                 &format!("use `{good}` to perform logical {english}"),
-                good.to_string(),
+                good,
                 Applicability::MachineApplicable,
             )
             .note("unlike in e.g., python and PHP, `&&` and `||` are used for logical operators")
@@ -584,7 +584,7 @@ impl<'a> Parser<'a> {
                     err.span_suggestion_verbose(
                         lo,
                         "try removing the `+`",
-                        "".to_string(),
+                        "",
                         Applicability::MachineApplicable,
                     );
                 }
@@ -634,7 +634,7 @@ impl<'a> Parser<'a> {
             .span_suggestion_short(
                 lo,
                 "use `!` to perform bitwise not",
-                "!".to_owned(),
+                "!",
                 Applicability::MachineApplicable,
             )
             .emit();
@@ -673,7 +673,7 @@ impl<'a> Parser<'a> {
             // trailing whitespace after the `!` in our suggestion
             self.sess.source_map().span_until_non_whitespace(lo.to(not_token.span)),
             "use `!` to perform logical negation",
-            "!".to_owned(),
+            "!",
             Applicability::MachineApplicable,
         )
         .emit();
@@ -744,7 +744,7 @@ impl<'a> Parser<'a> {
                                     .span_suggestion(
                                         label.ident.span,
                                         "use the correct loop label format",
-                                        label.ident.to_string(),
+                                        label.ident,
                                         Applicability::MachineApplicable,
                                     )
                                     .emit();
@@ -885,7 +885,7 @@ impl<'a> Parser<'a> {
                         "{}remove the type ascription",
                         if is_nightly { "alternatively, " } else { "" }
                     ),
-                    String::new(),
+                    "",
                     if is_nightly {
                         Applicability::MaybeIncorrect
                     } else {
@@ -929,7 +929,7 @@ impl<'a> Parser<'a> {
             .span_suggestion(
                 lt_span,
                 "remove the lifetime annotation",
-                String::new(),
+                "",
                 Applicability::MachineApplicable,
             )
             .emit();
@@ -980,12 +980,26 @@ impl<'a> Parser<'a> {
 
     fn parse_dot_or_call_expr_with_(&mut self, mut e: P<Expr>, lo: Span) -> PResult<'a, P<Expr>> {
         loop {
-            if self.eat(&token::Question) {
+            let has_question = if self.prev_token.kind == TokenKind::Ident(kw::Return, false) {
+                // we are using noexpect here because we don't expect a `?` directly after a `return`
+                // which could be suggested otherwise
+                self.eat_noexpect(&token::Question)
+            } else {
+                self.eat(&token::Question)
+            };
+            if has_question {
                 // `expr?`
                 e = self.mk_expr(lo.to(self.prev_token.span), ExprKind::Try(e), AttrVec::new());
                 continue;
             }
-            if self.eat(&token::Dot) {
+            let has_dot = if self.prev_token.kind == TokenKind::Ident(kw::Return, false) {
+                // we are using noexpect here because we don't expect a `.` directly after a `return`
+                // which could be suggested otherwise
+                self.eat_noexpect(&token::Dot)
+            } else {
+                self.eat(&token::Dot)
+            };
+            if has_dot {
                 // expr.f
                 e = self.parse_dot_suffix_expr(lo, e)?;
                 continue;
@@ -1541,9 +1555,13 @@ impl<'a> Parser<'a> {
             self.parse_for_expr(label, lo, attrs)
         } else if self.eat_keyword(kw::Loop) {
             self.parse_loop_expr(label, lo, attrs)
-        } else if self.check(&token::OpenDelim(Delimiter::Brace)) || self.token.is_whole_block() {
+        } else if self.check_noexpect(&token::OpenDelim(Delimiter::Brace))
+            || self.token.is_whole_block()
+        {
             self.parse_block_expr(label, lo, BlockCheckMode::Default, attrs)
-        } else if !ate_colon && (self.check(&TokenKind::Comma) || self.check(&TokenKind::Gt)) {
+        } else if !ate_colon
+            && (self.check_noexpect(&TokenKind::Comma) || self.check_noexpect(&TokenKind::Gt))
+        {
             // We're probably inside of a `Path<'a>` that needs a turbofish
             let msg = "expected `while`, `for`, `loop` or `{` after a label";
             self.struct_span_err(self.token.span, msg).span_label(self.token.span, msg).emit();
@@ -1626,7 +1644,7 @@ impl<'a> Parser<'a> {
             .span_suggestion_short(
                 lo.shrink_to_hi(),
                 "add `:` after the label",
-                ": ".to_string(),
+                ": ",
                 Applicability::MachineApplicable,
             )
             .note("labels are used before loops and blocks, allowing e.g., `break 'label` to them")
@@ -1645,7 +1663,7 @@ impl<'a> Parser<'a> {
             .span_suggestion(
                 span_dc,
                 "replace with the new syntax",
-                "try".to_string(),
+                "try",
                 Applicability::MachineApplicable,
             )
             .note("following RFC #2388, the new non-placeholder syntax is `try`")
@@ -2088,7 +2106,7 @@ impl<'a> Parser<'a> {
             .span_suggestion(
                 span_for,
                 "remove the parameters",
-                String::new(),
+                "",
                 Applicability::MachineApplicable,
             )
             .emit();
@@ -2352,7 +2370,7 @@ impl<'a> Parser<'a> {
                         .span_suggestion(
                             cond.span.shrink_to_lo(),
                             "add an `if` if this is the condition of a chained `else if` statement",
-                            "if ".to_string(),
+                            "if ",
                             Applicability::MaybeIncorrect,
                         )
                         .emit();
@@ -2388,12 +2406,7 @@ impl<'a> Parser<'a> {
         self.struct_span_err(last, "outer attributes are not allowed on `if` and `else` branches")
             .span_label(branch_span, "the attributes are attached to this branch")
             .span_label(ctx_span, format!("the branch belongs to this `{ctx}`"))
-            .span_suggestion(
-                span,
-                "remove the attributes",
-                String::new(),
-                Applicability::MachineApplicable,
-            )
+            .span_suggestion(span, "remove the attributes", "", Applicability::MachineApplicable)
             .emit();
     }
 
@@ -2502,7 +2515,7 @@ impl<'a> Parser<'a> {
                 e.span_suggestion_short(
                     match_span,
                     "try removing this `match`",
-                    String::new(),
+                    "",
                     Applicability::MaybeIncorrect, // speculative
                 );
             }
@@ -2578,7 +2591,7 @@ impl<'a> Parser<'a> {
                 err.span_suggestion(
                     semi_sp,
                     "use a comma to end a `match` arm expression",
-                    ",".to_string(),
+                    ",",
                     Applicability::MachineApplicable,
                 );
             }
@@ -2679,7 +2692,7 @@ impl<'a> Parser<'a> {
                     err.span_suggestion(
                         this.token.span,
                         "try using a fat arrow here",
-                        "=>".to_string(),
+                        "=>",
                         Applicability::MaybeIncorrect,
                     );
                     err.emit();
@@ -2739,7 +2752,7 @@ impl<'a> Parser<'a> {
                                 err.span_suggestion_short(
                                     arm_start_span.shrink_to_hi(),
                                     "missing a comma here to end this `match` arm",
-                                    ",".to_owned(),
+                                    ",",
                                     Applicability::MachineApplicable,
                                 );
                                 return Err(err);
@@ -2768,7 +2781,7 @@ impl<'a> Parser<'a> {
                                 .span_suggestion(
                                     hi.shrink_to_hi(),
                                     "missing a comma here to end this `match` arm",
-                                    ",".to_owned(),
+                                    ",",
                                     Applicability::MachineApplicable,
                                 )
                                 .emit();
@@ -3049,7 +3062,7 @@ impl<'a> Parser<'a> {
         .span_suggestion_short(
             self.token.span,
             "remove this comma",
-            String::new(),
+            "",
             Applicability::MachineApplicable,
         )
         .note("the base struct must always be the last field")
@@ -3103,7 +3116,7 @@ impl<'a> Parser<'a> {
             .span_suggestion(
                 field_name.span.shrink_to_hi().to(self.token.span),
                 "replace equals symbol with a colon",
-                ":".to_string(),
+                ":",
                 Applicability::MachineApplicable,
             )
             .emit();
@@ -3114,13 +3127,13 @@ impl<'a> Parser<'a> {
             .span_suggestion(
                 span,
                 "use `..` for an exclusive range",
-                "..".to_owned(),
+                "..",
                 Applicability::MaybeIncorrect,
             )
             .span_suggestion(
                 span,
                 "or `..=` for an inclusive range",
-                "..=".to_owned(),
+                "..=",
                 Applicability::MaybeIncorrect,
             )
             .emit();
@@ -3132,7 +3145,7 @@ impl<'a> Parser<'a> {
                 span,
                 "if you meant to write a comparison against a negative value, add a \
              space in between `<` and `-`",
-                "< -".to_string(),
+                "< -",
                 Applicability::MaybeIncorrect,
             )
             .emit();

@@ -354,7 +354,7 @@ fn compare_predicate_entailment<'tcx>(
                                         diag.span_suggestion_verbose(sp, msg, sugg, ap);
                                     }
                                     hir::FnRetTy::Return(hir_ty) => {
-                                        let sugg = trait_sig.output().to_string();
+                                        let sugg = trait_sig.output();
                                         diag.span_suggestion(hir_ty.span, msg, sugg, ap);
                                     }
                                 };
@@ -365,7 +365,7 @@ fn compare_predicate_entailment<'tcx>(
                         diag.span_suggestion(
                             impl_err_span,
                             "change the parameter type to match the trait",
-                            trait_ty.to_string(),
+                            trait_ty,
                             Applicability::MachineApplicable,
                         );
                     }
@@ -1379,7 +1379,7 @@ pub fn check_type_bounds<'tcx>(
             bound_vars.push(bound_var);
             tcx.mk_const(ty::ConstS {
                 ty: tcx.type_of(param.def_id),
-                val: ty::ConstKind::Bound(
+                kind: ty::ConstKind::Bound(
                     ty::INNERMOST,
                     ty::BoundVar::from_usize(bound_vars.len() - 1),
                 ),

@@ -13,9 +13,7 @@ use rustc_hir::def::DefKind;
 use rustc_index::vec::IndexVec;
 use rustc_infer::infer::InferCtxt;
 use rustc_middle::mir;
-use rustc_middle::mir::interpret::{
-    ConstValue, ErrorHandled, LitToConstError, LitToConstInput, Scalar,
-};
+use rustc_middle::mir::interpret::{ErrorHandled, LitToConstError, LitToConstInput};
 use rustc_middle::thir;
 use rustc_middle::thir::abstract_const::{self, Node, NodeId, NotConstEvaluatable};
 use rustc_middle::ty::subst::{Subst, SubstsRef};
@@ -144,7 +142,7 @@ pub fn is_const_evaluatable<'cx, 'tcx>(
                   .span_suggestion_verbose(
                       rustc_span::DUMMY_SP,
                       "consider enabling this feature",
-                      "#![feature(generic_const_exprs)]\n".to_string(),
+                      "#![feature(generic_const_exprs)]\n",
                       rustc_errors::Applicability::MaybeIncorrect,
                   )
                   .emit()
@@ -245,7 +243,7 @@ impl<'tcx> AbstractConst<'tcx> {
         tcx: TyCtxt<'tcx>,
         ct: ty::Const<'tcx>,
     ) -> Result<Option<AbstractConst<'tcx>>, ErrorGuaranteed> {
-        match ct.val() {
+        match ct.kind() {
             ty::ConstKind::Unevaluated(uv) => AbstractConst::new(tcx, uv.shrink()),
             ty::ConstKind::Error(DelaySpanBugEmitted { reported, .. }) => Err(reported),
             _ => Ok(None),
@@ -414,7 +412,7 @@ impl<'a, 'tcx> AbstractConstBuilder<'a, 'tcx> {
 
         for n in self.nodes.iter() {
             if let Node::Leaf(ct) = n {
-                if let ty::ConstKind::Unevaluated(ct) = ct.val() {
+                if let ty::ConstKind::Unevaluated(ct) = ct.kind() {
                     // `AbstractConst`s should not contain any promoteds as they require references which
                     // are not allowed.
                     assert_eq!(ct.promoted, None);
@@ -449,15 +447,14 @@ impl<'a, 'tcx> AbstractConstBuilder<'a, 'tcx> {
                 self.nodes.push(Node::Leaf(constant))
             }
             &ExprKind::NonHirLiteral { lit , user_ty: _} => {
-                // FIXME Construct a Valtree from this ScalarInt when introducing Valtrees
-                let const_value = ConstValue::Scalar(Scalar::Int(lit));
-                self.nodes.push(Node::Leaf(ty::Const::from_value(self.tcx, const_value, node.ty)))
+                let val = ty::ValTree::from_scalar_int(lit);
+                self.nodes.push(Node::Leaf(ty::Const::from_value(self.tcx, val, node.ty)))
             }
             &ExprKind::NamedConst { def_id, substs, user_ty: _ } => {
                 let uneval = ty::Unevaluated::new(ty::WithOptConstParam::unknown(def_id), substs);
 
                 let constant = self.tcx.mk_const(ty::ConstS {
-                                val: ty::ConstKind::Unevaluated(uneval),
+                                kind: ty::ConstKind::Unevaluated(uneval),
                                 ty: node.ty,
                             });
 
@@ -466,7 +463,7 @@ impl<'a, 'tcx> AbstractConstBuilder<'a, 'tcx> {
 
             ExprKind::ConstParam {param, ..} => {
                 let const_param = self.tcx.mk_const(ty::ConstS {
-                        val: ty::ConstKind::Param(*param),
+                        kind: ty::ConstKind::Param(*param),
                         ty: node.ty,
                     });
                 self.nodes.push(Node::Leaf(const_param))
@@ -748,7 +745,7 @@ impl<'tcx> ConstUnifyCtxt<'tcx> {
                     return false;
                 }
 
-                match (a_ct.val(), b_ct.val()) {
+                match (a_ct.kind(), b_ct.kind()) {
                     // We can just unify errors with everything to reduce the amount of
                     // emitted errors here.
                     (ty::ConstKind::Error(_), _) | (_, ty::ConstKind::Error(_)) => true,

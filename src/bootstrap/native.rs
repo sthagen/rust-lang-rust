@@ -179,13 +179,13 @@ fn download_ci_llvm(builder: &Builder<'_>, llvm_sha: &str) {
     let filename = format!("rust-dev-nightly-{}.tar.xz", builder.build.build.triple);
     let tarball = rustc_cache.join(&filename);
     if !tarball.exists() {
-        let help_on_error = "error: failed to download llvm from ci\n
-\nhelp: old builds get deleted after a certain time
-\nhelp: if trying to compile an old commit of rustc, disable `download-ci-llvm` in config.toml:
-\n
-\n[llvm]
-\ndownload-ci-llvm = false
-\n
+        let help_on_error = "error: failed to download llvm from ci
+
+help: old builds get deleted after a certain time
+help: if trying to compile an old commit of rustc, disable `download-ci-llvm` in config.toml:
+
+[llvm]
+download-ci-llvm = false
 ";
         builder.download_component(base, &format!("{}/{}", url, filename), &tarball, help_on_error);
     }
@@ -315,8 +315,11 @@ impl Step for Llvm {
             cfg.define("LLVM_ENABLE_ZLIB", "OFF");
         }
 
-        // Are we compiling for iOS/tvOS?
-        if target.contains("apple-ios") || target.contains("apple-tvos") {
+        // Are we compiling for iOS/tvOS/watchOS?
+        if target.contains("apple-ios")
+            || target.contains("apple-tvos")
+            || target.contains("apple-watchos")
+        {
             // These two defines prevent CMake from automatically trying to add a MacOSX sysroot, which leads to a compiler error.
             cfg.define("CMAKE_OSX_SYSROOT", "/");
             cfg.define("CMAKE_OSX_DEPLOYMENT_TARGET", "");

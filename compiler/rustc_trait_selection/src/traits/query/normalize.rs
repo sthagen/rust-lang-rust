@@ -100,7 +100,7 @@ impl<'cx, 'tcx> AtExt<'tcx> for At<'cx, 'tcx> {
     }
 }
 
-/// Visitor to find the maximum escaping bound var
+// Visitor to find the maximum escaping bound var
 struct MaxEscapingBoundVarVisitor {
     // The index which would count as escaping
     outer_index: ty::DebruijnIndex,
@@ -141,7 +141,7 @@ impl<'tcx> TypeVisitor<'tcx> for MaxEscapingBoundVarVisitor {
     }
 
     fn visit_const(&mut self, ct: ty::Const<'tcx>) -> ControlFlow<Self::BreakTy> {
-        match ct.val() {
+        match ct.kind() {
             ty::ConstKind::Bound(debruijn, _) if debruijn >= self.outer_index => {
                 self.escaping =
                     self.escaping.max(debruijn.as_usize() - self.outer_index.as_usize());
@@ -336,12 +336,15 @@ impl<'cx, 'tcx> FallibleTypeFolder<'tcx> for QueryNormalizer<'cx, 'tcx> {
     ) -> Result<mir::ConstantKind<'tcx>, Self::Error> {
         Ok(match constant {
             mir::ConstantKind::Ty(c) => {
-                let const_folded = c.try_fold_with(self)?;
-                match const_folded.val() {
-                    ty::ConstKind::Value(cv) => {
-                        // FIXME With Valtrees we need to convert `cv: ValTree`
-                        // to a `ConstValue` here.
-                        mir::ConstantKind::Val(cv, const_folded.ty())
+                let const_folded = c.try_super_fold_with(self)?;
+                match const_folded.kind() {
+                    ty::ConstKind::Value(valtree) => {
+                        let tcx = self.infcx.tcx;
+                        let ty = const_folded.ty();
+                        let const_val = tcx.valtree_to_const_val((ty, valtree));
+                        debug!(?ty, ?valtree, ?const_val);
+
+                        mir::ConstantKind::Val(const_val, ty)
                     }
                     _ => mir::ConstantKind::Ty(const_folded),
                 }
