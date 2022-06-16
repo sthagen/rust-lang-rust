@@ -152,9 +152,7 @@ impl CheckAttrVisitor<'_> {
                 sym::link_name => self.check_link_name(hir_id, attr, span, target),
                 sym::link_section => self.check_link_section(hir_id, attr, span, target),
                 sym::no_mangle => self.check_no_mangle(hir_id, attr, span, target),
-                sym::deprecated | sym::rustc_deprecated => {
-                    self.check_deprecated(hir_id, attr, span, target)
-                }
+                sym::deprecated => self.check_deprecated(hir_id, attr, span, target),
                 sym::macro_use | sym::macro_escape => self.check_macro_use(hir_id, attr, target),
                 sym::path => self.check_generic_attr(hir_id, attr, target, &[Target::Mod]),
                 sym::plugin_registrar => self.check_plugin_registrar(hir_id, attr, target),
@@ -807,6 +805,37 @@ impl CheckAttrVisitor<'_> {
         true
     }
 
+    fn check_doc_tuple_variadic(&self, meta: &NestedMetaItem, hir_id: HirId) -> bool {
+        match self.tcx.hir().find(hir_id).and_then(|node| match node {
+            hir::Node::Item(item) => Some(&item.kind),
+            _ => None,
+        }) {
+            Some(ItemKind::Impl(ref i)) => {
+                if !matches!(&i.self_ty.kind, hir::TyKind::Tup([_])) {
+                    self.tcx
+                        .sess
+                        .struct_span_err(
+                            meta.span(),
+                            "`#[doc(tuple_variadic)]` must be used on the first of a set of tuple trait impls with varying arity",
+                        )
+                        .emit();
+                    return false;
+                }
+            }
+            _ => {
+                self.tcx
+                    .sess
+                    .struct_span_err(
+                        meta.span(),
+                        "`#[doc(keyword = \"...\")]` can only be used on impl blocks",
+                    )
+                    .emit();
+                return false;
+            }
+        }
+        true
+    }
+
     /// Checks `#[doc(inline)]`/`#[doc(no_inline)]` attributes. Returns `true` if valid.
     ///
     /// A doc inlining attribute is invalid if it is applied to a non-`use` item, or
@@ -1067,6 +1096,13 @@ impl CheckAttrVisitor<'_> {
                             is_valid = false
                         }
 
+                        sym::tuple_variadic
+                            if !self.check_attr_not_crate_level(meta, hir_id, "tuple_variadic")
+                                || !self.check_doc_tuple_variadic(meta, hir_id) =>
+                        {
+                            is_valid = false
+                        }
+
                         sym::html_favicon_url
                         | sym::html_logo_url
                         | sym::html_playground_url
@@ -1120,7 +1156,8 @@ impl CheckAttrVisitor<'_> {
                         | sym::no_inline
                         | sym::notable_trait
                         | sym::passes
-                        | sym::plugins => {}
+                        | sym::plugins
+                        | sym::tuple_variadic => {}
 
                         sym::test => {
                             if !self.check_test_attr(meta, hir_id) {
@@ -2357,7 +2394,7 @@ impl<'tcx> Visitor<'tcx> for CheckAttrVisitor<'tcx> {
 
     fn visit_expr(&mut self, expr: &'tcx hir::Expr<'tcx>) {
         let target = match expr.kind {
-            hir::ExprKind::Closure(..) => Target::Closure,
+            hir::ExprKind::Closure { .. } => Target::Closure,
             _ => Target::Expression,
         };
 

@@ -287,6 +287,14 @@ impl Session {
     ) -> DiagnosticBuilder<'_, ()> {
         self.diagnostic().struct_span_warn(sp, msg)
     }
+    pub fn struct_span_warn_with_expectation<S: Into<MultiSpan>>(
+        &self,
+        sp: S,
+        msg: impl Into<DiagnosticMessage>,
+        id: lint::LintExpectationId,
+    ) -> DiagnosticBuilder<'_, ()> {
+        self.diagnostic().struct_span_warn_with_expectation(sp, msg, id)
+    }
     pub fn struct_span_warn_with_code<S: Into<MultiSpan>>(
         &self,
         sp: S,
@@ -297,6 +305,13 @@ impl Session {
     }
     pub fn struct_warn(&self, msg: impl Into<DiagnosticMessage>) -> DiagnosticBuilder<'_, ()> {
         self.diagnostic().struct_warn(msg)
+    }
+    pub fn struct_warn_with_expectation(
+        &self,
+        msg: impl Into<DiagnosticMessage>,
+        id: lint::LintExpectationId,
+    ) -> DiagnosticBuilder<'_, ()> {
+        self.diagnostic().struct_warn_with_expectation(msg, id)
     }
     pub fn struct_span_allow<S: Into<MultiSpan>>(
         &self,
@@ -1433,13 +1448,13 @@ fn validate_commandline_args_with_session_available(sess: &Session) {
         );
     }
 
-    // LLVM CFI requires LTO.
-    if sess.is_sanitizer_cfi_enabled() {
-        if sess.opts.cg.lto == config::LtoCli::Unspecified
-            || sess.opts.cg.lto == config::LtoCli::No
-            || sess.opts.cg.lto == config::LtoCli::Thin
-        {
+    // LLVM CFI and VFE both require LTO.
+    if sess.lto() != config::Lto::Fat {
+        if sess.is_sanitizer_cfi_enabled() {
             sess.err("`-Zsanitizer=cfi` requires `-Clto`");
+        }
+        if sess.opts.debugging_opts.virtual_function_elimination {
+            sess.err("`-Zvirtual-function-elimination` requires `-Clto`");
         }
     }
 

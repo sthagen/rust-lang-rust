@@ -401,13 +401,17 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
                     let msg = "`#[doc(keyword)]` is meant for internal use only";
                     gate_feature_post!(self, rustdoc_internals, attr.span, msg);
                 }
+
+                if nested_meta.has_name(sym::tuple_variadic) {
+                    let msg = "`#[doc(tuple_variadic)]` is meant for internal use only";
+                    gate_feature_post!(self, rustdoc_internals, attr.span, msg);
+                }
             }
         }
 
         // Emit errors for non-staged-api crates.
         if !self.features.staged_api {
-            if attr.has_name(sym::rustc_deprecated)
-                || attr.has_name(sym::unstable)
+            if attr.has_name(sym::unstable)
                 || attr.has_name(sym::stable)
                 || attr.has_name(sym::rustc_const_unstable)
                 || attr.has_name(sym::rustc_const_stable)
