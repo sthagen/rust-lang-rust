@@ -94,9 +94,6 @@ macro_rules! encoder_methods {
 }
 
 impl<'a, 'tcx> Encoder for EncodeContext<'a, 'tcx> {
-    type Ok = <MemEncoder as Encoder>::Ok;
-    type Err = <MemEncoder as Encoder>::Err;
-
     encoder_methods! {
         emit_usize(usize);
         emit_u128(u128);
@@ -118,10 +115,6 @@ impl<'a, 'tcx> Encoder for EncodeContext<'a, 'tcx> {
         emit_char(char);
         emit_str(&str);
         emit_raw_bytes(&[u8]);
-    }
-
-    fn finish(self) -> Result<Self::Ok, Self::Err> {
-        self.opaque.finish()
     }
 }
 
@@ -430,7 +423,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
     }
 
     fn encode_def_path_table(&mut self) {
-        let table = self.tcx.resolutions(()).definitions.def_path_table();
+        let table = self.tcx.definitions_untracked().def_path_table();
         if self.is_proc_macro {
             for def_index in std::iter::once(CRATE_DEF_INDEX)
                 .chain(self.tcx.resolutions(()).proc_macros.iter().map(|p| p.local_def_index))
@@ -451,7 +444,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
 
     fn encode_def_path_hash_map(&mut self) -> LazyValue<DefPathHashMapRef<'static>> {
         self.lazy(DefPathHashMapRef::BorrowedFromTcx(
-            self.tcx.resolutions(()).definitions.def_path_hash_to_def_index_map(),
+            self.tcx.definitions_untracked().def_path_hash_to_def_index_map(),
         ))
     }
 
@@ -2216,7 +2209,7 @@ fn encode_metadata_impl(tcx: TyCtxt<'_>) -> EncodedMetadata {
     // culminating in the `CrateRoot` which points to all of it.
     let root = ecx.encode_crate_root();
 
-    let mut result = ecx.opaque.finish().unwrap();
+    let mut result = ecx.opaque.finish();
 
     // Encode the root position.
     let header = METADATA_HEADER.len();

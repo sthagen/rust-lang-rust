@@ -698,6 +698,7 @@ name = "clippy_lints"
 version = "0.1.63"
 dependencies = [
  "cargo_metadata",
+ "clippy_dev",
  "clippy_utils",
  "if_chain",
  "itertools",
@@ -708,6 +709,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "tempfile",
  "toml",
  "unicode-normalization",
  "unicode-script",
@@ -3569,6 +3571,7 @@ dependencies = [
  "rustc_errors",
  "rustc_hir",
  "rustc_index",
+ "rustc_middle",
  "rustc_query_system",
  "rustc_session",
  "rustc_span",
@@ -4374,7 +4377,6 @@ dependencies = [
  "bitflags",
  "rustc_arena",
  "rustc_ast",
- "rustc_ast_lowering",
  "rustc_ast_pretty",
  "rustc_attr",
  "rustc_data_structures",
