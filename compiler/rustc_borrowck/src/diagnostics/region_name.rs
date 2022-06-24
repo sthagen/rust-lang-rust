@@ -6,7 +6,7 @@ use rustc_hir as hir;
 use rustc_hir::def::{DefKind, Res};
 use rustc_middle::ty::print::RegionHighlightMode;
 use rustc_middle::ty::subst::{GenericArgKind, SubstsRef};
-use rustc_middle::ty::{self, RegionVid, Ty};
+use rustc_middle::ty::{self, DefIdTree, RegionVid, Ty};
 use rustc_span::symbol::{kw, sym, Ident, Symbol};
 use rustc_span::{Span, DUMMY_SP};
 
@@ -45,6 +45,8 @@ pub(crate) enum RegionNameSource {
     AnonRegionFromYieldTy(Span, String),
     /// An anonymous region from an async fn.
     AnonRegionFromAsyncFn(Span),
+    /// An anonymous region from an impl self type or trait
+    AnonRegionFromImplSignature(Span, &'static str),
 }
 
 /// Describes what to highlight to explain to the user that we're giving an anonymous region a
@@ -75,7 +77,8 @@ impl RegionName {
             | RegionNameSource::AnonRegionFromUpvar(..)
             | RegionNameSource::AnonRegionFromOutput(..)
             | RegionNameSource::AnonRegionFromYieldTy(..)
-            | RegionNameSource::AnonRegionFromAsyncFn(..) => false,
+            | RegionNameSource::AnonRegionFromAsyncFn(..)
+            | RegionNameSource::AnonRegionFromImplSignature(..) => false,
         }
     }
 
@@ -87,7 +90,8 @@ impl RegionName {
             | RegionNameSource::SynthesizedFreeEnvRegion(span, _)
             | RegionNameSource::AnonRegionFromUpvar(span, _)
             | RegionNameSource::AnonRegionFromYieldTy(span, _)
-            | RegionNameSource::AnonRegionFromAsyncFn(span) => Some(span),
+            | RegionNameSource::AnonRegionFromAsyncFn(span)
+            | RegionNameSource::AnonRegionFromImplSignature(span, _) => Some(span),
             RegionNameSource::AnonRegionFromArgument(ref highlight)
             | RegionNameSource::AnonRegionFromOutput(ref highlight, _) => match *highlight {
                 RegionNameHighlight::MatchedHirTy(span)
@@ -166,6 +170,12 @@ impl RegionName {
             RegionNameSource::AnonRegionFromYieldTy(span, type_name) => {
                 diag.span_label(*span, format!("yield type is {type_name}"));
             }
+            RegionNameSource::AnonRegionFromImplSignature(span, location) => {
+                diag.span_label(
+                    *span,
+                    format!("lifetime `{self}` appears in the `impl`'s {location}"),
+                );
+            }
             RegionNameSource::Static => {}
         }
     }
@@ -240,7 +250,8 @@ impl<'tcx> MirBorrowckCtxt<'_, 'tcx> {
             .or_else(|| self.give_name_if_anonymous_region_appears_in_arguments(fr))
             .or_else(|| self.give_name_if_anonymous_region_appears_in_upvars(fr))
             .or_else(|| self.give_name_if_anonymous_region_appears_in_output(fr))
-            .or_else(|| self.give_name_if_anonymous_region_appears_in_yield_ty(fr));
+            .or_else(|| self.give_name_if_anonymous_region_appears_in_yield_ty(fr))
+            .or_else(|| self.give_name_if_anonymous_region_appears_in_impl_signature(fr));
 
         if let Some(ref value) = value {
             self.region_names.try_borrow_mut().unwrap().insert(fr, value.clone());
@@ -254,6 +265,7 @@ impl<'tcx> MirBorrowckCtxt<'_, 'tcx> {
     /// *user* has a name for. In that case, we'll be able to map
     /// `fr` to a `Region<'tcx>`, and that region will be one of
     /// named variants.
+    #[tracing::instrument(level = "trace", skip(self))]
     fn give_name_from_error_region(&self, fr: RegionVid) -> Option<RegionName> {
         let error_region = self.to_error_region(fr)?;
 
@@ -290,7 +302,7 @@ impl<'tcx> MirBorrowckCtxt<'_, 'tcx> {
                     if free_region.bound_region.is_named() {
                         // A named region that is actually named.
                         Some(RegionName { name, source: RegionNameSource::NamedFreeRegion(span) })
-                    } else {
+                    } else if let hir::IsAsync::Async = tcx.asyncness(self.mir_hir_id().owner) {
                         // If we spuriously thought that the region is named, we should let the
                         // system generate a true name for error messages. Currently this can
                         // happen if we have an elided name in an async fn for example: the
@@ -301,6 +313,8 @@ impl<'tcx> MirBorrowckCtxt<'_, 'tcx> {
                             name,
                             source: RegionNameSource::AnonRegionFromAsyncFn(span),
                         })
+                    } else {
+                        None
                     }
                 }
 
@@ -362,6 +376,7 @@ impl<'tcx> MirBorrowckCtxt<'_, 'tcx> {
     ///  | fn foo(x: &u32) { .. }
     ///           ------- fully elaborated type of `x` is `&'1 u32`
     /// ```
+    #[tracing::instrument(level = "trace", skip(self))]
     fn give_name_if_anonymous_region_appears_in_arguments(
         &self,
         fr: RegionVid,
@@ -651,6 +666,7 @@ impl<'tcx> MirBorrowckCtxt<'_, 'tcx> {
     ///  | let x = Some(&22);
     ///        - fully elaborated type of `x` is `Option<&'1 u32>`
     /// ```
+    #[tracing::instrument(level = "trace", skip(self))]
     fn give_name_if_anonymous_region_appears_in_upvars(&self, fr: RegionVid) -> Option<RegionName> {
         let upvar_index = self.regioncx.get_upvar_index_for_region(self.infcx.tcx, fr)?;
         let (upvar_name, upvar_span) = self.regioncx.get_upvar_name_and_span_for_region(
@@ -670,6 +686,7 @@ impl<'tcx> MirBorrowckCtxt<'_, 'tcx> {
     /// must be a closure since, in a free fn, such an argument would
     /// have to either also appear in an argument (if using elision)
     /// or be early bound (named, not in argument).
+    #[tracing::instrument(level = "trace", skip(self))]
     fn give_name_if_anonymous_region_appears_in_output(&self, fr: RegionVid) -> Option<RegionName> {
         let tcx = self.infcx.tcx;
         let hir = tcx.hir();
@@ -801,6 +818,7 @@ impl<'tcx> MirBorrowckCtxt<'_, 'tcx> {
         }
     }
 
+    #[tracing::instrument(level = "trace", skip(self))]
     fn give_name_if_anonymous_region_appears_in_yield_ty(
         &self,
         fr: RegionVid,
@@ -838,6 +856,45 @@ impl<'tcx> MirBorrowckCtxt<'_, 'tcx> {
         Some(RegionName {
             name: self.synthesize_region_name(),
             source: RegionNameSource::AnonRegionFromYieldTy(yield_span, type_name),
+        })
+    }
+
+    fn give_name_if_anonymous_region_appears_in_impl_signature(
+        &self,
+        fr: RegionVid,
+    ) -> Option<RegionName> {
+        let ty::ReEarlyBound(region) = *self.to_error_region(fr)? else {
+            return None;
+        };
+        if region.has_name() {
+            return None;
+        };
+
+        let tcx = self.infcx.tcx;
+        let body_parent_did = tcx.opt_parent(self.mir_def_id().to_def_id())?;
+        if tcx.parent(region.def_id) != body_parent_did
+            || tcx.def_kind(body_parent_did) != DefKind::Impl
+        {
+            return None;
+        }
+
+        let mut found = false;
+        tcx.fold_regions(tcx.type_of(body_parent_did), &mut true, |r: ty::Region<'tcx>, _| {
+            if *r == ty::ReEarlyBound(region) {
+                found = true;
+            }
+            r
+        });
+
+        Some(RegionName {
+            name: self.synthesize_region_name(),
+            source: RegionNameSource::AnonRegionFromImplSignature(
+                tcx.def_span(region.def_id),
+                // FIXME(compiler-errors): Does this ever actually show up
+                // anywhere other than the self type? I couldn't create an
+                // example of a `'_` in the impl's trait being referenceable.
+                if found { "self type" } else { "header" },
+            ),
         })
     }
 }

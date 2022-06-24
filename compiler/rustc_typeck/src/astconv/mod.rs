@@ -2111,14 +2111,24 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         extend: impl Fn(&mut DiagnosticBuilder<'tcx, ErrorGuaranteed>),
     ) -> bool {
         let args = segments.clone().flat_map(|segment| segment.args().args);
-        let types_and_spans: Vec<_> = segments
-            .clone()
-            .flat_map(|segment| {
-                segment.res.and_then(|res| {
-                    if segment.args().args.is_empty() {
-                        None
-                    } else {
-                        Some((
+
+        let (lt, ty, ct, inf) =
+            args.clone().fold((false, false, false, false), |(lt, ty, ct, inf), arg| match arg {
+                hir::GenericArg::Lifetime(_) => (true, ty, ct, inf),
+                hir::GenericArg::Type(_) => (lt, true, ct, inf),
+                hir::GenericArg::Const(_) => (lt, ty, true, inf),
+                hir::GenericArg::Infer(_) => (lt, ty, ct, true),
+            });
+        let mut emitted = false;
+        if lt || ty || ct || inf {
+            let types_and_spans: Vec<_> = segments
+                .clone()
+                .flat_map(|segment| {
+                    segment.res.and_then(|res| {
+                        if segment.args().args.is_empty() {
+                            None
+                        } else {
+                            Some((
                             match res {
                                 Res::PrimTy(ty) => format!("{} `{}`", res.descr(), ty.name()),
                                 Res::Def(_, def_id)
@@ -2130,32 +2140,23 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                             },
                             segment.ident.span,
                         ))
-                    }
+                        }
+                    })
                 })
-            })
-            .collect();
-        let this_type = match &types_and_spans[..] {
-            [.., _, (last, _)] => format!(
-                "{} and {last}",
-                types_and_spans[..types_and_spans.len() - 1]
-                    .iter()
-                    .map(|(x, _)| x.as_str())
-                    .intersperse(&", ")
-                    .collect::<String>()
-            ),
-            [(only, _)] => only.to_string(),
-            [] => "this type".to_string(),
-        };
+                .collect();
+            let this_type = match &types_and_spans[..] {
+                [.., _, (last, _)] => format!(
+                    "{} and {last}",
+                    types_and_spans[..types_and_spans.len() - 1]
+                        .iter()
+                        .map(|(x, _)| x.as_str())
+                        .intersperse(&", ")
+                        .collect::<String>()
+                ),
+                [(only, _)] => only.to_string(),
+                [] => "this type".to_string(),
+            };
 
-        let (lt, ty, ct, inf) =
-            args.clone().fold((false, false, false, false), |(lt, ty, ct, inf), arg| match arg {
-                hir::GenericArg::Lifetime(_) => (true, ty, ct, inf),
-                hir::GenericArg::Type(_) => (lt, true, ct, inf),
-                hir::GenericArg::Const(_) => (lt, ty, true, inf),
-                hir::GenericArg::Infer(_) => (lt, ty, ct, true),
-            });
-        let mut emitted = false;
-        if lt || ty || ct || inf {
             let arg_spans: Vec<Span> = args.map(|arg| arg.span()).collect();
 
             let mut kinds = Vec::with_capacity(4);
@@ -2920,13 +2921,15 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
     ) {
         for br in referenced_regions.difference(&constrained_regions) {
             let br_name = match *br {
+                ty::BrNamed(_, kw::UnderscoreLifetime) | ty::BrAnon(_) | ty::BrEnv => {
+                    "an anonymous lifetime".to_string()
+                }
                 ty::BrNamed(_, name) => format!("lifetime `{}`", name),
-                ty::BrAnon(_) | ty::BrEnv => "an anonymous lifetime".to_string(),
             };
 
             let mut err = generate_err(&br_name);
 
-            if let ty::BrAnon(_) = *br {
+            if let ty::BrNamed(_, kw::UnderscoreLifetime) | ty::BrAnon(_) = *br {
                 // The only way for an anonymous lifetime to wind up
                 // in the return type but **also** be unconstrained is
                 // if it only appears in "associated types" in the
