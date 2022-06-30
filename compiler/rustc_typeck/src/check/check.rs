@@ -95,8 +95,7 @@ pub(super) fn check_fn<'a, 'tcx>(
         fcx.register_infer_ok_obligations(fcx.infcx.replace_opaque_types_with_inference_vars(
             declared_ret_ty,
             body.value.hir_id,
-            DUMMY_SP,
-            traits::ObligationCauseCode::OpaqueReturnType(None),
+            decl.output.span(),
             param_env,
         ));
     // If we replaced declared_ret_ty with infer vars, then we must be infering
@@ -1580,8 +1579,7 @@ fn opaque_type_cycle_error(tcx: TyCtxt<'_>, def_id: LocalDefId, span: Span) -> E
             } else {
                 let mut multispan: MultiSpan = spans.clone().into();
                 for span in spans {
-                    multispan
-                        .push_span_label(span, "this returned value is of `!` type".to_string());
+                    multispan.push_span_label(span, "this returned value is of `!` type");
                 }
                 err.span_note(multispan, "these returned values have a concrete \"never\" type");
             }
