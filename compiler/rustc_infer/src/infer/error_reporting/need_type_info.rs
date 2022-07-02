@@ -313,11 +313,12 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
     pub fn emit_inference_failure_err(
         &self,
         body_id: Option<hir::BodyId>,
-        span: Span,
+        failure_span: Span,
         arg: GenericArg<'tcx>,
         // FIXME(#94483): Either use this or remove it.
         _impl_candidates: Vec<ty::TraitRef<'tcx>>,
         error_code: TypeAnnotationNeeded,
+        should_label_span: bool,
     ) -> DiagnosticBuilder<'tcx, ErrorGuaranteed> {
         let arg = self.resolve_vars_if_possible(arg);
         let arg_data = self.extract_inference_diagnostics_data(arg, None);
@@ -326,7 +327,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             // If we don't have any typeck results we're outside
             // of a body, so we won't be able to get better info
             // here.
-            return self.bad_inference_failure_err(span, arg_data, error_code);
+            return self.bad_inference_failure_err(failure_span, arg_data, error_code);
         };
         let typeck_results = typeck_results.borrow();
         let typeck_results = &typeck_results;
@@ -334,12 +335,11 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         let mut local_visitor = FindInferSourceVisitor::new(&self, typeck_results, arg);
         if let Some(body_id) = body_id {
             let expr = self.tcx.hir().expect_expr(body_id.hir_id);
-            debug!(?expr);
             local_visitor.visit_expr(expr);
         }
 
         let Some(InferSource { span, kind }) = local_visitor.infer_source else {
-            return self.bad_inference_failure_err(span, arg_data, error_code)
+            return self.bad_inference_failure_err(failure_span, arg_data, error_code)
         };
 
         let error_code = error_code.into();
@@ -348,6 +348,11 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             &format!("type annotations needed{}", kind.ty_msg(self)),
             error_code,
         );
+
+        if should_label_span && !failure_span.overlaps(span) {
+            err.span_label(failure_span, "type must be known at this point");
+        }
+
         match kind {
             InferSourceKind::LetBinding { insert_span, pattern_name, ty } => {
                 let suggestion_msg = if let Some(name) = pattern_name {
@@ -550,6 +555,7 @@ impl<'tcx> InferSourceKind<'tcx> {
     }
 }
 
+#[derive(Debug)]
 struct InsertableGenericArgs<'tcx> {
     insert_span: Span,
     substs: SubstsRef<'tcx>,
@@ -735,10 +741,20 @@ impl<'a, 'tcx> FindInferSourceVisitor<'a, 'tcx> {
                     return self.path_inferred_subst_iter(expr.hir_id, substs, path);
                 }
             }
-            hir::ExprKind::Struct(path, _, _) => {
+            // FIXME(#98711): Ideally we would also deal with type relative
+            // paths here, even if that is quite rare.
+            //
+            // See the `need_type_info/expr-struct-type-relative-gat.rs` test
+            // for an example where that would be needed.
+            //
+            // However, the `type_dependent_def_id` for `Self::Output` in an
+            // impl is currently the `DefId` of `Output` in the trait definition
+            // which makes this somewhat difficult and prevents us from just
+            // using `self.path_inferred_subst_iter` here.
+            hir::ExprKind::Struct(&hir::QPath::Resolved(_self_ty, path), _, _) => {
                 if let Some(ty) = self.opt_node_type(expr.hir_id) {
                     if let ty::Adt(_, substs) = ty.kind() {
-                        return self.path_inferred_subst_iter(expr.hir_id, substs, path);
+                        return Box::new(self.resolved_path_inferred_subst_iter(path, substs));
                     }
                 }
             }
@@ -945,6 +961,7 @@ impl<'a, 'tcx> Visitor<'tcx> for FindInferSourceVisitor<'a, 'tcx> {
         intravisit::walk_body(self, body);
     }
 
+    #[instrument(level = "debug", skip(self))]
     fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
         let tcx = self.infcx.tcx;
         match expr.kind {
@@ -959,9 +976,9 @@ impl<'a, 'tcx> Visitor<'tcx> for FindInferSourceVisitor<'a, 'tcx> {
             _ => intravisit::walk_expr(self, expr),
         }
 
-        for InsertableGenericArgs { insert_span, substs, generics_def_id, def_id } in
-            self.expr_inferred_subst_iter(expr)
-        {
+        for args in self.expr_inferred_subst_iter(expr) {
+            debug!(?args);
+            let InsertableGenericArgs { insert_span, substs, generics_def_id, def_id } = args;
             let generics = tcx.generics_of(generics_def_id);
             if let Some(argument_index) =
                 generics.own_substs(substs).iter().position(|&arg| self.generic_arg_is_target(arg))
