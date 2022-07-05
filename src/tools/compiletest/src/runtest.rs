@@ -1862,6 +1862,31 @@ impl<'test> TestCx<'test> {
             }
         }
 
+        if self.config.optimize_tests && !is_rustdoc {
+            match self.config.mode {
+                Ui => {
+                    // If optimize-tests is true we still only want to optimize tests that actually get
+                    // executed and that don't specify their own optimization levels.
+                    // Note: aux libs don't have a pass-mode, so they won't get optimized
+                    // unless compile-flags are set in the aux file.
+                    if self.config.optimize_tests
+                        && self.props.pass_mode(&self.config) == Some(PassMode::Run)
+                        && !self
+                            .props
+                            .compile_flags
+                            .iter()
+                            .any(|arg| arg == "-O" || arg.contains("opt-level"))
+                    {
+                        rustc.arg("-O");
+                    }
+                }
+                DebugInfo => { /* debuginfo tests must be unoptimized */ }
+                _ => {
+                    rustc.arg("-O");
+                }
+            }
+        }
+
         match self.config.mode {
             Incremental => {
                 // If we are extracting and matching errors in the new
@@ -3245,7 +3270,8 @@ impl<'test> TestCx<'test> {
 
             if !self.props.error_patterns.is_empty() {
                 // "// error-pattern" comments
-                self.check_error_patterns(&proc_res.stderr, &proc_res, pm);
+                let output_to_check = self.get_output(&proc_res);
+                self.check_error_patterns(&output_to_check, &proc_res, pm);
             }
         }
 
@@ -3266,7 +3292,8 @@ impl<'test> TestCx<'test> {
 
             if check_patterns {
                 // "// error-pattern" comments
-                self.check_error_patterns(&proc_res.stderr, &proc_res, pm);
+                let output_to_check = self.get_output(&proc_res);
+                self.check_error_patterns(&output_to_check, &proc_res, pm);
             }
 
             if check_annotations {
