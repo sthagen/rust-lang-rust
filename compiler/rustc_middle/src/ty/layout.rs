@@ -2,7 +2,7 @@ use crate::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use crate::mir::{GeneratorLayout, GeneratorSavedLocal};
 use crate::ty::normalize_erasing_regions::NormalizationError;
 use crate::ty::subst::Subst;
-use crate::ty::{self, subst::SubstsRef, EarlyBinder, ReprOptions, Ty, TyCtxt, TypeFoldable};
+use crate::ty::{self, subst::SubstsRef, EarlyBinder, ReprOptions, Ty, TyCtxt, TypeVisitable};
 use rustc_ast as ast;
 use rustc_attr as attr;
 use rustc_hir as hir;
@@ -235,9 +235,8 @@ fn sanity_check_layout<'tcx>(
     if cfg!(debug_assertions) {
         fn check_layout_abi<'tcx>(tcx: TyCtxt<'tcx>, layout: Layout<'tcx>) {
             match layout.abi() {
-                Abi::Scalar(_scalar) => {
+                Abi::Scalar(scalar) => {
                     // No padding in scalars.
-                    /* FIXME(#96185):
                     assert_eq!(
                         layout.align().abi,
                         scalar.align(&tcx).abi,
@@ -247,7 +246,7 @@ fn sanity_check_layout<'tcx>(
                         layout.size(),
                         scalar.size(&tcx),
                         "size mismatch between ABI and layout in {layout:#?}"
-                    );*/
+                    );
                 }
                 Abi::Vector { count, element } => {
                     // No padding in vectors. Alignment can be strengthened, though.
@@ -1418,9 +1417,9 @@ impl<'tcx> LayoutCx<'tcx, TyCtxt<'tcx>> {
 
                 if layout_variants.iter().all(|v| v.abi.is_uninhabited()) {
                     abi = Abi::Uninhabited;
-                } else if tag.size(dl) == size || variants.iter().all(|layout| layout.is_empty()) {
-                    // Without latter check aligned enums with custom discriminant values
-                    // Would result in ICE see the issue #92464 for more info
+                } else if tag.size(dl) == size {
+                    // Make sure we only use scalar layout when the enum is entirely its
+                    // own tag (i.e. it has no padding nor any non-ZST variant fields).
                     abi = Abi::Scalar(tag);
                 } else {
                     // Try to use a ScalarPair for all tagged enums.

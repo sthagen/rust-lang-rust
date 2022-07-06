@@ -5,9 +5,10 @@ use rustc_data_structures::fx::FxHashSet;
 use rustc_errors::{fluent, Applicability, DiagnosticMessage};
 use rustc_hir as hir;
 use rustc_hir::{is_range_literal, Expr, ExprKind, Node};
+use rustc_macros::LintDiagnostic;
 use rustc_middle::ty::layout::{IntegerExt, LayoutOf, SizeSkeleton};
 use rustc_middle::ty::subst::SubstsRef;
-use rustc_middle::ty::{self, AdtKind, DefIdTree, Ty, TyCtxt, TypeFoldable, TypeSuperFoldable};
+use rustc_middle::ty::{self, AdtKind, DefIdTree, Ty, TyCtxt, TypeSuperVisitable, TypeVisitable};
 use rustc_span::source_map;
 use rustc_span::symbol::sym;
 use rustc_span::{Span, Symbol, DUMMY_SP};
@@ -1182,7 +1183,7 @@ impl<'a, 'tcx> ImproperCTypesVisitor<'a, 'tcx> {
             cx: &'a LateContext<'tcx>,
         }
 
-        impl<'a, 'tcx> ty::fold::TypeVisitor<'tcx> for ProhibitOpaqueTypes<'a, 'tcx> {
+        impl<'a, 'tcx> ty::visit::TypeVisitor<'tcx> for ProhibitOpaqueTypes<'a, 'tcx> {
             type BreakTy = Ty<'tcx>;
 
             fn visit_ty(&mut self, ty: Ty<'tcx>) -> ControlFlow<Self::BreakTy> {
@@ -1553,13 +1554,20 @@ impl InvalidAtomicOrdering {
         let Some(fail_ordering) = Self::match_ordering(cx, fail_order_arg) else { return };
 
         if matches!(fail_ordering, sym::Release | sym::AcqRel) {
-            cx.struct_span_lint(INVALID_ATOMIC_ORDERING, fail_order_arg.span, |diag| {
-                diag.build(fluent::lint::atomic_ordering_invalid)
-                    .set_arg("method", method)
-                    .span_label(fail_order_arg.span, fluent::lint::label)
-                    .help(fluent::lint::help)
-                    .emit();
-            });
+            #[derive(LintDiagnostic)]
+            #[lint(lint::atomic_ordering_invalid)]
+            #[help]
+            struct InvalidAtomicOrderingDiag {
+                method: Symbol,
+                #[label]
+                fail_order_arg_span: Span,
+            }
+
+            cx.emit_spanned_lint(
+                INVALID_ATOMIC_ORDERING,
+                fail_order_arg.span,
+                InvalidAtomicOrderingDiag { method, fail_order_arg_span: fail_order_arg.span },
+            );
         }
 
         let Some(success_ordering) = Self::match_ordering(cx, success_order_arg) else { return };

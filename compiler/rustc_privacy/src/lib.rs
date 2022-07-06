@@ -27,7 +27,7 @@ use rustc_middle::thir::abstract_const::Node as ACNode;
 use rustc_middle::ty::query::Providers;
 use rustc_middle::ty::subst::InternalSubsts;
 use rustc_middle::ty::{self, Const, DefIdTree, GenericParamDefKind};
-use rustc_middle::ty::{TraitRef, Ty, TyCtxt, TypeFoldable, TypeSuperFoldable, TypeVisitor};
+use rustc_middle::ty::{TraitRef, Ty, TyCtxt, TypeSuperVisitable, TypeVisitable, TypeVisitor};
 use rustc_session::lint;
 use rustc_span::hygiene::Transparency;
 use rustc_span::symbol::{kw, Ident};
@@ -80,7 +80,7 @@ trait DefIdVisitor<'tcx> {
             dummy: Default::default(),
         }
     }
-    fn visit(&mut self, ty_fragment: impl TypeFoldable<'tcx>) -> ControlFlow<Self::BreakTy> {
+    fn visit(&mut self, ty_fragment: impl TypeVisitable<'tcx>) -> ControlFlow<Self::BreakTy> {
         ty_fragment.visit_with(&mut self.skeleton())
     }
     fn visit_trait(&mut self, trait_ref: TraitRef<'tcx>) -> ControlFlow<Self::BreakTy> {
@@ -467,7 +467,7 @@ impl<'tcx> EmbargoVisitor<'tcx> {
         }
 
         let macro_module_def_id = self.tcx.local_parent(local_def_id);
-        if self.tcx.hir().opt_def_kind(macro_module_def_id) != Some(DefKind::Mod) {
+        if self.tcx.opt_def_kind(macro_module_def_id) != Some(DefKind::Mod) {
             // The macro's parent doesn't correspond to a `mod`, return early (#63164, #65252).
             return;
         }
