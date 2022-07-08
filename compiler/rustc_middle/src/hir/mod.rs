@@ -63,6 +63,15 @@ impl ModuleItems {
         self.foreign_items.iter().copied()
     }
 
+    pub fn definitions(&self) -> impl Iterator<Item = LocalDefId> + '_ {
+        self.items
+            .iter()
+            .map(|id| id.def_id)
+            .chain(self.trait_items.iter().map(|id| id.def_id))
+            .chain(self.impl_items.iter().map(|id| id.def_id))
+            .chain(self.foreign_items.iter().map(|id| id.def_id))
+    }
+
     pub fn par_items(&self, f: impl Fn(ItemId) + Send + Sync) {
         par_for_each_in(&self.items[..], |&id| f(id))
     }
@@ -102,7 +111,6 @@ pub fn provide(providers: &mut Providers) {
         let hir = tcx.hir();
         hir.get_module_parent_node(hir.local_def_id_to_hir_id(id))
     };
-    providers.hir_crate = |tcx, ()| tcx.untracked_crate;
     providers.hir_crate_items = map::hir_crate_items;
     providers.crate_hash = map::crate_hash;
     providers.hir_module_items = map::hir_module_items;

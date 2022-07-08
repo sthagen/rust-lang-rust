@@ -70,7 +70,7 @@ use crate::formats::{AssocItemRender, Impl, RenderMode};
 use crate::html::escape::Escape;
 use crate::html::format::{
     href, join_with_double_colon, print_abi_with_space, print_constness_with_space,
-    print_default_space, print_generic_bounds, print_where_clause, Buffer, HrefError,
+    print_default_space, print_generic_bounds, print_where_clause, Buffer, Ending, HrefError,
     PrintWithSpace,
 };
 use crate::html::highlight;
@@ -634,7 +634,6 @@ fn render_impls(
                 &[],
                 ImplRenderingParameters {
                     show_def_docs: true,
-                    is_on_foreign_type: false,
                     show_default_items: true,
                     show_non_assoc_items: true,
                     toggle_open_by_default,
@@ -748,7 +747,7 @@ fn assoc_type(
     if !bounds.is_empty() {
         write!(w, ": {}", print_generic_bounds(bounds, cx))
     }
-    write!(w, "{}", print_where_clause(generics, cx, indent, false));
+    write!(w, "{}", print_where_clause(generics, cx, indent, Ending::NoNewline));
     if let Some(default) = default {
         write!(w, " = {}", default.print(cx))
     }
@@ -797,10 +796,10 @@ fn assoc_method(
         header_len += 4;
         let indent_str = "    ";
         render_attributes_in_pre(w, meth, indent_str);
-        (4, indent_str, false)
+        (4, indent_str, Ending::NoNewline)
     } else {
         render_attributes_in_code(w, meth);
-        (0, "", true)
+        (0, "", Ending::Newline)
     };
     w.reserve(header_len + "<a href=\"\" class=\"fnname\">{".len() + "</a>".len());
     write!(
@@ -1071,7 +1070,6 @@ fn render_assoc_items_inner(
                 &[],
                 ImplRenderingParameters {
                     show_def_docs: true,
-                    is_on_foreign_type: false,
                     show_default_items: true,
                     show_non_assoc_items: true,
                     toggle_open_by_default: true,
@@ -1287,7 +1285,6 @@ fn notable_traits_decl(decl: &clean::FnDecl, cx: &Context<'_>) -> String {
 #[derive(Clone, Copy, Debug)]
 struct ImplRenderingParameters {
     show_def_docs: bool,
-    is_on_foreign_type: bool,
     show_default_items: bool,
     /// Whether or not to show methods.
     show_non_assoc_items: bool,
@@ -1415,7 +1412,10 @@ fn render_impl(
                         id, item_type, in_trait_class,
                     );
                     render_rightside(w, cx, item, containing_item, render_mode);
-                    write!(w, "<a href=\"#{}\" class=\"anchor\"></a>", id);
+                    if trait_.is_some() {
+                        // Anchors are only used on trait impls.
+                        write!(w, "<a href=\"#{}\" class=\"anchor\"></a>", id);
+                    }
                     w.write_str("<h4 class=\"code-header\">");
                     render_assoc_item(
                         w,
@@ -1438,7 +1438,10 @@ fn render_impl(
                     id, item_type, in_trait_class
                 );
                 render_rightside(w, cx, item, containing_item, render_mode);
-                write!(w, "<a href=\"#{}\" class=\"anchor\"></a>", id);
+                if trait_.is_some() {
+                    // Anchors are only used on trait impls.
+                    write!(w, "<a href=\"#{}\" class=\"anchor\"></a>", id);
+                }
                 w.write_str("<h4 class=\"code-header\">");
                 assoc_const(
                     w,
@@ -1460,7 +1463,10 @@ fn render_impl(
                 let source_id = format!("{}.{}", item_type, name);
                 let id = cx.derive_id(source_id.clone());
                 write!(w, "<section id=\"{}\" class=\"{}{}\">", id, item_type, in_trait_class);
-                write!(w, "<a href=\"#{}\" class=\"anchor\"></a>", id);
+                if trait_.is_some() {
+                    // Anchors are only used on trait impls.
+                    write!(w, "<a href=\"#{}\" class=\"anchor\"></a>", id);
+                }
                 w.write_str("<h4 class=\"code-header\">");
                 assoc_type(
                     w,
@@ -1483,7 +1489,10 @@ fn render_impl(
                     "<section id=\"{}\" class=\"{}{} has-srclink\">",
                     id, item_type, in_trait_class
                 );
-                write!(w, "<a href=\"#{}\" class=\"anchor\"></a>", id);
+                if trait_.is_some() {
+                    // Anchors are only used on trait impls.
+                    write!(w, "<a href=\"#{}\" class=\"anchor\"></a>", id);
+                }
                 w.write_str("<h4 class=\"code-header\">");
                 assoc_type(
                     w,
@@ -1603,7 +1612,6 @@ fn render_impl(
             parent,
             rendering_params.show_def_docs,
             use_absolute,
-            rendering_params.is_on_foreign_type,
             aliases,
         );
         if toggled {
@@ -1688,21 +1696,12 @@ pub(crate) fn render_impl_summary(
     containing_item: &clean::Item,
     show_def_docs: bool,
     use_absolute: Option<bool>,
-    is_on_foreign_type: bool,
     // This argument is used to reference same type with different paths to avoid duplication
     // in documentation pages for trait with automatic implementations like "Send" and "Sync".
     aliases: &[String],
 ) {
-    let id = cx.derive_id(match i.inner_impl().trait_ {
-        Some(ref t) => {
-            if is_on_foreign_type {
-                get_id_for_impl_on_foreign_type(&i.inner_impl().for_, t, cx)
-            } else {
-                format!("impl-{}", small_url_encode(format!("{:#}", t.print(cx))))
-            }
-        }
-        None => "impl".to_string(),
-    });
+    let id =
+        cx.derive_id(get_id_for_impl(&i.inner_impl().for_, i.inner_impl().trait_.as_ref(), cx));
     let aliases = if aliases.is_empty() {
         String::new()
     } else {
@@ -1986,21 +1985,18 @@ fn sidebar_assoc_items(cx: &Context<'_>, out: &mut Buffer, it: &clean::Item) {
                 let mut ret = impls
                     .iter()
                     .filter_map(|it| {
-                        if let Some(ref i) = it.inner_impl().trait_ {
-                            let i_display = format!("{:#}", i.print(cx));
-                            let out = Escape(&i_display);
-                            let encoded =
-                                id_map.derive(small_url_encode(format!("impl-{:#}", i.print(cx))));
-                            let prefix = match it.inner_impl().polarity {
-                                ty::ImplPolarity::Positive | ty::ImplPolarity::Reservation => "",
-                                ty::ImplPolarity::Negative => "!",
-                            };
-                            let generated =
-                                format!("<a href=\"#{}\">{}{}</a>", encoded, prefix, out);
-                            if links.insert(generated.clone()) { Some(generated) } else { None }
-                        } else {
-                            None
-                        }
+                        let trait_ = it.inner_impl().trait_.as_ref()?;
+                        let encoded =
+                            id_map.derive(get_id_for_impl(&it.inner_impl().for_, Some(trait_), cx));
+
+                        let i_display = format!("{:#}", trait_.print(cx));
+                        let out = Escape(&i_display);
+                        let prefix = match it.inner_impl().polarity {
+                            ty::ImplPolarity::Positive | ty::ImplPolarity::Reservation => "",
+                            ty::ImplPolarity::Negative => "!",
+                        };
+                        let generated = format!("<a href=\"#{}\">{}{}</a>", encoded, prefix, out);
+                        if links.insert(generated.clone()) { Some(generated) } else { None }
                     })
                     .collect::<Vec<String>>();
                 ret.sort();
@@ -2147,12 +2143,11 @@ fn sidebar_struct(cx: &Context<'_>, buf: &mut Buffer, it: &clean::Item, s: &clea
     }
 }
 
-fn get_id_for_impl_on_foreign_type(
-    for_: &clean::Type,
-    trait_: &clean::Path,
-    cx: &Context<'_>,
-) -> String {
-    small_url_encode(format!("impl-{:#}-for-{:#}", trait_.print(cx), for_.print(cx)))
+fn get_id_for_impl(for_: &clean::Type, trait_: Option<&clean::Path>, cx: &Context<'_>) -> String {
+    match trait_ {
+        Some(t) => small_url_encode(format!("impl-{:#}-for-{:#}", t.print(cx), for_.print(cx))),
+        None => small_url_encode(format!("impl-{:#}", for_.print(cx))),
+    }
 }
 
 fn extract_for_impl_name(item: &clean::Item, cx: &Context<'_>) -> Option<(String, String)> {
@@ -2161,10 +2156,7 @@ fn extract_for_impl_name(item: &clean::Item, cx: &Context<'_>) -> Option<(String
             i.trait_.as_ref().map(|trait_| {
                 // Alternative format produces no URLs,
                 // so this parameter does nothing.
-                (
-                    format!("{:#}", i.for_.print(cx)),
-                    get_id_for_impl_on_foreign_type(&i.for_, trait_, cx),
-                )
+                (format!("{:#}", i.for_.print(cx)), get_id_for_impl(&i.for_, Some(trait_), cx))
             })
         }
         _ => None,

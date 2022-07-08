@@ -2036,6 +2036,14 @@ impl TyKind {
     pub fn is_unit(&self) -> bool {
         matches!(self, TyKind::Tup(tys) if tys.is_empty())
     }
+
+    pub fn is_simple_path(&self) -> Option<Symbol> {
+        if let TyKind::Path(None, Path { segments, .. }) = &self && segments.len() == 1 {
+            Some(segments[0].ident.name)
+        } else {
+            None
+        }
+    }
 }
 
 /// Syntax used to declare a trait object.
@@ -2667,13 +2675,16 @@ impl Item {
 #[derive(Clone, Copy, Encodable, Decodable, Debug)]
 pub enum Extern {
     None,
-    Implicit,
-    Explicit(StrLit),
+    Implicit(Span),
+    Explicit(StrLit, Span),
 }
 
 impl Extern {
-    pub fn from_abi(abi: Option<StrLit>) -> Extern {
-        abi.map_or(Extern::Implicit, Extern::Explicit)
+    pub fn from_abi(abi: Option<StrLit>, span: Span) -> Extern {
+        match abi {
+            Some(name) => Extern::Explicit(name, span),
+            None => Extern::Implicit(span),
+        }
     }
 }
 

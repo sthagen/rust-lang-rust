@@ -218,13 +218,6 @@ impl<'hir> Map<'hir> {
         self.tcx.local_def_id_to_hir_id(def_id)
     }
 
-    pub fn iter_local_def_id(self) -> impl Iterator<Item = LocalDefId> + 'hir {
-        // Create a dependency to the crate to be sure we re-execute this when the amount of
-        // definitions change.
-        self.tcx.ensure().hir_crate(());
-        self.tcx.definitions_untracked().iter_local_def_id()
-    }
-
     /// Do not call this function directly. The query should be called.
     pub(super) fn opt_def_kind(self, local_def_id: LocalDefId) -> Option<DefKind> {
         let hir_id = self.local_def_id_to_hir_id(local_def_id);
@@ -568,7 +561,7 @@ impl<'hir> Map<'hir> {
         }
     }
 
-    /// Walks the contents of a crate. See also `Crate::visit_all_items`.
+    /// Walks the contents of the local crate. See also `visit_all_item_likes_in_crate`.
     pub fn walk_toplevel_module(self, visitor: &mut impl Visitor<'hir>) {
         let (top_mod, span, hir_id) = self.get_module(CRATE_DEF_ID);
         visitor.visit_mod(top_mod, span, hir_id);
@@ -588,53 +581,61 @@ impl<'hir> Map<'hir> {
         }
     }
 
-    /// Visits all items in the crate in some deterministic (but
-    /// unspecified) order. If you need to process every item,
-    /// and care about nesting -- usually because your algorithm
-    /// follows lexical scoping rules -- then this method is the best choice.
-    /// If you don't care about nesting, you should use the `tcx.hir_crate_items()` query
-    /// or `items()` instead.
+    /// Visits all item-likes in the crate in some deterministic (but unspecified) order. If you
+    /// need to process every item-like, and don't care about visiting nested items in a particular
+    /// order then this method is the best choice.  If you do care about this nesting, you should
+    /// use the `tcx.hir().walk_toplevel_module`.
+    ///
+    /// Note that this function will access HIR for all the item-likes in the crate.  If you only
+    /// need to access some of them, it is usually better to manually loop on the iterators
+    /// provided by `tcx.hir_crate_items(())`.
     ///
     /// Please see the notes in `intravisit.rs` for more information.
-    pub fn deep_visit_all_item_likes<V>(self, visitor: &mut V)
+    pub fn visit_all_item_likes_in_crate<V>(self, visitor: &mut V)
     where
         V: Visitor<'hir>,
     {
-        let krate = self.krate();
-        for owner in krate.owners.iter().filter_map(|i| i.as_owner()) {
-            match owner.node() {
-                OwnerNode::Item(item) => visitor.visit_item(item),
-                OwnerNode::ForeignItem(item) => visitor.visit_foreign_item(item),
-                OwnerNode::ImplItem(item) => visitor.visit_impl_item(item),
-                OwnerNode::TraitItem(item) => visitor.visit_trait_item(item),
-                OwnerNode::Crate(_) => {}
-            }
+        let krate = self.tcx.hir_crate_items(());
+
+        for id in krate.items() {
+            visitor.visit_item(self.item(id));
+        }
+
+        for id in krate.trait_items() {
+            visitor.visit_trait_item(self.trait_item(id));
+        }
+
+        for id in krate.impl_items() {
+            visitor.visit_impl_item(self.impl_item(id));
+        }
+
+        for id in krate.foreign_items() {
+            visitor.visit_foreign_item(self.foreign_item(id));
         }
     }
 
-    /// If you don't care about nesting, you should use the
-    /// `tcx.hir_module_items()` query or `module_items()` instead.
-    /// Please see notes in `deep_visit_all_item_likes`.
-    pub fn deep_visit_item_likes_in_module<V>(self, module: LocalDefId, visitor: &mut V)
+    /// This method is the equivalent of `visit_all_item_likes_in_crate` but restricted to
+    /// item-likes in a single module.
+    pub fn visit_item_likes_in_module<V>(self, module: LocalDefId, visitor: &mut V)
     where
         V: Visitor<'hir>,
     {
         let module = self.tcx.hir_module_items(module);
 
-        for id in module.items.iter() {
-            visitor.visit_item(self.item(*id));
+        for id in module.items() {
+            visitor.visit_item(self.item(id));
         }
 
-        for id in module.trait_items.iter() {
-            visitor.visit_trait_item(self.trait_item(*id));
+        for id in module.trait_items() {
+            visitor.visit_trait_item(self.trait_item(id));
         }
 
-        for id in module.impl_items.iter() {
-            visitor.visit_impl_item(self.impl_item(*id));
+        for id in module.impl_items() {
+            visitor.visit_impl_item(self.impl_item(id));
         }
 
-        for id in module.foreign_items.iter() {
-            visitor.visit_foreign_item(self.foreign_item(*id));
+        for id in module.foreign_items() {
+            visitor.visit_foreign_item(self.foreign_item(id));
         }
     }
 
@@ -1013,12 +1014,14 @@ impl<'hir> Map<'hir> {
                 ItemKind::Use(path, _) => path.span,
                 _ => named_span(item.span, item.ident, item.kind.generics()),
             },
+            Node::Variant(variant) => named_span(variant.span, variant.ident, None),
             Node::ImplItem(item) => named_span(item.span, item.ident, Some(item.generics)),
             Node::ForeignItem(item) => match item.kind {
                 ForeignItemKind::Fn(decl, _, _) => until_within(item.span, decl.output.span()),
                 _ => named_span(item.span, item.ident, None),
             },
-            Node::Ctor(..) => return self.opt_span(self.get_parent_node(hir_id)),
+            Node::Ctor(_) => return self.opt_span(self.get_parent_node(hir_id)),
+            Node::Expr(Expr { kind: ExprKind::Closure { fn_decl_span, .. }, .. }) => *fn_decl_span,
             _ => self.span_with_body(hir_id),
         };
         Some(span)
@@ -1141,34 +1144,35 @@ pub(super) fn crate_hash(tcx: TyCtxt<'_>, crate_num: CrateNum) -> Svh {
 
     source_file_names.sort_unstable();
 
-    let mut hcx = tcx.create_stable_hashing_context();
-    let mut stable_hasher = StableHasher::new();
-    hir_body_hash.hash_stable(&mut hcx, &mut stable_hasher);
-    upstream_crates.hash_stable(&mut hcx, &mut stable_hasher);
-    source_file_names.hash_stable(&mut hcx, &mut stable_hasher);
-    if tcx.sess.opts.debugging_opts.incremental_relative_spans {
-        let definitions = &tcx.definitions_untracked();
-        let mut owner_spans: Vec<_> = krate
-            .owners
-            .iter_enumerated()
-            .filter_map(|(def_id, info)| {
-                let _ = info.as_owner()?;
-                let def_path_hash = definitions.def_path_hash(def_id);
-                let span = resolutions.source_span[def_id];
-                debug_assert_eq!(span.parent(), None);
-                Some((def_path_hash, span))
-            })
-            .collect();
-        owner_spans.sort_unstable_by_key(|bn| bn.0);
-        owner_spans.hash_stable(&mut hcx, &mut stable_hasher);
-    }
-    tcx.sess.opts.dep_tracking_hash(true).hash_stable(&mut hcx, &mut stable_hasher);
-    tcx.sess.local_stable_crate_id().hash_stable(&mut hcx, &mut stable_hasher);
-    // Hash visibility information since it does not appear in HIR.
-    resolutions.visibilities.hash_stable(&mut hcx, &mut stable_hasher);
-    resolutions.has_pub_restricted.hash_stable(&mut hcx, &mut stable_hasher);
+    let crate_hash: Fingerprint = tcx.with_stable_hashing_context(|mut hcx| {
+        let mut stable_hasher = StableHasher::new();
+        hir_body_hash.hash_stable(&mut hcx, &mut stable_hasher);
+        upstream_crates.hash_stable(&mut hcx, &mut stable_hasher);
+        source_file_names.hash_stable(&mut hcx, &mut stable_hasher);
+        if tcx.sess.opts.debugging_opts.incremental_relative_spans {
+            let definitions = tcx.definitions_untracked();
+            let mut owner_spans: Vec<_> = krate
+                .owners
+                .iter_enumerated()
+                .filter_map(|(def_id, info)| {
+                    let _ = info.as_owner()?;
+                    let def_path_hash = definitions.def_path_hash(def_id);
+                    let span = resolutions.source_span[def_id];
+                    debug_assert_eq!(span.parent(), None);
+                    Some((def_path_hash, span))
+                })
+                .collect();
+            owner_spans.sort_unstable_by_key(|bn| bn.0);
+            owner_spans.hash_stable(&mut hcx, &mut stable_hasher);
+        }
+        tcx.sess.opts.dep_tracking_hash(true).hash_stable(&mut hcx, &mut stable_hasher);
+        tcx.sess.local_stable_crate_id().hash_stable(&mut hcx, &mut stable_hasher);
+        // Hash visibility information since it does not appear in HIR.
+        resolutions.visibilities.hash_stable(&mut hcx, &mut stable_hasher);
+        resolutions.has_pub_restricted.hash_stable(&mut hcx, &mut stable_hasher);
+        stable_hasher.finish()
+    });
 
-    let crate_hash: Fingerprint = stable_hasher.finish();
     Svh::new(crate_hash.to_smaller_hash())
 }
 

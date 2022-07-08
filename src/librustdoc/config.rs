@@ -73,6 +73,8 @@ pub(crate) struct Options {
     pub(crate) proc_macro_crate: bool,
     /// How to format errors and warnings.
     pub(crate) error_format: ErrorOutputType,
+    /// Width of output buffer to truncate errors appropriately.
+    pub(crate) diagnostic_width: Option<usize>,
     /// Library search paths to hand to the compiler.
     pub(crate) libs: Vec<SearchPath>,
     /// Library search paths strings to hand to the compiler.
@@ -237,9 +239,6 @@ pub(crate) struct RenderOptions {
     pub(crate) resource_suffix: String,
     /// Whether to run the static CSS/JavaScript through a minifier when outputting them. `true` by
     /// default.
-    //
-    // FIXME(misdreavus): the flag name is `--disable-minification` but the meaning is inverted
-    // once read.
     pub(crate) enable_minification: bool,
     /// Whether to create an index page in the root of the output directory. If this is true but
     /// `enable_index_page` is None, generate a static listing of crates instead.
@@ -334,11 +333,12 @@ impl Options {
         let config::JsonConfig { json_rendered, json_unused_externs, .. } =
             config::parse_json(matches);
         let error_format = config::parse_error_format(matches, color, json_rendered);
+        let diagnostic_width = matches.opt_get("diagnostic-width").unwrap_or_default();
 
         let codegen_options = CodegenOptions::build(matches, error_format);
         let debugging_opts = DebuggingOptions::build(matches, error_format);
 
-        let diag = new_handler(error_format, None, &debugging_opts);
+        let diag = new_handler(error_format, None, diagnostic_width, &debugging_opts);
 
         // check for deprecated options
         check_deprecated_options(matches, &diag);
@@ -702,6 +702,7 @@ impl Options {
             input,
             proc_macro_crate,
             error_format,
+            diagnostic_width,
             libs,
             lib_strs,
             externs,

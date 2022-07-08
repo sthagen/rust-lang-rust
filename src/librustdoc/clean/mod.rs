@@ -629,6 +629,7 @@ fn clean_ty_generics<'tcx>(
         .params
         .iter()
         .filter_map(|param| match param.kind {
+            ty::GenericParamDefKind::Lifetime if param.name == kw::UnderscoreLifetime => None,
             ty::GenericParamDefKind::Lifetime => Some(param.clean(cx)),
             ty::GenericParamDefKind::Type { synthetic, .. } => {
                 if param.name == kw::SelfUpper {
@@ -1704,8 +1705,8 @@ fn clean_ty<'tcx>(this: Ty<'tcx>, cx: &mut DocContext<'tcx>, def_id: Option<DefI
             ImplTrait(bounds)
         }
 
-        ty::Closure(..) | ty::Generator(..) => Tuple(vec![]), // FIXME(pcwalton)
-
+        ty::Closure(..) => panic!("Closure"),
+        ty::Generator(..) => panic!("Generator"),
         ty::Bound(..) => panic!("Bound"),
         ty::Placeholder(..) => panic!("Placeholder"),
         ty::GeneratorWitness(..) => panic!("GeneratorWitness"),
@@ -1759,7 +1760,6 @@ fn is_field_vis_inherited(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
     match tcx.def_kind(parent) {
         DefKind::Struct | DefKind::Union => false,
         DefKind::Variant => true,
-        // FIXME: what about DefKind::Ctor?
         parent_kind => panic!("unexpected parent kind: {:?}", parent_kind),
     }
 }
