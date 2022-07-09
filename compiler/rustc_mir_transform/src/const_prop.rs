@@ -22,8 +22,8 @@ use rustc_middle::ty::{
     self, ConstKind, EarlyBinder, Instance, ParamEnv, Ty, TyCtxt, TypeVisitable,
 };
 use rustc_span::{def_id::DefId, Span};
-use rustc_target::abi::{HasDataLayout, Size, TargetDataLayout};
-use rustc_target::spec::abi::Abi;
+use rustc_target::abi::{self, HasDataLayout, Size, TargetDataLayout};
+use rustc_target::spec::abi::Abi as CallAbi;
 use rustc_trait_selection::traits;
 
 use crate::MirPass;
@@ -59,11 +59,8 @@ macro_rules! throw_machine_stop_str {
 pub struct ConstProp;
 
 impl<'tcx> MirPass<'tcx> for ConstProp {
-    fn is_enabled(&self, _sess: &rustc_session::Session) -> bool {
-        // FIXME(#70073): Unlike the other passes in "optimizations", this one emits errors, so it
-        // runs even when MIR optimizations are disabled. We should separate the lint out from the
-        // transform and move the lint as early in the pipeline as possible.
-        true
+    fn is_enabled(&self, sess: &rustc_session::Session) -> bool {
+        sess.mir_opt_level() >= 1
     }
 
     #[instrument(skip(self, tcx), level = "debug")]
@@ -198,7 +195,7 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for ConstPropMachine<'mir, 'tcx>
     fn find_mir_or_eval_fn(
         _ecx: &mut InterpCx<'mir, 'tcx, Self>,
         _instance: ty::Instance<'tcx>,
-        _abi: Abi,
+        _abi: CallAbi,
         _args: &[OpTy<'tcx>],
         _destination: &PlaceTy<'tcx>,
         _target: Option<BasicBlock>,
@@ -662,6 +659,11 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
                     (Ok(_), Ok(_)) => return this.ecx.eval_rvalue_into_place(rvalue, place),
                 };
 
+                if !matches!(const_arg.layout.abi, abi::Abi::Scalar(..)) {
+                    // We cannot handle Scalar Pair stuff.
+                    return this.ecx.eval_rvalue_into_place(rvalue, place);
+                }
+
                 let arg_value = const_arg.to_scalar()?.to_bits(const_arg.layout.size)?;
                 let dest = this.ecx.eval_place(place)?;
 
@@ -794,12 +796,6 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
 
     /// Returns `true` if and only if this `op` should be const-propagated into.
     fn should_const_prop(&mut self, op: &OpTy<'tcx>) -> bool {
-        let mir_opt_level = self.tcx.sess.mir_opt_level();
-
-        if mir_opt_level == 0 {
-            return false;
-        }
-
         if !self.tcx.consider_optimizing(|| format!("ConstantPropagation - OpTy: {:?}", op)) {
             return false;
         }

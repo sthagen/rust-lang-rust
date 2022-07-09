@@ -2,7 +2,7 @@ use crate::cgu_reuse_tracker::CguReuseTracker;
 use crate::code_stats::CodeStats;
 pub use crate::code_stats::{DataTypeKind, FieldInfo, SizeKind, VariantInfo};
 use crate::config::{self, CrateType, OutputType, SwitchWithOptPath};
-use crate::parse::ParseSess;
+use crate::parse::{add_feature_diagnostics, ParseSess};
 use crate::search_paths::{PathKind, SearchPath};
 use crate::{filesearch, lint};
 
@@ -457,6 +457,15 @@ impl Session {
         err: impl SessionDiagnostic<'a>,
     ) -> DiagnosticBuilder<'a, ErrorGuaranteed> {
         self.parse_sess.create_err(err)
+    }
+    pub fn create_feature_err<'a>(
+        &'a self,
+        err: impl SessionDiagnostic<'a>,
+        feature: Symbol,
+    ) -> DiagnosticBuilder<'a, ErrorGuaranteed> {
+        let mut err = self.parse_sess.create_err(err);
+        add_feature_diagnostics(&mut err, &self.parse_sess, feature);
+        err
     }
     pub fn emit_err<'a>(&'a self, err: impl SessionDiagnostic<'a>) -> ErrorGuaranteed {
         self.parse_sess.emit_err(err)
@@ -1487,6 +1496,12 @@ fn validate_commandline_args_with_session_available(sess: &Session) {
                 "`-Z stack-protector={}` is not supported for target {} and will be ignored",
                 sess.opts.debugging_opts.stack_protector, sess.opts.target_triple
             ))
+        }
+    }
+
+    if let Some(dwarf_version) = sess.opts.debugging_opts.dwarf_version {
+        if dwarf_version > 5 {
+            sess.err(&format!("requested DWARF version {} is greater than 5", dwarf_version));
         }
     }
 }

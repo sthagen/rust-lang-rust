@@ -1246,6 +1246,8 @@ options! {
     dump_dep_graph: bool = (false, parse_bool, [UNTRACKED],
         "dump the dependency graph to $RUST_DEP_GRAPH (default: /tmp/dep_graph.gv) \
         (default: no)"),
+    dump_drop_tracking_cfg: Option<String> = (None, parse_opt_string, [UNTRACKED],
+        "dump drop-tracking control-flow graph as a `.dot` file (default: no)"),
     dump_mir: Option<String> = (None, parse_opt_string, [UNTRACKED],
         "dump MIR state to file.
         `val` is used to select which passes and functions to dump. For example:
@@ -1270,6 +1272,8 @@ options! {
         computed `block` spans (one span encompassing a block's terminator and \
         all statements). If `-Z instrument-coverage` is also enabled, create \
         an additional `.html` file showing the computed coverage spans."),
+    dwarf_version: Option<u32> = (None, parse_opt_number, [TRACKED],
+        "version of DWARF debug information to emit (default: 2 or 4, depending on platform)"),
     emit_stack_sizes: bool = (false, parse_bool, [UNTRACKED],
         "emit a section containing stack size metadata (default: no)"),
     fewer_names: Option<bool> = (None, parse_opt_bool, [TRACKED],
