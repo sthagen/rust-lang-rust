@@ -22,7 +22,7 @@ fn fn_decl<'hir>(node: Node<'hir>) -> Option<&'hir FnDecl<'hir>> {
         Node::Item(Item { kind: ItemKind::Fn(sig, _, _), .. })
         | Node::TraitItem(TraitItem { kind: TraitItemKind::Fn(sig, _), .. })
         | Node::ImplItem(ImplItem { kind: ImplItemKind::Fn(sig, _), .. }) => Some(&sig.decl),
-        Node::Expr(Expr { kind: ExprKind::Closure { fn_decl, .. }, .. })
+        Node::Expr(Expr { kind: ExprKind::Closure(Closure { fn_decl, .. }), .. })
         | Node::ForeignItem(ForeignItem { kind: ForeignItemKind::Fn(fn_decl, ..), .. }) => {
             Some(fn_decl)
         }
@@ -54,7 +54,7 @@ pub fn associated_body<'hir>(node: Node<'hir>) -> Option<BodyId> {
             kind: ImplItemKind::Const(_, body) | ImplItemKind::Fn(_, body),
             ..
         })
-        | Node::Expr(Expr { kind: ExprKind::Closure { body, .. }, .. }) => Some(*body),
+        | Node::Expr(Expr { kind: ExprKind::Closure(Closure { body, .. }), .. }) => Some(*body),
 
         Node::AnonConst(constant) => Some(constant.body),
 
@@ -279,8 +279,8 @@ impl<'hir> Map<'hir> {
             }
             Node::Field(_) => DefKind::Field,
             Node::Expr(expr) => match expr.kind {
-                ExprKind::Closure { movability: None, .. } => DefKind::Closure,
-                ExprKind::Closure { movability: Some(_), .. } => DefKind::Generator,
+                ExprKind::Closure(Closure { movability: None, .. }) => DefKind::Closure,
+                ExprKind::Closure(Closure { movability: Some(_), .. }) => DefKind::Generator,
                 _ => bug!("def_kind: unsupported node: {}", self.node_to_string(hir_id)),
             },
             Node::GenericParam(param) => match param.kind {
@@ -1021,7 +1021,9 @@ impl<'hir> Map<'hir> {
                 _ => named_span(item.span, item.ident, None),
             },
             Node::Ctor(_) => return self.opt_span(self.get_parent_node(hir_id)),
-            Node::Expr(Expr { kind: ExprKind::Closure { fn_decl_span, .. }, .. }) => *fn_decl_span,
+            Node::Expr(Expr { kind: ExprKind::Closure(Closure { fn_decl_span, .. }), .. }) => {
+                *fn_decl_span
+            }
             _ => self.span_with_body(hir_id),
         };
         Some(span)
@@ -1149,7 +1151,7 @@ pub(super) fn crate_hash(tcx: TyCtxt<'_>, crate_num: CrateNum) -> Svh {
         hir_body_hash.hash_stable(&mut hcx, &mut stable_hasher);
         upstream_crates.hash_stable(&mut hcx, &mut stable_hasher);
         source_file_names.hash_stable(&mut hcx, &mut stable_hasher);
-        if tcx.sess.opts.debugging_opts.incremental_relative_spans {
+        if tcx.sess.opts.unstable_opts.incremental_relative_spans {
             let definitions = tcx.definitions_untracked();
             let mut owner_spans: Vec<_> = krate
                 .owners

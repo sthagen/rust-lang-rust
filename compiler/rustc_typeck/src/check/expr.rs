@@ -35,7 +35,7 @@ use rustc_hir::def::{CtorKind, DefKind, Res};
 use rustc_hir::def_id::DefId;
 use rustc_hir::intravisit::Visitor;
 use rustc_hir::lang_items::LangItem;
-use rustc_hir::{ExprKind, HirId, QPath};
+use rustc_hir::{Closure, ExprKind, HirId, QPath};
 use rustc_infer::infer;
 use rustc_infer::infer::type_variable::{TypeVariableOrigin, TypeVariableOriginKind};
 use rustc_infer::infer::InferOk;
@@ -319,7 +319,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             ExprKind::Match(discrim, arms, match_src) => {
                 self.check_match(expr, &discrim, arms, expected, match_src)
             }
-            ExprKind::Closure { capture_clause, fn_decl, body, movability, .. } => {
+            ExprKind::Closure(&Closure { capture_clause, fn_decl, body, movability, .. }) => {
                 self.check_expr_closure(expr, capture_clause, &fn_decl, body, movability, expected)
             }
             ExprKind::Block(body, _) => self.check_block_with_expected(&body, expected),
@@ -997,26 +997,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         coerce.coerce(self, &self.misc(sp), then_expr, then_ty);
 
         if let Some(else_expr) = opt_else_expr {
-            let else_ty = if sp.desugaring_kind() == Some(DesugaringKind::LetElse) {
-                // todo introduce `check_expr_with_expectation(.., Expectation::LetElse)`
-                //   for errors that point to the offending expression rather than the entire block.
-                //   We could use `check_expr_eq_type(.., tcx.types.never)`, but then there is no
-                //   way to detect that the expected type originated from let-else and provide
-                //   a customized error.
-                let else_ty = self.check_expr(else_expr);
-                let cause = self.cause(else_expr.span, ObligationCauseCode::LetElse);
-
-                if let Some(mut err) =
-                    self.demand_eqtype_with_origin(&cause, self.tcx.types.never, else_ty)
-                {
-                    err.emit();
-                    self.tcx.ty_error()
-                } else {
-                    else_ty
-                }
-            } else {
-                self.check_expr_with_expectation(else_expr, expected)
-            };
+            let else_ty = self.check_expr_with_expectation(else_expr, expected);
             let else_diverges = self.diverges.get();
 
             let opt_suggest_box_span = self.opt_suggest_box_span(else_ty, orig_expected);

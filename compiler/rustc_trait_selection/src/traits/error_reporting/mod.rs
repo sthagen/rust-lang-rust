@@ -24,8 +24,8 @@ use rustc_hir::Item;
 use rustc_hir::Node;
 use rustc_infer::infer::error_reporting::same_type_modulo_infer;
 use rustc_infer::traits::{AmbiguousSelection, TraitEngine};
-use rustc_middle::thir::abstract_const::NotConstEvaluatable;
 use rustc_middle::traits::select::OverflowError;
+use rustc_middle::ty::abstract_const::NotConstEvaluatable;
 use rustc_middle::ty::error::ExpectedFound;
 use rustc_middle::ty::fold::{TypeFolder, TypeSuperFoldable};
 use rustc_middle::ty::{
@@ -884,7 +884,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                     }
 
                     ty::PredicateKind::WellFormed(ty) => {
-                        if !self.tcx.sess.opts.debugging_opts.chalk {
+                        if !self.tcx.sess.opts.unstable_opts.chalk {
                             // WF predicates cannot themselves make
                             // errors. They can only block due to
                             // ambiguity; otherwise, they always
@@ -1086,7 +1086,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
         let hir = self.tcx.hir();
         Some(match node {
             Node::Expr(&hir::Expr {
-                kind: hir::ExprKind::Closure { body, fn_decl_span, .. },
+                kind: hir::ExprKind::Closure(&hir::Closure { body, fn_decl_span, .. }),
                 ..
             }) => (
                 sm.guess_head_span(fn_decl_span),
@@ -2179,6 +2179,33 @@ impl<'a, 'tcx> InferCtxtPrivExt<'a, 'tcx> for InferCtxt<'a, 'tcx> {
                 }
             }
 
+            ty::PredicateKind::ConstEvaluatable(data) => {
+                if predicate.references_error() || self.is_tainted_by_errors() {
+                    return;
+                }
+                let subst = data.substs.iter().find(|g| g.has_infer_types_or_consts());
+                if let Some(subst) = subst {
+                    let err = self.emit_inference_failure_err(
+                        body_id,
+                        span,
+                        subst,
+                        ErrorCode::E0284,
+                        true,
+                    );
+                    err
+                } else {
+                    // If we can't find a substitution, just print a generic error
+                    let mut err = struct_span_err!(
+                        self.tcx.sess,
+                        span,
+                        E0284,
+                        "type annotations needed: cannot satisfy `{}`",
+                        predicate,
+                    );
+                    err.span_label(span, &format!("cannot satisfy `{}`", predicate));
+                    err
+                }
+            }
             _ => {
                 if self.tcx.sess.has_errors().is_some() || self.is_tainted_by_errors() {
                     return;

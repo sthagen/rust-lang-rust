@@ -92,6 +92,7 @@ pub use self::sty::{
 pub use self::trait_def::TraitDef;
 
 pub mod _match;
+pub mod abstract_const;
 pub mod adjustment;
 pub mod binding;
 pub mod cast;
@@ -1720,11 +1721,9 @@ bitflags! {
         const IS_TRANSPARENT     = 1 << 2;
         // Internal only for now. If true, don't reorder fields.
         const IS_LINEAR          = 1 << 3;
-        // If true, don't expose any niche to type's context.
-        const HIDE_NICHE         = 1 << 4;
         // If true, the type's layout can be randomized using
         // the seed stored in `ReprOptions.layout_seed`
-        const RANDOMIZE_LAYOUT   = 1 << 5;
+        const RANDOMIZE_LAYOUT   = 1 << 4;
         // Any of these flags being set prevent field reordering optimisation.
         const IS_UNOPTIMISABLE   = ReprFlags::IS_C.bits
                                  | ReprFlags::IS_SIMD.bits
@@ -1763,7 +1762,7 @@ impl ReprOptions {
         // If the user defined a custom seed for layout randomization, xor the item's
         // path hash with the user defined seed, this will allowing determinism while
         // still allowing users to further randomize layout generation for e.g. fuzzing
-        if let Some(user_seed) = tcx.sess.opts.debugging_opts.layout_seed {
+        if let Some(user_seed) = tcx.sess.opts.unstable_opts.layout_seed {
             field_shuffle_seed ^= user_seed;
         }
 
@@ -1781,7 +1780,6 @@ impl ReprOptions {
                         ReprFlags::empty()
                     }
                     attr::ReprTransparent => ReprFlags::IS_TRANSPARENT,
-                    attr::ReprNoNiche => ReprFlags::HIDE_NICHE,
                     attr::ReprSimd => ReprFlags::IS_SIMD,
                     attr::ReprInt(i) => {
                         size = Some(i);
@@ -1797,7 +1795,7 @@ impl ReprOptions {
 
         // If `-Z randomize-layout` was enabled for the type definition then we can
         // consider performing layout randomization
-        if tcx.sess.opts.debugging_opts.randomize_layout {
+        if tcx.sess.opts.unstable_opts.randomize_layout {
             flags.insert(ReprFlags::RANDOMIZE_LAYOUT);
         }
 
@@ -1832,11 +1830,6 @@ impl ReprOptions {
     #[inline]
     pub fn linear(&self) -> bool {
         self.flags.contains(ReprFlags::IS_LINEAR)
-    }
-
-    #[inline]
-    pub fn hide_niche(&self) -> bool {
-        self.flags.contains(ReprFlags::HIDE_NICHE)
     }
 
     /// Returns the discriminant type, given these `repr` options.
