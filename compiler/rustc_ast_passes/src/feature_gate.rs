@@ -62,9 +62,9 @@ impl<'a> PostExpansionVisitor<'a> {
         let ast::StrLit { symbol_unescaped, span, .. } = abi;
 
         if let ast::Const::Yes(_) = constness {
-            match symbol_unescaped.as_str() {
+            match symbol_unescaped {
                 // Stable
-                "Rust" | "C" => {}
+                sym::Rust | sym::C => {}
                 abi => gate_feature_post!(
                     &self,
                     const_extern_fn,
@@ -404,8 +404,8 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
                     gate_feature_post!(self, rustdoc_internals, attr.span, msg);
                 }
 
-                if nested_meta.has_name(sym::tuple_variadic) {
-                    let msg = "`#[doc(tuple_variadic)]` is meant for internal use only";
+                if nested_meta.has_name(sym::fake_variadic) {
+                    let msg = "`#[doc(fake_variadic)]` is meant for internal use only";
                     gate_feature_post!(self, rustdoc_internals, attr.span, msg);
                 }
             }
