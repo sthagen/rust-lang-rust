@@ -718,6 +718,7 @@ fn test_unstable_options_tracking_hash() {
     tracked!(asm_comments, true);
     tracked!(assume_incomplete_release, true);
     tracked!(binary_dep_depinfo, true);
+    tracked!(box_noalias, Some(false));
     tracked!(
         branch_protection,
         Some(BranchProtection {
@@ -734,6 +735,7 @@ fn test_unstable_options_tracking_hash() {
     tracked!(drop_tracking, true);
     tracked!(dual_proc_macros, true);
     tracked!(dwarf_version, Some(5));
+    tracked!(emit_thin_lto, false);
     tracked!(fewer_names, Some(true));
     tracked!(force_unstable_if_unmarked, true);
     tracked!(fuel, Some(("abc".to_string(), 99)));

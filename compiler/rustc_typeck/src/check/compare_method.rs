@@ -2,7 +2,7 @@ use super::potentially_plural_count;
 use crate::check::regionck::OutlivesEnvironmentExt;
 use crate::check::wfcheck;
 use crate::errors::LifetimesOrBoundsMismatchOnTrait;
-use rustc_data_structures::stable_set::FxHashSet;
+use rustc_data_structures::fx::FxHashSet;
 use rustc_errors::{pluralize, struct_span_err, Applicability, DiagnosticId, ErrorGuaranteed};
 use rustc_hir as hir;
 use rustc_hir::def::{DefKind, Res};
@@ -1460,6 +1460,7 @@ pub fn check_type_bounds<'tcx>(
             .map(|e| e.map_bound(|e| *e).transpose_tuple2())
             .map(|(bound, span)| {
                 debug!(?bound);
+                // this is where opaque type is found
                 let concrete_ty_bound = bound.subst(tcx, rebased_substs);
                 debug!("check_type_bounds: concrete_ty_bound = {:?}", concrete_ty_bound);
 
@@ -1481,7 +1482,6 @@ pub fn check_type_bounds<'tcx>(
             ocx.register_obligations(obligations);
             ocx.register_obligation(obligation);
         }
-
         // Check that all obligations are satisfied by the implementation's
         // version.
         let errors = ocx.select_all_or_error();
