@@ -22,7 +22,6 @@ use rustc_hir::intravisit::Visitor;
 use rustc_hir::GenericParam;
 use rustc_hir::Item;
 use rustc_hir::Node;
-use rustc_infer::infer::error_reporting::same_type_modulo_infer;
 use rustc_infer::traits::TraitEngine;
 use rustc_middle::traits::select::OverflowError;
 use rustc_middle::ty::abstract_const::NotConstEvaluatable;
@@ -640,7 +639,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                                             if expected.len() == 1 { "" } else { "s" },
                                         )
                                     );
-                                } else if !same_type_modulo_infer(given_ty, expected_ty) {
+                                } else if !self.same_type_modulo_infer(given_ty, expected_ty) {
                                     // Print type mismatch
                                     let (expected_args, given_args) =
                                         self.cmp(given_ty, expected_ty);
@@ -789,24 +788,9 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                         span_bug!(span, "coerce requirement gave wrong error: `{:?}`", predicate)
                     }
 
-                    ty::PredicateKind::RegionOutlives(predicate) => {
-                        let predicate = bound_predicate.rebind(predicate);
-                        let predicate = self.resolve_vars_if_possible(predicate);
-                        let err = self
-                            .region_outlives_predicate(&obligation.cause, predicate)
-                            .err()
-                            .unwrap();
-                        struct_span_err!(
-                            self.tcx.sess,
-                            span,
-                            E0279,
-                            "the requirement `{}` is not satisfied (`{}`)",
-                            predicate,
-                            err,
-                        )
-                    }
-
-                    ty::PredicateKind::Projection(..) | ty::PredicateKind::TypeOutlives(..) => {
+                    ty::PredicateKind::RegionOutlives(..)
+                    | ty::PredicateKind::Projection(..)
+                    | ty::PredicateKind::TypeOutlives(..) => {
                         let predicate = self.resolve_vars_if_possible(obligation.predicate);
                         struct_span_err!(
                             self.tcx.sess,
