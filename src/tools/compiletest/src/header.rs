@@ -871,11 +871,13 @@ pub fn make_test_description<R: Read>(
     let rustc_has_sanitizer_support = env::var_os("RUSTC_SANITIZER_SUPPORT").is_some();
     let has_asm_support = util::has_asm_support(&config.target);
     let has_asan = util::ASAN_SUPPORTED_TARGETS.contains(&&*config.target);
+    let has_cfi = util::CFI_SUPPORTED_TARGETS.contains(&&*config.target);
     let has_lsan = util::LSAN_SUPPORTED_TARGETS.contains(&&*config.target);
     let has_msan = util::MSAN_SUPPORTED_TARGETS.contains(&&*config.target);
     let has_tsan = util::TSAN_SUPPORTED_TARGETS.contains(&&*config.target);
     let has_hwasan = util::HWASAN_SUPPORTED_TARGETS.contains(&&*config.target);
     let has_memtag = util::MEMTAG_SUPPORTED_TARGETS.contains(&&*config.target);
+    let has_shadow_call_stack = util::SHADOWCALLSTACK_SUPPORTED_TARGETS.contains(&&*config.target);
     // for `-Z gcc-ld=lld`
     let has_rust_lld = config
         .compile_lib_path
@@ -908,11 +910,14 @@ pub fn make_test_description<R: Read>(
         ignore |= !rustc_has_sanitizer_support
             && config.parse_name_directive(ln, "needs-sanitizer-support");
         ignore |= !has_asan && config.parse_name_directive(ln, "needs-sanitizer-address");
+        ignore |= !has_cfi && config.parse_name_directive(ln, "needs-sanitizer-cfi");
         ignore |= !has_lsan && config.parse_name_directive(ln, "needs-sanitizer-leak");
         ignore |= !has_msan && config.parse_name_directive(ln, "needs-sanitizer-memory");
         ignore |= !has_tsan && config.parse_name_directive(ln, "needs-sanitizer-thread");
         ignore |= !has_hwasan && config.parse_name_directive(ln, "needs-sanitizer-hwaddress");
         ignore |= !has_memtag && config.parse_name_directive(ln, "needs-sanitizer-memtag");
+        ignore |= !has_shadow_call_stack
+            && config.parse_name_directive(ln, "needs-sanitizer-shadow-call-stack");
         ignore |= config.target_panic == PanicStrategy::Abort
             && config.parse_name_directive(ln, "needs-unwind");
         ignore |= config.target == "wasm32-unknown-unknown"
