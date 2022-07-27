@@ -2090,10 +2090,17 @@ fn predicates_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::GenericPredicates<'_> {
         // from the trait itself that *shouldn't* be shown as the source of
         // an obligation and instead be skipped. Otherwise we'd use
         // `tcx.def_span(def_id);`
+
+        let constness = if tcx.has_attr(def_id, sym::const_trait) {
+            ty::BoundConstness::ConstIfConst
+        } else {
+            ty::BoundConstness::NotConst
+        };
+
         let span = rustc_span::DUMMY_SP;
         result.predicates =
             tcx.arena.alloc_from_iter(result.predicates.iter().copied().chain(std::iter::once((
-                ty::TraitRef::identity(tcx, def_id).without_const().to_predicate(tcx),
+                ty::TraitRef::identity(tcx, def_id).with_constness(constness).to_predicate(tcx),
                 span,
             ))));
     }
@@ -2775,6 +2782,12 @@ fn codegen_fn_attrs(tcx: TyCtxt<'_>, did: DefId) -> CodegenFnAttrs {
             }
         } else if attr.has_name(sym::rustc_allocator_nounwind) {
             codegen_fn_attrs.flags |= CodegenFnAttrFlags::NEVER_UNWIND;
+        } else if attr.has_name(sym::rustc_reallocator) {
+            codegen_fn_attrs.flags |= CodegenFnAttrFlags::REALLOCATOR;
+        } else if attr.has_name(sym::rustc_deallocator) {
+            codegen_fn_attrs.flags |= CodegenFnAttrFlags::DEALLOCATOR;
+        } else if attr.has_name(sym::rustc_allocator_zeroed) {
+            codegen_fn_attrs.flags |= CodegenFnAttrFlags::ALLOCATOR_ZEROED;
         } else if attr.has_name(sym::naked) {
             codegen_fn_attrs.flags |= CodegenFnAttrFlags::NAKED;
         } else if attr.has_name(sym::no_mangle) {
