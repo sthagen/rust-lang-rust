@@ -1346,16 +1346,8 @@ fn has_late_bound_regions<'tcx>(tcx: TyCtxt<'tcx>, node: Node<'tcx>) -> Option<S
 
             match self.tcx.named_region(lt.hir_id) {
                 Some(rl::Region::Static | rl::Region::EarlyBound(..)) => {}
-                Some(
-                    rl::Region::LateBound(debruijn, _, _)
-                    | rl::Region::LateBoundAnon(debruijn, _, _),
-                ) if debruijn < self.outer_index => {}
-                Some(
-                    rl::Region::LateBound(..)
-                    | rl::Region::LateBoundAnon(..)
-                    | rl::Region::Free(..),
-                )
-                | None => {
+                Some(rl::Region::LateBound(debruijn, _, _)) if debruijn < self.outer_index => {}
+                Some(rl::Region::LateBound(..) | rl::Region::Free(..)) | None => {
                     self.has_late_bound_regions = Some(lt.span);
                 }
             }
@@ -3173,9 +3165,11 @@ fn codegen_fn_attrs(tcx: TyCtxt<'_>, did: DefId) -> CodegenFnAttrs {
     // #73631: closures inherit `#[target_feature]` annotations
     if tcx.features().target_feature_11 && tcx.is_closure(did.to_def_id()) {
         let owner_id = tcx.parent(did.to_def_id());
-        codegen_fn_attrs
-            .target_features
-            .extend(tcx.codegen_fn_attrs(owner_id).target_features.iter().copied())
+        if tcx.def_kind(owner_id).has_codegen_attrs() {
+            codegen_fn_attrs
+                .target_features
+                .extend(tcx.codegen_fn_attrs(owner_id).target_features.iter().copied());
+        }
     }
 
     // If a function uses #[target_feature] it can't be inlined into general

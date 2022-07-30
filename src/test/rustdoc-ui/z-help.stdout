@@ -76,6 +76,7 @@
     -Z                              meta-stats=val -- gather metadata statistics (default: no)
     -Z                          mir-emit-retag=val -- emit Retagging MIR statements, interpreted e.g., by miri; implies -Zmir-opt-level=0 (default: no)
     -Z                       mir-enable-passes=val -- use like `-Zmir-enable-passes=+DestProp,-InstCombine`. Forces the specified passes to be enabled, overriding all other checks. Passes that are not specified are enabled or disabled by other flags as usual.
+    -Z        mir-pretty-relative-line-numbers=val -- use line numbers relative to the function in mir pretty printing
     -Z                           mir-opt-level=val -- MIR optimization level (0-4; default: 1 in non optimized builds and 2 in optimized builds)
     -Z                         move-size-limit=val -- the size at which the `large_assignments` lint starts to be emitted
     -Z                         mutable-noalias=val -- emit noalias metadata for mutable references (default: yes)
@@ -113,6 +114,7 @@
     -Z                        print-mono-items=val -- print the result of the monomorphization collection pass
     -Z                        print-type-sizes=val -- print layout information for each type encountered (default: no)
     -Z                    proc-macro-backtrace=val -- show backtraces for panics during proc-macro execution (default: no)
+    -Z           proc-macro-execution-strategy=val -- how to run proc-macro code (default: same-thread)
     -Z                                 profile=val -- insert profiling code (default: no)
     -Z                        profile-closures=val -- profile size of closures
     -Z                            profile-emit=val -- file path to emit profiling data at runtime when using 'profile' (default based on relative source path)

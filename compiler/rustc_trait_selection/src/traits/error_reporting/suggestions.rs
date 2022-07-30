@@ -184,7 +184,7 @@ pub trait InferCtxtExt<'tcx> {
         trait_pred: ty::PolyTraitPredicate<'tcx>,
     ) -> bool;
 
-    fn get_closure_name(&self, def_id: DefId, err: &mut Diagnostic, msg: &str) -> Option<String>;
+    fn get_closure_name(&self, def_id: DefId, err: &mut Diagnostic, msg: &str) -> Option<Symbol>;
 
     fn suggest_fn_call(
         &self,
@@ -315,6 +315,13 @@ pub trait InferCtxtExt<'tcx> {
     );
 
     fn suggest_derive(
+        &self,
+        obligation: &PredicateObligation<'tcx>,
+        err: &mut Diagnostic,
+        trait_pred: ty::PolyTraitPredicate<'tcx>,
+    );
+
+    fn suggest_dereferencing_index(
         &self,
         obligation: &PredicateObligation<'tcx>,
         err: &mut Diagnostic,
@@ -737,13 +744,13 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
     /// Given a closure's `DefId`, return the given name of the closure.
     ///
     /// This doesn't account for reassignments, but it's only used for suggestions.
-    fn get_closure_name(&self, def_id: DefId, err: &mut Diagnostic, msg: &str) -> Option<String> {
-        let get_name = |err: &mut Diagnostic, kind: &hir::PatKind<'_>| -> Option<String> {
+    fn get_closure_name(&self, def_id: DefId, err: &mut Diagnostic, msg: &str) -> Option<Symbol> {
+        let get_name = |err: &mut Diagnostic, kind: &hir::PatKind<'_>| -> Option<Symbol> {
             // Get the local name of this closure. This can be inaccurate because
             // of the possibility of reassignment, but this should be good enough.
             match &kind {
-                hir::PatKind::Binding(hir::BindingAnnotation::Unannotated, _, name, None) => {
-                    Some(format!("{}", name))
+                hir::PatKind::Binding(hir::BindingAnnotation::Unannotated, _, ident, None) => {
+                    Some(ident.name)
                 }
                 _ => {
                     err.note(msg);
@@ -2892,6 +2899,27 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                 ),
                 format!("#[derive({})]\n", diagnostic_name),
                 Applicability::MaybeIncorrect,
+            );
+        }
+    }
+
+    fn suggest_dereferencing_index(
+        &self,
+        obligation: &PredicateObligation<'tcx>,
+        err: &mut Diagnostic,
+        trait_pred: ty::PolyTraitPredicate<'tcx>,
+    ) {
+        if let ObligationCauseCode::ImplDerivedObligation(_) = obligation.cause.code()
+            && self.tcx.is_diagnostic_item(sym::SliceIndex, trait_pred.skip_binder().trait_ref.def_id)
+            && let ty::Slice(_) = trait_pred.skip_binder().trait_ref.substs.type_at(1).kind()
+            && let ty::Ref(_, inner_ty, _) = trait_pred.skip_binder().self_ty().kind()
+            && let ty::Uint(ty::UintTy::Usize) = inner_ty.kind()
+        {
+            err.span_suggestion_verbose(
+                obligation.cause.span.shrink_to_lo(),
+            "dereference this index",
+            '*',
+                Applicability::MachineApplicable,
             );
         }
     }

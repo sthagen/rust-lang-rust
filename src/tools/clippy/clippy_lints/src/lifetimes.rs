@@ -460,7 +460,6 @@ impl<'a, 'tcx> Visitor<'tcx> for RefVisitor<'a, 'tcx> {
                 let mut sub_visitor = RefVisitor::new(self.cx);
                 sub_visitor.visit_fn_decl(decl);
                 self.nested_elision_site_lts.append(&mut sub_visitor.all_lts());
-                return;
             },
             TyKind::TraitObject(bounds, ref lt, _) => {
                 if !lt.is_elided() {
@@ -469,7 +468,6 @@ impl<'a, 'tcx> Visitor<'tcx> for RefVisitor<'a, 'tcx> {
                 for bound in bounds {
                     self.visit_poly_trait_ref(bound, TraitBoundModifier::None);
                 }
-                return;
             },
             _ => walk_ty(self, ty),
         }
@@ -615,7 +613,7 @@ struct BodyLifetimeChecker {
 impl<'tcx> Visitor<'tcx> for BodyLifetimeChecker {
     // for lifetimes as parameters of generics
     fn visit_lifetime(&mut self, lifetime: &'tcx Lifetime) {
-        if lifetime.name.ident().name != kw::Empty && lifetime.name.ident().name != kw::StaticLifetime {
+        if lifetime.name.ident().name != kw::UnderscoreLifetime && lifetime.name.ident().name != kw::StaticLifetime {
             self.lifetimes_used_in_body = true;
         }
     }

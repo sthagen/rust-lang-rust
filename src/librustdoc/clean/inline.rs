@@ -17,7 +17,8 @@ use rustc_span::symbol::{kw, sym, Symbol};
 
 use crate::clean::{
     self, clean_fn_decl_from_did_and_sig, clean_middle_field, clean_middle_ty, clean_ty,
-    clean_ty_generics, utils, Attributes, AttributesExt, Clean, ImplKind, ItemId, Type, Visibility,
+    clean_ty_generics, clean_visibility, utils, Attributes, AttributesExt, Clean, ImplKind, ItemId,
+    Type, Visibility,
 };
 use crate::core::DocContext;
 use crate::formats::item_type::ItemType;
@@ -134,7 +135,7 @@ pub(crate) fn try_inline(
     );
     if let Some(import_def_id) = import_def_id {
         // The visibility needs to reflect the one from the reexport and not from the "source" DefId.
-        item.visibility = cx.tcx.visibility(import_def_id).clean(cx);
+        item.visibility = clean_visibility(cx.tcx.visibility(import_def_id));
     }
     ret.push(item);
     Some(ret)
@@ -217,7 +218,7 @@ pub(crate) fn build_external_trait(cx: &mut DocContext<'_>, did: DefId) -> clean
     clean::Trait { def_id: did, generics, items: trait_items, bounds: supertrait_bounds }
 }
 
-fn build_external_function<'tcx>(cx: &mut DocContext<'tcx>, did: DefId) -> clean::Function {
+fn build_external_function<'tcx>(cx: &mut DocContext<'tcx>, did: DefId) -> Box<clean::Function> {
     let sig = cx.tcx.fn_sig(did);
 
     let predicates = cx.tcx.predicates_of(did);
@@ -227,7 +228,7 @@ fn build_external_function<'tcx>(cx: &mut DocContext<'tcx>, did: DefId) -> clean
         let decl = clean_fn_decl_from_did_and_sig(cx, Some(did), sig);
         (generics, decl)
     });
-    clean::Function { decl, generics }
+    Box::new(clean::Function { decl, generics })
 }
 
 fn build_enum(cx: &mut DocContext<'_>, did: DefId) -> clean::Enum {
@@ -259,15 +260,15 @@ fn build_union(cx: &mut DocContext<'_>, did: DefId) -> clean::Union {
     clean::Union { generics, fields }
 }
 
-fn build_type_alias(cx: &mut DocContext<'_>, did: DefId) -> clean::Typedef {
+fn build_type_alias(cx: &mut DocContext<'_>, did: DefId) -> Box<clean::Typedef> {
     let predicates = cx.tcx.explicit_predicates_of(did);
     let type_ = clean_middle_ty(cx.tcx.type_of(did), cx, Some(did));
 
-    clean::Typedef {
+    Box::new(clean::Typedef {
         type_,
         generics: clean_ty_generics(cx, cx.tcx.generics_of(did), predicates),
         item_type: None,
-    }
+    })
 }
 
 /// Builds all inherent implementations of an ADT (struct/union/enum) or Trait item/path/reexport.
@@ -492,7 +493,7 @@ pub(crate) fn build_impl(
     ret.push(clean::Item::from_def_id_and_attrs_and_parts(
         did,
         None,
-        clean::ImplItem(clean::Impl {
+        clean::ImplItem(Box::new(clean::Impl {
             unsafety: hir::Unsafety::Normal,
             generics,
             trait_,
@@ -504,7 +505,7 @@ pub(crate) fn build_impl(
             } else {
                 ImplKind::Normal
             },
-        }),
+        })),
         Box::new(merged_attrs),
         cx,
         cfg,
@@ -537,7 +538,7 @@ fn build_module(
                     attrs: Box::new(clean::Attributes::default()),
                     item_id: ItemId::Primitive(prim_ty, did.krate),
                     visibility: clean::Public,
-                    kind: box clean::ImportItem(clean::Import::new_simple(
+                    kind: Box::new(clean::ImportItem(clean::Import::new_simple(
                         item.ident.name,
                         clean::ImportSource {
                             path: clean::Path {
@@ -553,7 +554,7 @@ fn build_module(
                             did: None,
                         },
                         true,
-                    )),
+                    ))),
                     cfg: None,
                 });
             } else if let Some(i) = try_inline(cx, did, None, res, item.ident.name, None, visited) {
@@ -599,7 +600,7 @@ fn build_macro(
     match CStore::from_tcx(cx.tcx).load_macro_untracked(def_id, cx.sess()) {
         LoadedMacro::MacroDef(item_def, _) => {
             if let ast::ItemKind::MacroDef(ref def) = item_def.kind {
-                let vis = cx.tcx.visibility(import_def_id.unwrap_or(def_id)).clean(cx);
+                let vis = clean_visibility(cx.tcx.visibility(import_def_id.unwrap_or(def_id)));
                 clean::MacroItem(clean::Macro {
                     source: utils::display_macro_source(cx, name, def, def_id, vis),
                 })

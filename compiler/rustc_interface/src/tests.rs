@@ -1,3 +1,4 @@
+#![cfg_attr(not(bootstrap), allow(rustc::bad_opt_access))]
 use crate::interface::parse_cfgspecs;
 
 use rustc_data_structures::fx::FxHashSet;
@@ -10,7 +11,7 @@ use rustc_session::config::{
 };
 use rustc_session::config::{
     BranchProtection, Externs, OomStrategy, OutputType, OutputTypes, PAuthKey, PacRet,
-    SymbolManglingVersion, WasiExecModel,
+    ProcMacroExecutionStrategy, SymbolManglingVersion, WasiExecModel,
 };
 use rustc_session::config::{CFGuard, ExternEntry, LinkerPluginLto, LtoCli, SwitchWithOptPath};
 use rustc_session::lint::Level;
@@ -669,6 +670,7 @@ fn test_unstable_options_tracking_hash() {
     untracked!(ls, true);
     untracked!(macro_backtrace, true);
     untracked!(meta_stats, true);
+    untracked!(mir_pretty_relative_line_numbers, true);
     untracked!(nll_facts, true);
     untracked!(no_analysis, true);
     untracked!(no_interleave_lints, true);
@@ -683,6 +685,7 @@ fn test_unstable_options_tracking_hash() {
     untracked!(print_mono_items, Some(String::from("abc")));
     untracked!(print_type_sizes, true);
     untracked!(proc_macro_backtrace, true);
+    untracked!(proc_macro_execution_strategy, ProcMacroExecutionStrategy::CrossThread);
     untracked!(query_dep_graph, true);
     untracked!(save_analysis, true);
     untracked!(self_profile, SwitchWithOptPath::Enabled(None));

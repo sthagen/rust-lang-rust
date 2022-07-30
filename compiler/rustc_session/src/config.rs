@@ -948,6 +948,8 @@ fn default_configuration(sess: &Session) -> CrateConfig {
     if sess.opts.debug_assertions {
         ret.insert((sym::debug_assertions, None));
     }
+    // JUSTIFICATION: before wrapper fn is available
+    #[cfg_attr(not(bootstrap), allow(rustc::bad_opt_access))]
     if sess.opts.crate_types.contains(&CrateType::ProcMacro) {
         ret.insert((sym::proc_macro, None));
     }
@@ -1942,9 +1944,22 @@ fn parse_native_lib_kind(
         "static" => NativeLibKind::Static { bundle: None, whole_archive: None },
         "dylib" => NativeLibKind::Dylib { as_needed: None },
         "framework" => NativeLibKind::Framework { as_needed: None },
+        "link-arg" => {
+            if !nightly_options::is_unstable_enabled(matches) {
+                let why = if nightly_options::match_is_nightly_build(matches) {
+                    " and only accepted on the nightly compiler"
+                } else {
+                    ", the `-Z unstable-options` flag must also be passed to use it"
+                };
+                early_error(error_format, &format!("library kind `link-arg` is unstable{why}"))
+            }
+            NativeLibKind::LinkArg
+        }
         _ => early_error(
             error_format,
-            &format!("unknown library kind `{kind}`, expected one of: static, dylib, framework"),
+            &format!(
+                "unknown library kind `{kind}`, expected one of: static, dylib, framework, link-arg"
+            ),
         ),
     };
     match modifiers {
@@ -2043,7 +2058,7 @@ fn parse_libs(matches: &getopts::Matches, error_format: ErrorOutputType) -> Vec<
         .into_iter()
         .map(|s| {
             // Parse string of the form "[KIND[:MODIFIERS]=]lib[:new_name]",
-            // where KIND is one of "dylib", "framework", "static" and
+            // where KIND is one of "dylib", "framework", "static", "link-arg" and
             // where MODIFIERS are  a comma separated list of supported modifiers
             // (bundle, verbatim, whole-archive, as-needed). Each modifier is prefixed
             // with either + or - to indicate whether it is enabled or disabled.
@@ -2196,6 +2211,8 @@ fn parse_remap_path_prefix(
     mapping
 }
 
+// JUSTIFICATION: before wrapper fn is available
+#[cfg_attr(not(bootstrap), allow(rustc::bad_opt_access))]
 pub fn build_session_options(matches: &getopts::Matches) -> Options {
     let color = parse_color(matches);
 
@@ -2954,4 +2971,14 @@ impl OomStrategy {
             OomStrategy::Abort => 0,
         }
     }
+}
+
+/// How to run proc-macro code when building this crate
+#[derive(Clone, Copy, PartialEq, Hash, Debug)]
+pub enum ProcMacroExecutionStrategy {
+    /// Run the proc-macro code on the same thread as the server.
+    SameThread,
+
+    /// Run the proc-macro code on a different thread.
+    CrossThread,
 }
