@@ -744,10 +744,7 @@ impl<'tcx> TypeFolder<'tcx> for BoundVarReplacer<'_, 'tcx> {
             }
             ty::ConstKind::Bound(debruijn, bound_const) if debruijn >= self.current_index => {
                 let universe = self.universe_for(debruijn);
-                let p = ty::PlaceholderConst {
-                    universe,
-                    name: ty::BoundConst { var: bound_const, ty: ct.ty() },
-                };
+                let p = ty::PlaceholderConst { universe, name: bound_const };
                 self.mapped_consts.insert(p, bound_const);
                 self.infcx
                     .tcx
@@ -1988,7 +1985,7 @@ fn confirm_impl_candidate<'cx, 'tcx>(
         return Progress { term: tcx.ty_error().into(), obligations: nested };
     };
 
-    if !assoc_ty.item.defaultness.has_value() {
+    if !assoc_ty.item.defaultness(tcx).has_value() {
         // This means that the impl is missing a definition for the
         // associated type. This error will be reported by the type
         // checker method `check_impl_items_against_trait`, so here we
@@ -2089,7 +2086,11 @@ fn assoc_def(
         return Ok(specialization_graph::LeafDef {
             item: *item,
             defining_node: impl_node,
-            finalizing_node: if item.defaultness.is_default() { None } else { Some(impl_node) },
+            finalizing_node: if item.defaultness(tcx).is_default() {
+                None
+            } else {
+                Some(impl_node)
+            },
         });
     }
 
