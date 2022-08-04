@@ -51,19 +51,24 @@ pub(crate) trait Clean<'tcx, T> {
 impl<'tcx> Clean<'tcx, Item> for DocModule<'tcx> {
     fn clean(&self, cx: &mut DocContext<'tcx>) -> Item {
         let mut items: Vec<Item> = vec![];
-        items.extend(
-            self.foreigns
-                .iter()
-                .map(|(item, renamed)| clean_maybe_renamed_foreign_item(cx, item, *renamed)),
-        );
-        items.extend(self.mods.iter().map(|x| x.clean(cx)));
+        let mut inserted = FxHashSet::default();
+        items.extend(self.foreigns.iter().map(|(item, renamed)| {
+            let item = clean_maybe_renamed_foreign_item(cx, item, *renamed);
+            if let Some(name) = item.name {
+                inserted.insert((item.type_(), name));
+            }
+            item
+        }));
+        items.extend(self.mods.iter().map(|x| {
+            inserted.insert((ItemType::Module, x.name));
+            x.clean(cx)
+        }));
 
         // Split up imports from all other items.
         //
         // This covers the case where somebody does an import which should pull in an item,
         // but there's already an item with the same namespace and same name. Rust gives
         // priority to the not-imported one, so we should, too.
-        let mut inserted = FxHashSet::default();
         items.extend(self.items.iter().flat_map(|(item, renamed)| {
             // First, lower everything other than imports.
             if matches!(item.kind, hir::ItemKind::Use(..)) {
@@ -121,16 +126,10 @@ impl<'tcx> Clean<'tcx, Item> for DocModule<'tcx> {
     }
 }
 
-impl<'tcx> Clean<'tcx, Attributes> for [ast::Attribute] {
-    fn clean(&self, _cx: &mut DocContext<'_>) -> Attributes {
-        Attributes::from_ast(self, None)
-    }
-}
-
 impl<'tcx> Clean<'tcx, Option<GenericBound>> for hir::GenericBound<'tcx> {
     fn clean(&self, cx: &mut DocContext<'tcx>) -> Option<GenericBound> {
         Some(match *self {
-            hir::GenericBound::Outlives(lt) => GenericBound::Outlives(lt.clean(cx)),
+            hir::GenericBound::Outlives(lt) => GenericBound::Outlives(clean_lifetime(lt, cx)),
             hir::GenericBound::LangItemTrait(lang_item, span, _, generic_args) => {
                 let def_id = cx.tcx.require_lang_item(lang_item, Some(span));
 
@@ -163,7 +162,7 @@ impl<'tcx> Clean<'tcx, Option<GenericBound>> for hir::GenericBound<'tcx> {
     }
 }
 
-fn clean_trait_ref_with_bindings<'tcx>(
+pub(crate) fn clean_trait_ref_with_bindings<'tcx>(
     cx: &mut DocContext<'tcx>,
     trait_ref: ty::TraitRef<'tcx>,
     bindings: &[TypeBinding],
@@ -178,12 +177,6 @@ fn clean_trait_ref_with_bindings<'tcx>(
     debug!("ty::TraitRef\n  subst: {:?}\n", trait_ref.substs);
 
     path
-}
-
-impl<'tcx> Clean<'tcx, Path> for ty::TraitRef<'tcx> {
-    fn clean(&self, cx: &mut DocContext<'tcx>) -> Path {
-        clean_trait_ref_with_bindings(cx, *self, &[])
-    }
 }
 
 fn clean_poly_trait_ref_with_bindings<'tcx>(
@@ -220,21 +213,19 @@ impl<'tcx> Clean<'tcx, GenericBound> for ty::PolyTraitRef<'tcx> {
     }
 }
 
-impl<'tcx> Clean<'tcx, Lifetime> for hir::Lifetime {
-    fn clean(&self, cx: &mut DocContext<'tcx>) -> Lifetime {
-        let def = cx.tcx.named_region(self.hir_id);
-        if let Some(
-            rl::Region::EarlyBound(_, node_id)
-            | rl::Region::LateBound(_, _, node_id)
-            | rl::Region::Free(_, node_id),
-        ) = def
-        {
-            if let Some(lt) = cx.substs.get(&node_id).and_then(|p| p.as_lt()).cloned() {
-                return lt;
-            }
+fn clean_lifetime<'tcx>(lifetime: hir::Lifetime, cx: &mut DocContext<'tcx>) -> Lifetime {
+    let def = cx.tcx.named_region(lifetime.hir_id);
+    if let Some(
+        rl::Region::EarlyBound(_, node_id)
+        | rl::Region::LateBound(_, _, node_id)
+        | rl::Region::Free(_, node_id),
+    ) = def
+    {
+        if let Some(lt) = cx.substs.get(&node_id).and_then(|p| p.as_lt()).cloned() {
+            return lt;
         }
-        Lifetime(self.name.ident().name)
     }
+    Lifetime(lifetime.name.ident().name)
 }
 
 pub(crate) fn clean_const<'tcx>(constant: &hir::ConstArg, cx: &mut DocContext<'tcx>) -> Constant {
@@ -256,29 +247,27 @@ pub(crate) fn clean_middle_const<'tcx>(
     }
 }
 
-impl<'tcx> Clean<'tcx, Option<Lifetime>> for ty::Region<'tcx> {
-    fn clean(&self, _cx: &mut DocContext<'_>) -> Option<Lifetime> {
-        match **self {
-            ty::ReStatic => Some(Lifetime::statik()),
-            ty::ReLateBound(_, ty::BoundRegion { kind: ty::BrNamed(_, name), .. }) => {
-                if name != kw::UnderscoreLifetime { Some(Lifetime(name)) } else { None }
-            }
-            ty::ReEarlyBound(ref data) => {
-                if data.name != kw::UnderscoreLifetime {
-                    Some(Lifetime(data.name))
-                } else {
-                    None
-                }
-            }
-            ty::ReLateBound(..)
-            | ty::ReFree(..)
-            | ty::ReVar(..)
-            | ty::RePlaceholder(..)
-            | ty::ReEmpty(_)
-            | ty::ReErased => {
-                debug!("cannot clean region {:?}", self);
+pub(crate) fn clean_middle_region<'tcx>(region: ty::Region<'tcx>) -> Option<Lifetime> {
+    match *region {
+        ty::ReStatic => Some(Lifetime::statik()),
+        ty::ReLateBound(_, ty::BoundRegion { kind: ty::BrNamed(_, name), .. }) => {
+            if name != kw::UnderscoreLifetime { Some(Lifetime(name)) } else { None }
+        }
+        ty::ReEarlyBound(ref data) => {
+            if data.name != kw::UnderscoreLifetime {
+                Some(Lifetime(data.name))
+            } else {
                 None
             }
+        }
+        ty::ReLateBound(..)
+        | ty::ReFree(..)
+        | ty::ReVar(..)
+        | ty::RePlaceholder(..)
+        | ty::ReEmpty(_)
+        | ty::ReErased => {
+            debug!("cannot clean region {:?}", region);
+            None
         }
     }
 }
@@ -311,7 +300,7 @@ impl<'tcx> Clean<'tcx, Option<WherePredicate>> for hir::WherePredicate<'tcx> {
             }
 
             hir::WherePredicate::RegionPredicate(ref wrp) => WherePredicate::RegionPredicate {
-                lifetime: wrp.lifetime.clean(cx),
+                lifetime: clean_lifetime(wrp.lifetime, cx),
                 bounds: wrp.bounds.iter().filter_map(|x| x.clean(cx)).collect(),
             },
 
@@ -330,7 +319,7 @@ impl<'tcx> Clean<'tcx, Option<WherePredicate>> for ty::Predicate<'tcx> {
             ty::PredicateKind::Trait(pred) => {
                 clean_poly_trait_predicate(bound_predicate.rebind(pred), cx)
             }
-            ty::PredicateKind::RegionOutlives(pred) => clean_region_outlives_predicate(pred, cx),
+            ty::PredicateKind::RegionOutlives(pred) => clean_region_outlives_predicate(pred),
             ty::PredicateKind::TypeOutlives(pred) => clean_type_outlives_predicate(pred, cx),
             ty::PredicateKind::Projection(pred) => Some(clean_projection_predicate(pred, cx)),
             ty::PredicateKind::ConstEvaluatable(..) => None,
@@ -367,7 +356,6 @@ fn clean_poly_trait_predicate<'tcx>(
 
 fn clean_region_outlives_predicate<'tcx>(
     pred: ty::OutlivesPredicate<ty::Region<'tcx>, ty::Region<'tcx>>,
-    cx: &mut DocContext<'tcx>,
 ) -> Option<WherePredicate> {
     let ty::OutlivesPredicate(a, b) = pred;
 
@@ -376,8 +364,10 @@ fn clean_region_outlives_predicate<'tcx>(
     }
 
     Some(WherePredicate::RegionPredicate {
-        lifetime: a.clean(cx).expect("failed to clean lifetime"),
-        bounds: vec![GenericBound::Outlives(b.clean(cx).expect("failed to clean bounds"))],
+        lifetime: clean_middle_region(a).expect("failed to clean lifetime"),
+        bounds: vec![GenericBound::Outlives(
+            clean_middle_region(b).expect("failed to clean bounds"),
+        )],
     })
 }
 
@@ -393,7 +383,9 @@ fn clean_type_outlives_predicate<'tcx>(
 
     Some(WherePredicate::BoundPredicate {
         ty: clean_middle_ty(ty, cx, None),
-        bounds: vec![GenericBound::Outlives(lt.clean(cx).expect("failed to clean lifetimes"))],
+        bounds: vec![GenericBound::Outlives(
+            clean_middle_region(lt).expect("failed to clean lifetimes"),
+        )],
         bound_params: Vec::new(),
     })
 }
@@ -432,7 +424,7 @@ fn clean_projection<'tcx>(
     def_id: Option<DefId>,
 ) -> Type {
     let lifted = ty.lift_to_tcx(cx.tcx).unwrap();
-    let trait_ = lifted.trait_ref(cx.tcx).clean(cx);
+    let trait_ = clean_trait_ref_with_bindings(cx, lifted.trait_ref(cx.tcx), &[]);
     let self_type = clean_middle_ty(ty.self_ty(), cx, None);
     let self_def_id = if let Some(def_id) = def_id {
         cx.tcx.opt_parent(def_id).or(Some(def_id))
@@ -524,7 +516,7 @@ fn clean_generic_param<'tcx>(
                     .filter(|bp| !bp.in_where_clause)
                     .flat_map(|bp| bp.bounds)
                     .map(|bound| match bound {
-                        hir::GenericBound::Outlives(lt) => lt.clean(cx),
+                        hir::GenericBound::Outlives(lt) => clean_lifetime(*lt, cx),
                         _ => panic!(),
                     })
                     .collect()
@@ -1008,15 +1000,6 @@ impl<'tcx> Clean<'tcx, FnRetTy> for hir::FnRetTy<'tcx> {
     }
 }
 
-impl<'tcx> Clean<'tcx, bool> for hir::IsAuto {
-    fn clean(&self, _: &mut DocContext<'tcx>) -> bool {
-        match *self {
-            hir::IsAuto::Yes => true,
-            hir::IsAuto::No => false,
-        }
-    }
-}
-
 impl<'tcx> Clean<'tcx, Path> for hir::TraitRef<'tcx> {
     fn clean(&self, cx: &mut DocContext<'tcx>) -> Path {
         let path = clean_path(self.path, cx);
@@ -1431,7 +1414,8 @@ fn maybe_expand_private_type_alias<'tcx>(
                 });
                 if let Some(lt) = lifetime.cloned() {
                     let lt_def_id = cx.tcx.hir().local_def_id(param.hir_id);
-                    let cleaned = if !lt.is_elided() { lt.clean(cx) } else { Lifetime::elided() };
+                    let cleaned =
+                        if !lt.is_elided() { clean_lifetime(lt, cx) } else { Lifetime::elided() };
                     substs.insert(lt_def_id.to_def_id(), SubstParam::Lifetime(cleaned));
                 }
                 indices.lifetimes += 1;
@@ -1503,7 +1487,7 @@ pub(crate) fn clean_ty<'tcx>(ty: &hir::Ty<'tcx>, cx: &mut DocContext<'tcx>) -> T
             // there's no case where it could cause the function to fail to compile.
             let elided =
                 l.is_elided() || matches!(l.name, LifetimeName::Param(_, ParamName::Fresh));
-            let lifetime = if elided { None } else { Some(l.clean(cx)) };
+            let lifetime = if elided { None } else { Some(clean_lifetime(*l, cx)) };
             BorrowedRef { lifetime, mutability: m.mutbl, type_: Box::new(clean_ty(m.ty, cx)) }
         }
         TyKind::Slice(ty) => Slice(Box::new(clean_ty(ty, cx))),
@@ -1539,7 +1523,8 @@ pub(crate) fn clean_ty<'tcx>(ty: &hir::Ty<'tcx>, cx: &mut DocContext<'tcx>) -> T
         TyKind::Path(_) => clean_qpath(ty, cx),
         TyKind::TraitObject(bounds, ref lifetime, _) => {
             let bounds = bounds.iter().map(|bound| bound.clean(cx)).collect();
-            let lifetime = if !lifetime.is_elided() { Some(lifetime.clean(cx)) } else { None };
+            let lifetime =
+                if !lifetime.is_elided() { Some(clean_lifetime(*lifetime, cx)) } else { None };
             DynTrait(bounds, lifetime)
         }
         TyKind::BareFn(barefn) => BareFunction(Box::new(barefn.clean(cx))),
@@ -1604,7 +1589,7 @@ pub(crate) fn clean_middle_ty<'tcx>(
         }
         ty::RawPtr(mt) => RawPointer(mt.mutbl, Box::new(clean_middle_ty(mt.ty, cx, None))),
         ty::Ref(r, ty, mutbl) => BorrowedRef {
-            lifetime: r.clean(cx),
+            lifetime: clean_middle_region(r),
             mutability: mutbl,
             type_: Box::new(clean_middle_ty(ty, cx, None)),
         },
@@ -1651,7 +1636,7 @@ pub(crate) fn clean_middle_ty<'tcx>(
 
             inline::record_extern_fqn(cx, did, ItemType::Trait);
 
-            let lifetime = reg.clean(cx);
+            let lifetime = clean_middle_region(*reg);
             let mut bounds = vec![];
 
             for did in dids {
@@ -1717,7 +1702,7 @@ pub(crate) fn clean_middle_ty<'tcx>(
                     let trait_ref = match bound_predicate.skip_binder() {
                         ty::PredicateKind::Trait(tr) => bound_predicate.rebind(tr.trait_ref),
                         ty::PredicateKind::TypeOutlives(ty::OutlivesPredicate(_ty, reg)) => {
-                            if let Some(r) = reg.clean(cx) {
+                            if let Some(r) = clean_middle_region(reg) {
                                 regions.push(GenericBound::Outlives(r));
                             }
                             return None;
@@ -1875,7 +1860,7 @@ impl<'tcx> Clean<'tcx, GenericArgs> for hir::GenericArgs<'tcx> {
                 .iter()
                 .map(|arg| match arg {
                     hir::GenericArg::Lifetime(lt) if !lt.is_elided() => {
-                        GenericArg::Lifetime(lt.clean(cx))
+                        GenericArg::Lifetime(clean_lifetime(*lt, cx))
                     }
                     hir::GenericArg::Lifetime(_) => GenericArg::Lifetime(Lifetime::elided()),
                     hir::GenericArg::Type(ty) => GenericArg::Type(clean_ty(ty, cx)),
@@ -2096,7 +2081,7 @@ fn clean_extern_crate<'tcx>(
     // FIXME: using `from_def_id_and_kind` breaks `rustdoc/masked` for some reason
     vec![Item {
         name: Some(name),
-        attrs: Box::new(attrs.clean(cx)),
+        attrs: Box::new(Attributes::from_ast(attrs)),
         item_id: crate_def_id.into(),
         visibility: clean_visibility(ty_vis),
         kind: Box::new(ExternCrateItem { src: orig_name }),

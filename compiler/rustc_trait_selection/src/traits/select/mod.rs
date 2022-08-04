@@ -1630,6 +1630,9 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 );
             }
 
+            // FIXME(@jswrenn): this should probably be more sophisticated
+            (TransmutabilityCandidate, _) | (_, TransmutabilityCandidate) => false,
+
             // (*)
             (
                 BuiltinCandidate { has_nested: false }
@@ -2081,30 +2084,28 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             .flat_map(|ty| {
                 let ty: ty::Binder<'tcx, Ty<'tcx>> = types.rebind(*ty); // <----/
 
-                self.infcx.commit_unconditionally(|_| {
-                    let placeholder_ty = self.infcx.replace_bound_vars_with_placeholders(ty);
-                    let Normalized { value: normalized_ty, mut obligations } =
-                        ensure_sufficient_stack(|| {
-                            project::normalize_with_depth(
-                                self,
-                                param_env,
-                                cause.clone(),
-                                recursion_depth,
-                                placeholder_ty,
-                            )
-                        });
-                    let placeholder_obligation = predicate_for_trait_def(
-                        self.tcx(),
-                        param_env,
-                        cause.clone(),
-                        trait_def_id,
-                        recursion_depth,
-                        normalized_ty,
-                        &[],
-                    );
-                    obligations.push(placeholder_obligation);
-                    obligations
-                })
+                let placeholder_ty = self.infcx.replace_bound_vars_with_placeholders(ty);
+                let Normalized { value: normalized_ty, mut obligations } =
+                    ensure_sufficient_stack(|| {
+                        project::normalize_with_depth(
+                            self,
+                            param_env,
+                            cause.clone(),
+                            recursion_depth,
+                            placeholder_ty,
+                        )
+                    });
+                let placeholder_obligation = predicate_for_trait_def(
+                    self.tcx(),
+                    param_env,
+                    cause.clone(),
+                    trait_def_id,
+                    recursion_depth,
+                    normalized_ty,
+                    &[],
+                );
+                obligations.push(placeholder_obligation);
+                obligations
             })
             .collect()
     }
