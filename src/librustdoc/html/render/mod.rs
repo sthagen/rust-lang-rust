@@ -1550,6 +1550,15 @@ fn render_impl(
         rendering_params: ImplRenderingParameters,
     ) {
         for trait_item in &t.items {
+            // Skip over any default trait items that are impossible to call
+            // (e.g. if it has a `Self: Sized` bound on an unsized type).
+            if let Some(impl_def_id) = parent.item_id.as_def_id()
+                && let Some(trait_item_def_id) = trait_item.item_id.as_def_id()
+                && cx.tcx().is_impossible_method((impl_def_id, trait_item_def_id))
+            {
+                continue;
+            }
+
             let n = trait_item.name;
             if i.items.iter().any(|m| m.name == n) {
                 continue;
@@ -2668,7 +2677,7 @@ fn render_call_locations(w: &mut Buffer, cx: &mut Context<'_>, item: &clean::Ite
         let contents = match fs::read_to_string(&path) {
             Ok(contents) => contents,
             Err(err) => {
-                let span = item.span(tcx).inner();
+                let span = item.span(tcx).map_or(rustc_span::DUMMY_SP, |span| span.inner());
                 tcx.sess
                     .span_err(span, &format!("failed to read file {}: {}", path.display(), err));
                 return false;
@@ -2764,11 +2773,10 @@ fn render_call_locations(w: &mut Buffer, cx: &mut Context<'_>, item: &clean::Ite
         sources::print_src(
             w,
             contents_subset,
-            call_data.edition,
             file_span,
             cx,
             &root_path,
-            Some(highlight::DecorationInfo(decoration_info)),
+            highlight::DecorationInfo(decoration_info),
             sources::SourceContext::Embedded { offset: line_min },
         );
         write!(w, "</div></div>");

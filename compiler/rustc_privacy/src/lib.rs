@@ -5,8 +5,8 @@
 #![feature(try_blocks)]
 #![recursion_limit = "256"]
 #![allow(rustc::potential_query_instability)]
-#![cfg_attr(not(bootstrap), deny(rustc::untranslatable_diagnostic))]
-#![cfg_attr(not(bootstrap), deny(rustc::diagnostic_outside_of_impl))]
+#![deny(rustc::untranslatable_diagnostic)]
+#![deny(rustc::diagnostic_outside_of_impl)]
 
 mod errors;
 
@@ -1625,15 +1625,10 @@ impl<'a, 'tcx> Visitor<'tcx> for ObsoleteVisiblePrivateTypesVisitor<'a, 'tcx> {
         intravisit::walk_ty(self, t)
     }
 
-    fn visit_variant(
-        &mut self,
-        v: &'tcx hir::Variant<'tcx>,
-        g: &'tcx hir::Generics<'tcx>,
-        item_id: hir::HirId,
-    ) {
+    fn visit_variant(&mut self, v: &'tcx hir::Variant<'tcx>) {
         if self.access_levels.is_reachable(self.tcx.hir().local_def_id(v.id)) {
             self.in_variant = true;
-            intravisit::walk_variant(self, v, g, item_id);
+            intravisit::walk_variant(self, v);
             self.in_variant = false;
         }
     }

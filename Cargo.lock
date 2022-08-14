@@ -333,7 +333,6 @@ dependencies = [
  "cargo-util",
  "clap",
  "crates-io",
- "crossbeam-utils",
  "curl",
  "curl-sys",
  "env_logger 0.9.0",
@@ -357,7 +356,6 @@ dependencies = [
  "libgit2-sys",
  "log",
  "memchr",
- "num_cpus",
  "opener",
  "openssl",
  "os_info",
@@ -417,6 +415,7 @@ dependencies = [
 name = "cargo-miri"
 version = "0.1.0"
 dependencies = [
+ "cargo_metadata 0.15.0",
  "directories",
  "rustc-workspace-hack",
  "rustc_version",
@@ -465,6 +464,7 @@ dependencies = [
  "termcolor",
  "toml_edit",
  "url 2.2.2",
+ "winapi",
 ]
 
 [[package]]
@@ -659,7 +659,7 @@ dependencies = [
 
 [[package]]
 name = "clippy"
-version = "0.1.64"
+version = "0.1.65"
 dependencies = [
  "clippy_lints",
  "clippy_utils",
@@ -702,7 +702,7 @@ dependencies = [
 
 [[package]]
 name = "clippy_lints"
-version = "0.1.64"
+version = "0.1.65"
 dependencies = [
  "cargo_metadata 0.14.0",
  "clippy_utils",
@@ -724,7 +724,7 @@ dependencies = [
 
 [[package]]
 name = "clippy_utils"
-version = "0.1.64"
+version = "0.1.65"
 dependencies = [
  "arrayvec",
  "if_chain",
@@ -799,9 +799,9 @@ dependencies = [
 
 [[package]]
 name = "compiler_builtins"
-version = "0.1.78"
+version = "0.1.79"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "413b6b13f725a46cdec40364e0c1d564a22cf0aaac5f1e267a129d956478a6b4"
+checksum = "4f873ce2bd3550b0b565f878b3d04ea8253f4259dc3d20223af2e1ba86f5ecca"
 dependencies = [
  "cc",
  "rustc-std-workspace-core",
@@ -816,6 +816,7 @@ dependencies = [
  "getopts",
  "glob",
  "lazy_static",
+ "lazycell",
  "libc",
  "miow",
  "regex",
@@ -2139,9 +2140,9 @@ checksum = "830d08ce1d1d941e6b30645f1a0eb5643013d835ce3779a5fc208261dbe10f55"
 
 [[package]]
 name = "libc"
-version = "0.2.126"
+version = "0.2.129"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "349d5a591cd28b49e1d1037471617a32ddcda5731b99419008085f72d5a53836"
+checksum = "64de3cc433455c14174d42e554d4027ee631c4d046d43e3ecc6efc4636cdc7a7"
 dependencies = [
  "rustc-std-workspace-core",
 ]
@@ -2655,9 +2656,9 @@ checksum = "dd20eec3dbe4376829cb7d80ae6ac45e0a766831dca50202ff2d40db46a8a024"
 
 [[package]]
 name = "os_info"
-version = "3.4.0"
+version = "3.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0eca3ecae1481e12c3d9379ec541b238a16f0b75c9a409942daa8ec20dbfdb62"
+checksum = "5209b2162b2c140df493a93689e04f8deab3a67634f5bc7a553c0a98e5b8d399"
 dependencies = [
  "log",
  "serde",
@@ -4626,6 +4627,7 @@ dependencies = [
  "rustc_attr",
  "rustc_data_structures",
  "rustc_errors",
+ "rustc_feature",
  "rustc_graphviz",
  "rustc_hir",
  "rustc_hir_pretty",

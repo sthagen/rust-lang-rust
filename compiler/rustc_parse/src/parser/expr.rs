@@ -850,7 +850,7 @@ impl<'a> Parser<'a> {
                     ExprKind::Index(_, _) => "indexing",
                     ExprKind::Try(_) => "`?`",
                     ExprKind::Field(_, _) => "a field access",
-                    ExprKind::MethodCall(_, _, _) => "a method call",
+                    ExprKind::MethodCall(_, _, _, _) => "a method call",
                     ExprKind::Call(_, _) => "a function call",
                     ExprKind::Await(_) => "`.await`",
                     ExprKind::Err => return Ok(with_postfix),
@@ -859,7 +859,7 @@ impl<'a> Parser<'a> {
             );
             let mut err = self.struct_span_err(span, &msg);
 
-            let suggest_parens = |err: &mut DiagnosticBuilder<'_, _>| {
+            let suggest_parens = |err: &mut Diagnostic| {
                 let suggestions = vec![
                     (span.shrink_to_lo(), "(".to_string()),
                     (span.shrink_to_hi(), ")".to_string()),
@@ -1258,8 +1258,11 @@ impl<'a> Parser<'a> {
 
     /// Parse an indexing expression `expr[...]`.
     fn parse_index_expr(&mut self, lo: Span, base: P<Expr>) -> PResult<'a, P<Expr>> {
+        let prev_span = self.prev_token.span;
+        let open_delim_span = self.token.span;
         self.bump(); // `[`
         let index = self.parse_expr()?;
+        self.suggest_missing_semicolon_before_array(prev_span, open_delim_span)?;
         self.expect(&token::CloseDelim(Delimiter::Bracket))?;
         Ok(self.mk_expr(lo.to(self.prev_token.span), self.mk_index(base, index), AttrVec::new()))
     }
@@ -1277,12 +1280,14 @@ impl<'a> Parser<'a> {
 
         if self.check(&token::OpenDelim(Delimiter::Parenthesis)) {
             // Method call `expr.f()`
-            let mut args = self.parse_paren_expr_seq()?;
-            args.insert(0, self_arg);
-
+            let args = self.parse_paren_expr_seq()?;
             let fn_span = fn_span_lo.to(self.prev_token.span);
             let span = lo.to(self.prev_token.span);
-            Ok(self.mk_expr(span, ExprKind::MethodCall(segment, args, fn_span), AttrVec::new()))
+            Ok(self.mk_expr(
+                span,
+                ExprKind::MethodCall(segment, self_arg, args, fn_span),
+                AttrVec::new(),
+            ))
         } else {
             // Field access `expr.f`
             if let Some(args) = segment.args {
@@ -2056,6 +2061,45 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn suggest_missing_semicolon_before_array(
+        &self,
+        prev_span: Span,
+        open_delim_span: Span,
+    ) -> PResult<'a, ()> {
+        if self.token.kind == token::Comma {
+            let mut snapshot = self.create_snapshot_for_diagnostic();
+            snapshot.bump();
+            match snapshot.parse_seq_to_before_end(
+                &token::CloseDelim(Delimiter::Bracket),
+                SeqSep::trailing_allowed(token::Comma),
+                |p| p.parse_expr(),
+            ) {
+                Ok(_)
+                    // When the close delim is `)`, `token.kind` is expected to be `token::CloseDelim(Delimiter::Parenthesis)`,
+                    // but the actual `token.kind` is `token::CloseDelim(Delimiter::Bracket)`.
+                    // This is because the `token.kind` of the close delim is treated as the same as
+                    // that of the open delim in `TokenTreesReader::parse_token_tree`, even if the delimiters of them are different.
+                    // Therefore, `token.kind` should not be compared here.
+                    if snapshot
+                        .span_to_snippet(snapshot.token.span)
+                        .map_or(false, |snippet| snippet == "]") =>
+                {
+                    let mut err = self.struct_span_err(open_delim_span, "expected `;`, found `[`");
+                    err.span_suggestion_verbose(
+                        prev_span.shrink_to_hi(),
+                        "consider adding `;` here",
+                        ';',
+                        Applicability::MaybeIncorrect,
+                    );
+                    return Err(err);
+                }
+                Ok(_) => (),
+                Err(err) => err.cancel(),
+            }
+        }
+        Ok(())
+    }
+
     /// Parses a block or unsafe block.
     pub(super) fn parse_block_expr(
         &mut self,
@@ -2224,7 +2268,7 @@ impl<'a> Parser<'a> {
                     attrs: attrs.into(),
                     ty,
                     pat,
-                    span: lo.to(this.token.span),
+                    span: lo.to(this.prev_token.span),
                     id: DUMMY_NODE_ID,
                     is_placeholder: false,
                 },

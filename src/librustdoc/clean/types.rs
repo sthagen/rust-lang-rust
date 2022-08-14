@@ -415,29 +415,28 @@ impl Item {
             .unwrap_or(false)
     }
 
-    pub(crate) fn span(&self, tcx: TyCtxt<'_>) -> Span {
+    pub(crate) fn span(&self, tcx: TyCtxt<'_>) -> Option<Span> {
         let kind = match &*self.kind {
             ItemKind::StrippedItem(k) => k,
             _ => &*self.kind,
         };
         match kind {
-            ItemKind::ModuleItem(Module { span, .. }) => *span,
-            ItemKind::ImplItem(box Impl { kind: ImplKind::Auto, .. }) => Span::dummy(),
+            ItemKind::ModuleItem(Module { span, .. }) => Some(*span),
+            ItemKind::ImplItem(box Impl { kind: ImplKind::Auto, .. }) => None,
             ItemKind::ImplItem(box Impl { kind: ImplKind::Blanket(_), .. }) => {
                 if let ItemId::Blanket { impl_id, .. } = self.item_id {
-                    rustc_span(impl_id, tcx)
+                    Some(rustc_span(impl_id, tcx))
                 } else {
                     panic!("blanket impl item has non-blanket ID")
                 }
             }
-            _ => {
-                self.item_id.as_def_id().map(|did| rustc_span(did, tcx)).unwrap_or_else(Span::dummy)
-            }
+            _ => self.item_id.as_def_id().map(|did| rustc_span(did, tcx)),
         }
     }
 
     pub(crate) fn attr_span(&self, tcx: TyCtxt<'_>) -> rustc_span::Span {
-        crate::passes::span_of_attrs(&self.attrs).unwrap_or_else(|| self.span(tcx).inner())
+        crate::passes::span_of_attrs(&self.attrs)
+            .unwrap_or_else(|| self.span(tcx).map_or(rustc_span::DUMMY_SP, |span| span.inner()))
     }
 
     /// Finds the `doc` attribute as a NameValue and returns the corresponding
@@ -2109,14 +2108,6 @@ impl Span {
         self.0
     }
 
-    pub(crate) fn dummy() -> Self {
-        Self(rustc_span::DUMMY_SP)
-    }
-
-    pub(crate) fn is_dummy(&self) -> bool {
-        self.0.is_dummy()
-    }
-
     pub(crate) fn filename(&self, sess: &Session) -> FileName {
         sess.source_map().span_to_filename(self.0)
     }
@@ -2495,14 +2486,15 @@ impl SubstParam {
 #[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
 mod size_asserts {
     use super::*;
+    use rustc_data_structures::static_assert_size;
     // These are in alphabetical order, which is easy to maintain.
-    rustc_data_structures::static_assert_size!(Crate, 72); // frequently moved by-value
-    rustc_data_structures::static_assert_size!(DocFragment, 32);
-    rustc_data_structures::static_assert_size!(GenericArg, 80);
-    rustc_data_structures::static_assert_size!(GenericArgs, 32);
-    rustc_data_structures::static_assert_size!(GenericParamDef, 56);
-    rustc_data_structures::static_assert_size!(Item, 56);
-    rustc_data_structures::static_assert_size!(ItemKind, 112);
-    rustc_data_structures::static_assert_size!(PathSegment, 40);
-    rustc_data_structures::static_assert_size!(Type, 72);
+    static_assert_size!(Crate, 72); // frequently moved by-value
+    static_assert_size!(DocFragment, 32);
+    static_assert_size!(GenericArg, 80);
+    static_assert_size!(GenericArgs, 32);
+    static_assert_size!(GenericParamDef, 56);
+    static_assert_size!(Item, 56);
+    static_assert_size!(ItemKind, 112);
+    static_assert_size!(PathSegment, 40);
+    static_assert_size!(Type, 72);
 }

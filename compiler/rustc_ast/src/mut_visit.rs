@@ -1302,10 +1302,11 @@ pub fn noop_visit_expr<T: MutVisitor>(
             vis.visit_expr(f);
             visit_exprs(args, vis);
         }
-        ExprKind::MethodCall(PathSegment { ident, id, args }, exprs, span) => {
+        ExprKind::MethodCall(PathSegment { ident, id, args }, receiver, exprs, span) => {
             vis.visit_ident(ident);
             vis.visit_id(id);
             visit_opt(args, |args| vis.visit_generic_args(args));
+            vis.visit_expr(receiver);
             visit_exprs(exprs, vis);
             vis.visit_span(span);
         }
@@ -1486,7 +1487,7 @@ pub fn noop_flat_map_stmt_kind<T: MutVisitor>(
 pub fn noop_visit_vis<T: MutVisitor>(visibility: &mut Visibility, vis: &mut T) {
     match &mut visibility.kind {
         VisibilityKind::Public | VisibilityKind::Inherited => {}
-        VisibilityKind::Restricted { path, id } => {
+        VisibilityKind::Restricted { path, id, shorthand: _ } => {
             vis.visit_path(path);
             vis.visit_id(id);
         }

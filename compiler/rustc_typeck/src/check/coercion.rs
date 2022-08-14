@@ -1479,6 +1479,10 @@ impl<'tcx, 'exprs, E: AsCoercionSite> CoerceMany<'tcx, 'exprs, E> {
                 }
             }
             Err(coercion_error) => {
+                // Mark that we've failed to coerce the types here to suppress
+                // any superfluous errors we might encounter while trying to
+                // emit or provide suggestions on how to fix the initial error.
+                fcx.set_tainted_by_errors();
                 let (expected, found) = if label_expression_as_expected {
                     // In the case where this is a "forced unit", like
                     // `break`, we want to call the `()` "expected"
@@ -1581,19 +1585,19 @@ impl<'tcx, 'exprs, E: AsCoercionSite> CoerceMany<'tcx, 'exprs, E> {
             }
         }
     }
-    fn note_unreachable_loop_return<'a>(
+    fn note_unreachable_loop_return(
         &self,
-        err: &mut DiagnosticBuilder<'a, ErrorGuaranteed>,
+        err: &mut Diagnostic,
         expr: &hir::Expr<'tcx>,
         ret_exprs: &Vec<&'tcx hir::Expr<'tcx>>,
     ) {
         let hir::ExprKind::Loop(_, _, _, loop_span) = expr.kind else { return;};
         let mut span: MultiSpan = vec![loop_span].into();
-        span.push_span_label(loop_span, "this might have zero elements to iterate on".to_string());
+        span.push_span_label(loop_span, "this might have zero elements to iterate on");
         for ret_expr in ret_exprs {
             span.push_span_label(
                 ret_expr.span,
-                "if the loop doesn't execute, this value would never get returned".to_string(),
+                "if the loop doesn't execute, this value would never get returned",
             );
         }
         err.span_note(

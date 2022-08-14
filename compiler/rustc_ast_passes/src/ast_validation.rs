@@ -13,9 +13,7 @@ use rustc_ast::walk_list;
 use rustc_ast::*;
 use rustc_ast_pretty::pprust::{self, State};
 use rustc_data_structures::fx::FxHashMap;
-use rustc_errors::{
-    error_code, pluralize, struct_span_err, Applicability, DiagnosticBuilder, ErrorGuaranteed,
-};
+use rustc_errors::{error_code, pluralize, struct_span_err, Applicability, Diagnostic};
 use rustc_parse::validate_attr;
 use rustc_session::lint::builtin::{
     DEPRECATED_WHERE_CLAUSE_LOCATION, MISSING_ABI, PATTERNS_IN_FNS_WITHOUT_BODY,
@@ -477,7 +475,7 @@ impl<'a> AstValidator<'a> {
         ctx: &str,
         msg: &str,
         sugg: &str,
-        help: impl FnOnce(&mut DiagnosticBuilder<'_, ErrorGuaranteed>),
+        help: impl FnOnce(&mut Diagnostic),
     ) {
         let source_map = self.session.source_map();
         let end = source_map.end_point(sp);
@@ -1196,7 +1194,7 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
                     let msg = "free function without a body";
                     let ext = sig.header.ext;
 
-                    let f = |e: &mut DiagnosticBuilder<'_, _>| {
+                    let f = |e: &mut Diagnostic| {
                         if let Extern::Implicit(start_span) | Extern::Explicit(_, start_span) = &ext
                         {
                             let start_suggestion = if let Extern::Explicit(abi, _) = ext {
@@ -1538,25 +1536,17 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
         visit::walk_param_bound(self, bound)
     }
 
-    fn visit_poly_trait_ref(&mut self, t: &'a PolyTraitRef, m: &'a TraitBoundModifier) {
+    fn visit_poly_trait_ref(&mut self, t: &'a PolyTraitRef) {
         self.check_late_bound_lifetime_defs(&t.bound_generic_params);
-        visit::walk_poly_trait_ref(self, t, m);
+        visit::walk_poly_trait_ref(self, t);
     }
 
     fn visit_variant_data(&mut self, s: &'a VariantData) {
         self.with_banned_assoc_ty_bound(|this| visit::walk_struct_def(this, s))
     }
 
-    fn visit_enum_def(
-        &mut self,
-        enum_definition: &'a EnumDef,
-        generics: &'a Generics,
-        item_id: NodeId,
-        _: Span,
-    ) {
-        self.with_banned_assoc_ty_bound(|this| {
-            visit::walk_enum_def(this, enum_definition, generics, item_id)
-        })
+    fn visit_enum_def(&mut self, enum_definition: &'a EnumDef) {
+        self.with_banned_assoc_ty_bound(|this| visit::walk_enum_def(this, enum_definition))
     }
 
     fn visit_fn(&mut self, fk: FnKind<'a>, span: Span, id: NodeId) {

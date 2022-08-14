@@ -904,7 +904,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     }
                 }
 
-                let label_span_not_found = |err: &mut DiagnosticBuilder<'_, _>| {
+                let label_span_not_found = |err: &mut Diagnostic| {
                     if unsatisfied_predicates.is_empty() {
                         err.span_label(span, format!("{item_kind} not found in `{ty_str}`"));
                         let is_string_or_ref_str = match actual.kind() {
@@ -1000,7 +1000,11 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     label_span_not_found(&mut err);
                 }
 
-                self.check_for_field_method(&mut err, source, span, actual, item_name);
+                // Don't suggest (for example) `expr.field.method()` if `expr.method()`
+                // doesn't exist due to unsatisfied predicates.
+                if unsatisfied_predicates.is_empty() {
+                    self.check_for_field_method(&mut err, source, span, actual, item_name);
+                }
 
                 self.check_for_unwrap_self(&mut err, source, span, actual, item_name);
 
@@ -1150,7 +1154,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         rcvr_ty: Ty<'tcx>,
         expr: &hir::Expr<'_>,
         item_name: Ident,
-        err: &mut DiagnosticBuilder<'tcx, ErrorGuaranteed>,
+        err: &mut Diagnostic,
     ) -> bool {
         let tcx = self.tcx;
         let field_receiver = self.autoderef(span, rcvr_ty).find_map(|(ty, _)| match ty.kind() {
@@ -1327,17 +1331,18 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
     fn check_for_field_method(
         &self,
-        err: &mut DiagnosticBuilder<'tcx, ErrorGuaranteed>,
+        err: &mut Diagnostic,
         source: SelfSource<'tcx>,
         span: Span,
         actual: Ty<'tcx>,
         item_name: Ident,
     ) {
         if let SelfSource::MethodCall(expr) = source
-            && let Some((fields, substs)) = self.get_field_candidates(span, actual)
+            && let mod_id = self.tcx.parent_module(expr.hir_id).to_def_id()
+            && let Some((fields, substs)) = self.get_field_candidates_considering_privacy(span, actual, mod_id)
         {
             let call_expr = self.tcx.hir().expect_expr(self.tcx.hir().get_parent_node(expr.hir_id));
-            for candidate_field in fields.iter() {
+            for candidate_field in fields {
                 if let Some(field_path) = self.check_for_nested_field_satisfying(
                     span,
                     &|_, field_ty| {
@@ -1353,7 +1358,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     candidate_field,
                     substs,
                     vec![],
-                    self.tcx.parent_module(expr.hir_id).to_def_id(),
+                    mod_id,
                 ) {
                     let field_path_str = field_path
                         .iter()
@@ -1375,7 +1380,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
     fn check_for_unwrap_self(
         &self,
-        err: &mut DiagnosticBuilder<'tcx, ErrorGuaranteed>,
+        err: &mut Diagnostic,
         source: SelfSource<'tcx>,
         span: Span,
         actual: Ty<'tcx>,

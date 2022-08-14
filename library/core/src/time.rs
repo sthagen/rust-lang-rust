@@ -321,8 +321,8 @@ impl Duration {
     /// To determine the total number of seconds represented by the `Duration`
     /// including the fractional part, use [`as_secs_f64`] or [`as_secs_f32`]
     ///
-    /// [`as_secs_f32`]: Duration::as_secs_f64
-    /// [`as_secs_f64`]: Duration::as_secs_f32
+    /// [`as_secs_f64`]: Duration::as_secs_f64
+    /// [`as_secs_f32`]: Duration::as_secs_f32
     /// [`subsec_nanos`]: Duration::subsec_nanos
     #[stable(feature = "duration", since = "1.3.0")]
     #[rustc_const_stable(feature = "duration_consts", since = "1.32.0")]
@@ -1135,7 +1135,7 @@ impl fmt::Debug for Duration {
                     // 2. The postfix: can be "µs" so we have to count UTF8 characters.
                     let mut actual_w = prefix.len() + postfix.chars().count();
                     // 3. The integer part:
-                    if let Some(log) = integer_part.checked_log10() {
+                    if let Some(log) = integer_part.checked_ilog10() {
                         // integer_part is > 0, so has length log10(x)+1
                         actual_w += 1 + log as usize;
                     } else {

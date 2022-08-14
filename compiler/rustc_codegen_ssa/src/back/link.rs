@@ -1583,12 +1583,21 @@ fn crt_objects_fallback(sess: &Session, crate_type: CrateType) -> bool {
 fn add_pre_link_objects(
     cmd: &mut dyn Linker,
     sess: &Session,
+    flavor: LinkerFlavor,
     link_output_kind: LinkOutputKind,
     self_contained: bool,
 ) {
+    // FIXME: we are currently missing some infra here (per-linker-flavor CRT objects),
+    // so Fuchsia has to be special-cased.
     let opts = &sess.target;
-    let objects =
-        if self_contained { &opts.pre_link_objects_fallback } else { &opts.pre_link_objects };
+    let empty = Default::default();
+    let objects = if self_contained {
+        &opts.pre_link_objects_fallback
+    } else if !(sess.target.os == "fuchsia" && flavor == LinkerFlavor::Gcc) {
+        &opts.pre_link_objects
+    } else {
+        &empty
+    };
     for obj in objects.get(&link_output_kind).iter().copied().flatten() {
         cmd.add_object(&get_object_file_path(sess, obj, self_contained));
     }
@@ -1914,7 +1923,7 @@ fn linker_with_args<'a>(
     // ------------ Object code and libraries, order-dependent ------------
 
     // Pre-link CRT objects.
-    add_pre_link_objects(cmd, sess, link_output_kind, crt_objects_fallback);
+    add_pre_link_objects(cmd, sess, flavor, link_output_kind, crt_objects_fallback);
 
     add_linked_symbol_object(
         cmd,
@@ -2070,7 +2079,10 @@ fn add_order_independent_options(
 
     add_link_script(cmd, sess, tmpdir, crate_type);
 
-    if sess.target.os == "fuchsia" && crate_type == CrateType::Executable {
+    if sess.target.os == "fuchsia"
+        && crate_type == CrateType::Executable
+        && flavor != LinkerFlavor::Gcc
+    {
         let prefix = if sess.opts.unstable_opts.sanitizer.contains(SanitizerSet::ADDRESS) {
             "asan/"
         } else {
@@ -2674,11 +2686,16 @@ fn add_apple_sdk(cmd: &mut dyn Linker, sess: &Session, flavor: LinkerFlavor) {
     let os = &sess.target.os;
     let llvm_target = &sess.target.llvm_target;
     if sess.target.vendor != "apple"
-        || !matches!(os.as_ref(), "ios" | "tvos" | "watchos")
+        || !matches!(os.as_ref(), "ios" | "tvos" | "watchos" | "macos")
         || (flavor != LinkerFlavor::Gcc && flavor != LinkerFlavor::Lld(LldFlavor::Ld64))
     {
         return;
     }
+
+    if os == "macos" && flavor != LinkerFlavor::Lld(LldFlavor::Ld64) {
+        return;
+    }
+
     let sdk_name = match (arch.as_ref(), os.as_ref()) {
         ("aarch64", "tvos") => "appletvos",
         ("x86_64", "tvos") => "appletvsimulator",
@@ -2694,6 +2711,7 @@ fn add_apple_sdk(cmd: &mut dyn Linker, sess: &Session, flavor: LinkerFlavor) {
         ("aarch64", "watchos") if llvm_target.ends_with("-simulator") => "watchsimulator",
         ("aarch64", "watchos") => "watchos",
         ("arm", "watchos") => "watchos",
+        (_, "macos") => "macosx",
         _ => {
             sess.err(&format!("unsupported arch `{}` for os `{}`", arch, os));
             return;

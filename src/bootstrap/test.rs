@@ -628,6 +628,10 @@ impl Step for Miri {
             cargo.env("MIRI_HOST_SYSROOT", sysroot);
             cargo.env("RUSTC_LIB_PATH", builder.rustc_libdir(compiler));
             cargo.env("MIRI", miri);
+            // propagate --bless
+            if builder.config.cmd.bless() {
+                cargo.env("MIRI_BLESS", "Gesundheit");
+            }
 
             cargo.arg("--").args(builder.config.cmd.test_args());
 
@@ -919,6 +923,11 @@ fn compare_browser_ui_test_version(installed_version: &str, src: &Path) {
                     "⚠️ Installed version of browser-ui-test (`{}`) is different than the \
                      one used in the CI (`{}`)",
                     installed_version, v
+                );
+                eprintln!(
+                    "You can install this version using `npm update browser-ui-test` or by using \
+                     `npm install browser-ui-test@{}`",
+                    v,
                 );
             }
         }

@@ -62,7 +62,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                         hir::ExprKind::Call(f, self.lower_exprs(args))
                     }
                 }
-                ExprKind::MethodCall(ref seg, ref args, span) => {
+                ExprKind::MethodCall(ref seg, ref receiver, ref args, span) => {
                     let hir_seg = self.arena.alloc(self.lower_path_segment(
                         e.span,
                         seg,
@@ -70,7 +70,9 @@ impl<'hir> LoweringContext<'_, 'hir> {
                         ParenthesizedGenericArgs::Err,
                         ImplTraitContext::Disallowed(ImplTraitPosition::Path),
                     ));
-                    let args = self.lower_exprs(args);
+                    let args = self.arena.alloc_from_iter(
+                        [&*receiver].into_iter().chain(args.iter()).map(|x| self.lower_expr_mut(x)),
+                    );
                     hir::ExprKind::MethodCall(hir_seg, args, self.lower_span(span))
                 }
                 ExprKind::Binary(binop, ref lhs, ref rhs) => {
@@ -1534,15 +1536,13 @@ impl<'hir> LoweringContext<'_, 'hir> {
             hir::MatchSource::ForLoopDesugar,
         ));
 
-        let attrs: Vec<_> = e.attrs.iter().map(|a| self.lower_attr(a)).collect();
-
         // This is effectively `{ let _result = ...; _result }`.
         // The construct was introduced in #21984 and is necessary to make sure that
         // temporaries in the `head` expression are dropped and do not leak to the
         // surrounding scope of the `match` since the `match` is not a terminating scope.
         //
         // Also, add the attributes to the outer returned expr node.
-        self.expr_drop_temps_mut(for_span, match_expr, attrs.into())
+        self.expr_drop_temps_mut(for_span, match_expr, e.attrs.clone())
     }
 
     /// Desugar `ExprKind::Try` from: `<expr>?` into:
