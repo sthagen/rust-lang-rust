@@ -1,6 +1,8 @@
 #![feature(once_cell)]
 #![feature(rustc_attrs)]
 #![feature(type_alias_impl_trait)]
+#![deny(rustc::untranslatable_diagnostic)]
+#![deny(rustc::diagnostic_outside_of_impl)]
 
 use fluent_bundle::FluentResource;
 use fluent_syntax::parser::ParserError;
@@ -34,6 +36,7 @@ fluent_messages! {
     builtin_macros => "../locales/en-US/builtin_macros.ftl",
     const_eval => "../locales/en-US/const_eval.ftl",
     expand => "../locales/en-US/expand.ftl",
+    interface => "../locales/en-US/interface.ftl",
     lint => "../locales/en-US/lint.ftl",
     parser => "../locales/en-US/parser.ftl",
     passes => "../locales/en-US/passes.ftl",

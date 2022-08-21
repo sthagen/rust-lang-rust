@@ -39,6 +39,7 @@
 #[macro_use]
 extern crate tracing;
 
+use rustc_ast::ptr::P;
 use rustc_ast::visit;
 use rustc_ast::{self as ast, *};
 use rustc_ast_pretty::pprust;
@@ -48,7 +49,7 @@ use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::sorted_map::SortedMap;
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
 use rustc_data_structures::sync::Lrc;
-use rustc_errors::{struct_span_err, Applicability, Handler};
+use rustc_errors::{struct_span_err, Applicability, Handler, StashKey};
 use rustc_hir as hir;
 use rustc_hir::def::{DefKind, LifetimeRes, Namespace, PartialRes, PerNS, Res};
 use rustc_hir::def_id::{LocalDefId, CRATE_DEF_ID};
@@ -643,14 +644,12 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
     ) -> (Fingerprint, Fingerprint) {
         self.tcx.with_stable_hashing_context(|mut hcx| {
             let mut stable_hasher = StableHasher::new();
-            hcx.with_hir_bodies(true, node.def_id(), bodies, |hcx| {
+            hcx.with_hir_bodies(node.def_id(), bodies, |hcx| {
                 node.hash_stable(hcx, &mut stable_hasher)
             });
             let hash_including_bodies = stable_hasher.finish();
             let mut stable_hasher = StableHasher::new();
-            hcx.with_hir_bodies(false, node.def_id(), bodies, |hcx| {
-                node.hash_stable(hcx, &mut stable_hasher)
-            });
+            hcx.without_hir_bodies(|hcx| node.hash_stable(hcx, &mut stable_hasher));
             let hash_without_bodies = stable_hasher.finish();
             (hash_including_bodies, hash_without_bodies)
         })
@@ -873,14 +872,14 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         // the `HirId`s. We don't actually need HIR version of attributes anyway.
         // Tokens are also not needed after macro expansion and parsing.
         let kind = match attr.kind {
-            AttrKind::Normal(ref item, _) => AttrKind::Normal(
-                AttrItem {
-                    path: item.path.clone(),
-                    args: self.lower_mac_args(&item.args),
+            AttrKind::Normal(ref normal) => AttrKind::Normal(P(NormalAttr {
+                item: AttrItem {
+                    path: normal.item.path.clone(),
+                    args: self.lower_mac_args(&normal.item.args),
                     tokens: None,
                 },
-                None,
-            ),
+                tokens: None,
+            })),
             AttrKind::DocComment(comment_kind, data) => AttrKind::DocComment(comment_kind, data),
         };
 
@@ -928,7 +927,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                     lit.clone()
                 } else {
                     Lit {
-                        token: token::Lit::new(token::LitKind::Err, kw::Empty, None),
+                        token_lit: token::Lit::new(token::LitKind::Err, kw::Empty, None),
                         kind: LitKind::Err(kw::Empty),
                         span: DUMMY_SP,
                     }
@@ -2235,7 +2234,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                         c.value.span,
                         "using `_` for array lengths is unstable",
                     )
-                    .emit();
+                    .stash(c.value.span, StashKey::UnderscoreForArrayLengths);
                     hir::ArrayLen::Body(self.lower_anon_const(c))
                 }
             }

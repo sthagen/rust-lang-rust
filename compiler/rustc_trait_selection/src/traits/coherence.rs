@@ -307,7 +307,13 @@ fn negative_impl<'cx, 'tcx>(
             tcx.impl_subject(impl1_def_id),
         ) {
             Ok(s) => s,
-            Err(err) => bug!("failed to fully normalize {:?}: {:?}", impl1_def_id, err),
+            Err(err) => {
+                tcx.sess.delay_span_bug(
+                    tcx.def_span(impl1_def_id),
+                    format!("failed to fully normalize {:?}: {:?}", impl1_def_id, err),
+                );
+                return false;
+            }
         };
 
         // Attempt to prove that impl2 applies, given all of the above.
@@ -398,12 +404,12 @@ fn resolve_negative_obligation<'cx, 'tcx>(
 pub fn trait_ref_is_knowable<'tcx>(
     tcx: TyCtxt<'tcx>,
     trait_ref: ty::TraitRef<'tcx>,
-) -> Option<Conflict> {
+) -> Result<(), Conflict> {
     debug!("trait_ref_is_knowable(trait_ref={:?})", trait_ref);
     if orphan_check_trait_ref(tcx, trait_ref, InCrate::Remote).is_ok() {
         // A downstream or cousin crate is allowed to implement some
         // substitution of this trait-ref.
-        return Some(Conflict::Downstream);
+        return Err(Conflict::Downstream);
     }
 
     if trait_ref_is_local_or_fundamental(tcx, trait_ref) {
@@ -412,7 +418,7 @@ pub fn trait_ref_is_knowable<'tcx>(
         // allowed to implement a substitution of this trait ref, which
         // means impls could only come from dependencies of this crate,
         // which we already know about.
-        return None;
+        return Ok(());
     }
 
     // This is a remote non-fundamental trait, so if another crate
@@ -425,10 +431,10 @@ pub fn trait_ref_is_knowable<'tcx>(
     // we are an owner.
     if orphan_check_trait_ref(tcx, trait_ref, InCrate::Local).is_ok() {
         debug!("trait_ref_is_knowable: orphan check passed");
-        None
+        Ok(())
     } else {
         debug!("trait_ref_is_knowable: nonlocal, nonfundamental, unowned");
-        Some(Conflict::Upstream)
+        Err(Conflict::Upstream)
     }
 }
 
@@ -734,7 +740,21 @@ impl<'tcx> TypeVisitor<'tcx> for OrphanChecker<'tcx> {
         result
     }
 
-    // FIXME: Constants should participate in orphan checking.
+    /// All possible values for a constant parameter already exist
+    /// in the crate defining the trait, so they are always non-local[^1].
+    ///
+    /// Because there's no way to have an impl where the first local
+    /// generic argument is a constant, we also don't have to fail
+    /// the orphan check when encountering a parameter or a generic constant.
+    ///
+    /// This means that we can completely ignore constants during the orphan check.
+    ///
+    /// See `src/test/ui/coherence/const-generics-orphan-check-ok.rs` for examples.
+    ///
+    /// [^1]: This might not hold for function pointers or trait objects in the future.
+    /// As these should be quite rare as const arguments and especially rare as impl
+    /// parameters, allowing uncovered const parameters in impls seems more useful
+    /// than allowing `impl<T> Trait<local_fn_ptr, T> for i32` to compile.
     fn visit_const(&mut self, _c: ty::Const<'tcx>) -> ControlFlow<Self::BreakTy> {
         ControlFlow::CONTINUE
     }

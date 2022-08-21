@@ -287,7 +287,7 @@ impl<'a> Parser<'a> {
             return Ok(None);
         } else if macros_allowed && self.check_path() {
             // MACRO INVOCATION ITEM
-            (Ident::empty(), ItemKind::MacCall(self.parse_item_macro(vis)?))
+            (Ident::empty(), ItemKind::MacCall(P(self.parse_item_macro(vis)?)))
         } else {
             return Ok(None);
         };
@@ -1159,6 +1159,16 @@ impl<'a> Parser<'a> {
                     const_span,
                     "you might want to declare a static instead",
                     "static",
+                    Applicability::MaybeIncorrect,
+                )
+                .emit();
+        } else if self.eat_keyword(kw::Let) {
+            let span = self.prev_token.span;
+            self.struct_span_err(const_span.to(span), "`const` and `let` are mutually exclusive")
+                .span_suggestion(
+                    const_span.to(span),
+                    "remove `let`",
+                    "const",
                     Applicability::MaybeIncorrect,
                 )
                 .emit();
@@ -2299,7 +2309,7 @@ impl<'a> Parser<'a> {
                 (pat, this.parse_ty_for_param()?)
             } else {
                 debug!("parse_param_general ident_to_pat");
-                let parser_snapshot_before_ty = this.clone();
+                let parser_snapshot_before_ty = this.create_snapshot_for_diagnostic();
                 this.eat_incorrect_doc_comment_for_param_type();
                 let mut ty = this.parse_ty_for_param();
                 if ty.is_ok()
@@ -2322,13 +2332,13 @@ impl<'a> Parser<'a> {
                     // Recover from attempting to parse the argument as a type without pattern.
                     Err(err) => {
                         err.cancel();
-                        *this = parser_snapshot_before_ty;
+                        this.restore_snapshot(parser_snapshot_before_ty);
                         this.recover_arg_parse()?
                     }
                 }
             };
 
-            let span = lo.until(this.token.span);
+            let span = lo.to(this.prev_token.span);
 
             Ok((
                 Param {

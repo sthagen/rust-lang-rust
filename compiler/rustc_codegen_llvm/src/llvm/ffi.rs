@@ -2079,6 +2079,19 @@ extern "C" {
         Ty: &'a DIType,
     ) -> &'a DIType;
 
+    pub fn LLVMRustDIBuilderCreateStaticMemberType<'a>(
+        Builder: &DIBuilder<'a>,
+        Scope: &'a DIDescriptor,
+        Name: *const c_char,
+        NameLen: size_t,
+        File: &'a DIFile,
+        LineNo: c_uint,
+        Ty: &'a DIType,
+        Flags: DIFlags,
+        val: Option<&'a Value>,
+        AlignInBits: u32,
+    ) -> &'a DIDerivedType;
+
     pub fn LLVMRustDIBuilderCreateLexicalBlock<'a>(
         Builder: &DIBuilder<'a>,
         Scope: &'a DIScope,
@@ -2347,6 +2360,7 @@ extern "C" {
         PGOGenPath: *const c_char,
         PGOUsePath: *const c_char,
         InstrumentCoverage: bool,
+        InstrProfileOutput: *const c_char,
         InstrumentGCOV: bool,
         PGOSampleUsePath: *const c_char,
         DebugInfoForProfiling: bool,
@@ -2409,12 +2423,6 @@ extern "C" {
         DI: &'a DiagnosticInfo,
         cookie_out: &mut c_uint,
     ) -> &'a SMDiagnostic;
-
-    pub fn LLVMRustSetInlineAsmDiagnosticHandler(
-        C: &Context,
-        H: InlineAsmDiagHandlerTy,
-        CX: *mut c_void,
-    );
 
     #[allow(improper_ctypes)]
     pub fn LLVMRustUnpackSMDiagnostic(

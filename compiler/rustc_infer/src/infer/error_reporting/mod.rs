@@ -66,6 +66,7 @@ use rustc_hir::lang_items::LangItem;
 use rustc_hir::Node;
 use rustc_middle::dep_graph::DepContext;
 use rustc_middle::ty::print::with_no_trimmed_paths;
+use rustc_middle::ty::relate::{self, RelateResult, TypeRelation};
 use rustc_middle::ty::{
     self, error::TypeError, Binder, List, Region, Subst, Ty, TyCtxt, TypeFoldable,
     TypeSuperVisitable, TypeVisitable,
@@ -457,7 +458,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
     }
 
     /// Adds a note if the types come from similarly named crates
-    fn check_and_note_conflicting_crates(&self, err: &mut Diagnostic, terr: &TypeError<'tcx>) {
+    fn check_and_note_conflicting_crates(&self, err: &mut Diagnostic, terr: TypeError<'tcx>) {
         use hir::def_id::CrateNum;
         use rustc_hir::definitions::DisambiguatedDefPathData;
         use ty::print::Printer;
@@ -561,7 +562,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                 }
             }
         };
-        match *terr {
+        match terr {
             TypeError::Sorts(ref exp_found) => {
                 // if they are both "path types", there's a chance of ambiguity
                 // due to different versions of the same crate
@@ -583,7 +584,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         err: &mut Diagnostic,
         cause: &ObligationCause<'tcx>,
         exp_found: Option<ty::error::ExpectedFound<Ty<'tcx>>>,
-        terr: &TypeError<'tcx>,
+        terr: TypeError<'tcx>,
     ) {
         match *cause.code() {
             ObligationCauseCode::Pattern { origin_expr: true, span: Some(span), root_ty } => {
@@ -1432,7 +1433,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         cause: &ObligationCause<'tcx>,
         secondary_span: Option<(Span, String)>,
         mut values: Option<ValuePairs<'tcx>>,
-        terr: &TypeError<'tcx>,
+        terr: TypeError<'tcx>,
         swap_secondary_and_primary: bool,
         prefer_label: bool,
     ) {
@@ -1713,7 +1714,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             ty::error::TypeError::Sorts(terr)
                 if exp_found.map_or(false, |ef| terr.found == ef.found) =>
             {
-                Some(*terr)
+                Some(terr)
             }
             _ => exp_found,
         };
@@ -1750,6 +1751,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         if let Some(ValuePairs::PolyTraitRefs(exp_found)) = values
             && let ty::Closure(def_id, _) = exp_found.expected.skip_binder().self_ty().kind()
             && let Some(def_id) = def_id.as_local()
+            && terr.involves_regions()
         {
             let span = self.tcx.def_span(def_id);
             diag.span_note(span, "this closure does not fulfill the lifetime requirements");
@@ -2078,7 +2080,8 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                             diag.span_suggestion(
                                 span,
                                 *msg,
-                                format!("{}.as_ref()", snippet),
+                                // HACK: fix issue# 100605, suggesting convert from &Option<T> to Option<&T>, remove the extra `&`
+                                format!("{}.as_ref()", snippet.trim_start_matches('&')),
                                 Applicability::MachineApplicable,
                             );
                         }
@@ -2091,7 +2094,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
     pub fn report_and_explain_type_error(
         &self,
         trace: TypeTrace<'tcx>,
-        terr: &TypeError<'tcx>,
+        terr: TypeError<'tcx>,
     ) -> DiagnosticBuilder<'tcx, ErrorGuaranteed> {
         use crate::traits::ObligationCauseCode::MatchExpressionArm;
 
@@ -2659,66 +2662,91 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
     /// Float types, respectively). When comparing two ADTs, these rules apply recursively.
     pub fn same_type_modulo_infer(&self, a: Ty<'tcx>, b: Ty<'tcx>) -> bool {
         let (a, b) = self.resolve_vars_if_possible((a, b));
+        SameTypeModuloInfer(self).relate(a, b).is_ok()
+    }
+}
+
+struct SameTypeModuloInfer<'a, 'tcx>(&'a InferCtxt<'a, 'tcx>);
+
+impl<'tcx> TypeRelation<'tcx> for SameTypeModuloInfer<'_, 'tcx> {
+    fn tcx(&self) -> TyCtxt<'tcx> {
+        self.0.tcx
+    }
+
+    fn param_env(&self) -> ty::ParamEnv<'tcx> {
+        // Unused, only for consts which we treat as always equal
+        ty::ParamEnv::empty()
+    }
+
+    fn tag(&self) -> &'static str {
+        "SameTypeModuloInfer"
+    }
+
+    fn a_is_expected(&self) -> bool {
+        true
+    }
+
+    fn relate_with_variance<T: relate::Relate<'tcx>>(
+        &mut self,
+        _variance: ty::Variance,
+        _info: ty::VarianceDiagInfo<'tcx>,
+        a: T,
+        b: T,
+    ) -> relate::RelateResult<'tcx, T> {
+        self.relate(a, b)
+    }
+
+    fn tys(&mut self, a: Ty<'tcx>, b: Ty<'tcx>) -> RelateResult<'tcx, Ty<'tcx>> {
         match (a.kind(), b.kind()) {
-            (&ty::Adt(def_a, substs_a), &ty::Adt(def_b, substs_b)) => {
-                if def_a != def_b {
-                    return false;
-                }
-
-                substs_a
-                    .types()
-                    .zip(substs_b.types())
-                    .all(|(a, b)| self.same_type_modulo_infer(a, b))
-            }
-            (&ty::FnDef(did_a, substs_a), &ty::FnDef(did_b, substs_b)) => {
-                if did_a != did_b {
-                    return false;
-                }
-
-                substs_a
-                    .types()
-                    .zip(substs_b.types())
-                    .all(|(a, b)| self.same_type_modulo_infer(a, b))
-            }
-            (&ty::Int(_) | &ty::Uint(_), &ty::Infer(ty::InferTy::IntVar(_)))
+            (ty::Int(_) | ty::Uint(_), ty::Infer(ty::InferTy::IntVar(_)))
             | (
-                &ty::Infer(ty::InferTy::IntVar(_)),
-                &ty::Int(_) | &ty::Uint(_) | &ty::Infer(ty::InferTy::IntVar(_)),
+                ty::Infer(ty::InferTy::IntVar(_)),
+                ty::Int(_) | ty::Uint(_) | ty::Infer(ty::InferTy::IntVar(_)),
             )
-            | (&ty::Float(_), &ty::Infer(ty::InferTy::FloatVar(_)))
+            | (ty::Float(_), ty::Infer(ty::InferTy::FloatVar(_)))
             | (
-                &ty::Infer(ty::InferTy::FloatVar(_)),
-                &ty::Float(_) | &ty::Infer(ty::InferTy::FloatVar(_)),
+                ty::Infer(ty::InferTy::FloatVar(_)),
+                ty::Float(_) | ty::Infer(ty::InferTy::FloatVar(_)),
             )
-            | (&ty::Infer(ty::InferTy::TyVar(_)), _)
-            | (_, &ty::Infer(ty::InferTy::TyVar(_))) => true,
-            (&ty::Ref(_, ty_a, mut_a), &ty::Ref(_, ty_b, mut_b)) => {
-                mut_a == mut_b && self.same_type_modulo_infer(ty_a, ty_b)
-            }
-            (&ty::RawPtr(a), &ty::RawPtr(b)) => {
-                a.mutbl == b.mutbl && self.same_type_modulo_infer(a.ty, b.ty)
-            }
-            (&ty::Slice(a), &ty::Slice(b)) => self.same_type_modulo_infer(a, b),
-            (&ty::Array(a_ty, a_ct), &ty::Array(b_ty, b_ct)) => {
-                self.same_type_modulo_infer(a_ty, b_ty) && a_ct == b_ct
-            }
-            (&ty::Tuple(a), &ty::Tuple(b)) => {
-                if a.len() != b.len() {
-                    return false;
-                }
-                std::iter::zip(a.iter(), b.iter()).all(|(a, b)| self.same_type_modulo_infer(a, b))
-            }
-            (&ty::FnPtr(a), &ty::FnPtr(b)) => {
-                let a = a.skip_binder().inputs_and_output;
-                let b = b.skip_binder().inputs_and_output;
-                if a.len() != b.len() {
-                    return false;
-                }
-                std::iter::zip(a.iter(), b.iter()).all(|(a, b)| self.same_type_modulo_infer(a, b))
-            }
-            // FIXME(compiler-errors): This needs to be generalized more
-            _ => a == b,
+            | (ty::Infer(ty::InferTy::TyVar(_)), _)
+            | (_, ty::Infer(ty::InferTy::TyVar(_))) => Ok(a),
+            (ty::Infer(_), _) | (_, ty::Infer(_)) => Err(TypeError::Mismatch),
+            _ => relate::super_relate_tys(self, a, b),
         }
+    }
+
+    fn regions(
+        &mut self,
+        a: ty::Region<'tcx>,
+        b: ty::Region<'tcx>,
+    ) -> RelateResult<'tcx, ty::Region<'tcx>> {
+        if (a.is_var() && b.is_free_or_static()) || (b.is_var() && a.is_free_or_static()) || a == b
+        {
+            Ok(a)
+        } else {
+            Err(TypeError::Mismatch)
+        }
+    }
+
+    fn binders<T>(
+        &mut self,
+        a: ty::Binder<'tcx, T>,
+        b: ty::Binder<'tcx, T>,
+    ) -> relate::RelateResult<'tcx, ty::Binder<'tcx, T>>
+    where
+        T: relate::Relate<'tcx>,
+    {
+        Ok(ty::Binder::dummy(self.relate(a.skip_binder(), b.skip_binder())?))
+    }
+
+    fn consts(
+        &mut self,
+        a: ty::Const<'tcx>,
+        _b: ty::Const<'tcx>,
+    ) -> relate::RelateResult<'tcx, ty::Const<'tcx>> {
+        // FIXME(compiler-errors): This could at least do some first-order
+        // relation
+        Ok(a)
     }
 }
 
@@ -2781,12 +2809,12 @@ pub enum FailureCode {
 }
 
 pub trait ObligationCauseExt<'tcx> {
-    fn as_failure_code(&self, terr: &TypeError<'tcx>) -> FailureCode;
+    fn as_failure_code(&self, terr: TypeError<'tcx>) -> FailureCode;
     fn as_requirement_str(&self) -> &'static str;
 }
 
 impl<'tcx> ObligationCauseExt<'tcx> for ObligationCause<'tcx> {
-    fn as_failure_code(&self, terr: &TypeError<'tcx>) -> FailureCode {
+    fn as_failure_code(&self, terr: TypeError<'tcx>) -> FailureCode {
         use self::FailureCode::*;
         use crate::traits::ObligationCauseCode::*;
         match self.code() {
@@ -2823,7 +2851,7 @@ impl<'tcx> ObligationCauseExt<'tcx> for ObligationCause<'tcx> {
                 TypeError::IntrinsicCast => {
                     Error0308("cannot coerce intrinsics to function pointers")
                 }
-                TypeError::ObjectUnsafeCoercion(did) => Error0038(*did),
+                TypeError::ObjectUnsafeCoercion(did) => Error0038(did),
                 _ => Error0308("mismatched types"),
             },
         }

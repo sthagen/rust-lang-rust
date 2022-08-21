@@ -28,7 +28,7 @@ use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::stack::ensure_sufficient_stack;
 use rustc_errors::{
     pluralize, struct_span_err, Applicability, Diagnostic, DiagnosticBuilder, DiagnosticId,
-    ErrorGuaranteed,
+    ErrorGuaranteed, StashKey,
 };
 use rustc_hir as hir;
 use rustc_hir::def::{CtorKind, DefKind, Res};
@@ -561,16 +561,17 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     // We just want to check sizedness, so instead of introducing
                     // placeholder lifetimes with probing, we just replace higher lifetimes
                     // with fresh vars.
-                    let span = args.get(i).map(|a| a.span).unwrap_or(expr.span);
+                    let arg_span = args.get(i).map(|a| a.span);
+                    let span = arg_span.unwrap_or(expr.span);
                     let input = self.replace_bound_vars_with_fresh_vars(
                         span,
                         infer::LateBoundRegionConversionTime::FnCall,
                         fn_sig.input(i),
                     );
-                    self.require_type_is_sized_deferred(
-                        input,
+                    self.require_type_is_sized(
+                        self.normalize_associated_types_in(span, input),
                         span,
-                        traits::SizedArgumentType(None),
+                        traits::SizedArgumentType(arg_span),
                     );
                 }
             }
@@ -585,7 +586,11 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 infer::LateBoundRegionConversionTime::FnCall,
                 fn_sig.output(),
             );
-            self.require_type_is_sized_deferred(output, expr.span, traits::SizedReturnType);
+            self.require_type_is_sized(
+                self.normalize_associated_types_in(expr.span, output),
+                expr.span,
+                traits::SizedReturnType,
+            );
         }
 
         // We always require that the type provided as the value for
@@ -1307,7 +1312,39 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 span: expr.span,
             })
         };
-        self.tcx.mk_array(element_ty, args.len() as u64)
+        let array_len = args.len() as u64;
+        self.suggest_array_len(expr, array_len);
+        self.tcx.mk_array(element_ty, array_len)
+    }
+
+    fn suggest_array_len(&self, expr: &'tcx hir::Expr<'tcx>, array_len: u64) {
+        if let Some(parent_hir_id) = self.tcx.hir().find_parent_node(expr.hir_id) {
+            let ty = match self.tcx.hir().find(parent_hir_id) {
+                Some(
+                    hir::Node::Local(hir::Local { ty: Some(ty), .. })
+                    | hir::Node::Item(hir::Item { kind: hir::ItemKind::Const(ty, _), .. }),
+                ) => Some(ty),
+                _ => None,
+            };
+            if let Some(ty) = ty
+                && let hir::TyKind::Array(_, length) = ty.kind
+                && let hir::ArrayLen::Body(hir::AnonConst { hir_id, .. }) = length
+                && let Some(span) = self.tcx.hir().opt_span(hir_id)
+            {
+                match self.tcx.sess.diagnostic().steal_diagnostic(span, StashKey::UnderscoreForArrayLengths) {
+                    Some(mut err) => {
+                        err.span_suggestion(
+                            span,
+                            "consider specifying the array length",
+                            array_len,
+                            Applicability::MaybeIncorrect,
+                        );
+                        err.emit();
+                    }
+                    None => ()
+                }
+            }
+        }
     }
 
     fn check_expr_const_block(
@@ -1333,10 +1370,13 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         element: &'tcx hir::Expr<'tcx>,
         count: &'tcx hir::ArrayLen,
         expected: Expectation<'tcx>,
-        _expr: &'tcx hir::Expr<'tcx>,
+        expr: &'tcx hir::Expr<'tcx>,
     ) -> Ty<'tcx> {
         let tcx = self.tcx;
         let count = self.array_length_to_const(count);
+        if let Some(count) = count.try_eval_usize(tcx, self.param_env) {
+            self.suggest_array_len(expr, count);
+        }
 
         let uty = match expected {
             ExpectHasType(uty) => match *uty.kind() {
@@ -2158,7 +2198,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 E0610,
                 "`{expr_t}` is a primitive type and therefore doesn't have fields",
             );
-            let is_valid_suffix = |field: String| {
+            let is_valid_suffix = |field: &str| {
                 if field == "f32" || field == "f64" {
                     return true;
                 }
@@ -2183,20 +2223,39 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 let suffix = chars.collect::<String>();
                 suffix.is_empty() || suffix == "f32" || suffix == "f64"
             };
+            let maybe_partial_suffix = |field: &str| -> Option<&str> {
+                let first_chars = ['f', 'l'];
+                if field.len() >= 1
+                    && field.to_lowercase().starts_with(first_chars)
+                    && field[1..].chars().all(|c| c.is_ascii_digit())
+                {
+                    if field.to_lowercase().starts_with(['f']) { Some("f32") } else { Some("f64") }
+                } else {
+                    None
+                }
+            };
             if let ty::Infer(ty::IntVar(_)) = expr_t.kind()
                 && let ExprKind::Lit(Spanned {
                     node: ast::LitKind::Int(_, ast::LitIntType::Unsuffixed),
                     ..
                 }) = base.kind
                 && !base.span.from_expansion()
-                && is_valid_suffix(field_name)
             {
-                err.span_suggestion_verbose(
-                    field.span.shrink_to_lo(),
-                    "If the number is meant to be a floating point number, consider adding a `0` after the period",
-                    '0',
-                    Applicability::MaybeIncorrect,
-                );
+                if is_valid_suffix(&field_name) {
+                    err.span_suggestion_verbose(
+                        field.span.shrink_to_lo(),
+                        "if intended to be a floating point literal, consider adding a `0` after the period",
+                        '0',
+                        Applicability::MaybeIncorrect,
+                    );
+                } else if let Some(correct_suffix) = maybe_partial_suffix(&field_name) {
+                    err.span_suggestion_verbose(
+                        field.span,
+                        format!("if intended to be a floating point literal, consider adding a `0` after the period and a `{correct_suffix}` suffix"),
+                        format!("0{correct_suffix}"),
+                        Applicability::MaybeIncorrect,
+                    );
+                }
             }
             err.emit();
         }

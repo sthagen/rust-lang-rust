@@ -62,6 +62,7 @@
 #![feature(slice_partition_dedup)]
 #![feature(int_log)]
 #![feature(iter_advance_by)]
+#![feature(iter_array_chunks)]
 #![feature(iter_collect_into)]
 #![feature(iter_partition_in_place)]
 #![feature(iter_intersperse)]
@@ -98,6 +99,7 @@
 #![feature(waker_getters)]
 #![feature(slice_flatten)]
 #![feature(provide_any)]
+#![feature(utf8_chunks)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
 extern crate test;

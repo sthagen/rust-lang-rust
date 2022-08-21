@@ -778,7 +778,6 @@ impl<'hir> WhereRegionPredicate<'hir> {
 /// An equality predicate (e.g., `T = int`); currently unsupported.
 #[derive(Debug, HashStable_Generic)]
 pub struct WhereEqPredicate<'hir> {
-    pub hir_id: HirId,
     pub span: Span,
     pub lhs_ty: &'hir Ty<'hir>,
     pub rhs_ty: &'hir Ty<'hir>,
@@ -1626,7 +1625,7 @@ pub struct AnonConst {
 }
 
 /// An expression.
-#[derive(Debug)]
+#[derive(Debug, HashStable_Generic)]
 pub struct Expr<'hir> {
     pub hir_id: HirId,
     pub kind: ExprKind<'hir>,
@@ -2380,7 +2379,7 @@ impl TypeBinding<'_> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, HashStable_Generic)]
 pub struct Ty<'hir> {
     pub hir_id: HirId,
     pub kind: TyKind<'hir>,
@@ -3332,12 +3331,14 @@ pub enum Node<'hir> {
     Field(&'hir FieldDef<'hir>),
     AnonConst(&'hir AnonConst),
     Expr(&'hir Expr<'hir>),
+    ExprField(&'hir ExprField<'hir>),
     Stmt(&'hir Stmt<'hir>),
     PathSegment(&'hir PathSegment<'hir>),
     Ty(&'hir Ty<'hir>),
     TypeBinding(&'hir TypeBinding<'hir>),
     TraitRef(&'hir TraitRef<'hir>),
     Pat(&'hir Pat<'hir>),
+    PatField(&'hir PatField<'hir>),
     Arm(&'hir Arm<'hir>),
     Block(&'hir Block<'hir>),
     Local(&'hir Local<'hir>),
@@ -3388,6 +3389,8 @@ impl<'hir> Node<'hir> {
             | Node::Block(..)
             | Node::Ctor(..)
             | Node::Pat(..)
+            | Node::PatField(..)
+            | Node::ExprField(..)
             | Node::Arm(..)
             | Node::Local(..)
             | Node::Crate(..)
