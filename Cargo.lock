@@ -1280,7 +1280,6 @@ name = "error_index_generator"
 version = "0.0.0"
 dependencies = [
  "rustdoc",
- "walkdir",
 ]
 
 [[package]]
@@ -3575,6 +3574,7 @@ dependencies = [
  "rustc_errors",
  "rustc_hir",
  "rustc_index",
+ "rustc_macros",
  "rustc_middle",
  "rustc_query_system",
  "rustc_session",
@@ -3595,6 +3595,7 @@ dependencies = [
  "rustc_data_structures",
  "rustc_errors",
  "rustc_feature",
+ "rustc_macros",
  "rustc_parse",
  "rustc_session",
  "rustc_span",
@@ -3819,6 +3820,7 @@ dependencies = [
  "rustc_interface",
  "rustc_lint",
  "rustc_log",
+ "rustc_macros",
  "rustc_metadata",
  "rustc_middle",
  "rustc_parse",
@@ -4212,11 +4214,14 @@ dependencies = [
  "regex",
  "rustc_ast",
  "rustc_data_structures",
+ "rustc_errors",
  "rustc_graphviz",
  "rustc_hir",
  "rustc_index",
+ "rustc_macros",
  "rustc_middle",
  "rustc_serialize",
+ "rustc_session",
  "rustc_span",
  "rustc_target",
  "smallvec",
@@ -4320,6 +4325,7 @@ dependencies = [
  "rustc_ast",
  "rustc_errors",
  "rustc_lint",
+ "rustc_macros",
  "rustc_metadata",
  "rustc_session",
  "rustc_span",
@@ -4419,9 +4425,11 @@ dependencies = [
  "rustc_ast",
  "rustc_ast_pretty",
  "rustc_data_structures",
+ "rustc_errors",
  "rustc_hir",
  "rustc_hir_pretty",
  "rustc_lexer",
+ "rustc_macros",
  "rustc_middle",
  "rustc_session",
  "rustc_span",
@@ -4597,6 +4605,7 @@ dependencies = [
  "rustc_hir",
  "rustc_index",
  "rustc_infer",
+ "rustc_macros",
  "rustc_middle",
  "rustc_session",
  "rustc_span",
@@ -4991,9 +5000,9 @@ checksum = "da73c8f77aebc0e40c300b93f0a5f1bece7a248a36eee287d4e095f35c7b7d6e"
 
 [[package]]
 name = "snapbox"
-version = "0.2.9"
+version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c1f212b806d6f56d19838e36a0aaa7e79a0bc9ca177e873fb87651ad92f983e2"
+checksum = "44d199ccf8f606592df2d145db26f2aa45344e23c64b074cc5a4047f1d99b0f7"
 dependencies = [
  "concolor",
  "content_inspector",
@@ -5009,9 +5018,9 @@ dependencies = [
 
 [[package]]
 name = "snapbox-macros"
-version = "0.2.1"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c01dea7e04cbb27ef4c86e9922184608185f7cd95c1763bc30d727cda4a5e930"
+checksum = "8a253e6f894cfa440cba00600a249fa90869d8e0ec45ab274a456e043a0ce8f2"
 
 [[package]]
 name = "socket2"
@@ -5294,7 +5303,6 @@ name = "tidy"
 version = "0.1.0"
 dependencies = [
  "cargo_metadata 0.14.0",
- "crossbeam-utils",
  "lazy_static",
  "regex",
  "walkdir",

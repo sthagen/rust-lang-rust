@@ -765,6 +765,14 @@ rustc_queries! {
         desc { |tcx| "processing `{}`", tcx.def_path_str(key.to_def_id()) }
     }
 
+    /// Returns the types assumed to be well formed while "inside" of the given item.
+    ///
+    /// Note that we've liberated the late bound regions of function signatures, so
+    /// this can not be used to check whether these types are well formed.
+    query assumed_wf_types(key: DefId) -> &'tcx ty::List<Ty<'tcx>> {
+        desc { |tcx| "computing the implied bounds of {}", tcx.def_path_str(key) }
+    }
+
     /// Computes the signature of the function.
     query fn_sig(key: DefId) -> ty::PolyFnSig<'tcx> {
         desc { |tcx| "computing function signature of `{}`", tcx.def_path_str(key) }
@@ -810,8 +818,8 @@ rustc_queries! {
         desc { |tcx| "checking privacy in {}", describe_as_module(key, tcx) }
     }
 
-    query check_mod_liveness(key: LocalDefId) -> () {
-        desc { |tcx| "checking liveness of variables in {}", describe_as_module(key, tcx) }
+    query check_liveness(key: DefId) {
+        desc { |tcx| "checking liveness of variables in {}", tcx.def_path_str(key) }
     }
 
     /// Return the live symbols in the crate for dead code check.
@@ -1301,6 +1309,7 @@ rustc_queries! {
     query layout_of(
         key: ty::ParamEnvAnd<'tcx, Ty<'tcx>>
     ) -> Result<ty::layout::TyAndLayout<'tcx>, ty::layout::LayoutError<'tcx>> {
+        depth_limit
         desc { "computing layout of `{}`", key.value }
         remap_env_constness
     }
@@ -1556,6 +1565,9 @@ rustc_queries! {
     query native_library_kind(def_id: DefId)
         -> Option<NativeLibKind> {
         desc { |tcx| "native_library_kind({})", tcx.def_path_str(def_id) }
+    }
+    query native_library(def_id: DefId) -> Option<&'tcx NativeLib> {
+        desc { |tcx| "native_library({})", tcx.def_path_str(def_id) }
     }
 
     /// Does lifetime resolution, but does not descend into trait items. This

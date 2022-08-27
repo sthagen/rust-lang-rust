@@ -12,7 +12,7 @@ use rustc_data_structures::sync::{Lock, Lrc};
 use rustc_errors::{emitter::SilentEmitter, ColorConfig, Handler};
 use rustc_errors::{
     error_code, fallback_fluent_bundle, Applicability, Diagnostic, DiagnosticBuilder, DiagnosticId,
-    DiagnosticMessage, ErrorGuaranteed, MultiSpan, StashKey,
+    DiagnosticMessage, EmissionGuarantee, ErrorGuaranteed, MultiSpan, StashKey,
 };
 use rustc_feature::{find_feature_issue, GateIssue, UnstableFeatures};
 use rustc_span::edition::Edition;
@@ -360,6 +360,17 @@ impl ParseSess {
         self.create_warning(warning).emit()
     }
 
+    pub fn create_fatal<'a>(
+        &'a self,
+        fatal: impl SessionDiagnostic<'a, !>,
+    ) -> DiagnosticBuilder<'a, !> {
+        fatal.into_diagnostic(self)
+    }
+
+    pub fn emit_fatal<'a>(&'a self, fatal: impl SessionDiagnostic<'a, !>) -> ! {
+        self.create_fatal(fatal).emit()
+    }
+
     #[rustc_lint_diagnostics]
     pub fn struct_err(
         &self,
@@ -371,5 +382,18 @@ impl ParseSess {
     #[rustc_lint_diagnostics]
     pub fn struct_warn(&self, msg: impl Into<DiagnosticMessage>) -> DiagnosticBuilder<'_, ()> {
         self.span_diagnostic.struct_warn(msg)
+    }
+
+    #[rustc_lint_diagnostics]
+    pub fn struct_fatal(&self, msg: impl Into<DiagnosticMessage>) -> DiagnosticBuilder<'_, !> {
+        self.span_diagnostic.struct_fatal(msg)
+    }
+
+    #[rustc_lint_diagnostics]
+    pub fn struct_diagnostic<G: EmissionGuarantee>(
+        &self,
+        msg: impl Into<DiagnosticMessage>,
+    ) -> DiagnosticBuilder<'_, G> {
+        self.span_diagnostic.struct_diagnostic(msg)
     }
 }
