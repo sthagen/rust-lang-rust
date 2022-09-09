@@ -132,7 +132,7 @@ decl_derive!(
         diag,
         help,
         note,
-        warn_,
+        warning,
         // field attributes
         skip_arg,
         primary_span,
@@ -149,7 +149,7 @@ decl_derive!(
         diag,
         help,
         note,
-        warn_,
+        warning,
         // field attributes
         skip_arg,
         primary_span,
@@ -166,13 +166,18 @@ decl_derive!(
         label,
         help,
         note,
-        warn_,
+        warning,
         suggestion,
         suggestion_short,
         suggestion_hidden,
         suggestion_verbose,
+        multipart_suggestion,
+        multipart_suggestion_short,
+        multipart_suggestion_hidden,
+        multipart_suggestion_verbose,
         // field attributes
         skip_arg,
         primary_span,
+        suggestion_part,
         applicability)] => diagnostics::session_subdiagnostic_derive
 );

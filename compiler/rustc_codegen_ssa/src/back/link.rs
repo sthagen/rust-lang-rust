@@ -1,6 +1,6 @@
 use rustc_arena::TypedArena;
 use rustc_ast::CRATE_NODE_ID;
-use rustc_data_structures::fx::{FxHashSet, FxIndexMap};
+use rustc_data_structures::fx::FxIndexMap;
 use rustc_data_structures::memmap::Mmap;
 use rustc_data_structures::temp_dir::MaybeTempDir;
 use rustc_errors::{ErrorGuaranteed, Handler};
@@ -1173,13 +1173,6 @@ pub fn linker_and_flavor(sess: &Session) -> (PathBuf, LinkerFlavor) {
             // only the linker flavor is known; use the default linker for the selected flavor
             (None, Some(flavor)) => Some((
                 PathBuf::from(match flavor {
-                    LinkerFlavor::Em => {
-                        if cfg!(windows) {
-                            "emcc.bat"
-                        } else {
-                            "emcc"
-                        }
-                    }
                     LinkerFlavor::Gcc => {
                         if cfg!(any(target_os = "solaris", target_os = "illumos")) {
                             // On historical Solaris systems, "cc" may have
@@ -1194,11 +1187,17 @@ pub fn linker_and_flavor(sess: &Session) -> (PathBuf, LinkerFlavor) {
                         }
                     }
                     LinkerFlavor::Ld => "ld",
-                    LinkerFlavor::Msvc => "link.exe",
                     LinkerFlavor::Lld(_) => "lld",
-                    LinkerFlavor::PtxLinker => "rust-ptx-linker",
-                    LinkerFlavor::BpfLinker => "bpf-linker",
-                    LinkerFlavor::L4Bender => "l4-bender",
+                    LinkerFlavor::Msvc => "link.exe",
+                    LinkerFlavor::EmCc => {
+                        if cfg!(windows) {
+                            "emcc.bat"
+                        } else {
+                            "emcc"
+                        }
+                    }
+                    LinkerFlavor::Bpf => "bpf-linker",
+                    LinkerFlavor::Ptx => "rust-ptx-linker",
                 }),
                 flavor,
             )),
@@ -1208,7 +1207,7 @@ pub fn linker_and_flavor(sess: &Session) -> (PathBuf, LinkerFlavor) {
                 });
 
                 let flavor = if stem == "emcc" {
-                    LinkerFlavor::Em
+                    LinkerFlavor::EmCc
                 } else if stem == "gcc"
                     || stem.ends_with("-gcc")
                     || stem == "clang"
@@ -1236,7 +1235,8 @@ pub fn linker_and_flavor(sess: &Session) -> (PathBuf, LinkerFlavor) {
 
     // linker and linker flavor specified via command line have precedence over what the target
     // specification specifies
-    if let Some(ret) = infer_from(sess, sess.opts.cg.linker.clone(), sess.opts.cg.linker_flavor) {
+    let linker_flavor = sess.opts.cg.linker_flavor.map(LinkerFlavor::from_cli);
+    if let Some(ret) = infer_from(sess, sess.opts.cg.linker.clone(), linker_flavor) {
         return ret;
     }
 
@@ -1714,6 +1714,13 @@ fn add_post_link_args(cmd: &mut dyn Linker, sess: &Session, flavor: LinkerFlavor
 /// that are necessary for the linking. They are only present in symbol table but not actually
 /// used in any sections, so the linker will therefore pick relevant rlibs for linking, but
 /// unused `#[no_mangle]` or `#[used]` can still be discard by GC sections.
+///
+/// There's a few internal crates in the standard library (aka libcore and
+/// libstd) which actually have a circular dependence upon one another. This
+/// currently arises through "weak lang items" where libcore requires things
+/// like `rust_begin_unwind` but libstd ends up defining it. To get this
+/// circular dependence to work correctly we declare some of these things
+/// in this synthetic object.
 fn add_linked_symbol_object(
     cmd: &mut dyn Linker,
     sess: &Session,
@@ -2113,11 +2120,11 @@ fn add_order_independent_options(
         });
     }
 
-    if flavor == LinkerFlavor::PtxLinker {
+    if flavor == LinkerFlavor::Ptx {
         // Provide the linker with fallback to internal `target-cpu`.
         cmd.arg("--fallback-arch");
         cmd.arg(&codegen_results.crate_info.target_cpu);
-    } else if flavor == LinkerFlavor::BpfLinker {
+    } else if flavor == LinkerFlavor::Bpf {
         cmd.arg("--cpu");
         cmd.arg(&codegen_results.crate_info.target_cpu);
         cmd.arg("--cpu-features");
@@ -2333,65 +2340,10 @@ fn add_upstream_rust_crates<'a>(
     // crates.
     let deps = &codegen_results.crate_info.used_crates;
 
-    // There's a few internal crates in the standard library (aka libcore and
-    // libstd) which actually have a circular dependence upon one another. This
-    // currently arises through "weak lang items" where libcore requires things
-    // like `rust_begin_unwind` but libstd ends up defining it. To get this
-    // circular dependence to work correctly in all situations we'll need to be
-    // sure to correctly apply the `--start-group` and `--end-group` options to
-    // GNU linkers, otherwise if we don't use any other symbol from the standard
-    // library it'll get discarded and the whole application won't link.
-    //
-    // In this loop we're calculating the `group_end`, after which crate to
-    // pass `--end-group` and `group_start`, before which crate to pass
-    // `--start-group`. We currently do this by passing `--end-group` after
-    // the first crate (when iterating backwards) that requires a lang item
-    // defined somewhere else. Once that's set then when we've defined all the
-    // necessary lang items we'll pass `--start-group`.
-    //
-    // Note that this isn't amazing logic for now but it should do the trick
-    // for the current implementation of the standard library.
-    let mut group_end = None;
-    let mut group_start = None;
-    // Crates available for linking thus far.
-    let mut available = FxHashSet::default();
-    // Crates required to satisfy dependencies discovered so far.
-    let mut required = FxHashSet::default();
-
-    let info = &codegen_results.crate_info;
-    for &cnum in deps.iter().rev() {
-        if let Some(missing) = info.missing_lang_items.get(&cnum) {
-            let missing_crates = missing.iter().map(|i| info.lang_item_to_crate.get(i).copied());
-            required.extend(missing_crates);
-        }
-
-        required.insert(Some(cnum));
-        available.insert(Some(cnum));
-
-        if required.len() > available.len() && group_end.is_none() {
-            group_end = Some(cnum);
-        }
-        if required.len() == available.len() && group_end.is_some() {
-            group_start = Some(cnum);
-            break;
-        }
-    }
-
-    // If we didn't end up filling in all lang items from upstream crates then
-    // we'll be filling it in with our crate. This probably means we're the
-    // standard library itself, so skip this for now.
-    if group_end.is_some() && group_start.is_none() {
-        group_end = None;
-    }
-
     let mut compiler_builtins = None;
     let search_path = OnceCell::new();
 
     for &cnum in deps.iter() {
-        if group_start == Some(cnum) {
-            cmd.group_start();
-        }
-
         // We may not pass all crates through to the linker. Some crates may
         // appear statically in an existing dylib, meaning we'll pick up all the
         // symbols from the dylib.
@@ -2451,6 +2403,14 @@ fn add_upstream_rust_crates<'a>(
                                 bundle: Some(false),
                                 whole_archive: Some(false) | None,
                             } => {
+                                // HACK/FIXME: Fixup a circular dependency between libgcc and libc
+                                // with glibc. This logic should be moved to the libc crate.
+                                if sess.target.os == "linux"
+                                    && sess.target.env == "gnu"
+                                    && name == "c"
+                                {
+                                    cmd.link_staticlib("gcc", false);
+                                }
                                 cmd.link_staticlib(name, lib.verbatim.unwrap_or(false));
                             }
                             NativeLibKind::LinkArg => {
@@ -2469,10 +2429,6 @@ fn add_upstream_rust_crates<'a>(
                 }
             }
             Linkage::Dynamic => add_dynamic_crate(cmd, sess, &src.dylib.as_ref().unwrap().0),
-        }
-
-        if group_end == Some(cnum) {
-            cmd.group_end();
         }
     }
 
@@ -2797,20 +2753,24 @@ fn add_gcc_ld_path(cmd: &mut dyn Linker, sess: &Session, flavor: LinkerFlavor) {
         if let LinkerFlavor::Gcc = flavor {
             match ld_impl {
                 LdImpl::Lld => {
-                    let tools_path = sess.get_tools_search_paths(false);
-                    let gcc_ld_dir = tools_path
-                        .into_iter()
-                        .map(|p| p.join("gcc-ld"))
-                        .find(|p| {
-                            p.join(if sess.host.is_like_windows { "ld.exe" } else { "ld" }).exists()
-                        })
-                        .unwrap_or_else(|| sess.fatal("rust-lld (as ld) not found"));
-                    cmd.arg({
-                        let mut arg = OsString::from("-B");
-                        arg.push(gcc_ld_dir);
-                        arg
-                    });
-                    cmd.arg(format!("-Wl,-rustc-lld-flavor={}", sess.target.lld_flavor.as_str()));
+                    // Implement the "self-contained" part of -Zgcc-ld
+                    // by adding rustc distribution directories to the tool search path.
+                    for path in sess.get_tools_search_paths(false) {
+                        cmd.arg({
+                            let mut arg = OsString::from("-B");
+                            arg.push(path.join("gcc-ld"));
+                            arg
+                        });
+                    }
+                    // Implement the "linker flavor" part of -Zgcc-ld
+                    // by asking cc to use some kind of lld.
+                    cmd.arg("-fuse-ld=lld");
+                    if sess.target.lld_flavor != LldFlavor::Ld {
+                        // Tell clang to use a non-default LLD flavor.
+                        // Gcc doesn't understand the target option, but we currently assume
+                        // that gcc is not used for Apple and Wasm targets (#97402).
+                        cmd.arg(format!("--target={}", sess.target.llvm_target));
+                    }
                 }
             }
         } else {

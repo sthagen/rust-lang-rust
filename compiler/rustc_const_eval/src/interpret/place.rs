@@ -2,8 +2,6 @@
 //! into a place.
 //! All high-level functions to write to memory work on places as destinations.
 
-use std::hash::Hash;
-
 use rustc_ast::Mutability;
 use rustc_middle::mir;
 use rustc_middle::ty;
@@ -290,7 +288,7 @@ impl<'tcx, Prov: Provenance> PlaceTy<'tcx, Prov> {
 // FIXME: Working around https://github.com/rust-lang/rust/issues/54385
 impl<'mir, 'tcx: 'mir, Prov, M> InterpCx<'mir, 'tcx, M>
 where
-    Prov: Provenance + Eq + Hash + 'static,
+    Prov: Provenance + 'static,
     M: Machine<'mir, 'tcx, Provenance = Prov>,
 {
     /// Take a value, which represents a (thin or wide) reference, and make it a place.
@@ -642,7 +640,7 @@ where
         // avoid force_allocation.
         let src = match self.read_immediate_raw(src)? {
             Ok(src_val) => {
-                assert!(!src.layout.is_unsized(), "cannot have unsized immediates");
+                assert!(!src.layout.is_unsized(), "cannot copy unsized immediates");
                 assert!(
                     !dest.layout.is_unsized(),
                     "the src is sized, so the dest must also be sized"
@@ -819,7 +817,7 @@ where
             }
             abi::Variants::Multiple {
                 tag_encoding:
-                    TagEncoding::Niche { dataful_variant, ref niche_variants, niche_start },
+                    TagEncoding::Niche { untagged_variant, ref niche_variants, niche_start },
                 tag: tag_layout,
                 tag_field,
                 ..
@@ -827,7 +825,7 @@ where
                 // No need to validate that the discriminant here because the
                 // `TyAndLayout::for_variant()` call earlier already checks the variant is valid.
 
-                if variant_index != dataful_variant {
+                if variant_index != untagged_variant {
                     let variants_start = niche_variants.start().as_u32();
                     let variant_index_relative = variant_index
                         .as_u32()
@@ -892,6 +890,8 @@ mod size_asserts {
     static_assert_size!(MemPlaceMeta, 24);
     static_assert_size!(MemPlace, 40);
     static_assert_size!(MPlaceTy<'_>, 64);
-    static_assert_size!(Place, 48);
-    static_assert_size!(PlaceTy<'_>, 72);
+    #[cfg(not(bootstrap))]
+    static_assert_size!(Place, 40);
+    #[cfg(not(bootstrap))]
+    static_assert_size!(PlaceTy<'_>, 64);
 }

@@ -18,6 +18,7 @@
 #![feature(control_flow_enum)]
 #![feature(extend_one)]
 #![cfg_attr(bootstrap, feature(label_break_value))]
+#![feature(let_chains)]
 #![feature(let_else)]
 #![feature(min_specialization)]
 #![feature(never_type)]
@@ -34,5 +35,6 @@ extern crate tracing;
 #[macro_use]
 extern crate rustc_middle;
 
+mod errors;
 pub mod infer;
 pub mod traits;

@@ -101,7 +101,7 @@ pub(super) fn check_fn<'a, 'tcx>(
             decl.output.span(),
             param_env,
         ));
-    // If we replaced declared_ret_ty with infer vars, then we must be infering
+    // If we replaced declared_ret_ty with infer vars, then we must be inferring
     // an opaque type, so set a flag so we can improve diagnostics.
     fcx.return_type_has_opaque = ret_ty != declared_ret_ty;
 
@@ -610,12 +610,7 @@ pub(super) fn check_opaque_for_inheriting_lifetimes<'tcx>(
         fn visit_ty(&mut self, arg: &'tcx hir::Ty<'tcx>) {
             match arg.kind {
                 hir::TyKind::Path(hir::QPath::Resolved(None, path)) => match &path.segments {
-                    [
-                        PathSegment {
-                            res: Some(Res::SelfTy { trait_: _, alias_to: impl_ref }),
-                            ..
-                        },
-                    ] => {
+                    [PathSegment { res: Res::SelfTy { trait_: _, alias_to: impl_ref }, .. }] => {
                         let impl_ty_name =
                             impl_ref.map(|(def_id, _)| self.tcx.def_path_str(def_id));
                         self.selftys.push((path.span, impl_ty_name));
@@ -1464,7 +1459,7 @@ fn check_enum<'tcx>(tcx: TyCtxt<'tcx>, vs: &'tcx [hir::Variant<'tcx>], def_id: L
     def.destructor(tcx); // force the destructor to be evaluated
 
     if vs.is_empty() {
-        if let Some(attr) = tcx.get_attr(def_id.to_def_id(), sym::repr) {
+        if let Some(attr) = tcx.get_attrs(def_id.to_def_id(), sym::repr).next() {
             struct_span_err!(
                 tcx.sess,
                 attr.span,
@@ -1543,7 +1538,7 @@ fn detect_discriminant_duplicate<'tcx>(
             None => {
                 // At this point we know this discriminant is a duplicate, and was not explicitly
                 // assigned by the user. Here we iterate backwards to fetch the HIR for the last
-                // explictly assigned discriminant, and letting the user know that this was the
+                // explicitly assigned discriminant, and letting the user know that this was the
                 // increment startpoint, and how many steps from there leading to the duplicate
                 if let Some((n, hir::Variant { span, ident, .. })) =
                     vs[..idx].iter().rev().enumerate().find(|v| v.1.disr_expr.is_some())
@@ -1566,7 +1561,7 @@ fn detect_discriminant_duplicate<'tcx>(
     };
 
     // Here we loop through the discriminants, comparing each discriminant to another.
-    // When a duplicate is detected, we instatiate an error and point to both
+    // When a duplicate is detected, we instantiate an error and point to both
     // initial and duplicate value. The duplicate discriminant is then discarded by swapping
     // it with the last element and decrementing the `vec.len` (which is why we have to evaluate
     // `discrs.len()` anew every iteration, and why this could be tricky to do in a functional

@@ -25,7 +25,6 @@ use rustc_span::lev_distance::find_best_match_for_name;
 use rustc_span::source_map::SourceMap;
 use rustc_span::symbol::{kw, sym, Ident, Symbol};
 use rustc_span::{BytePos, Span};
-use tracing::debug;
 
 use crate::imports::{Import, ImportKind, ImportResolver};
 use crate::late::{PatternSource, Rib};
@@ -1172,16 +1171,6 @@ impl<'a> Resolver<'a> {
                 Scope::Module(module, _) => {
                     this.add_module_candidates(module, &mut suggestions, filter_fn);
                 }
-                Scope::RegisteredAttrs => {
-                    let res = Res::NonMacroAttr(NonMacroAttrKind::Registered);
-                    if filter_fn(res) {
-                        suggestions.extend(
-                            this.registered_attrs
-                                .iter()
-                                .map(|ident| TypoSuggestion::typo_from_res(ident.name, res)),
-                        );
-                    }
-                }
                 Scope::MacroUsePrelude => {
                     suggestions.extend(this.macro_use_prelude.iter().filter_map(
                         |(name, binding)| {
@@ -1404,7 +1393,7 @@ impl<'a> Resolver<'a> {
 
         // If only some candidates are accessible, take just them
         if !candidates.iter().all(|v: &ImportSuggestion| !v.accessible) {
-            candidates = candidates.into_iter().filter(|x| x.accessible).collect();
+            candidates.retain(|x| x.accessible)
         }
 
         candidates

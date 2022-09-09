@@ -83,7 +83,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         self.resolve_vars_with_obligations_and_mutate_fulfillment(ty, |_| {})
     }
 
-    #[instrument(skip(self, mutate_fulfillment_errors), level = "debug")]
+    #[instrument(skip(self, mutate_fulfillment_errors), level = "debug", ret)]
     pub(in super::super) fn resolve_vars_with_obligations_and_mutate_fulfillment(
         &self,
         mut ty: Ty<'tcx>,
@@ -107,10 +107,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         // indirect dependencies that don't seem worth tracking
         // precisely.
         self.select_obligations_where_possible(false, mutate_fulfillment_errors);
-        ty = self.resolve_vars_if_possible(ty);
-
-        debug!(?ty);
-        ty
+        self.resolve_vars_if_possible(ty)
     }
 
     pub(in super::super) fn record_deferred_call_resolution(
@@ -412,7 +409,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     rhs_span: opt_input_expr.map(|expr| expr.span),
                     is_lit: opt_input_expr
                         .map_or(false, |expr| matches!(expr.kind, ExprKind::Lit(_))),
-                    output_pred: None,
+                    output_ty: None,
                 },
             ),
             self.param_env,
@@ -439,6 +436,17 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         if !ty.references_error() {
             let lang_item = self.tcx.require_lang_item(LangItem::Sized, None);
             self.require_type_meets(ty, span, code, lang_item);
+        }
+    }
+
+    pub fn require_type_is_sized_deferred(
+        &self,
+        ty: Ty<'tcx>,
+        span: Span,
+        code: traits::ObligationCauseCode<'tcx>,
+    ) {
+        if !ty.references_error() {
+            self.deferred_sized_obligations.borrow_mut().push((ty, span, code));
         }
     }
 
@@ -487,13 +495,10 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
     pub fn to_const(&self, ast_c: &hir::AnonConst) -> ty::Const<'tcx> {
         let const_def_id = self.tcx.hir().local_def_id(ast_c.hir_id);
+        let span = self.tcx.hir().span(ast_c.hir_id);
         let c = ty::Const::from_anon_const(self.tcx, const_def_id);
-        self.register_wf_obligation(
-            c.into(),
-            self.tcx.hir().span(ast_c.hir_id),
-            ObligationCauseCode::WellFormed(None),
-        );
-        c
+        self.register_wf_obligation(c.into(), span, ObligationCauseCode::WellFormed(None));
+        self.normalize_associated_types_in(span, c)
     }
 
     pub fn const_arg_to_const(
@@ -979,7 +984,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         if found != self.tcx.types.unit {
             return;
         }
-        if let ExprKind::MethodCall(path_segment, [rcvr, ..], _) = expr.kind {
+        if let ExprKind::MethodCall(path_segment, rcvr, ..) = expr.kind {
             if self
                 .typeck_results
                 .borrow()
@@ -1405,7 +1410,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         })
     }
 
-    #[tracing::instrument(level = "debug", skip(self, code, span, def_id, substs))]
+    #[instrument(level = "debug", skip(self, code, span, def_id, substs))]
     fn add_required_obligations_with_code(
         &self,
         span: Span,

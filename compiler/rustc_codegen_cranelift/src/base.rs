@@ -73,7 +73,7 @@ pub(crate) fn codegen_fn<'tcx>(
     // Predefine blocks
     let start_block = bcx.create_block();
     let block_map: IndexVec<BasicBlock, Block> =
-        (0..mir.basic_blocks().len()).map(|_| bcx.create_block()).collect();
+        (0..mir.basic_blocks.len()).map(|_| bcx.create_block()).collect();
 
     // Make FunctionCx
     let target_config = module.target_config();
@@ -271,7 +271,7 @@ fn codegen_fn_body(fx: &mut FunctionCx<'_, '_, '_>, start_block: Block) {
     }
     fx.tcx.sess.time("codegen prelude", || crate::abi::codegen_fn_prelude(fx, start_block));
 
-    for (bb, bb_data) in fx.mir.basic_blocks().iter_enumerated() {
+    for (bb, bb_data) in fx.mir.basic_blocks.iter_enumerated() {
         let block = fx.get_block(bb);
         fx.bcx.switch_to_block(block);
 
@@ -794,20 +794,31 @@ fn codegen_stmt<'tcx>(
         | StatementKind::AscribeUserType(..) => {}
 
         StatementKind::Coverage { .. } => fx.tcx.sess.fatal("-Zcoverage is unimplemented"),
-        StatementKind::CopyNonOverlapping(inner) => {
-            let dst = codegen_operand(fx, &inner.dst);
-            let pointee = dst
-                .layout()
-                .pointee_info_at(fx, rustc_target::abi::Size::ZERO)
-                .expect("Expected pointer");
-            let dst = dst.load_scalar(fx);
-            let src = codegen_operand(fx, &inner.src).load_scalar(fx);
-            let count = codegen_operand(fx, &inner.count).load_scalar(fx);
-            let elem_size: u64 = pointee.size.bytes();
-            let bytes =
-                if elem_size != 1 { fx.bcx.ins().imul_imm(count, elem_size as i64) } else { count };
-            fx.bcx.call_memcpy(fx.target_config, dst, src, bytes);
-        }
+        StatementKind::Intrinsic(ref intrinsic) => match &**intrinsic {
+            // We ignore `assume` intrinsics, they are only useful for optimizations
+            NonDivergingIntrinsic::Assume(_) => {}
+            NonDivergingIntrinsic::CopyNonOverlapping(mir::CopyNonOverlapping {
+                src,
+                dst,
+                count,
+            }) => {
+                let dst = codegen_operand(fx, dst);
+                let pointee = dst
+                    .layout()
+                    .pointee_info_at(fx, rustc_target::abi::Size::ZERO)
+                    .expect("Expected pointer");
+                let dst = dst.load_scalar(fx);
+                let src = codegen_operand(fx, src).load_scalar(fx);
+                let count = codegen_operand(fx, count).load_scalar(fx);
+                let elem_size: u64 = pointee.size.bytes();
+                let bytes = if elem_size != 1 {
+                    fx.bcx.ins().imul_imm(count, elem_size as i64)
+                } else {
+                    count
+                };
+                fx.bcx.call_memcpy(fx.target_config, dst, src, bytes);
+            }
+        },
     }
 }
 
@@ -925,8 +936,11 @@ pub(crate) fn codegen_panic_inner<'tcx>(
     args: &[Value],
     span: Span,
 ) {
-    let def_id =
-        fx.tcx.lang_items().require(lang_item).unwrap_or_else(|s| fx.tcx.sess.span_fatal(span, &s));
+    let def_id = fx
+        .tcx
+        .lang_items()
+        .require(lang_item)
+        .unwrap_or_else(|e| fx.tcx.sess.span_fatal(span, e.to_string()));
 
     let instance = Instance::mono(fx.tcx, def_id).polymorphize(fx.tcx);
     let symbol_name = fx.tcx.symbol_name(instance).name;

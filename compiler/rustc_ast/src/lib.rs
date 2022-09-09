@@ -14,6 +14,7 @@
 #![feature(const_trait_impl)]
 #![feature(if_let_guard)]
 #![cfg_attr(bootstrap, feature(label_break_value))]
+#![feature(let_chains)]
 #![feature(min_specialization)]
 #![feature(negative_impls)]
 #![feature(slice_internals)]
@@ -24,6 +25,9 @@
 
 #[macro_use]
 extern crate rustc_macros;
+
+#[macro_use]
+extern crate tracing;
 
 pub mod util {
     pub mod classify;

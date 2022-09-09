@@ -93,6 +93,7 @@
 #![warn(missing_debug_implementations)]
 #![warn(missing_docs)]
 #![allow(explicit_outlives_requirements)]
+#![allow(incomplete_features)]
 //
 // Library features:
 #![feature(const_align_offset)]
@@ -142,6 +143,7 @@
 #![feature(const_type_id)]
 #![feature(const_type_name)]
 #![feature(const_default_impls)]
+#![feature(const_unicode_case_lookup)]
 #![feature(const_unsafecell_get_mut)]
 #![feature(core_panic)]
 #![feature(duration_consts_float)]
@@ -160,6 +162,7 @@
 //
 // Language features:
 #![feature(abi_unadjusted)]
+#![feature(adt_const_params)]
 #![feature(allow_internal_unsafe)]
 #![feature(allow_internal_unstable)]
 #![feature(associated_type_bounds)]

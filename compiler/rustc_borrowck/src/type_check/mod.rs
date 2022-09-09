@@ -1043,6 +1043,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
             let CanonicalUserTypeAnnotation { span, ref user_ty, inferred_ty } = *user_annotation;
             let inferred_ty = self.normalize(inferred_ty, Locations::All(span));
             let annotation = self.instantiate_canonical_with_fresh_inference_vars(span, user_ty);
+            debug!(?annotation);
             match annotation {
                 UserType::Ty(mut ty) => {
                     ty = self.normalize(ty, Locations::All(span));
@@ -1301,12 +1302,13 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                     );
                 }
             }
-            StatementKind::CopyNonOverlapping(box rustc_middle::mir::CopyNonOverlapping {
-                ..
-            }) => span_bug!(
-                stmt.source_info.span,
-                "Unexpected StatementKind::CopyNonOverlapping, should only appear after lowering_intrinsics",
-            ),
+            StatementKind::Intrinsic(box ref kind) => match kind {
+                NonDivergingIntrinsic::Assume(op) => self.check_operand(op, location),
+                NonDivergingIntrinsic::CopyNonOverlapping(..) => span_bug!(
+                    stmt.source_info.span,
+                    "Unexpected NonDivergingIntrinsic::CopyNonOverlapping, should only appear after lowering_intrinsics",
+                ),
+            },
             StatementKind::FakeRead(..)
             | StatementKind::StorageLive(..)
             | StatementKind::StorageDead(..)
@@ -2633,7 +2635,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
             self.check_local(&body, local, local_decl);
         }
 
-        for (block, block_data) in body.basic_blocks().iter_enumerated() {
+        for (block, block_data) in body.basic_blocks.iter_enumerated() {
             let mut location = Location { block, statement_index: 0 };
             for stmt in &block_data.statements {
                 if !stmt.source_info.span.is_dummy() {

@@ -378,6 +378,7 @@ bootstrap_tool!(
     JsonDocCk, "src/tools/jsondocck", "jsondocck";
     HtmlChecker, "src/tools/html-checker", "html-checker";
     BumpStage0, "src/tools/bump-stage0", "bump-stage0";
+    ReplaceVersionPlaceholder, "src/tools/replace-version-placeholder", "replace-version-placeholder";
 );
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, Ord, PartialOrd)]
@@ -856,14 +857,7 @@ tool_extended!((self, builder),
     Clippy, "src/tools/clippy", "clippy-driver", stable=true, in_tree=true, {};
     Miri, "src/tools/miri", "miri", stable=false, {};
     CargoMiri, "src/tools/miri/cargo-miri", "cargo-miri", stable=false, {};
-    Rls, "src/tools/rls", "rls", stable=true, {
-        builder.ensure(Clippy {
-            compiler: self.compiler,
-            target: self.target,
-            extra_features: Vec::new(),
-        });
-        self.extra_features.push("clippy".to_owned());
-    };
+    Rls, "src/tools/rls", "rls", stable=true, {};
     // FIXME: tool_std is not quite right, we shouldn't allow nightly features.
     // But `builder.cargo` doesn't know how to handle ToolBootstrap in stages other than 0,
     // and this is close enough for now.

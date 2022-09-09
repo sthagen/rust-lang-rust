@@ -2,6 +2,7 @@ use crate::traits::{ObligationCause, ObligationCauseCode};
 use crate::ty::diagnostics::suggest_constraining_type_param;
 use crate::ty::print::{FmtPrinter, Printer};
 use crate::ty::{self, BoundRegionKind, Region, Ty, TyCtxt};
+use hir::def::DefKind;
 use rustc_errors::Applicability::{MachineApplicable, MaybeIncorrect};
 use rustc_errors::{pluralize, Diagnostic, MultiSpan};
 use rustc_hir as hir;
@@ -276,10 +277,23 @@ impl<'tcx> Ty<'tcx> {
             }
             ty::Slice(ty) if ty.is_simple_ty() => format!("slice `{}`", self).into(),
             ty::Slice(_) => "slice".into(),
-            ty::RawPtr(_) => "*-ptr".into(),
+            ty::RawPtr(tymut) => {
+                let tymut_string = match tymut.mutbl {
+                    hir::Mutability::Mut => tymut.to_string(),
+                    hir::Mutability::Not => format!("const {}", tymut.ty),
+                };
+
+                if tymut_string != "_" && (tymut.ty.is_simple_text() || tymut_string.len() < "const raw pointer".len()) {
+                    format!("`*{}`", tymut_string).into()
+                } else {
+                    // Unknown type name, it's long or has type arguments
+                    "raw pointer".into()
+                }
+            },
             ty::Ref(_, ty, mutbl) => {
                 let tymut = ty::TypeAndMut { ty, mutbl };
                 let tymut_string = tymut.to_string();
+
                 if tymut_string != "_"
                     && (ty.is_simple_text() || tymut_string.len() < "mutable reference".len())
                 {
@@ -525,7 +539,7 @@ impl<T> Trait<T> for X {
                             diag.span_label(p_span, "this type parameter");
                         }
                     }
-                    (ty::Projection(proj_ty), _) => {
+                    (ty::Projection(proj_ty), _) if self.def_kind(proj_ty.item_def_id) != DefKind::ImplTraitPlaceholder => {
                         self.expected_projection(
                             diag,
                             proj_ty,
@@ -534,7 +548,7 @@ impl<T> Trait<T> for X {
                             cause.code(),
                         );
                     }
-                    (_, ty::Projection(proj_ty)) => {
+                    (_, ty::Projection(proj_ty)) if self.def_kind(proj_ty.item_def_id) != DefKind::ImplTraitPlaceholder => {
                         let msg = format!(
                             "consider constraining the associated type `{}` to `{}`",
                             values.found, values.expected,

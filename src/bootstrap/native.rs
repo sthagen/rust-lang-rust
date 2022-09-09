@@ -432,12 +432,13 @@ impl Step for Llvm {
             cfg.define("LLVM_LINK_LLVM_DYLIB", "ON");
         }
 
-        if target.starts_with("riscv") && !target.contains("freebsd") {
+        if target.starts_with("riscv") && !target.contains("freebsd") && !target.contains("openbsd")
+        {
             // RISC-V GCC erroneously requires linking against
             // `libatomic` when using 1-byte and 2-byte C++
             // atomics but the LLVM build system check cannot
             // detect this. Therefore it is set manually here.
-            // FreeBSD uses Clang as its system compiler and
+            // Some BSD uses Clang as its system compiler and
             // provides no libatomic in its base system so does
             // not want this.
             ldflags.exe.push(" -latomic");
@@ -637,7 +638,7 @@ fn configure_cmake(
 
         if target.contains("darwin") {
             // Make sure that CMake does not build universal binaries on macOS.
-            // Explicitly specifiy the one single target architecture.
+            // Explicitly specify the one single target architecture.
             if target.starts_with("aarch64") {
                 // macOS uses a different name for building arm64
                 cfg.define("CMAKE_OSX_ARCHITECTURES", "arm64");

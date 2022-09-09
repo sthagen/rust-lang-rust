@@ -31,6 +31,14 @@ impl AddSubdiagnostic for ForbiddenLetReason {
 }
 
 #[derive(SessionDiagnostic)]
+#[diag(ast_passes::forbidden_let_stable)]
+#[note]
+pub struct ForbiddenLetStable {
+    #[primary_span]
+    pub span: Span,
+}
+
+#[derive(SessionDiagnostic)]
 #[diag(ast_passes::forbidden_assoc_constraint)]
 pub struct ForbiddenAssocConstraint {
     #[primary_span]
@@ -69,17 +77,6 @@ pub enum InvalidVisibilityNote {
     IndividualImplItems,
     #[note(ast_passes::individual_foreign_items)]
     IndividualForeignItems,
-}
-
-#[derive(SessionDiagnostic)]
-#[diag(ast_passes::trait_fn_async, code = "E0706")]
-#[note]
-#[note(ast_passes::note2)]
-pub struct TraitFnAsync {
-    #[primary_span]
-    pub fn_span: Span,
-    #[label]
-    pub span: Span,
 }
 
 #[derive(SessionDiagnostic)]

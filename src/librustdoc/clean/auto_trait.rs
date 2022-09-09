@@ -123,7 +123,7 @@ where
             kind: Box::new(ImplItem(Box::new(Impl {
                 unsafety: hir::Unsafety::Normal,
                 generics: new_generics,
-                trait_: Some(clean_trait_ref_with_bindings(self.cx, trait_ref, &[])),
+                trait_: Some(clean_trait_ref_with_bindings(self.cx, trait_ref, ThinVec::new())),
                 for_: clean_middle_ty(ty, self.cx, None),
                 items: Vec::new(),
                 polarity,
@@ -525,8 +525,8 @@ where
                             GenericBound::TraitBound(ref mut p, _) => {
                                 // Insert regions into the for_generics hash map first, to ensure
                                 // that we don't end up with duplicate bounds (e.g., for<'b, 'b>)
-                                for_generics.extend(p.generic_params.clone());
-                                p.generic_params = for_generics.into_iter().collect();
+                                for_generics.extend(p.generic_params.drain(..));
+                                p.generic_params.extend(for_generics);
                                 self.is_fn_trait(&p.trait_)
                             }
                             _ => false,

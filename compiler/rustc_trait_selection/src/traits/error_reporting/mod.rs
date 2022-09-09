@@ -349,7 +349,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                             message,
                             label,
                             note,
-                            enclosing_scope,
+                            parent_label,
                             append_const_msg,
                         } = self.on_unimplemented_note(trait_ref, &obligation);
                         let have_alt_message = message.is_some() || label.is_some();
@@ -450,12 +450,27 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                         {
                             "consider using `()`, or a `Result`".to_owned()
                         } else {
-                            format!(
-                                "{}the trait `{}` is not implemented for `{}`",
-                                pre_message,
-                                trait_predicate.print_modifiers_and_trait_path(),
-                                trait_ref.skip_binder().self_ty(),
-                            )
+                            let ty_desc = match trait_ref.skip_binder().self_ty().kind() {
+                                ty::FnDef(_, _) => Some("fn item"),
+                                ty::Closure(_, _) => Some("closure"),
+                                _ => None,
+                            };
+
+                            match ty_desc {
+                                Some(desc) => format!(
+                                    "{}the trait `{}` is not implemented for {} `{}`",
+                                    pre_message,
+                                    trait_predicate.print_modifiers_and_trait_path(),
+                                    desc,
+                                    trait_ref.skip_binder().self_ty(),
+                                ),
+                                None => format!(
+                                    "{}the trait `{}` is not implemented for `{}`",
+                                    pre_message,
+                                    trait_predicate.print_modifiers_and_trait_path(),
+                                    trait_ref.skip_binder().self_ty(),
+                                ),
+                            }
                         };
 
                         if self.suggest_add_reference_to_arg(
@@ -515,7 +530,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                             // If it has a custom `#[rustc_on_unimplemented]` note, let's display it
                             err.note(s.as_str());
                         }
-                        if let Some(ref s) = enclosing_scope {
+                        if let Some(ref s) = parent_label {
                             let body = tcx
                                 .hir()
                                 .opt_local_def_id(obligation.cause.body_id)
@@ -524,11 +539,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                                         hir_id: obligation.cause.body_id,
                                     })
                                 });
-
-                            let enclosing_scope_span =
-                                tcx.hir().span_with_body(tcx.hir().local_def_id_to_hir_id(body));
-
-                            err.span_label(enclosing_scope_span, s);
+                            err.span_label(tcx.def_span(body), s);
                         }
 
                         self.suggest_floating_point_literal(&obligation, &mut err, &trait_ref);
@@ -1506,13 +1517,28 @@ impl<'a, 'tcx> InferCtxtPrivExt<'a, 'tcx> for InferCtxt<'a, 'tcx> {
                 .emit();
             }
             FulfillmentErrorCode::CodeConstEquateError(ref expected_found, ref err) => {
-                self.report_mismatched_consts(
+                let mut diag = self.report_mismatched_consts(
                     &error.obligation.cause,
                     expected_found.expected,
                     expected_found.found,
                     err.clone(),
-                )
-                .emit();
+                );
+                let code = error.obligation.cause.code().peel_derives().peel_match_impls();
+                if let ObligationCauseCode::BindingObligation(..)
+                | ObligationCauseCode::ItemObligation(..)
+                | ObligationCauseCode::ExprBindingObligation(..)
+                | ObligationCauseCode::ExprItemObligation(..) = code
+                {
+                    self.note_obligation_cause_code(
+                        &mut diag,
+                        &error.obligation.predicate,
+                        error.obligation.param_env,
+                        code,
+                        &mut vec![],
+                        &mut Default::default(),
+                    );
+                }
+                diag.emit();
             }
         }
     }
@@ -1790,13 +1816,21 @@ impl<'a, 'tcx> InferCtxtPrivExt<'a, 'tcx> for InferCtxt<'a, 'tcx> {
                 return false;
             }
             if candidates.len() == 1 {
+                let ty_desc = match candidates[0].self_ty().kind() {
+                    ty::FnPtr(_) => Some("fn pointer"),
+                    _ => None,
+                };
+                let the_desc = match ty_desc {
+                    Some(desc) => format!(" implemented for {} `", desc),
+                    None => " implemented for `".to_string(),
+                };
                 err.highlighted_help(vec![
                     (
                         format!("the trait `{}` ", candidates[0].print_only_trait_path()),
                         Style::NoStyle,
                     ),
                     ("is".to_string(), Style::Highlight),
-                    (" implemented for `".to_string(), Style::NoStyle),
+                    (the_desc, Style::NoStyle),
                     (candidates[0].self_ty().to_string(), Style::Highlight),
                     ("`".to_string(), Style::NoStyle),
                 ]);
@@ -1861,9 +1895,7 @@ impl<'a, 'tcx> InferCtxtPrivExt<'a, 'tcx> for InferCtxt<'a, 'tcx> {
                         // FIXME(compiler-errors): This could be generalized, both to
                         // be more granular, and probably look past other `#[fundamental]`
                         // types, too.
-                        self.tcx
-                            .visibility(def.did())
-                            .is_accessible_from(body_id.owner.to_def_id(), self.tcx)
+                        self.tcx.visibility(def.did()).is_accessible_from(body_id.owner, self.tcx)
                     } else {
                         true
                     }
@@ -1999,7 +2031,7 @@ impl<'a, 'tcx> InferCtxtPrivExt<'a, 'tcx> for InferCtxt<'a, 'tcx> {
         let predicate = self.resolve_vars_if_possible(obligation.predicate);
         let span = obligation.cause.span;
 
-        debug!(?predicate, obligation.cause.code = tracing::field::debug(&obligation.cause.code()));
+        debug!(?predicate, obligation.cause.code = ?obligation.cause.code());
 
         // Ambiguity errors are often caused as fallout from earlier errors.
         // We ignore them if this `infcx` is tainted in some cases below.
@@ -2176,12 +2208,12 @@ impl<'a, 'tcx> InferCtxtPrivExt<'a, 'tcx> for InferCtxt<'a, 'tcx> {
                         && let [
                             ..,
                             trait_path_segment @ hir::PathSegment {
-                                res: Some(rustc_hir::def::Res::Def(rustc_hir::def::DefKind::Trait, trait_id)),
+                                res: rustc_hir::def::Res::Def(rustc_hir::def::DefKind::Trait, trait_id),
                                 ..
                             },
                             hir::PathSegment {
                                 ident: assoc_item_name,
-                                res: Some(rustc_hir::def::Res::Def(_, item_id)),
+                                res: rustc_hir::def::Res::Def(_, item_id),
                                 ..
                             }
                         ] = path.segments

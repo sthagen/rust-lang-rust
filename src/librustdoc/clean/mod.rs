@@ -33,7 +33,8 @@ use std::collections::hash_map::Entry;
 use std::collections::BTreeMap;
 use std::default::Default;
 use std::hash::Hash;
-use std::{mem, vec};
+use std::mem;
+use thin_vec::ThinVec;
 
 use crate::core::{self, DocContext, ImplTraitParam};
 use crate::formats::item_type::ItemType;
@@ -125,7 +126,7 @@ fn clean_generic_bound<'tcx>(
                 bug!("clean: parenthesized `GenericBound::LangItemTrait`");
             };
 
-            let trait_ = clean_trait_ref_with_bindings(cx, trait_ref, &bindings);
+            let trait_ = clean_trait_ref_with_bindings(cx, trait_ref, bindings);
             GenericBound::TraitBound(
                 PolyTrait { trait_, generic_params: vec![] },
                 hir::TraitBoundModifier::None,
@@ -147,14 +148,14 @@ fn clean_generic_bound<'tcx>(
 pub(crate) fn clean_trait_ref_with_bindings<'tcx>(
     cx: &mut DocContext<'tcx>,
     trait_ref: ty::TraitRef<'tcx>,
-    bindings: &[TypeBinding],
+    bindings: ThinVec<TypeBinding>,
 ) -> Path {
     let kind = cx.tcx.def_kind(trait_ref.def_id).into();
     if !matches!(kind, ItemType::Trait | ItemType::TraitAlias) {
         span_bug!(cx.tcx.def_span(trait_ref.def_id), "`TraitRef` had unexpected kind {:?}", kind);
     }
     inline::record_extern_fqn(cx, trait_ref.def_id, kind);
-    let path = external_path(cx, trait_ref.def_id, true, bindings.to_vec(), trait_ref.substs);
+    let path = external_path(cx, trait_ref.def_id, true, bindings, trait_ref.substs);
 
     debug!("ty::TraitRef\n  subst: {:?}\n", trait_ref.substs);
 
@@ -164,7 +165,7 @@ pub(crate) fn clean_trait_ref_with_bindings<'tcx>(
 fn clean_poly_trait_ref_with_bindings<'tcx>(
     cx: &mut DocContext<'tcx>,
     poly_trait_ref: ty::PolyTraitRef<'tcx>,
-    bindings: &[TypeBinding],
+    bindings: ThinVec<TypeBinding>,
 ) -> GenericBound {
     let poly_trait_ref = poly_trait_ref.lift_to_tcx(cx.tcx).unwrap();
 
@@ -189,10 +190,10 @@ fn clean_poly_trait_ref_with_bindings<'tcx>(
     )
 }
 
-fn clean_lifetime<'tcx>(lifetime: hir::Lifetime, cx: &mut DocContext<'tcx>) -> Lifetime {
+fn clean_lifetime<'tcx>(lifetime: &hir::Lifetime, cx: &mut DocContext<'tcx>) -> Lifetime {
     let def = cx.tcx.named_region(lifetime.hir_id);
     if let Some(
-        rl::Region::EarlyBound(_, node_id)
+        rl::Region::EarlyBound(node_id)
         | rl::Region::LateBound(_, _, node_id)
         | rl::Region::Free(_, node_id),
     ) = def
@@ -327,7 +328,7 @@ fn clean_poly_trait_predicate<'tcx>(
     let poly_trait_ref = pred.map_bound(|pred| pred.trait_ref);
     Some(WherePredicate::BoundPredicate {
         ty: clean_middle_ty(poly_trait_ref.skip_binder().self_ty(), cx, None),
-        bounds: vec![clean_poly_trait_ref_with_bindings(cx, poly_trait_ref, &[])],
+        bounds: vec![clean_poly_trait_ref_with_bindings(cx, poly_trait_ref, ThinVec::new())],
         bound_params: Vec::new(),
     })
 }
@@ -369,9 +370,9 @@ fn clean_type_outlives_predicate<'tcx>(
 }
 
 fn clean_middle_term<'tcx>(term: ty::Term<'tcx>, cx: &mut DocContext<'tcx>) -> Term {
-    match term {
-        ty::Term::Ty(ty) => Term::Type(clean_middle_ty(ty, cx, None)),
-        ty::Term::Const(c) => Term::Constant(clean_middle_const(c, cx)),
+    match term.unpack() {
+        ty::TermKind::Ty(ty) => Term::Type(clean_middle_ty(ty, cx, None)),
+        ty::TermKind::Const(c) => Term::Constant(clean_middle_const(c, cx)),
     }
 }
 
@@ -402,7 +403,7 @@ fn clean_projection<'tcx>(
     def_id: Option<DefId>,
 ) -> Type {
     let lifted = ty.lift_to_tcx(cx.tcx).unwrap();
-    let trait_ = clean_trait_ref_with_bindings(cx, lifted.trait_ref(cx.tcx), &[]);
+    let trait_ = clean_trait_ref_with_bindings(cx, lifted.trait_ref(cx.tcx), ThinVec::new());
     let self_type = clean_middle_ty(ty.self_ty(), cx, None);
     let self_def_id = if let Some(def_id) = def_id {
         cx.tcx.opt_parent(def_id).or(Some(def_id))
@@ -494,7 +495,7 @@ fn clean_generic_param<'tcx>(
                     .filter(|bp| !bp.in_where_clause)
                     .flat_map(|bp| bp.bounds)
                     .map(|bound| match bound {
-                        hir::GenericBound::Outlives(lt) => clean_lifetime(*lt, cx),
+                        hir::GenericBound::Outlives(lt) => clean_lifetime(lt, cx),
                         _ => panic!(),
                     })
                     .collect()
@@ -886,7 +887,10 @@ fn clean_function<'tcx>(
         // NOTE: generics must be cleaned before args
         let generics = clean_generics(generics, cx);
         let args = clean_args_from_types_and_body_id(cx, sig.decl.inputs, body_id);
-        let decl = clean_fn_decl_with_args(cx, sig.decl, args);
+        let mut decl = clean_fn_decl_with_args(cx, sig.decl, args);
+        if sig.header.is_async() {
+            decl.output = decl.sugared_async_return_type();
+        }
         (generics, decl)
     });
     Box::new(Function { decl, generics })
@@ -1388,7 +1392,7 @@ fn maybe_expand_private_type_alias<'tcx>(
                     }
                     _ => None,
                 });
-                if let Some(lt) = lifetime.cloned() {
+                if let Some(lt) = lifetime {
                     let lt_def_id = cx.tcx.hir().local_def_id(param.hir_id);
                     let cleaned =
                         if !lt.is_elided() { clean_lifetime(lt, cx) } else { Lifetime::elided() };
@@ -1488,7 +1492,7 @@ pub(crate) fn clean_ty<'tcx>(ty: &hir::Ty<'tcx>, cx: &mut DocContext<'tcx>) -> T
             Array(Box::new(clean_ty(ty, cx)), length)
         }
         TyKind::Tup(tys) => Tuple(tys.iter().map(|ty| clean_ty(ty, cx)).collect()),
-        TyKind::OpaqueDef(item_id, _) => {
+        TyKind::OpaqueDef(item_id, _, _) => {
             let item = cx.tcx.hir().item(item_id);
             if let hir::ItemKind::OpaqueTy(ref ty) = item.kind {
                 ImplTrait(ty.bounds.iter().filter_map(|x| clean_generic_bound(x, cx)).collect())
@@ -1588,12 +1592,12 @@ pub(crate) fn clean_middle_ty<'tcx>(
                 AdtKind::Enum => ItemType::Enum,
             };
             inline::record_extern_fqn(cx, did, kind);
-            let path = external_path(cx, did, false, vec![], substs);
+            let path = external_path(cx, did, false, ThinVec::new(), substs);
             Type::Path { path }
         }
         ty::Foreign(did) => {
             inline::record_extern_fqn(cx, did, ItemType::ForeignType);
-            let path = external_path(cx, did, false, vec![], InternalSubsts::empty());
+            let path = external_path(cx, did, false, ThinVec::new(), InternalSubsts::empty());
             Type::Path { path }
         }
         ty::Dynamic(obj, ref reg) => {
@@ -1617,7 +1621,7 @@ pub(crate) fn clean_middle_ty<'tcx>(
             let mut bounds = dids
                 .map(|did| {
                     let empty = cx.tcx.intern_substs(&[]);
-                    let path = external_path(cx, did, false, vec![], empty);
+                    let path = external_path(cx, did, false, ThinVec::new(), empty);
                     inline::record_extern_fqn(cx, did, ItemType::Trait);
                     PolyTrait { trait_: path, generic_params: Vec::new() }
                 })
@@ -1693,7 +1697,7 @@ pub(crate) fn clean_middle_ty<'tcx>(
                         }
                     }
 
-                    let bindings: Vec<_> = bounds
+                    let bindings: ThinVec<_> = bounds
                         .iter()
                         .filter_map(|bound| {
                             if let ty::PredicateKind::Projection(proj) = bound.kind().skip_binder()
@@ -1714,7 +1718,7 @@ pub(crate) fn clean_middle_ty<'tcx>(
                         })
                         .collect();
 
-                    Some(clean_poly_trait_ref_with_bindings(cx, trait_ref, &bindings))
+                    Some(clean_poly_trait_ref_with_bindings(cx, trait_ref, bindings))
                 })
                 .collect::<Vec<_>>();
             bounds.extend(regions);
@@ -1773,21 +1777,19 @@ fn is_field_vis_inherited(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
     }
 }
 
-pub(crate) fn clean_visibility(vis: ty::Visibility) -> Visibility {
+pub(crate) fn clean_visibility(vis: ty::Visibility<DefId>) -> Visibility {
     match vis {
         ty::Visibility::Public => Visibility::Public,
-        // NOTE: this is not quite right: `ty` uses `Invisible` to mean 'private',
-        // while rustdoc really does mean inherited. That means that for enum variants, such as
-        // `pub enum E { V }`, `V` will be marked as `Public` by `ty`, but as `Inherited` by rustdoc.
-        // Various parts of clean override `tcx.visibility` explicitly to make sure this distinction is captured.
-        ty::Visibility::Invisible => Visibility::Inherited,
         ty::Visibility::Restricted(module) => Visibility::Restricted(module),
     }
 }
 
 pub(crate) fn clean_variant_def<'tcx>(variant: &ty::VariantDef, cx: &mut DocContext<'tcx>) -> Item {
     let kind = match variant.ctor_kind {
-        CtorKind::Const => Variant::CLike,
+        CtorKind::Const => Variant::CLike(match variant.discr {
+            ty::VariantDiscr::Explicit(def_id) => Some(Discriminant { expr: None, value: def_id }),
+            ty::VariantDiscr::Relative(_) => None,
+        }),
         CtorKind::Fn => Variant::Tuple(
             variant.fields.iter().map(|field| clean_middle_field(field, cx)).collect(),
         ),
@@ -1804,6 +1806,7 @@ pub(crate) fn clean_variant_def<'tcx>(variant: &ty::VariantDef, cx: &mut DocCont
 
 fn clean_variant_data<'tcx>(
     variant: &hir::VariantData<'tcx>,
+    disr_expr: &Option<hir::AnonConst>,
     cx: &mut DocContext<'tcx>,
 ) -> Variant {
     match variant {
@@ -1814,7 +1817,10 @@ fn clean_variant_data<'tcx>(
         hir::VariantData::Tuple(..) => {
             Variant::Tuple(variant.fields().iter().map(|x| clean_field(x, cx)).collect())
         }
-        hir::VariantData::Unit(..) => Variant::CLike,
+        hir::VariantData::Unit(..) => Variant::CLike(disr_expr.map(|disr| Discriminant {
+            expr: Some(disr.body),
+            value: cx.tcx.hir().local_def_id(disr.hir_id).to_def_id(),
+        })),
     }
 }
 
@@ -1850,12 +1856,8 @@ fn clean_generic_args<'tcx>(
             })
             .collect::<Vec<_>>()
             .into();
-        let bindings = generic_args
-            .bindings
-            .iter()
-            .map(|x| clean_type_binding(x, cx))
-            .collect::<Vec<_>>()
-            .into();
+        let bindings =
+            generic_args.bindings.iter().map(|x| clean_type_binding(x, cx)).collect::<ThinVec<_>>();
         GenericArgs::AngleBracketed { args, bindings }
     }
 }
@@ -1972,7 +1974,7 @@ fn clean_maybe_renamed_item<'tcx>(
 }
 
 fn clean_variant<'tcx>(variant: &hir::Variant<'tcx>, cx: &mut DocContext<'tcx>) -> Item {
-    let kind = VariantItem(clean_variant_data(&variant.data, cx));
+    let kind = VariantItem(clean_variant_data(&variant.data, &variant.disr_expr, cx));
     let what_rustc_thinks =
         Item::from_hir_id_and_parts(variant.id, Some(variant.ident.name), kind, cx);
     // don't show `pub` for variants, which are always public
@@ -2109,8 +2111,8 @@ fn clean_use_statement<'tcx>(
     // `pub(super)` or higher. If the current module is the top level
     // module, there isn't really a parent module, which makes the results
     // meaningless. In this case, we make sure the answer is `false`.
-    let is_visible_from_parent_mod = visibility.is_accessible_from(parent_mod.to_def_id(), cx.tcx)
-        && !current_mod.is_top_level_module();
+    let is_visible_from_parent_mod =
+        visibility.is_accessible_from(parent_mod, cx.tcx) && !current_mod.is_top_level_module();
 
     if pub_underscore {
         if let Some(ref inline) = inline_attr {

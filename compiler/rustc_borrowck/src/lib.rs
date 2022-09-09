@@ -2,6 +2,7 @@
 
 #![allow(rustc::potential_query_instability)]
 #![feature(box_patterns)]
+#![feature(let_chains)]
 #![feature(let_else)]
 #![feature(min_specialization)]
 #![feature(never_type)]
@@ -25,8 +26,8 @@ use rustc_index::bit_set::ChunkedBitSet;
 use rustc_index::vec::IndexVec;
 use rustc_infer::infer::{DefiningAnchor, InferCtxt, TyCtxtInferExt};
 use rustc_middle::mir::{
-    traversal, Body, ClearCrossCrate, Local, Location, Mutability, Operand, Place, PlaceElem,
-    PlaceRef, VarDebugInfoContents,
+    traversal, Body, ClearCrossCrate, Local, Location, Mutability, NonDivergingIntrinsic, Operand,
+    Place, PlaceElem, PlaceRef, VarDebugInfoContents,
 };
 use rustc_middle::mir::{AggregateKind, BasicBlock, BorrowCheckResult, BorrowKind};
 use rustc_middle::mir::{Field, ProjectionElem, Promoted, Rvalue, Statement, StatementKind};
@@ -590,22 +591,19 @@ impl<'cx, 'tcx> rustc_mir_dataflow::ResultsVisitor<'cx, 'tcx> for MirBorrowckCtx
                     flow_state,
                 );
             }
-            StatementKind::CopyNonOverlapping(box rustc_middle::mir::CopyNonOverlapping {
-                ..
-            }) => {
-                span_bug!(
+            StatementKind::Intrinsic(box ref kind) => match kind {
+                NonDivergingIntrinsic::Assume(op) => self.consume_operand(location, (op, span), flow_state),
+                NonDivergingIntrinsic::CopyNonOverlapping(..) => span_bug!(
                     span,
                     "Unexpected CopyNonOverlapping, should only appear after lower_intrinsics",
                 )
             }
-            StatementKind::Nop
+            // Only relevant for mir typeck
+            StatementKind::AscribeUserType(..)
+            // Doesn't have any language semantics
             | StatementKind::Coverage(..)
-            | StatementKind::AscribeUserType(..)
-            | StatementKind::Retag { .. }
-            | StatementKind::StorageLive(..) => {
-                // `Nop`, `AscribeUserType`, `Retag`, and `StorageLive` are irrelevant
-                // to borrow check.
-            }
+            // Does not actually affect borrowck
+            | StatementKind::StorageLive(..) => {}
             StatementKind::StorageDead(local) => {
                 self.access_place(
                     location,
@@ -615,7 +613,10 @@ impl<'cx, 'tcx> rustc_mir_dataflow::ResultsVisitor<'cx, 'tcx> for MirBorrowckCtx
                     flow_state,
                 );
             }
-            StatementKind::Deinit(..) | StatementKind::SetDiscriminant { .. } => {
+            StatementKind::Nop
+            | StatementKind::Retag { .. }
+            | StatementKind::Deinit(..)
+            | StatementKind::SetDiscriminant { .. } => {
                 bug!("Statement not allowed in this MIR phase")
             }
         }
@@ -975,6 +976,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         }
     }
 
+    #[instrument(level = "debug", skip(self, flow_state))]
     fn check_access_for_conflict(
         &mut self,
         location: Location,
@@ -983,11 +985,6 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         rw: ReadOrWrite,
         flow_state: &Flows<'cx, 'tcx>,
     ) -> bool {
-        debug!(
-            "check_access_for_conflict(location={:?}, place_span={:?}, sd={:?}, rw={:?})",
-            location, place_span, sd, rw,
-        );
-
         let mut error_reported = false;
         let tcx = self.infcx.tcx;
         let body = self.body;
@@ -1451,13 +1448,13 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
 
     /// Checks whether a borrow of this place is invalidated when the function
     /// exits
+    #[instrument(level = "debug", skip(self))]
     fn check_for_invalidation_at_exit(
         &mut self,
         location: Location,
         borrow: &BorrowData<'tcx>,
         span: Span,
     ) {
-        debug!("check_for_invalidation_at_exit({:?})", borrow);
         let place = borrow.borrowed_place;
         let mut root_place = PlaceRef { local: place.local, projection: &[] };
 

@@ -1,6 +1,7 @@
 use super::callee::DeferredCallResolution;
 
 use rustc_data_structures::fx::FxHashSet;
+use rustc_data_structures::sync::Lrc;
 use rustc_hir as hir;
 use rustc_hir::def_id::LocalDefId;
 use rustc_hir::HirIdMap;
@@ -12,7 +13,9 @@ use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_span::def_id::LocalDefIdMap;
 use rustc_span::{self, Span};
 use rustc_trait_selection::infer::InferCtxtExt as _;
-use rustc_trait_selection::traits::{self, ObligationCause, TraitEngine, TraitEngineExt};
+use rustc_trait_selection::traits::{
+    self, ObligationCause, ObligationCtxt, TraitEngine, TraitEngineExt as _,
+};
 
 use std::cell::RefCell;
 use std::ops::Deref;
@@ -34,6 +37,12 @@ pub struct Inherited<'a, 'tcx> {
     pub(super) locals: RefCell<HirIdMap<super::LocalTy<'tcx>>>,
 
     pub(super) fulfillment_cx: RefCell<Box<dyn TraitEngine<'tcx>>>,
+
+    // Some additional `Sized` obligations badly affect type inference.
+    // These obligations are added in a later stage of typeck.
+    // Removing these may also cause additional complications, see #101066.
+    pub(super) deferred_sized_obligations:
+        RefCell<Vec<(Ty<'tcx>, Span, traits::ObligationCauseCode<'tcx>)>>,
 
     // When we process a call like `c()` where `c` is a closure type,
     // we may not have decided yet whether `c` is a `Fn`, `FnMut`, or
@@ -84,7 +93,29 @@ impl<'tcx> Inherited<'_, 'tcx> {
             infcx: tcx
                 .infer_ctxt()
                 .ignoring_regions()
-                .with_fresh_in_progress_typeck_results(hir_owner),
+                .with_fresh_in_progress_typeck_results(hir_owner)
+                .with_normalize_fn_sig_for_diagnostic(Lrc::new(move |infcx, fn_sig| {
+                    if fn_sig.has_escaping_bound_vars() {
+                        return fn_sig;
+                    }
+                    infcx.probe(|_| {
+                        let ocx = ObligationCtxt::new_in_snapshot(infcx);
+                        let normalized_fn_sig = ocx.normalize(
+                            ObligationCause::dummy(),
+                            // FIXME(compiler-errors): This is probably not the right param-env...
+                            infcx.tcx.param_env(def_id),
+                            fn_sig,
+                        );
+                        if ocx.select_all_or_error().is_empty() {
+                            let normalized_fn_sig =
+                                infcx.resolve_vars_if_possible(normalized_fn_sig);
+                            if !normalized_fn_sig.needs_infer() {
+                                return normalized_fn_sig;
+                            }
+                        }
+                        fn_sig
+                    })
+                })),
             def_id,
         }
     }
@@ -112,6 +143,7 @@ impl<'a, 'tcx> Inherited<'a, 'tcx> {
             infcx,
             fulfillment_cx: RefCell::new(<dyn TraitEngine<'_>>::new(tcx)),
             locals: RefCell::new(Default::default()),
+            deferred_sized_obligations: RefCell::new(Vec::new()),
             deferred_call_resolutions: RefCell::new(Default::default()),
             deferred_cast_checks: RefCell::new(Vec::new()),
             deferred_transmute_checks: RefCell::new(Vec::new()),

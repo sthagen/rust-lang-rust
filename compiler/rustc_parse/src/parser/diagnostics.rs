@@ -10,9 +10,9 @@ use rustc_ast::ptr::P;
 use rustc_ast::token::{self, Delimiter, Lit, LitKind, TokenKind};
 use rustc_ast::util::parser::AssocOp;
 use rustc_ast::{
-    AngleBracketedArg, AngleBracketedArgs, AnonConst, AttrVec, BinOpKind, BindingMode, Block,
-    BlockCheckMode, Expr, ExprKind, GenericArg, Generics, Item, ItemKind, Mutability, Param, Pat,
-    PatKind, Path, PathSegment, QSelf, Ty, TyKind,
+    AngleBracketedArg, AngleBracketedArgs, AnonConst, AttrVec, BinOpKind, BindingAnnotation, Block,
+    BlockCheckMode, Expr, ExprKind, GenericArg, Generics, Item, ItemKind, Param, Pat, PatKind,
+    Path, PathSegment, QSelf, Ty, TyKind,
 };
 use rustc_ast_pretty::pprust;
 use rustc_data_structures::fx::FxHashSet;
@@ -29,7 +29,6 @@ use std::ops::{Deref, DerefMut};
 use std::mem::take;
 
 use crate::parser;
-use tracing::{debug, trace};
 
 const TURBOFISH_SUGGESTION_STR: &str =
     "use `::<...>` instead of `<...>` to specify lifetime, type, or const arguments";
@@ -38,7 +37,7 @@ const TURBOFISH_SUGGESTION_STR: &str =
 pub(super) fn dummy_arg(ident: Ident) -> Param {
     let pat = P(Pat {
         id: ast::DUMMY_NODE_ID,
-        kind: PatKind::Ident(BindingMode::ByValue(Mutability::Not), ident, None),
+        kind: PatKind::Ident(BindingAnnotation::NONE, ident, None),
         span: ident.span,
         tokens: None,
     });
@@ -706,6 +705,22 @@ pub(crate) struct LeftArrowOperator {
     pub span: Span,
 }
 
+#[derive(SessionDiagnostic)]
+#[diag(parser::remove_let)]
+pub(crate) struct RemoveLet {
+    #[primary_span]
+    #[suggestion(applicability = "machine-applicable", code = "")]
+    pub span: Span,
+}
+
+#[derive(SessionDiagnostic)]
+#[diag(parser::use_eq_instead)]
+pub(crate) struct UseEqInstead {
+    #[primary_span]
+    #[suggestion_short(applicability = "machine-applicable", code = "=")]
+    pub span: Span,
+}
+
 // SnapshotParser is used to create a snapshot of the parser
 // without causing duplicate errors being emitted when the `Parser`
 // is dropped.
@@ -759,7 +774,7 @@ impl<'a> Parser<'a> {
     /// This is to avoid losing unclosed delims errors `create_snapshot_for_diagnostic` clears.
     pub(super) fn restore_snapshot(&mut self, snapshot: SnapshotParser<'a>) {
         *self = snapshot.parser;
-        self.unclosed_delims.extend(snapshot.unclosed_delims.clone());
+        self.unclosed_delims.extend(snapshot.unclosed_delims);
     }
 
     pub fn unclosed_delims(&self) -> &[UnmatchedBrace] {
@@ -948,6 +963,14 @@ impl<'a> Parser<'a> {
                     .emit();
                 return Ok(true);
             }
+        }
+
+        if self.token.kind == TokenKind::EqEq
+            && self.prev_token.is_ident()
+            && expected.iter().any(|tok| matches!(tok, TokenType::Token(TokenKind::Eq)))
+        {
+            // Likely typo: `=` → `==` in let expr or enum item
+            return Err(self.sess.create_err(UseEqInstead { span: self.token.span }));
         }
 
         let expect = tokens_to_string(&expected);
@@ -2962,7 +2985,7 @@ impl<'a> Parser<'a> {
                                 }
                                 _ => {}
                             },
-                            PatKind::Ident(BindingMode::ByValue(Mutability::Not), ident, None) => {
+                            PatKind::Ident(BindingAnnotation::NONE, ident, None) => {
                                 match &first_pat.kind {
                                     PatKind::Ident(_, old_ident, _) => {
                                         let path = PatKind::Path(

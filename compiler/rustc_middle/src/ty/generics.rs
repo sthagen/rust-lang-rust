@@ -1,4 +1,3 @@
-use crate::middle::resolve_lifetime::ObjectLifetimeDefault;
 use crate::ty;
 use crate::ty::subst::{Subst, SubstsRef};
 use crate::ty::EarlyBinder;
@@ -13,7 +12,7 @@ use super::{EarlyBoundRegion, InstantiatedPredicates, ParamConst, ParamTy, Predi
 #[derive(Clone, Debug, TyEncodable, TyDecodable, HashStable)]
 pub enum GenericParamDefKind {
     Lifetime,
-    Type { has_default: bool, object_lifetime_default: ObjectLifetimeDefault, synthetic: bool },
+    Type { has_default: bool, synthetic: bool },
     Const { has_default: bool },
 }
 
@@ -267,7 +266,7 @@ impl<'tcx> Generics {
         // Filter the default arguments.
         //
         // This currently uses structural equality instead
-        // of semantic equivalance. While not ideal, that's
+        // of semantic equivalence. While not ideal, that's
         // good enough for now as this should only be used
         // for diagnostics anyways.
         own_params.end -= self
@@ -329,6 +328,7 @@ impl<'tcx> GenericPredicates<'tcx> {
         }
     }
 
+    #[instrument(level = "debug", skip(self, tcx))]
     fn instantiate_into(
         &self,
         tcx: TyCtxt<'tcx>,

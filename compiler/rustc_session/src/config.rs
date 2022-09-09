@@ -12,8 +12,8 @@ use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 
 use rustc_data_structures::stable_hasher::ToStableHashKey;
 use rustc_target::abi::{Align, TargetDataLayout};
-use rustc_target::spec::{LinkerFlavor, SplitDebuginfo, Target, TargetTriple, TargetWarnings};
-use rustc_target::spec::{PanicStrategy, SanitizerSet, TARGETS};
+use rustc_target::spec::{PanicStrategy, SanitizerSet, SplitDebuginfo};
+use rustc_target::spec::{Target, TargetTriple, TargetWarnings, TARGETS};
 
 use crate::parse::{CrateCheckConfig, CrateConfig};
 use rustc_feature::UnstableFeatures;
@@ -35,6 +35,8 @@ use std::hash::Hash;
 use std::iter::{self, FromIterator};
 use std::path::{Path, PathBuf};
 use std::str::{self, FromStr};
+
+pub mod sigpipe;
 
 /// The different settings that the `-C strip` flag can have.
 #[derive(Clone, Copy, PartialEq, Hash, Debug)]
@@ -798,7 +800,15 @@ impl UnstableOptions {
 // The type of entry function, so users can have their own entry functions
 #[derive(Copy, Clone, PartialEq, Hash, Debug, HashStable_Generic)]
 pub enum EntryFnType {
-    Main,
+    Main {
+        /// Specifies what to do with `SIGPIPE` before calling `fn main()`.
+        ///
+        /// What values that are valid and what they mean must be in sync
+        /// across rustc and libstd, but we don't want it public in libstd,
+        /// so we take a bit of an unusual approach with simple constants
+        /// and an `include!()`.
+        sigpipe: u8,
+    },
     Start,
 }
 
@@ -888,10 +898,10 @@ fn default_configuration(sess: &Session) -> CrateConfig {
     let max_atomic_width = sess.target.max_atomic_width();
     let atomic_cas = sess.target.atomic_cas;
     let layout = TargetDataLayout::parse(&sess.target).unwrap_or_else(|err| {
-        sess.fatal(&err);
+        sess.emit_fatal(err);
     });
 
-    let mut ret = FxHashSet::default();
+    let mut ret = CrateConfig::default();
     ret.reserve(7); // the minimum number of insertions
     // Target bindings.
     ret.insert((sym::target_os, Some(Symbol::intern(os))));
@@ -2379,16 +2389,6 @@ pub fn build_session_options(matches: &getopts::Matches) -> Options {
         }
     }
 
-    if cg.linker_flavor == Some(LinkerFlavor::L4Bender)
-        && !nightly_options::is_unstable_enabled(matches)
-    {
-        early_error(
-            error_format,
-            "`l4-bender` linker flavor is unstable, `-Z unstable-options` \
-             flag must also be passed to explicitly use it",
-        );
-    }
-
     let prints = collect_print_requests(&mut cg, &mut unstable_opts, matches, error_format);
 
     let cg = cg;
@@ -2530,7 +2530,7 @@ fn parse_pretty(unstable_opts: &UnstableOptions, efmt: ErrorOutputType) -> Optio
             ),
         ),
     };
-    tracing::debug!("got unpretty option: {first:?}");
+    debug!("got unpretty option: {first:?}");
     Some(first)
 }
 

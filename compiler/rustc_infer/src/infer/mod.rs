@@ -337,6 +337,9 @@ pub struct InferCtxt<'a, 'tcx> {
     /// when we enter into a higher-ranked (`for<..>`) type or trait
     /// bound.
     universe: Cell<ty::UniverseIndex>,
+
+    normalize_fn_sig_for_diagnostic:
+        Option<Lrc<dyn Fn(&InferCtxt<'_, 'tcx>, ty::PolyFnSig<'tcx>) -> ty::PolyFnSig<'tcx>>>,
 }
 
 /// See the `error_reporting` module for more details.
@@ -350,12 +353,11 @@ pub enum ValuePairs<'tcx> {
 
 impl<'tcx> ValuePairs<'tcx> {
     pub fn ty(&self) -> Option<(Ty<'tcx>, Ty<'tcx>)> {
-        if let ValuePairs::Terms(ExpectedFound {
-            expected: ty::Term::Ty(expected),
-            found: ty::Term::Ty(found),
-        }) = self
+        if let ValuePairs::Terms(ExpectedFound { expected, found }) = self
+            && let Some(expected) = expected.ty()
+            && let Some(found) = found.ty()
         {
-            Some((*expected, *found))
+            Some((expected, found))
         } else {
             None
         }
@@ -504,7 +506,7 @@ pub enum FixupError<'tcx> {
 }
 
 /// See the `region_obligations` field for more information.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RegionObligation<'tcx> {
     pub sub_region: ty::Region<'tcx>,
     pub sup_type: Ty<'tcx>,
@@ -540,6 +542,8 @@ pub struct InferCtxtBuilder<'tcx> {
     defining_use_anchor: DefiningAnchor,
     considering_regions: bool,
     fresh_typeck_results: Option<RefCell<ty::TypeckResults<'tcx>>>,
+    normalize_fn_sig_for_diagnostic:
+        Option<Lrc<dyn Fn(&InferCtxt<'_, 'tcx>, ty::PolyFnSig<'tcx>) -> ty::PolyFnSig<'tcx>>>,
 }
 
 pub trait TyCtxtInferExt<'tcx> {
@@ -553,6 +557,7 @@ impl<'tcx> TyCtxtInferExt<'tcx> for TyCtxt<'tcx> {
             defining_use_anchor: DefiningAnchor::Error,
             considering_regions: true,
             fresh_typeck_results: None,
+            normalize_fn_sig_for_diagnostic: None,
         }
     }
 }
@@ -579,6 +584,14 @@ impl<'tcx> InferCtxtBuilder<'tcx> {
 
     pub fn ignoring_regions(mut self) -> Self {
         self.considering_regions = false;
+        self
+    }
+
+    pub fn with_normalize_fn_sig_for_diagnostic(
+        mut self,
+        fun: Lrc<dyn Fn(&InferCtxt<'_, 'tcx>, ty::PolyFnSig<'tcx>) -> ty::PolyFnSig<'tcx>>,
+    ) -> Self {
+        self.normalize_fn_sig_for_diagnostic = Some(fun);
         self
     }
 
@@ -611,6 +624,7 @@ impl<'tcx> InferCtxtBuilder<'tcx> {
             defining_use_anchor,
             considering_regions,
             ref fresh_typeck_results,
+            ref normalize_fn_sig_for_diagnostic,
         } = *self;
         let in_progress_typeck_results = fresh_typeck_results.as_ref();
         f(InferCtxt {
@@ -629,6 +643,9 @@ impl<'tcx> InferCtxtBuilder<'tcx> {
             in_snapshot: Cell::new(false),
             skip_leak_check: Cell::new(false),
             universe: Cell::new(ty::UniverseIndex::ROOT),
+            normalize_fn_sig_for_diagnostic: normalize_fn_sig_for_diagnostic
+                .as_ref()
+                .map(|f| f.clone()),
         })
     }
 }
@@ -1315,7 +1332,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
     /// `resolve_vars_if_possible` as well as `fully_resolve`.
     ///
     /// Make sure to call [`InferCtxt::process_registered_region_obligations`]
-    /// first, or preferrably use [`InferCtxt::check_region_obligations_and_report_errors`]
+    /// first, or preferably use [`InferCtxt::check_region_obligations_and_report_errors`]
     /// to do both of these operations together.
     pub fn resolve_regions_and_report_errors(
         &self,
@@ -2024,16 +2041,6 @@ impl RegionVariableOrigin {
             | UpvarRegion(_, a) => a,
             Nll(..) => bug!("NLL variable used with `span`"),
         }
-    }
-}
-
-impl<'tcx> fmt::Debug for RegionObligation<'tcx> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "RegionObligation(sub_region={:?}, sup_type={:?})",
-            self.sub_region, self.sup_type
-        )
     }
 }
 

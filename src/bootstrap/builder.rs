@@ -647,9 +647,9 @@ impl<'a> Builder<'a> {
                 test::CrateRustdocJsonTypes,
                 test::Linkcheck,
                 test::TierCheck,
+                test::ReplacePlaceholderTest,
                 test::Cargotest,
                 test::Cargo,
-                test::Rls,
                 test::RustAnalyzer,
                 test::ErrorIndex,
                 test::Distcheck,
@@ -736,7 +736,6 @@ impl<'a> Builder<'a> {
                 install::Docs,
                 install::Std,
                 install::Cargo,
-                install::Rls,
                 install::RustAnalyzer,
                 install::Rustfmt,
                 install::RustDemangler,
@@ -746,7 +745,12 @@ impl<'a> Builder<'a> {
                 install::Src,
                 install::Rustc
             ),
-            Kind::Run => describe!(run::ExpandYamlAnchors, run::BuildManifest, run::BumpStage0),
+            Kind::Run => describe!(
+                run::ExpandYamlAnchors,
+                run::BuildManifest,
+                run::BumpStage0,
+                run::ReplaceVersionPlaceholder,
+            ),
             // These commands either don't use paths, or they're special-cased in Build::build()
             Kind::Clean | Kind::Format | Kind::Setup => vec![],
         }
@@ -942,7 +946,7 @@ impl<'a> Builder<'a> {
         };
         patchelf.args(&[OsString::from("--set-rpath"), rpath_entries]);
         if !fname.extension().map_or(false, |ext| ext == "so") {
-            // Finally, set the corret .interp for binaries
+            // Finally, set the correct .interp for binaries
             let dynamic_linker_path = nix_deps_dir.join("nix-support/dynamic-linker");
             // FIXME: can we support utf8 here? `args` doesn't accept Vec<u8>, only OsString ...
             let dynamic_linker = t!(String::from_utf8(t!(fs::read(dynamic_linker_path))));
@@ -958,7 +962,7 @@ impl<'a> Builder<'a> {
         let tempfile = self.tempdir().join(dest_path.file_name().unwrap());
         // While bootstrap itself only supports http and https downloads, downstream forks might
         // need to download components from other protocols. The match allows them adding more
-        // protocols without worrying about merge conficts if we change the HTTP implementation.
+        // protocols without worrying about merge conflicts if we change the HTTP implementation.
         match url.split_once("://").map(|(proto, _)| proto) {
             Some("http") | Some("https") => {
                 self.download_http_with_retries(&tempfile, url, help_on_error)

@@ -35,21 +35,7 @@ impl<'mir, 'tcx> InterpCx<'mir, 'tcx, CompileTimeInterpreter<'mir, 'tcx>> {
         // All `#[rustc_do_not_const_check]` functions should be hooked here.
         let def_id = instance.def_id();
 
-        if Some(def_id) == self.tcx.lang_items().const_eval_select() {
-            // redirect to const_eval_select_ct
-            if let Some(const_eval_select) = self.tcx.lang_items().const_eval_select_ct() {
-                return Ok(Some(
-                    ty::Instance::resolve(
-                        *self.tcx,
-                        ty::ParamEnv::reveal_all(),
-                        const_eval_select,
-                        instance.substs,
-                    )
-                    .unwrap()
-                    .unwrap(),
-                ));
-            }
-        } else if Some(def_id) == self.tcx.lang_items().panic_display()
+        if Some(def_id) == self.tcx.lang_items().panic_display()
             || Some(def_id) == self.tcx.lang_items().begin_panic_fn()
         {
             // &str or &&str
@@ -89,10 +75,10 @@ pub struct CompileTimeInterpreter<'mir, 'tcx> {
     /// exhaustion error.
     ///
     /// Setting this to `0` disables the limit and allows the interpreter to run forever.
-    pub steps_remaining: usize,
+    pub(super) steps_remaining: usize,
 
     /// The virtual call stack.
-    pub(crate) stack: Vec<Frame<'mir, 'tcx, AllocId, ()>>,
+    pub(super) stack: Vec<Frame<'mir, 'tcx, AllocId, ()>>,
 
     /// We need to make sure consts never point to anything mutable, even recursively. That is
     /// relied on for pattern matching on consts with references.
@@ -103,7 +89,7 @@ pub struct CompileTimeInterpreter<'mir, 'tcx> {
     pub(super) can_access_statics: bool,
 
     /// Whether to check alignment during evaluation.
-    check_alignment: bool,
+    pub(super) check_alignment: bool,
 }
 
 impl<'mir, 'tcx> CompileTimeInterpreter<'mir, 'tcx> {
@@ -269,9 +255,10 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for CompileTimeInterpreter<'mir,
                     );
                     throw_inval!(AlreadyReported(guar));
                 } else {
+                    // `find_mir_or_eval_fn` checks that this is a const fn before even calling us,
+                    // so this should be unreachable.
                     let path = ecx.tcx.def_path_str(def.did);
-                    Err(ConstEvalErrKind::NeedsRfc(format!("calling extern function `{}`", path))
-                        .into())
+                    bug!("trying to call extern function `{path}` at compile-time");
                 }
             }
             _ => Ok(ecx.tcx.instance_mir(instance)),
@@ -339,11 +326,7 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for CompileTimeInterpreter<'mir,
 
         // CTFE-specific intrinsics.
         let Some(ret) = target else {
-            return Err(ConstEvalErrKind::NeedsRfc(format!(
-                "calling intrinsic `{}`",
-                intrinsic_name
-            ))
-            .into());
+            throw_unsup_format!("intrinsic `{intrinsic_name}` is not supported at compile-time");
         };
         match intrinsic_name {
             sym::ptr_guaranteed_eq | sym::ptr_guaranteed_ne => {
@@ -400,11 +383,9 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for CompileTimeInterpreter<'mir,
                 }
             }
             _ => {
-                return Err(ConstEvalErrKind::NeedsRfc(format!(
-                    "calling intrinsic `{}`",
-                    intrinsic_name
-                ))
-                .into());
+                throw_unsup_format!(
+                    "intrinsic `{intrinsic_name}` is not supported at compile-time"
+                );
             }
         }
 
@@ -447,7 +428,7 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for CompileTimeInterpreter<'mir,
         _left: &ImmTy<'tcx>,
         _right: &ImmTy<'tcx>,
     ) -> InterpResult<'tcx, (Scalar, bool, Ty<'tcx>)> {
-        Err(ConstEvalErrKind::NeedsRfc("pointer arithmetic or comparison".to_string()).into())
+        throw_unsup_format!("pointer arithmetic or comparison is not supported at compile-time");
     }
 
     fn before_terminator(ecx: &mut InterpCx<'mir, 'tcx, Self>) -> InterpResult<'tcx> {
@@ -469,7 +450,8 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for CompileTimeInterpreter<'mir,
         _ecx: &mut InterpCx<'mir, 'tcx, Self>,
         _ptr: Pointer<AllocId>,
     ) -> InterpResult<'tcx> {
-        Err(ConstEvalErrKind::NeedsRfc("exposing pointers".to_string()).into())
+        // This is only reachable with -Zunleash-the-miri-inside-of-you.
+        throw_unsup_format!("exposing pointers is not possible at compile-time")
     }
 
     #[inline(always)]

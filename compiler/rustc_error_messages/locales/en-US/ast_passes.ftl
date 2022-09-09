@@ -4,6 +4,10 @@ ast_passes_forbidden_let =
     .not_supported_or = `||` operators are not supported in let chain expressions
     .not_supported_parentheses = `let`s wrapped in parentheses are not supported in a context with let chains
 
+ast_passes_forbidden_let_stable =
+    expected expression, found statement (`let`)
+    .note = variable declaration using `let` is a statement
+
 ast_passes_deprecated_where_clause_location =
     where clause not allowed here
 
@@ -21,12 +25,6 @@ ast_passes_invalid_visibility =
     .implied = `pub` not permitted here because it's implied
     .individual_impl_items = place qualifiers on individual impl items instead
     .individual_foreign_items = place qualifiers on individual foreign items instead
-
-ast_passes_trait_fn_async =
-    functions in traits cannot be declared `async`
-    .label = `async` because of this
-    .note = `async` trait functions are not currently supported
-    .note2 = consider using the `async-trait` crate: https://crates.io/crates/async-trait
 
 ast_passes_trait_fn_const =
     functions in traits cannot be declared const

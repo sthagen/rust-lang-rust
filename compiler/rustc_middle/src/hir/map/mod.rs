@@ -212,7 +212,13 @@ impl<'hir> Map<'hir> {
                 ItemKind::Fn(..) => DefKind::Fn,
                 ItemKind::Macro(_, macro_kind) => DefKind::Macro(macro_kind),
                 ItemKind::Mod(..) => DefKind::Mod,
-                ItemKind::OpaqueTy(..) => DefKind::OpaqueTy,
+                ItemKind::OpaqueTy(ref opaque) => {
+                    if opaque.in_trait {
+                        DefKind::ImplTraitPlaceholder
+                    } else {
+                        DefKind::OpaqueTy
+                    }
+                }
                 ItemKind::TyAlias(..) => DefKind::TyAlias,
                 ItemKind::Enum(..) => DefKind::Enum,
                 ItemKind::Struct(..) => DefKind::Struct,
@@ -291,6 +297,9 @@ impl<'hir> Map<'hir> {
         Some(def_kind)
     }
 
+    /// Finds the id of the parent node to this one.
+    ///
+    /// If calling repeatedly and iterating over parents, prefer [`Map::parent_iter`].
     pub fn find_parent_node(self, id: HirId) -> Option<HirId> {
         if id.local_id == ItemLocalId::from_u32(0) {
             Some(self.tcx.hir_owner_parent(id.owner))
@@ -486,7 +495,9 @@ impl<'hir> Map<'hir> {
         let def_kind = self.tcx.def_kind(def_id);
         match def_kind {
             DefKind::Trait | DefKind::TraitAlias => def_id,
-            DefKind::TyParam | DefKind::ConstParam => self.tcx.local_parent(def_id),
+            DefKind::LifetimeParam | DefKind::TyParam | DefKind::ConstParam => {
+                self.tcx.local_parent(def_id)
+            }
             _ => bug!("ty_param_owner: {:?} is a {:?} not a type parameter", def_id, def_kind),
         }
     }
@@ -495,7 +506,9 @@ impl<'hir> Map<'hir> {
         let def_kind = self.tcx.def_kind(def_id);
         match def_kind {
             DefKind::Trait | DefKind::TraitAlias => kw::SelfUpper,
-            DefKind::TyParam | DefKind::ConstParam => self.tcx.item_name(def_id.to_def_id()),
+            DefKind::LifetimeParam | DefKind::TyParam | DefKind::ConstParam => {
+                self.tcx.item_name(def_id.to_def_id())
+            }
             _ => bug!("ty_param_name: {:?} is a {:?} not a type parameter", def_id, def_kind),
         }
     }
@@ -1180,7 +1193,13 @@ fn hir_id_to_string(map: Map<'_>, id: HirId) -> String {
                 ItemKind::ForeignMod { .. } => "foreign mod",
                 ItemKind::GlobalAsm(..) => "global asm",
                 ItemKind::TyAlias(..) => "ty",
-                ItemKind::OpaqueTy(..) => "opaque type",
+                ItemKind::OpaqueTy(ref opaque) => {
+                    if opaque.in_trait {
+                        "opaque type in trait"
+                    } else {
+                        "opaque type"
+                    }
+                }
                 ItemKind::Enum(..) => "enum",
                 ItemKind::Struct(..) => "struct",
                 ItemKind::Union(..) => "union",

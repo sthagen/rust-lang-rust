@@ -37,7 +37,6 @@ use rustc_errors::{
 use rustc_session::parse::ParseSess;
 use rustc_span::source_map::{Span, DUMMY_SP};
 use rustc_span::symbol::{kw, sym, Ident, Symbol};
-use tracing::debug;
 
 use std::ops::Range;
 use std::{cmp, mem, slice};
@@ -281,7 +280,7 @@ impl TokenCursor {
                         if delim != Delimiter::Invisible {
                             return (Token::new(token::OpenDelim(delim), sp.open), Spacing::Alone);
                         }
-                        // No open delimeter to return; continue on to the next iteration.
+                        // No open delimiter to return; continue on to the next iteration.
                     }
                 };
             } else if let Some(frame) = self.stack.pop() {

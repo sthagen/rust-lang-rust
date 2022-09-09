@@ -8,6 +8,7 @@ use std::sync::OnceLock as OnceCell;
 use std::{cmp, fmt, iter};
 
 use arrayvec::ArrayVec;
+use thin_vec::ThinVec;
 
 use rustc_ast::attr;
 use rustc_ast::util::comments::beautify_doc_string;
@@ -15,7 +16,6 @@ use rustc_ast::{self as ast, AttrStyle};
 use rustc_attr::{ConstStability, Deprecation, Stability, StabilityLevel};
 use rustc_const_eval::const_eval::is_unstable_const_fn;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
-use rustc_data_structures::thin_vec::ThinVec;
 use rustc_hir as hir;
 use rustc_hir::def::{CtorKind, DefKind, Res};
 use rustc_hir::def_id::{CrateNum, DefId, LOCAL_CRATE};
@@ -1303,7 +1303,7 @@ impl GenericBound {
     pub(crate) fn maybe_sized(cx: &mut DocContext<'_>) -> GenericBound {
         let did = cx.tcx.require_lang_item(LangItem::Sized, None);
         let empty = cx.tcx.intern_substs(&[]);
-        let path = external_path(cx, did, false, vec![], empty);
+        let path = external_path(cx, did, false, ThinVec::new(), empty);
         inline::record_extern_fqn(cx, did, ItemType::Trait);
         GenericBound::TraitBound(
             PolyTrait { trait_: path, generic_params: Vec::new() },
@@ -2098,7 +2098,7 @@ impl Enum {
 
 #[derive(Clone, Debug)]
 pub(crate) enum Variant {
-    CLike,
+    CLike(Option<Discriminant>),
     Tuple(Vec<Item>),
     Struct(VariantStruct),
 }
@@ -2107,8 +2107,28 @@ impl Variant {
     pub(crate) fn has_stripped_entries(&self) -> Option<bool> {
         match *self {
             Self::Struct(ref struct_) => Some(struct_.has_stripped_entries()),
-            Self::CLike | Self::Tuple(_) => None,
+            Self::CLike(..) | Self::Tuple(_) => None,
         }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct Discriminant {
+    // In the case of cross crate re-exports, we don't have the nessesary information
+    // to reconstruct the expression of the discriminant, only the value.
+    pub(super) expr: Option<BodyId>,
+    pub(super) value: DefId,
+}
+
+impl Discriminant {
+    /// Will be `None` in the case of cross-crate reexports, and may be
+    /// simplified
+    pub(crate) fn expr(&self, tcx: TyCtxt<'_>) -> Option<String> {
+        self.expr.map(|body| print_const_expr(tcx, body))
+    }
+    /// Will always be a machine readable number, without underscores or suffixes.
+    pub(crate) fn value(&self, tcx: TyCtxt<'_>) -> String {
+        print_evaluated_const(tcx, self.value, false).unwrap()
     }
 }
 
@@ -2338,7 +2358,7 @@ impl ConstantKind {
         match *self {
             ConstantKind::TyConst { .. } | ConstantKind::Anonymous { .. } => None,
             ConstantKind::Extern { def_id } | ConstantKind::Local { def_id, .. } => {
-                print_evaluated_const(tcx, def_id)
+                print_evaluated_const(tcx, def_id, true)
             }
         }
     }
@@ -2512,7 +2532,8 @@ mod size_asserts {
     // These are in alphabetical order, which is easy to maintain.
     static_assert_size!(Crate, 72); // frequently moved by-value
     static_assert_size!(DocFragment, 32);
-    static_assert_size!(GenericArg, 64);
+    #[cfg(not(bootstrap))]
+    static_assert_size!(GenericArg, 56);
     static_assert_size!(GenericArgs, 32);
     static_assert_size!(GenericParamDef, 56);
     static_assert_size!(Item, 56);

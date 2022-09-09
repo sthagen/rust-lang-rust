@@ -161,6 +161,13 @@ rustc_queries! {
         separate_provide_extern
     }
 
+    query compare_predicates_and_trait_impl_trait_tys(key: DefId)
+        -> Result<&'tcx FxHashMap<DefId, Ty<'tcx>>, ErrorGuaranteed>
+    {
+        desc { "better description please" }
+        separate_provide_extern
+    }
+
     query analysis(key: ()) -> Result<(), ErrorGuaranteed> {
         eval_always
         desc { "running analysis passes on this crate" }
@@ -1151,7 +1158,7 @@ rustc_queries! {
     /// Used by rustdoc.
     query rendered_const(def_id: DefId) -> String {
         storage(ArenaCacheSelector<'tcx>)
-        desc { |tcx| "rendering constant intializer of `{}`", tcx.def_path_str(def_id) }
+        desc { |tcx| "rendering constant initializer of `{}`", tcx.def_path_str(def_id) }
         cache_on_disk_if { def_id.is_local() }
         separate_provide_extern
     }
@@ -1593,19 +1600,21 @@ rustc_queries! {
     query is_late_bound_map(_: LocalDefId) -> Option<&'tcx FxIndexSet<LocalDefId>> {
         desc { "testing if a region is late bound" }
     }
-    /// For a given item (like a struct), gets the default lifetimes to be used
+    /// For a given item's generic parameter, gets the default lifetimes to be used
     /// for each parameter if a trait object were to be passed for that parameter.
-    /// For example, for `struct Foo<'a, T, U>`, this would be `['static, 'static]`.
-    /// For `struct Foo<'a, T: 'a, U>`, this would instead be `['a, 'static]`.
-    query object_lifetime_defaults(_: LocalDefId) -> Option<&'tcx [ObjectLifetimeDefault]> {
-        desc { "looking up lifetime defaults for a region on an item" }
+    /// For example, for `T` in `struct Foo<'a, T>`, this would be `'static`.
+    /// For `T` in `struct Foo<'a, T: 'a>`, this would instead be `'a`.
+    /// This query will panic if passed something that is not a type parameter.
+    query object_lifetime_default(key: DefId) -> ObjectLifetimeDefault {
+        desc { "looking up lifetime defaults for generic parameter `{}`", tcx.def_path_str(key) }
+        separate_provide_extern
     }
     query late_bound_vars_map(_: LocalDefId)
         -> Option<&'tcx FxHashMap<ItemLocalId, Vec<ty::BoundVariableKind>>> {
         desc { "looking up late bound vars" }
     }
 
-    query visibility(def_id: DefId) -> ty::Visibility {
+    query visibility(def_id: DefId) -> ty::Visibility<DefId> {
         desc { |tcx| "computing visibility of `{}`", tcx.def_path_str(def_id) }
         separate_provide_extern
     }

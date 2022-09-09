@@ -18,6 +18,9 @@
 extern crate rustc_macros;
 
 #[macro_use]
+extern crate tracing;
+
+#[macro_use]
 extern crate rustc_data_structures;
 
 extern crate self as rustc_hir;
@@ -27,6 +30,7 @@ pub mod def;
 pub mod def_path_hash_map;
 pub mod definitions;
 pub mod diagnostic_items;
+pub mod errors;
 pub use rustc_span::def_id;
 mod hir;
 pub mod hir_id;

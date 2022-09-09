@@ -2,16 +2,17 @@
 //! It also serves as an input to the parser itself.
 
 use crate::config::CheckCfg;
+use crate::errors::{FeatureDiagnosticForIssue, FeatureDiagnosticHelp, FeatureGateError};
 use crate::lint::{
     builtin::UNSTABLE_SYNTAX_PRE_EXPANSION, BufferedEarlyLint, BuiltinLintDiagnostics, Lint, LintId,
 };
 use crate::SessionDiagnostic;
 use rustc_ast::node_id::NodeId;
-use rustc_data_structures::fx::{FxHashMap, FxHashSet};
+use rustc_data_structures::fx::{FxHashMap, FxHashSet, FxIndexSet};
 use rustc_data_structures::sync::{Lock, Lrc};
 use rustc_errors::{emitter::SilentEmitter, ColorConfig, Handler};
 use rustc_errors::{
-    error_code, fallback_fluent_bundle, Applicability, Diagnostic, DiagnosticBuilder, DiagnosticId,
+    fallback_fluent_bundle, Applicability, Diagnostic, DiagnosticBuilder, DiagnosticId,
     DiagnosticMessage, EmissionGuarantee, ErrorGuaranteed, MultiSpan, StashKey,
 };
 use rustc_feature::{find_feature_issue, GateIssue, UnstableFeatures};
@@ -24,7 +25,7 @@ use std::str;
 
 /// The set of keys (and, optionally, values) that define the compilation
 /// environment of the crate, used to drive conditional compilation.
-pub type CrateConfig = FxHashSet<(Symbol, Option<Symbol>)>;
+pub type CrateConfig = FxIndexSet<(Symbol, Option<Symbol>)>;
 pub type CrateCheckConfig = CheckCfg<Symbol>;
 
 /// Collected spans during parsing for places where a certain feature was
@@ -112,7 +113,7 @@ pub fn feature_err_issue<'a>(
             .map(|err| err.cancel());
     }
 
-    let mut err = sess.span_diagnostic.struct_span_err_with_code(span, explain, error_code!(E0658));
+    let mut err = sess.create_err(FeatureGateError { span, explain });
     add_feature_diagnostics_for_issue(&mut err, sess, feature, issue);
     err
 }
@@ -130,6 +131,8 @@ pub fn feature_warn<'a>(sess: &'a ParseSess, feature: Symbol, span: Span, explai
 ///
 /// This variant allows you to control whether it is a library or language feature.
 /// Almost always, you want to use this for a language feature. If so, prefer `feature_warn`.
+#[allow(rustc::diagnostic_outside_of_impl)]
+#[allow(rustc::untranslatable_diagnostic)]
 pub fn feature_warn_issue<'a>(
     sess: &'a ParseSess,
     feature: Symbol,
@@ -172,14 +175,12 @@ pub fn add_feature_diagnostics_for_issue<'a>(
     issue: GateIssue,
 ) {
     if let Some(n) = find_feature_issue(feature, issue) {
-        err.note(&format!(
-            "see issue #{n} <https://github.com/rust-lang/rust/issues/{n}> for more information"
-        ));
+        err.subdiagnostic(FeatureDiagnosticForIssue { n });
     }
 
     // #23973: do not suggest `#![feature(...)]` if we are in beta/stable
     if sess.unstable_features.is_nightly_build() {
-        err.help(&format!("add `#![feature({feature})]` to the crate attributes to enable"));
+        err.subdiagnostic(FeatureDiagnosticHelp { feature });
     }
 }
 
@@ -240,7 +241,7 @@ impl ParseSess {
         Self {
             span_diagnostic: handler,
             unstable_features: UnstableFeatures::from_environment(None),
-            config: FxHashSet::default(),
+            config: FxIndexSet::default(),
             check_config: CrateCheckConfig::default(),
             edition: ExpnId::root().expn_data().edition,
             raw_identifier_spans: Lock::new(Vec::new()),
@@ -342,7 +343,7 @@ impl ParseSess {
         &'a self,
         err: impl SessionDiagnostic<'a>,
     ) -> DiagnosticBuilder<'a, ErrorGuaranteed> {
-        err.into_diagnostic(self)
+        err.into_diagnostic(&self.span_diagnostic)
     }
 
     pub fn emit_err<'a>(&'a self, err: impl SessionDiagnostic<'a>) -> ErrorGuaranteed {
@@ -353,7 +354,7 @@ impl ParseSess {
         &'a self,
         warning: impl SessionDiagnostic<'a, ()>,
     ) -> DiagnosticBuilder<'a, ()> {
-        warning.into_diagnostic(self)
+        warning.into_diagnostic(&self.span_diagnostic)
     }
 
     pub fn emit_warning<'a>(&'a self, warning: impl SessionDiagnostic<'a, ()>) {
@@ -364,7 +365,7 @@ impl ParseSess {
         &'a self,
         fatal: impl SessionDiagnostic<'a, !>,
     ) -> DiagnosticBuilder<'a, !> {
-        fatal.into_diagnostic(self)
+        fatal.into_diagnostic(&self.span_diagnostic)
     }
 
     pub fn emit_fatal<'a>(&'a self, fatal: impl SessionDiagnostic<'a, !>) -> ! {
@@ -372,6 +373,8 @@ impl ParseSess {
     }
 
     #[rustc_lint_diagnostics]
+    #[allow(rustc::diagnostic_outside_of_impl)]
+    #[allow(rustc::untranslatable_diagnostic)]
     pub fn struct_err(
         &self,
         msg: impl Into<DiagnosticMessage>,
@@ -380,16 +383,22 @@ impl ParseSess {
     }
 
     #[rustc_lint_diagnostics]
+    #[allow(rustc::diagnostic_outside_of_impl)]
+    #[allow(rustc::untranslatable_diagnostic)]
     pub fn struct_warn(&self, msg: impl Into<DiagnosticMessage>) -> DiagnosticBuilder<'_, ()> {
         self.span_diagnostic.struct_warn(msg)
     }
 
     #[rustc_lint_diagnostics]
+    #[allow(rustc::diagnostic_outside_of_impl)]
+    #[allow(rustc::untranslatable_diagnostic)]
     pub fn struct_fatal(&self, msg: impl Into<DiagnosticMessage>) -> DiagnosticBuilder<'_, !> {
         self.span_diagnostic.struct_fatal(msg)
     }
 
     #[rustc_lint_diagnostics]
+    #[allow(rustc::diagnostic_outside_of_impl)]
+    #[allow(rustc::untranslatable_diagnostic)]
     pub fn struct_diagnostic<G: EmissionGuarantee>(
         &self,
         msg: impl Into<DiagnosticMessage>,

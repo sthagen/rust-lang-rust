@@ -119,7 +119,12 @@ impl<'a> AstValidator<'a> {
 
     /// Emits an error banning the `let` expression provided in the given location.
     fn ban_let_expr(&self, expr: &'a Expr, forbidden_let_reason: ForbiddenLetReason) {
-        self.session.emit_err(ForbiddenLet { span: expr.span, reason: forbidden_let_reason });
+        let sess = &self.session;
+        if sess.opts.unstable_features.is_nightly_build() {
+            sess.emit_err(ForbiddenLet { span: expr.span, reason: forbidden_let_reason });
+        } else {
+            sess.emit_err(ForbiddenLetStable { span: expr.span });
+        }
     }
 
     fn check_gat_where(
@@ -276,18 +281,12 @@ impl<'a> AstValidator<'a> {
     fn check_decl_no_pat(decl: &FnDecl, mut report_err: impl FnMut(Span, Option<Ident>, bool)) {
         for Param { pat, .. } in &decl.inputs {
             match pat.kind {
-                PatKind::Ident(BindingMode::ByValue(Mutability::Not), _, None) | PatKind::Wild => {}
-                PatKind::Ident(BindingMode::ByValue(Mutability::Mut), ident, None) => {
+                PatKind::Ident(BindingAnnotation::NONE, _, None) | PatKind::Wild => {}
+                PatKind::Ident(BindingAnnotation::MUT, ident, None) => {
                     report_err(pat.span, Some(ident), true)
                 }
                 _ => report_err(pat.span, None, false),
             }
-        }
-    }
-
-    fn check_trait_fn_not_async(&self, fn_span: Span, asyncness: Async) {
-        if let Async::Yes { span, .. } = asyncness {
-            self.session.emit_err(TraitFnAsync { fn_span, span });
         }
     }
 
@@ -1591,7 +1590,6 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
             self.invalid_visibility(&item.vis, None);
             if let AssocItemKind::Fn(box Fn { sig, .. }) = &item.kind {
                 self.check_trait_fn_not_const(sig.header.constness);
-                self.check_trait_fn_not_async(item.span, sig.header.asyncness);
             }
         }
 
@@ -1795,7 +1793,7 @@ pub(crate) enum ForbiddenLetReason {
     NotSupportedOr(Span),
     /// A let chain with invalid parentheses
     ///
-    /// For exemple, `let 1 = 1 && (expr && expr)` is allowed
+    /// For example, `let 1 = 1 && (expr && expr)` is allowed
     /// but `(let 1 = 1 && (let 1 = 1 && (let 1 = 1))) && let a = 1` is not
     NotSupportedParentheses(Span),
 }

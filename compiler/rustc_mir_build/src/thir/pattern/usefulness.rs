@@ -754,8 +754,8 @@ fn lint_non_exhaustive_omitted_patterns<'p, 'tcx>(
     hir_id: HirId,
     witnesses: Vec<DeconstructedPat<'p, 'tcx>>,
 ) {
-    let joined_patterns = joined_uncovered_patterns(cx, &witnesses);
     cx.tcx.struct_span_lint_hir(NON_EXHAUSTIVE_OMITTED_PATTERNS, hir_id, sp, |build| {
+        let joined_patterns = joined_uncovered_patterns(cx, &witnesses);
         let mut lint = build.build("some variants are not matched explicitly");
         lint.span_label(sp, pattern_not_covered_label(&witnesses, &joined_patterns));
         lint.help(
@@ -791,7 +791,7 @@ fn lint_non_exhaustive_omitted_patterns<'p, 'tcx>(
 /// `is_under_guard` is used to inform if the pattern has a guard. If it
 /// has one it must not be inserted into the matrix. This shouldn't be
 /// relied on for soundness.
-#[instrument(level = "debug", skip(cx, matrix, hir_id))]
+#[instrument(level = "debug", skip(cx, matrix, hir_id), ret)]
 fn is_useful<'p, 'tcx>(
     cx: &MatchCheckCtxt<'p, 'tcx>,
     matrix: &Matrix<'p, 'tcx>,
@@ -917,7 +917,6 @@ fn is_useful<'p, 'tcx>(
         v.head().set_reachable();
     }
 
-    debug!(?ret);
     ret
 }
 

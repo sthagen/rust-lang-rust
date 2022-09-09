@@ -2,7 +2,6 @@ use crate::cell::UnsafeCell;
 use crate::collections::VecDeque;
 use crate::hint;
 use crate::ops::{Deref, DerefMut, Drop};
-use crate::ptr;
 use crate::sync::atomic::{AtomicUsize, Ordering};
 use crate::sys::hermit::abi;
 
@@ -173,9 +172,6 @@ impl Mutex {
     pub const fn new() -> Mutex {
         Mutex { inner: Spinlock::new(MutexInner::new()) }
     }
-
-    #[inline]
-    pub unsafe fn init(&mut self) {}
 
     #[inline]
     pub unsafe fn lock(&self) {

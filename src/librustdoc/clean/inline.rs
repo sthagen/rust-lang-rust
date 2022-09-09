@@ -3,9 +3,10 @@
 use std::iter::once;
 use std::sync::Arc;
 
+use thin_vec::ThinVec;
+
 use rustc_ast as ast;
 use rustc_data_structures::fx::FxHashSet;
-use rustc_data_structures::thin_vec::ThinVec;
 use rustc_hir as hir;
 use rustc_hir::def::{DefKind, Res};
 use rustc_hir::def_id::DefId;
@@ -23,8 +24,6 @@ use crate::clean::{
 };
 use crate::core::DocContext;
 use crate::formats::item_type::ItemType;
-
-type Attrs<'hir> = &'hir [ast::Attribute];
 
 /// Attempt to inline a definition into this AST.
 ///
@@ -46,7 +45,7 @@ pub(crate) fn try_inline(
     import_def_id: Option<DefId>,
     res: Res,
     name: Symbol,
-    attrs: Option<Attrs<'_>>,
+    attrs: Option<&[ast::Attribute]>,
     visited: &mut FxHashSet<DefId>,
 ) -> Option<Vec<clean::Item>> {
     let did = res.opt_def_id()?;
@@ -172,7 +171,7 @@ pub(crate) fn try_inline_glob(
     }
 }
 
-pub(crate) fn load_attrs<'hir>(cx: &DocContext<'hir>, did: DefId) -> Attrs<'hir> {
+pub(crate) fn load_attrs<'hir>(cx: &DocContext<'hir>, did: DefId) -> &'hir [ast::Attribute] {
     cx.tcx.get_attrs_unchecked(did)
 }
 
@@ -287,7 +286,7 @@ pub(crate) fn build_impls(
     cx: &mut DocContext<'_>,
     parent_module: Option<DefId>,
     did: DefId,
-    attrs: Option<Attrs<'_>>,
+    attrs: Option<&[ast::Attribute]>,
     ret: &mut Vec<clean::Item>,
 ) {
     let _prof_timer = cx.tcx.sess.prof.generic_activity("build_inherent_impls");
@@ -303,8 +302,8 @@ pub(crate) fn build_impls(
 pub(crate) fn merge_attrs(
     cx: &mut DocContext<'_>,
     parent_module: Option<DefId>,
-    old_attrs: Attrs<'_>,
-    new_attrs: Option<Attrs<'_>>,
+    old_attrs: &[ast::Attribute],
+    new_attrs: Option<&[ast::Attribute]>,
 ) -> (clean::Attributes, Option<Arc<clean::cfg::Cfg>>) {
     // NOTE: If we have additional attributes (from a re-export),
     // always insert them first. This ensure that re-export
@@ -331,7 +330,7 @@ pub(crate) fn build_impl(
     cx: &mut DocContext<'_>,
     parent_module: Option<DefId>,
     did: DefId,
-    attrs: Option<Attrs<'_>>,
+    attrs: Option<&[ast::Attribute]>,
     ret: &mut Vec<clean::Item>,
 ) {
     if !cx.inlined.insert(did.into()) {
@@ -461,7 +460,7 @@ pub(crate) fn build_impl(
         ),
     };
     let polarity = tcx.impl_polarity(did);
-    let trait_ = associated_trait.map(|t| clean_trait_ref_with_bindings(cx, t, &[]));
+    let trait_ = associated_trait.map(|t| clean_trait_ref_with_bindings(cx, t, ThinVec::new()));
     if trait_.as_ref().map(|t| t.def_id()) == tcx.lang_items().deref_trait() {
         super::build_deref_target_impls(cx, &trait_items, ret);
     }

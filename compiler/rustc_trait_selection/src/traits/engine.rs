@@ -17,6 +17,7 @@ use rustc_span::Span;
 
 pub trait TraitEngineExt<'tcx> {
     fn new(tcx: TyCtxt<'tcx>) -> Box<Self>;
+    fn new_in_snapshot(tcx: TyCtxt<'tcx>) -> Box<Self>;
 }
 
 impl<'tcx> TraitEngineExt<'tcx> for dyn TraitEngine<'tcx> {
@@ -25,6 +26,14 @@ impl<'tcx> TraitEngineExt<'tcx> for dyn TraitEngine<'tcx> {
             Box::new(ChalkFulfillmentContext::new())
         } else {
             Box::new(FulfillmentContext::new())
+        }
+    }
+
+    fn new_in_snapshot(tcx: TyCtxt<'tcx>) -> Box<Self> {
+        if tcx.sess.opts.unstable_opts.chalk {
+            Box::new(ChalkFulfillmentContext::new())
+        } else {
+            Box::new(FulfillmentContext::new_in_snapshot())
         }
     }
 }
@@ -39,6 +48,10 @@ pub struct ObligationCtxt<'a, 'tcx> {
 impl<'a, 'tcx> ObligationCtxt<'a, 'tcx> {
     pub fn new(infcx: &'a InferCtxt<'a, 'tcx>) -> Self {
         Self { infcx, engine: RefCell::new(<dyn TraitEngine<'_>>::new(infcx.tcx)) }
+    }
+
+    pub fn new_in_snapshot(infcx: &'a InferCtxt<'a, 'tcx>) -> Self {
+        Self { infcx, engine: RefCell::new(<dyn TraitEngine<'_>>::new_in_snapshot(infcx.tcx)) }
     }
 
     pub fn register_obligation(&self, obligation: PredicateObligation<'tcx>) {
@@ -124,7 +137,18 @@ impl<'a, 'tcx> ObligationCtxt<'a, 'tcx> {
         let hir_id = tcx.hir().local_def_id_to_hir_id(def_id);
         let cause = ObligationCause::misc(span, hir_id);
         for ty in assumed_wf_types {
-            implied_bounds.insert(ty);
+            // FIXME(@lcnr): rustc currently does not check wf for types
+            // pre-normalization, meaning that implied bounds are sometimes
+            // incorrect. See #100910 for more details.
+            //
+            // Not adding the unnormalized types here mostly fixes that, except
+            // that there are projections which are still ambiguous in the item definition
+            // but do normalize successfully when using the item, see #98543.
+            //
+            // Anyways, I will hopefully soon change implied bounds to make all of this
+            // sound and then uncomment this line again.
+
+            // implied_bounds.insert(ty);
             let normalized = self.normalize(cause.clone(), param_env, ty);
             implied_bounds.insert(normalized);
         }

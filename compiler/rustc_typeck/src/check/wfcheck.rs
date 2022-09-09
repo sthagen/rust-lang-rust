@@ -768,7 +768,7 @@ impl<'tcx> TypeVisitor<'tcx> for GATSubstCollector<'tcx> {
 fn could_be_self(trait_def_id: LocalDefId, ty: &hir::Ty<'_>) -> bool {
     match ty.kind {
         hir::TyKind::TraitObject([trait_ref], ..) => match trait_ref.trait_ref.path.segments {
-            [s] => s.res.and_then(|r| r.opt_def_id()) == Some(trait_def_id.to_def_id()),
+            [s] => s.res.opt_def_id() == Some(trait_def_id.to_def_id()),
             _ => false,
         },
         _ => false,
@@ -972,7 +972,7 @@ fn check_param_wf(tcx: TyCtxt<'_>, param: &hir::GenericParam<'_>) {
     }
 }
 
-#[tracing::instrument(level = "debug", skip(tcx, span, sig_if_method))]
+#[instrument(level = "debug", skip(tcx, span, sig_if_method))]
 fn check_associated_item(
     tcx: TyCtxt<'_>,
     item_id: LocalDefId,
@@ -1225,7 +1225,7 @@ fn check_item_type(tcx: TyCtxt<'_>, item_id: LocalDefId, ty_span: Span, allow_fo
     });
 }
 
-#[tracing::instrument(level = "debug", skip(tcx, ast_self_ty, ast_trait_ref))]
+#[instrument(level = "debug", skip(tcx, ast_self_ty, ast_trait_ref))]
 fn check_impl<'tcx>(
     tcx: TyCtxt<'tcx>,
     item: &'tcx hir::Item<'tcx>,
@@ -1262,7 +1262,11 @@ fn check_impl<'tcx>(
             }
             None => {
                 let self_ty = tcx.type_of(item.def_id);
-                let self_ty = wfcx.normalize(item.span, None, self_ty);
+                let self_ty = wfcx.normalize(
+                    item.span,
+                    Some(WellFormedLoc::Ty(item.hir_id().expect_owner())),
+                    self_ty,
+                );
                 wfcx.register_wf_obligation(
                     ast_self_ty.span,
                     Some(WellFormedLoc::Ty(item.hir_id().expect_owner())),
@@ -1307,7 +1311,11 @@ fn check_where_clauses<'tcx>(wfcx: &WfCheckingCtxt<'_, 'tcx>, span: Span, def_id
                     // parameter includes another (e.g., `<T, U = T>`). In those cases, we can't
                     // be sure if it will error or not as user might always specify the other.
                     if !ty.needs_subst() {
-                        wfcx.register_wf_obligation(tcx.def_span(param.def_id), None, ty.into());
+                        wfcx.register_wf_obligation(
+                            tcx.def_span(param.def_id),
+                            Some(WellFormedLoc::Ty(param.def_id.expect_local())),
+                            ty.into(),
+                        );
                     }
                 }
             }
@@ -1464,7 +1472,7 @@ fn check_where_clauses<'tcx>(wfcx: &WfCheckingCtxt<'_, 'tcx>, span: Span, def_id
     wfcx.register_obligations(obligations);
 }
 
-#[tracing::instrument(level = "debug", skip(wfcx, span, hir_decl))]
+#[instrument(level = "debug", skip(wfcx, span, hir_decl))]
 fn check_fn_or_method<'tcx>(
     wfcx: &WfCheckingCtxt<'_, 'tcx>,
     span: Span,
@@ -1512,7 +1520,14 @@ fn check_fn_or_method<'tcx>(
         );
     }
 
-    wfcx.register_wf_obligation(hir_decl.output.span(), None, sig.output().into());
+    wfcx.register_wf_obligation(
+        hir_decl.output.span(),
+        Some(WellFormedLoc::Param {
+            function: def_id,
+            param_idx: sig.inputs().len().try_into().unwrap(),
+        }),
+        sig.output().into(),
+    );
 
     check_where_clauses(wfcx, span, def_id);
 }
@@ -1521,7 +1536,7 @@ const HELP_FOR_SELF_TYPE: &str = "consider changing to `self`, `&self`, `&mut se
      `self: Rc<Self>`, `self: Arc<Self>`, or `self: Pin<P>` (where P is one \
      of the previous types except `Self`)";
 
-#[tracing::instrument(level = "debug", skip(wfcx))]
+#[instrument(level = "debug", skip(wfcx))]
 fn check_method_receiver<'tcx>(
     wfcx: &WfCheckingCtxt<'_, 'tcx>,
     fn_sig: &hir::FnSig<'_>,

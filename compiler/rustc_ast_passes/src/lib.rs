@@ -8,8 +8,12 @@
 #![feature(box_patterns)]
 #![feature(if_let_guard)]
 #![feature(iter_is_partitioned)]
+#![feature(let_chains)]
 #![feature(let_else)]
 #![recursion_limit = "256"]
+
+#[macro_use]
+extern crate tracing;
 
 pub mod ast_validation;
 mod errors;

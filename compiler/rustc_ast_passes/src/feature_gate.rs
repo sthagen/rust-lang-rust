@@ -11,8 +11,6 @@ use rustc_span::source_map::Spanned;
 use rustc_span::symbol::sym;
 use rustc_span::Span;
 
-use tracing::debug;
-
 macro_rules! gate_feature_fn {
     ($visitor: expr, $has_feature: expr, $span: expr, $name: expr, $explain: expr, $help: expr) => {{
         let (visitor, has_feature, span, name, explain, help) =
@@ -777,6 +775,7 @@ pub fn check_crate(krate: &ast::Crate, sess: &Session) {
         "`if let` guards are experimental",
         "you can write `if matches!(<expr>, <pattern>)` instead of `if let <pattern> = <expr>`"
     );
+    gate_all!(let_chains, "`let` expressions in this position are unstable");
     gate_all!(
         async_closure,
         "async closures are unstable",

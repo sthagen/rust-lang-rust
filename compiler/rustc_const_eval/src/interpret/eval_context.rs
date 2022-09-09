@@ -187,9 +187,6 @@ pub enum LocalValue<Prov: Provenance = AllocId> {
 
 impl<'tcx, Prov: Provenance + 'static> LocalState<'tcx, Prov> {
     /// Read the local's value or error if the local is not yet live or not live anymore.
-    ///
-    /// Note: This may only be invoked from the `Machine::access_local` hook and not from
-    /// anywhere else. You may be invalidating machine invariants if you do!
     #[inline]
     pub fn access(&self) -> InterpResult<'tcx, &Operand<Prov>> {
         match &self.value {
@@ -782,7 +779,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         assert_eq!(
             unwinding,
             match self.frame().loc {
-                Ok(loc) => self.body().basic_blocks()[loc.block].is_cleanup,
+                Ok(loc) => self.body().basic_blocks[loc.block].is_cleanup,
                 Err(_) => true,
             }
         );

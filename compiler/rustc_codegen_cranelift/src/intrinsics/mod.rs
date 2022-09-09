@@ -203,7 +203,7 @@ pub(crate) fn codegen_intrinsic_call<'tcx>(
             sym::transmute => {
                 crate::base::codegen_panic(fx, "Transmuting to uninhabited type.", source_info);
             }
-            _ => unimplemented!("unsupported instrinsic {}", intrinsic),
+            _ => unimplemented!("unsupported intrinsic {}", intrinsic),
         }
         return;
     };
@@ -357,9 +357,6 @@ fn codegen_regular_intrinsic_call<'tcx>(
     let usize_layout = fx.layout_of(fx.tcx.types.usize);
 
     match intrinsic {
-        sym::assume => {
-            intrinsic_args!(fx, args => (_a); intrinsic);
-        }
         sym::likely | sym::unlikely => {
             intrinsic_args!(fx, args => (a); intrinsic);
 
@@ -575,6 +572,13 @@ fn codegen_regular_intrinsic_call<'tcx>(
             let base_val = base.load_scalar(fx);
             let res = fx.bcx.ins().iadd(base_val, ptr_diff);
             ret.write_cvalue(fx, CValue::by_val(res, base.layout()));
+        }
+
+        sym::ptr_mask => {
+            intrinsic_args!(fx, args => (ptr, mask); intrinsic);
+            let ptr = ptr.load_scalar(fx);
+            let mask = mask.load_scalar(fx);
+            fx.bcx.ins().band(ptr, mask);
         }
 
         sym::transmute => {

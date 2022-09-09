@@ -6,6 +6,7 @@ use std::borrow::{Borrow, Cow};
 use std::fmt::Debug;
 use std::hash::Hash;
 
+use rustc_ast::{InlineAsmOptions, InlineAsmTemplatePiece};
 use rustc_middle::mir;
 use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_span::def_id::DefId;
@@ -215,23 +216,12 @@ pub trait Machine<'mir, 'tcx>: Sized {
         right: &ImmTy<'tcx, Self::Provenance>,
     ) -> InterpResult<'tcx, (Scalar<Self::Provenance>, bool, Ty<'tcx>)>;
 
-    /// Called to read the specified `local` from the `frame`.
-    /// Since reading a ZST is not actually accessing memory or locals, this is never invoked
-    /// for ZST reads.
-    #[inline]
-    fn access_local<'a>(
-        frame: &'a Frame<'mir, 'tcx, Self::Provenance, Self::FrameExtra>,
-        local: mir::Local,
-    ) -> InterpResult<'tcx, &'a Operand<Self::Provenance>>
-    where
-        'tcx: 'mir,
-    {
-        frame.locals[local].access()
-    }
-
     /// Called to write the specified `local` from the `frame`.
     /// Since writing a ZST is not actually accessing memory or locals, this is never invoked
     /// for ZST reads.
+    ///
+    /// Due to borrow checker trouble, we indicate the `frame` as an index rather than an `&mut
+    /// Frame`.
     #[inline]
     fn access_local_mut<'a>(
         ecx: &'a mut InterpCx<'mir, 'tcx, Self>,
@@ -326,13 +316,22 @@ pub trait Machine<'mir, 'tcx>: Sized {
     /// cache the result. (This relies on `AllocMap::get_or` being able to add the
     /// owned allocation to the map even when the map is shared.)
     ///
-    /// This must only fail if `alloc` contains relocations.
+    /// This must only fail if `alloc` contains provenance.
     fn adjust_allocation<'b>(
         ecx: &InterpCx<'mir, 'tcx, Self>,
         id: AllocId,
         alloc: Cow<'b, Allocation>,
         kind: Option<MemoryKind<Self::MemoryKind>>,
     ) -> InterpResult<'tcx, Cow<'b, Allocation<Self::Provenance, Self::AllocExtra>>>;
+
+    fn eval_inline_asm(
+        _ecx: &mut InterpCx<'mir, 'tcx, Self>,
+        _template: &'tcx [InlineAsmTemplatePiece],
+        _operands: &[mir::InlineAsmOperand<'tcx>],
+        _options: InlineAsmOptions,
+    ) -> InterpResult<'tcx> {
+        throw_unsup_format!("inline assembly is not supported")
+    }
 
     /// Hook for performing extra checks on a memory read access.
     ///
@@ -490,6 +489,7 @@ pub macro compile_time_machine(<$mir: lifetime, $tcx: lifetime>) {
     ) -> InterpResult<$tcx, Pointer<Option<AllocId>>> {
         // Allow these casts, but make the pointer not dereferenceable.
         // (I.e., they behave like transmutation.)
+        // This is correct because no pointers can ever be exposed in compile-time evaluation.
         Ok(Pointer::from_addr(addr))
     }
 

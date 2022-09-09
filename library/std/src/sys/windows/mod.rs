@@ -48,7 +48,7 @@ cfg_if::cfg_if! {
 
 // SAFETY: must be called only once during runtime initialization.
 // NOTE: this is not guaranteed to run, for example when Rust code is called externally.
-pub unsafe fn init(_argc: isize, _argv: *const *const u8) {
+pub unsafe fn init(_argc: isize, _argv: *const *const u8, _sigpipe: u8) {
     stack_overflow::init();
 
     // Normally, `thread::spawn` will call `Thread::set_name` but since this thread already
@@ -329,3 +329,11 @@ pub fn abort_internal() -> ! {
     }
     crate::intrinsics::abort();
 }
+
+/// Align the inner value to 8 bytes.
+///
+/// This is enough for almost all of the buffers we're likely to work with in
+/// the Windows APIs we use.
+#[repr(C, align(8))]
+#[derive(Copy, Clone)]
+pub(crate) struct Align8<T: ?Sized>(pub T);

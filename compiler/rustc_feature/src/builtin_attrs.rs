@@ -359,6 +359,7 @@ pub const BUILTIN_ATTRIBUTES: &[BuiltinAttribute] = &[
     ),
 
     // Entry point:
+    gated!(unix_sigpipe, Normal, template!(Word, NameValueStr: "inherit|sig_ign|sig_dfl"), ErrorFollowing, experimental!(unix_sigpipe)),
     ungated!(start, Normal, template!(Word), WarnFollowing),
     ungated!(no_start, CrateLevel, template!(Word), WarnFollowing),
     ungated!(no_main, CrateLevel, template!(Word), WarnFollowing),
@@ -458,10 +459,6 @@ pub const BUILTIN_ATTRIBUTES: &[BuiltinAttribute] = &[
     ),
     gated!(ffi_pure, Normal, template!(Word), WarnFollowing, experimental!(ffi_pure)),
     gated!(ffi_const, Normal, template!(Word), WarnFollowing, experimental!(ffi_const)),
-    gated!(
-        register_attr, CrateLevel, template!(List: "attr1, attr2, ..."), DuplicatesOk,
-        experimental!(register_attr),
-    ),
     gated!(
         register_tool, CrateLevel, template!(List: "tool1, tool2, ..."), DuplicatesOk,
         experimental!(register_tool),
@@ -762,6 +759,7 @@ pub const BUILTIN_ATTRIBUTES: &[BuiltinAttribute] = &[
     // Internal attributes, Testing:
     // ==========================================================================
 
+    rustc_attr!(TEST, rustc_access_level, Normal, template!(Word), WarnFollowing),
     rustc_attr!(TEST, rustc_outlives, Normal, template!(Word), WarnFollowing),
     rustc_attr!(TEST, rustc_capture_analysis, Normal, template!(Word), WarnFollowing),
     rustc_attr!(TEST, rustc_insignificant_dtor, Normal, template!(Word), WarnFollowing),
@@ -823,6 +821,14 @@ pub fn is_builtin_attr_name(name: Symbol) -> bool {
 
 pub fn is_builtin_only_local(name: Symbol) -> bool {
     BUILTIN_ATTRIBUTE_MAP.get(&name).map_or(false, |attr| attr.only_local)
+}
+
+pub fn is_valid_for_get_attr(name: Symbol) -> bool {
+    BUILTIN_ATTRIBUTE_MAP.get(&name).map_or(false, |attr| match attr.duplicates {
+        WarnFollowing | ErrorFollowing | ErrorPreceding | FutureWarnFollowing
+        | FutureWarnPreceding => true,
+        DuplicatesOk | WarnFollowingWordOnly => false,
+    })
 }
 
 pub static BUILTIN_ATTRIBUTE_MAP: LazyLock<FxHashMap<Symbol, &BuiltinAttribute>> =

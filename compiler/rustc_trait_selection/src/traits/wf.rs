@@ -129,9 +129,9 @@ pub fn predicate_obligations<'a, 'tcx>(
         }
         ty::PredicateKind::Projection(t) => {
             wf.compute_projection(t.projection_ty);
-            wf.compute(match t.term {
-                ty::Term::Ty(ty) => ty.into(),
-                ty::Term::Const(c) => c.into(),
+            wf.compute(match t.term.unpack() {
+                ty::TermKind::Ty(ty) => ty.into(),
+                ty::TermKind::Const(c) => c.into(),
             })
         }
         ty::PredicateKind::WellFormed(arg) => {
@@ -434,6 +434,7 @@ impl<'tcx> WfPredicates<'tcx> {
     }
 
     /// Pushes all the predicates needed to validate that `ty` is WF into `out`.
+    #[instrument(level = "debug", skip(self))]
     fn compute(&mut self, arg: GenericArg<'tcx>) {
         let mut walker = arg.walk();
         let param_env = self.param_env;
@@ -487,6 +488,8 @@ impl<'tcx> WfPredicates<'tcx> {
                     continue;
                 }
             };
+
+            debug!("wf bounds for ty={:?} ty.kind={:#?}", ty, ty.kind());
 
             match *ty.kind() {
                 ty::Bool
@@ -841,7 +844,7 @@ pub fn object_region_bounds<'tcx>(
 ///
 /// Requires that trait definitions have been processed so that we can
 /// elaborate predicates and walk supertraits.
-#[instrument(skip(tcx, predicates), level = "debug")]
+#[instrument(skip(tcx, predicates), level = "debug", ret)]
 pub(crate) fn required_region_bounds<'tcx>(
     tcx: TyCtxt<'tcx>,
     erased_self_ty: Ty<'tcx>,
