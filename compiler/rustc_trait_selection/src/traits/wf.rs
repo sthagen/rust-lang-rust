@@ -101,6 +101,7 @@ pub fn trait_obligations<'a, 'tcx>(
     wf.normalize(infcx)
 }
 
+#[instrument(skip(infcx), ret)]
 pub fn predicate_obligations<'a, 'tcx>(
     infcx: &InferCtxt<'a, 'tcx>,
     param_env: ty::ParamEnv<'tcx>,
@@ -440,6 +441,7 @@ impl<'tcx> WfPredicates<'tcx> {
         let param_env = self.param_env;
         let depth = self.recursion_depth;
         while let Some(arg) = walker.next() {
+            debug!(?arg, ?self.out);
             let ty = match arg.unpack() {
                 GenericArgKind::Type(ty) => ty,
 
@@ -454,7 +456,7 @@ impl<'tcx> WfPredicates<'tcx> {
                             self.out.extend(obligations);
 
                             let predicate =
-                                ty::Binder::dummy(ty::PredicateKind::ConstEvaluatable(uv.shrink()))
+                                ty::Binder::dummy(ty::PredicateKind::ConstEvaluatable(uv))
                                     .to_predicate(self.tcx());
                             let cause = self.cause(traits::WellFormed(None));
                             self.out.push(traits::Obligation::with_depth(
@@ -637,7 +639,7 @@ impl<'tcx> WfPredicates<'tcx> {
                     }
                 }
 
-                ty::Dynamic(data, r) => {
+                ty::Dynamic(data, r, _) => {
                     // WfObject
                     //
                     // Here, we defer WF checking due to higher-ranked
@@ -689,6 +691,8 @@ impl<'tcx> WfPredicates<'tcx> {
                     ));
                 }
             }
+
+            debug!(?self.out);
         }
     }
 

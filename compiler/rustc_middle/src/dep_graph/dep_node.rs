@@ -62,7 +62,7 @@ use crate::ty::TyCtxt;
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_hir::def_id::{CrateNum, DefId, LocalDefId};
 use rustc_hir::definitions::DefPathHash;
-use rustc_hir::HirId;
+use rustc_hir::{HirId, ItemLocalId};
 use rustc_query_system::dep_graph::FingerprintStyle;
 use rustc_span::symbol::Symbol;
 use std::hash::Hash;
@@ -144,11 +144,9 @@ impl DepKind {
 
 macro_rules! define_dep_nodes {
     (
-    $(
-        [$($attrs:tt)*]
-        $variant:ident $(( $tuple_arg_ty:ty $(,)? ))*
-      ,)*
-    ) => (
+     $($(#[$attr:meta])*
+        [$($modifiers:tt)*] fn $variant:ident($($K:tt)*) -> $V:ty,)*) => {
+
         #[macro_export]
         macro_rules! make_dep_kind_array {
             ($mod:ident) => {[ $($mod::$variant()),* ]};
@@ -158,7 +156,7 @@ macro_rules! define_dep_nodes {
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Encodable, Decodable)]
         #[allow(non_camel_case_types)]
         pub enum DepKind {
-            $($variant),*
+            $( $( #[$attr] )* $variant),*
         }
 
         fn dep_kind_from_label_string(label: &str) -> Result<DepKind, ()> {
@@ -176,24 +174,17 @@ macro_rules! define_dep_nodes {
                 pub const $variant: &str = stringify!($variant);
             )*
         }
-    );
+    };
 }
 
-rustc_dep_node_append!(define_dep_nodes![
-    // We use this for most things when incr. comp. is turned off.
-    [] Null,
-
-    // We use this to create a forever-red node.
-    [] Red,
-
-    [anon] TraitSelect,
-
-    // WARNING: if `Symbol` is changed, make sure you update `make_compile_codegen_unit` below.
-    [] CompileCodegenUnit(Symbol),
-
-    // WARNING: if `MonoItem` is changed, make sure you update `make_compile_mono_item` below.
-    // Only used by rustc_codegen_cranelift
-    [] CompileMonoItem(MonoItem),
+rustc_query_append!(define_dep_nodes![
+    /// We use this for most things when incr. comp. is turned off.
+    [] fn Null() -> (),
+    /// We use this to create a forever-red node.
+    [] fn Red() -> (),
+    [] fn TraitSelect() -> (),
+    [] fn CompileCodegenUnit() -> (),
+    [] fn CompileMonoItem() -> (),
 ]);
 
 // WARNING: `construct` is generic and does not know that `CompileCodegenUnit` takes `Symbol`s as keys.
@@ -289,7 +280,7 @@ impl DepNodeExt for DepNode {
         let kind = dep_kind_from_label_string(label)?;
 
         match kind.fingerprint_style(tcx) {
-            FingerprintStyle::Opaque => Err(()),
+            FingerprintStyle::Opaque | FingerprintStyle::HirId => Err(()),
             FingerprintStyle::Unit => Ok(DepNode::new_no_params(tcx, kind)),
             FingerprintStyle::DefPathHash => {
                 Ok(DepNode::from_def_path_hash(tcx, def_path_hash, kind))
@@ -417,7 +408,7 @@ impl<'tcx> DepNodeParams<TyCtxt<'tcx>> for (DefId, DefId) {
 impl<'tcx> DepNodeParams<TyCtxt<'tcx>> for HirId {
     #[inline(always)]
     fn fingerprint_style() -> FingerprintStyle {
-        FingerprintStyle::Opaque
+        FingerprintStyle::HirId
     }
 
     // We actually would not need to specialize the implementation of this
@@ -426,10 +417,36 @@ impl<'tcx> DepNodeParams<TyCtxt<'tcx>> for HirId {
     #[inline(always)]
     fn to_fingerprint(&self, tcx: TyCtxt<'tcx>) -> Fingerprint {
         let HirId { owner, local_id } = *self;
-
         let def_path_hash = tcx.def_path_hash(owner.to_def_id());
-        let local_id = Fingerprint::from_smaller_hash(local_id.as_u32().into());
+        Fingerprint::new(
+            // `owner` is local, so is completely defined by the local hash
+            def_path_hash.local_hash(),
+            local_id.as_u32().into(),
+        )
+    }
 
-        def_path_hash.0.combine(local_id)
+    #[inline(always)]
+    fn to_debug_str(&self, tcx: TyCtxt<'tcx>) -> String {
+        let HirId { owner, local_id } = *self;
+        format!("{}.{}", tcx.def_path_str(owner.to_def_id()), local_id.as_u32())
+    }
+
+    #[inline(always)]
+    fn recover(tcx: TyCtxt<'tcx>, dep_node: &DepNode) -> Option<Self> {
+        if dep_node.kind.fingerprint_style(tcx) == FingerprintStyle::HirId {
+            let (local_hash, local_id) = Fingerprint::from(dep_node.hash).as_value();
+            let def_path_hash = DefPathHash::new(tcx.sess.local_stable_crate_id(), local_hash);
+            let owner = tcx
+                .def_path_hash_to_def_id(def_path_hash, &mut || {
+                    panic!("Failed to extract HirId: {:?} {}", dep_node.kind, dep_node.hash)
+                })
+                .expect_local();
+            let local_id = local_id
+                .try_into()
+                .unwrap_or_else(|_| panic!("local id should be u32, found {:?}", local_id));
+            Some(HirId { owner, local_id: ItemLocalId::from_u32(local_id) })
+        } else {
+            None
+        }
     }
 }

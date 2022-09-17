@@ -221,9 +221,9 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         let source_info = self.source_info(scrutinee_span);
 
         if let Ok(scrutinee_builder) =
-            scrutinee_place_builder.clone().try_upvars_resolved(self.tcx, self.typeck_results)
+            scrutinee_place_builder.clone().try_upvars_resolved(self.tcx, &self.upvars)
         {
-            let scrutinee_place = scrutinee_builder.into_place(self.tcx, self.typeck_results);
+            let scrutinee_place = scrutinee_builder.into_place(self.tcx, &self.upvars);
             self.cfg.push_fake_read(block, source_info, cause_matched_place, scrutinee_place);
         }
 
@@ -348,12 +348,10 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                     // ```
                     let mut opt_scrutinee_place: Option<(Option<&Place<'tcx>>, Span)> = None;
                     let scrutinee_place: Place<'tcx>;
-                    if let Ok(scrutinee_builder) = scrutinee_place_builder
-                        .clone()
-                        .try_upvars_resolved(this.tcx, this.typeck_results)
+                    if let Ok(scrutinee_builder) =
+                        scrutinee_place_builder.clone().try_upvars_resolved(this.tcx, &this.upvars)
                     {
-                        scrutinee_place =
-                            scrutinee_builder.into_place(this.tcx, this.typeck_results);
+                        scrutinee_place = scrutinee_builder.into_place(this.tcx, &this.upvars);
                         opt_scrutinee_place = Some((Some(&scrutinee_place), scrutinee_span));
                     }
                     let scope = this.declare_bindings(
@@ -570,7 +568,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
 
             _ => {
                 let place_builder = unpack!(block = self.as_place_builder(block, initializer));
-                self.place_into_pattern(block, irrefutable_pat, place_builder, true)
+                self.place_into_pattern(block, &irrefutable_pat, place_builder, true)
             }
         }
     }
@@ -620,9 +618,9 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                     // };
                     // ```
                     if let Ok(match_pair_resolved) =
-                        initializer.clone().try_upvars_resolved(self.tcx, self.typeck_results)
+                        initializer.clone().try_upvars_resolved(self.tcx, &self.upvars)
                     {
-                        let place = match_pair_resolved.into_place(self.tcx, self.typeck_results);
+                        let place = match_pair_resolved.into_place(self.tcx, &self.upvars);
                         *match_place = Some(place);
                     }
                 }
@@ -701,7 +699,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         self.cfg.push(block, Statement { source_info, kind: StatementKind::StorageLive(local_id) });
         // Although there is almost always scope for given variable in corner cases
         // like #92893 we might get variable with no scope.
-        if let Some(region_scope) = self.region_scope_tree.var_scope(var.0.local_id) && schedule_drop{
+        if let Some(region_scope) = self.region_scope_tree.var_scope(var.0.local_id) && schedule_drop {
             self.schedule_drop(span, region_scope, local_id, DropKind::Storage);
         }
         Place::from(local_id)
@@ -1602,9 +1600,9 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
 
         // Insert a Shallow borrow of any places that is switched on.
         if let Some(fb) = fake_borrows && let Ok(match_place_resolved) =
-            match_place.clone().try_upvars_resolved(self.tcx, self.typeck_results)
+            match_place.clone().try_upvars_resolved(self.tcx, &self.upvars)
         {
-            let resolved_place = match_place_resolved.into_place(self.tcx, self.typeck_results);
+            let resolved_place = match_place_resolved.into_place(self.tcx, &self.upvars);
             fb.insert(resolved_place);
         }
 
@@ -1791,10 +1789,8 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         );
         let mut opt_expr_place: Option<(Option<&Place<'tcx>>, Span)> = None;
         let expr_place: Place<'tcx>;
-        if let Ok(expr_builder) =
-            expr_place_builder.try_upvars_resolved(self.tcx, self.typeck_results)
-        {
-            expr_place = expr_builder.into_place(self.tcx, self.typeck_results);
+        if let Ok(expr_builder) = expr_place_builder.try_upvars_resolved(self.tcx, &self.upvars) {
+            expr_place = expr_builder.into_place(self.tcx, &self.upvars);
             opt_expr_place = Some((Some(&expr_place), expr_span));
         }
         let otherwise_post_guard_block = otherwise_candidate.pre_binding_block.unwrap();
@@ -2278,23 +2274,14 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         init: &Expr<'tcx>,
         initializer_span: Span,
         else_block: BlockId,
-        visibility_scope: Option<SourceScope>,
-        remainder_scope: region::Scope,
-        remainder_span: Span,
+        let_else_scope: &region::Scope,
         pattern: &Pat<'tcx>,
-    ) -> BlockAnd<()> {
+    ) -> BlockAnd<BasicBlock> {
         let else_block_span = self.thir[else_block].span;
-        let (matching, failure) = self.in_if_then_scope(remainder_scope, |this| {
+        let (matching, failure) = self.in_if_then_scope(*let_else_scope, |this| {
             let scrutinee = unpack!(block = this.lower_scrutinee(block, init, initializer_span));
             let pat = Pat { ty: init.ty, span: else_block_span, kind: PatKind::Wild };
             let mut wildcard = Candidate::new(scrutinee.clone(), &pat, false);
-            this.declare_bindings(
-                visibility_scope,
-                remainder_span,
-                pattern,
-                ArmHasGuard(false),
-                Some((None, initializer_span)),
-            );
             let mut candidate = Candidate::new(scrutinee.clone(), pattern, false);
             let fake_borrow_temps = this.lower_match_tree(
                 block,
@@ -2325,28 +2312,9 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 None,
                 None,
             );
-            this.break_for_else(failure, remainder_scope, this.source_info(initializer_span));
+            this.break_for_else(failure, *let_else_scope, this.source_info(initializer_span));
             matching.unit()
         });
-
-        // This place is not really used because this destination place
-        // should never be used to take values at the end of the failure
-        // block.
-        let dummy_place = self.temp(self.tcx.types.never, else_block_span);
-        let failure_block;
-        unpack!(
-            failure_block = self.ast_block(
-                dummy_place,
-                failure,
-                else_block,
-                self.source_info(else_block_span),
-            )
-        );
-        self.cfg.terminate(
-            failure_block,
-            self.source_info(else_block_span),
-            TerminatorKind::Unreachable,
-        );
-        matching.unit()
+        matching.and(failure)
     }
 }

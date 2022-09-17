@@ -139,11 +139,10 @@ impl LifetimeName {
         match self {
             LifetimeName::ImplicitObjectLifetimeDefault | LifetimeName::Infer => true,
 
-            // It might seem surprising that `Fresh` counts as
-            // *not* elided -- but this is because, as far as the code
-            // in the compiler is concerned -- `Fresh` variants act
-            // equivalently to "some fresh name". They correspond to
-            // early-bound regions on an impl, in other words.
+            // It might seem surprising that `Fresh` counts as not *elided*
+            // -- but this is because, as far as the code in the compiler is
+            // concerned -- `Fresh` variants act equivalently to "some fresh name".
+            // They correspond to early-bound regions on an impl, in other words.
             LifetimeName::Error | LifetimeName::Param(..) | LifetimeName::Static => false,
         }
     }
@@ -300,9 +299,9 @@ impl GenericArg<'_> {
     pub fn to_ord(&self) -> ast::ParamKindOrd {
         match self {
             GenericArg::Lifetime(_) => ast::ParamKindOrd::Lifetime,
-            GenericArg::Type(_) => ast::ParamKindOrd::Type,
-            GenericArg::Const(_) => ast::ParamKindOrd::Const,
-            GenericArg::Infer(_) => ast::ParamKindOrd::Infer,
+            GenericArg::Type(_) | GenericArg::Const(_) | GenericArg::Infer(_) => {
+                ast::ParamKindOrd::TypeOrConst
+            }
         }
     }
 
@@ -576,8 +575,7 @@ impl<'hir> Generics<'hir> {
         if self.has_where_clause_predicates {
             self.predicates
                 .iter()
-                .filter(|p| p.in_where_clause())
-                .last()
+                .rfind(|&p| p.in_where_clause())
                 .map_or(end, |p| p.span())
                 .shrink_to_hi()
                 .to(end)
@@ -835,7 +833,16 @@ impl<'tcx> OwnerNodes<'tcx> {
 impl fmt::Debug for OwnerNodes<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("OwnerNodes")
+            // Do not print all the pointers to all the nodes, as it would be unreadable.
             .field("node", &self.nodes[ItemLocalId::from_u32(0)])
+            .field(
+                "parents",
+                &self
+                    .nodes
+                    .iter_enumerated()
+                    .map(|(id, parented_node)| (id, parented_node.as_ref().map(|node| node.parent)))
+                    .collect::<Vec<_>>(),
+            )
             .field("bodies", &self.bodies)
             .field("local_id_to_def_id", &self.local_id_to_def_id)
             .field("hash_without_bodies", &self.hash_without_bodies)
@@ -2401,6 +2408,14 @@ impl<'hir> Ty<'hir> {
             _ => None,
         }
     }
+
+    pub fn peel_refs(&self) -> &Self {
+        let mut final_ty = self;
+        while let TyKind::Rptr(_, MutTy { ty, .. }) = &final_ty.kind {
+            final_ty = &ty;
+        }
+        final_ty
+    }
 }
 
 /// Not represented directly in the AST; referred to by name through a `ty_path`.
@@ -2645,7 +2660,7 @@ pub struct FnDecl<'hir> {
 }
 
 /// Represents what type of implicit self a function has, if any.
-#[derive(Copy, Clone, Encodable, Decodable, Debug, HashStable_Generic)]
+#[derive(Copy, Clone, PartialEq, Eq, Encodable, Decodable, Debug, HashStable_Generic)]
 pub enum ImplicitSelfKind {
     /// Represents a `fn x(self);`.
     Imm,

@@ -11,6 +11,7 @@ allow-unauthenticated = [
     "S-*",
     "T-*",
     "WG-*",
+    "const-hack",
     "needs-fcp",
     "relnotes",
     "requires-nightly",
@@ -129,8 +130,8 @@ trigger_files = [
 
     # Internal tooling
     "src/etc/htmldocck.py",
-    "src/etc/check_missing_items.py",
     "src/tools/jsondocck",
+    "src/tools/jsondoclint",
     "src/tools/rustdoc-gui",
     "src/tools/rustdoc-js",
     "src/tools/rustdoc-themes",
@@ -141,11 +142,11 @@ exclude_labels = [
 
 [autolabel."A-rustdoc-json"]
 trigger_files = [
-    "src/etc/check_missing_items.py",
     "src/librustdoc/json/",
     "src/rustdoc-json-types",
     "src/test/rustdoc-json",
     "src/tools/jsondocck",
+    "src/tools/jsondoclint",
 ]
 
 [autolabel."T-compiler"]
@@ -345,6 +346,7 @@ cc = [
     "@CraftSpider",
     "@aDotInTheVoid",
     "@Enselic",
+    "@obi1kenobi",
 ]
 
 [mentions."src/tools/cargo"]

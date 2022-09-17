@@ -590,13 +590,12 @@ impl<'tcx> RegionInferenceContext<'tcx> {
         // constraints were too strong, and if so, emit or propagate those errors.
         if infcx.tcx.sess.opts.unstable_opts.polonius {
             self.check_polonius_subset_errors(
-                body,
                 outlives_requirements.as_mut(),
                 &mut errors_buffer,
                 polonius_output.expect("Polonius output is unavailable despite `-Z polonius`"),
             );
         } else {
-            self.check_universal_regions(body, outlives_requirements.as_mut(), &mut errors_buffer);
+            self.check_universal_regions(outlives_requirements.as_mut(), &mut errors_buffer);
         }
 
         if errors_buffer.is_empty() {
@@ -1409,7 +1408,6 @@ impl<'tcx> RegionInferenceContext<'tcx> {
     /// report them as errors.
     fn check_universal_regions(
         &self,
-        body: &Body<'tcx>,
         mut propagated_outlives_requirements: Option<&mut Vec<ClosureOutlivesRequirement<'tcx>>>,
         errors_buffer: &mut RegionErrors<'tcx>,
     ) {
@@ -1420,7 +1418,6 @@ impl<'tcx> RegionInferenceContext<'tcx> {
                     // they did not grow too large, accumulating any requirements
                     // for our caller into the `outlives_requirements` vector.
                     self.check_universal_region(
-                        body,
                         fr,
                         &mut propagated_outlives_requirements,
                         errors_buffer,
@@ -1461,7 +1458,6 @@ impl<'tcx> RegionInferenceContext<'tcx> {
     /// report them as errors.
     fn check_polonius_subset_errors(
         &self,
-        body: &Body<'tcx>,
         mut propagated_outlives_requirements: Option<&mut Vec<ClosureOutlivesRequirement<'tcx>>>,
         errors_buffer: &mut RegionErrors<'tcx>,
         polonius_output: Rc<PoloniusOutput>,
@@ -1508,7 +1504,6 @@ impl<'tcx> RegionInferenceContext<'tcx> {
             let propagated = self.try_propagate_universal_region_error(
                 *longer_fr,
                 *shorter_fr,
-                body,
                 &mut propagated_outlives_requirements,
             );
             if propagated == RegionRelationCheckResult::Error {
@@ -1548,13 +1543,9 @@ impl<'tcx> RegionInferenceContext<'tcx> {
     ///
     /// Things that are to be propagated are accumulated into the
     /// `outlives_requirements` vector.
-    #[instrument(
-        skip(self, body, propagated_outlives_requirements, errors_buffer),
-        level = "debug"
-    )]
+    #[instrument(skip(self, propagated_outlives_requirements, errors_buffer), level = "debug")]
     fn check_universal_region(
         &self,
-        body: &Body<'tcx>,
         longer_fr: RegionVid,
         propagated_outlives_requirements: &mut Option<&mut Vec<ClosureOutlivesRequirement<'tcx>>>,
         errors_buffer: &mut RegionErrors<'tcx>,
@@ -1577,7 +1568,6 @@ impl<'tcx> RegionInferenceContext<'tcx> {
             if let RegionRelationCheckResult::Error = self.check_universal_region_relation(
                 longer_fr,
                 representative,
-                body,
                 propagated_outlives_requirements,
             ) {
                 errors_buffer.push(RegionErrorKind::RegionError {
@@ -1597,7 +1587,6 @@ impl<'tcx> RegionInferenceContext<'tcx> {
             if let RegionRelationCheckResult::Error = self.check_universal_region_relation(
                 longer_fr,
                 shorter_fr,
-                body,
                 propagated_outlives_requirements,
             ) {
                 // We only report the first region error. Subsequent errors are hidden so as
@@ -1622,7 +1611,6 @@ impl<'tcx> RegionInferenceContext<'tcx> {
         &self,
         longer_fr: RegionVid,
         shorter_fr: RegionVid,
-        body: &Body<'tcx>,
         propagated_outlives_requirements: &mut Option<&mut Vec<ClosureOutlivesRequirement<'tcx>>>,
     ) -> RegionRelationCheckResult {
         // If it is known that `fr: o`, carry on.
@@ -1638,7 +1626,6 @@ impl<'tcx> RegionInferenceContext<'tcx> {
             self.try_propagate_universal_region_error(
                 longer_fr,
                 shorter_fr,
-                body,
                 propagated_outlives_requirements,
             )
         }
@@ -1650,7 +1637,6 @@ impl<'tcx> RegionInferenceContext<'tcx> {
         &self,
         longer_fr: RegionVid,
         shorter_fr: RegionVid,
-        body: &Body<'tcx>,
         propagated_outlives_requirements: &mut Option<&mut Vec<ClosureOutlivesRequirement<'tcx>>>,
     ) -> RegionRelationCheckResult {
         if let Some(propagated_outlives_requirements) = propagated_outlives_requirements {
@@ -1662,7 +1648,6 @@ impl<'tcx> RegionInferenceContext<'tcx> {
                 debug!("try_propagate_universal_region_error: fr_minus={:?}", fr_minus);
 
                 let blame_span_category = self.find_outlives_blame_span(
-                    body,
                     longer_fr,
                     NllRegionVariableOrigin::FreeRegion,
                     shorter_fr,
@@ -1816,48 +1801,25 @@ impl<'tcx> RegionInferenceContext<'tcx> {
 
     pub(crate) fn retrieve_closure_constraint_info(
         &self,
-        _body: &Body<'tcx>,
-        constraint: &OutlivesConstraint<'tcx>,
-    ) -> BlameConstraint<'tcx> {
-        let loc = match constraint.locations {
-            Locations::All(span) => {
-                return BlameConstraint {
-                    category: constraint.category,
-                    from_closure: false,
-                    cause: ObligationCause::dummy_with_span(span),
-                    variance_info: constraint.variance_info,
-                };
+        constraint: OutlivesConstraint<'tcx>,
+    ) -> Option<(ConstraintCategory<'tcx>, Span)> {
+        match constraint.locations {
+            Locations::All(_) => None,
+            Locations::Single(loc) => {
+                self.closure_bounds_mapping[&loc].get(&(constraint.sup, constraint.sub)).copied()
             }
-            Locations::Single(loc) => loc,
-        };
-
-        let opt_span_category =
-            self.closure_bounds_mapping[&loc].get(&(constraint.sup, constraint.sub));
-        opt_span_category
-            .map(|&(category, span)| BlameConstraint {
-                category,
-                from_closure: true,
-                cause: ObligationCause::dummy_with_span(span),
-                variance_info: constraint.variance_info,
-            })
-            .unwrap_or(BlameConstraint {
-                category: constraint.category,
-                from_closure: false,
-                cause: ObligationCause::dummy_with_span(constraint.span),
-                variance_info: constraint.variance_info,
-            })
+        }
     }
 
     /// Finds a good `ObligationCause` to blame for the fact that `fr1` outlives `fr2`.
     pub(crate) fn find_outlives_blame_span(
         &self,
-        body: &Body<'tcx>,
         fr1: RegionVid,
         fr1_origin: NllRegionVariableOrigin,
         fr2: RegionVid,
     ) -> (ConstraintCategory<'tcx>, ObligationCause<'tcx>) {
         let BlameConstraint { category, cause, .. } =
-            self.best_blame_constraint(body, fr1, fr1_origin, |r| {
+            self.best_blame_constraint(fr1, fr1_origin, |r| {
                 self.provides_universal_region(r, fr1, fr2)
             });
         (category, cause)
@@ -2045,7 +2007,6 @@ impl<'tcx> RegionInferenceContext<'tcx> {
     #[instrument(level = "debug", skip(self, target_test))]
     pub(crate) fn best_blame_constraint(
         &self,
-        body: &Body<'tcx>,
         from_region: RegionVid,
         from_region_origin: NllRegionVariableOrigin,
         target_test: impl Fn(RegionVid) -> bool,
@@ -2090,19 +2051,28 @@ impl<'tcx> RegionInferenceContext<'tcx> {
         let mut categorized_path: Vec<BlameConstraint<'tcx>> = path
             .iter()
             .map(|constraint| {
-                if constraint.category == ConstraintCategory::ClosureBounds {
-                    self.retrieve_closure_constraint_info(body, &constraint)
-                } else {
-                    BlameConstraint {
-                        category: constraint.category,
-                        from_closure: false,
-                        cause: ObligationCause::new(
-                            constraint.span,
-                            CRATE_HIR_ID,
-                            cause_code.clone(),
-                        ),
-                        variance_info: constraint.variance_info,
-                    }
+                let (category, span, from_closure, cause_code) =
+                    if constraint.category == ConstraintCategory::ClosureBounds {
+                        if let Some((category, span)) =
+                            self.retrieve_closure_constraint_info(*constraint)
+                        {
+                            (category, span, true, ObligationCauseCode::MiscObligation)
+                        } else {
+                            (
+                                constraint.category,
+                                constraint.span,
+                                false,
+                                ObligationCauseCode::MiscObligation,
+                            )
+                        }
+                    } else {
+                        (constraint.category, constraint.span, false, cause_code.clone())
+                    };
+                BlameConstraint {
+                    category,
+                    from_closure,
+                    cause: ObligationCause::new(span, CRATE_HIR_ID, cause_code),
+                    variance_info: constraint.variance_info,
                 }
             })
             .collect();

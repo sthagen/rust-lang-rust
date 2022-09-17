@@ -24,7 +24,7 @@ pub use UnsafeSource::*;
 
 use crate::ptr::P;
 use crate::token::{self, CommentKind, Delimiter};
-use crate::tokenstream::{DelimSpan, LazyTokenStream, TokenStream};
+use crate::tokenstream::{DelimSpan, LazyAttrTokenStream, TokenStream};
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
 use rustc_data_structures::stack::ensure_sufficient_stack;
 use rustc_data_structures::sync::Lrc;
@@ -33,7 +33,6 @@ use rustc_serialize::{Decodable, Decoder, Encodable, Encoder};
 use rustc_span::source_map::{respan, Spanned};
 use rustc_span::symbol::{kw, sym, Ident, Symbol};
 use rustc_span::{Span, DUMMY_SP};
-use std::cmp::Ordering;
 use std::convert::TryFrom;
 use std::fmt;
 use std::mem;
@@ -92,7 +91,7 @@ pub struct Path {
     /// The segments in the path: the things separated by `::`.
     /// Global paths begin with `kw::PathRoot`.
     pub segments: Vec<PathSegment>,
-    pub tokens: Option<LazyTokenStream>,
+    pub tokens: Option<LazyAttrTokenStream>,
 }
 
 impl PartialEq<Symbol> for Path {
@@ -324,46 +323,17 @@ pub type GenericBounds = Vec<GenericBound>;
 /// Specifies the enforced ordering for generic parameters. In the future,
 /// if we wanted to relax this order, we could override `PartialEq` and
 /// `PartialOrd`, to allow the kinds to be unordered.
-#[derive(Hash, Clone, Copy)]
+#[derive(Hash, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ParamKindOrd {
     Lifetime,
-    Type,
-    Const,
-    // `Infer` is not actually constructed directly from the AST, but is implicitly constructed
-    // during HIR lowering, and `ParamKindOrd` will implicitly order inferred variables last.
-    Infer,
+    TypeOrConst,
 }
-
-impl Ord for ParamKindOrd {
-    fn cmp(&self, other: &Self) -> Ordering {
-        use ParamKindOrd::*;
-        let to_int = |v| match v {
-            Lifetime => 0,
-            Infer | Type | Const => 1,
-        };
-
-        to_int(*self).cmp(&to_int(*other))
-    }
-}
-impl PartialOrd for ParamKindOrd {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-impl PartialEq for ParamKindOrd {
-    fn eq(&self, other: &Self) -> bool {
-        self.cmp(other) == Ordering::Equal
-    }
-}
-impl Eq for ParamKindOrd {}
 
 impl fmt::Display for ParamKindOrd {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ParamKindOrd::Lifetime => "lifetime".fmt(f),
-            ParamKindOrd::Type => "type".fmt(f),
-            ParamKindOrd::Const { .. } => "const".fmt(f),
-            ParamKindOrd::Infer => "infer".fmt(f),
+            ParamKindOrd::TypeOrConst => "type and const".fmt(f),
         }
     }
 }
@@ -564,7 +534,7 @@ pub struct Block {
     /// Distinguishes between `unsafe { ... }` and `{ ... }`.
     pub rules: BlockCheckMode,
     pub span: Span,
-    pub tokens: Option<LazyTokenStream>,
+    pub tokens: Option<LazyAttrTokenStream>,
     /// The following *isn't* a parse error, but will cause multiple errors in following stages.
     /// ```compile_fail
     /// let x = {
@@ -583,7 +553,7 @@ pub struct Pat {
     pub id: NodeId,
     pub kind: PatKind,
     pub span: Span,
-    pub tokens: Option<LazyTokenStream>,
+    pub tokens: Option<LazyAttrTokenStream>,
 }
 
 impl Pat {
@@ -967,8 +937,8 @@ impl Stmt {
     /// a trailing semicolon.
     ///
     /// This only modifies the parsed AST struct, not the attached
-    /// `LazyTokenStream`. The parser is responsible for calling
-    /// `CreateTokenStream::add_trailing_semi` when there is actually
+    /// `LazyAttrTokenStream`. The parser is responsible for calling
+    /// `ToAttrTokenStream::add_trailing_semi` when there is actually
     /// a semicolon in the tokenstream.
     pub fn add_trailing_semicolon(mut self) -> Self {
         self.kind = match self.kind {
@@ -1014,7 +984,7 @@ pub struct MacCallStmt {
     pub mac: P<MacCall>,
     pub style: MacStmtStyle,
     pub attrs: AttrVec,
-    pub tokens: Option<LazyTokenStream>,
+    pub tokens: Option<LazyAttrTokenStream>,
 }
 
 #[derive(Clone, Copy, PartialEq, Encodable, Decodable, Debug)]
@@ -1039,7 +1009,7 @@ pub struct Local {
     pub kind: LocalKind,
     pub span: Span,
     pub attrs: AttrVec,
-    pub tokens: Option<LazyTokenStream>,
+    pub tokens: Option<LazyAttrTokenStream>,
 }
 
 #[derive(Clone, Encodable, Decodable, Debug)]
@@ -1138,7 +1108,7 @@ pub struct Expr {
     pub kind: ExprKind,
     pub span: Span,
     pub attrs: AttrVec,
-    pub tokens: Option<LazyTokenStream>,
+    pub tokens: Option<LazyAttrTokenStream>,
 }
 
 impl Expr {
@@ -1997,7 +1967,7 @@ pub struct Ty {
     pub id: NodeId,
     pub kind: TyKind,
     pub span: Span,
-    pub tokens: Option<LazyTokenStream>,
+    pub tokens: Option<LazyAttrTokenStream>,
 }
 
 impl Clone for Ty {
@@ -2102,6 +2072,7 @@ impl TyKind {
 #[derive(Clone, Copy, PartialEq, Encodable, Decodable, Debug, HashStable_Generic)]
 pub enum TraitObjectSyntax {
     Dyn,
+    DynStar,
     None,
 }
 
@@ -2117,15 +2088,15 @@ pub enum InlineAsmRegOrRegClass {
 bitflags::bitflags! {
     #[derive(Encodable, Decodable, HashStable_Generic)]
     pub struct InlineAsmOptions: u16 {
-        const PURE = 1 << 0;
-        const NOMEM = 1 << 1;
-        const READONLY = 1 << 2;
+        const PURE            = 1 << 0;
+        const NOMEM           = 1 << 1;
+        const READONLY        = 1 << 2;
         const PRESERVES_FLAGS = 1 << 3;
-        const NORETURN = 1 << 4;
-        const NOSTACK = 1 << 5;
-        const ATT_SYNTAX = 1 << 6;
-        const RAW = 1 << 7;
-        const MAY_UNWIND = 1 << 8;
+        const NORETURN        = 1 << 4;
+        const NOSTACK         = 1 << 5;
+        const ATT_SYNTAX      = 1 << 6;
+        const RAW             = 1 << 7;
+        const MAY_UNWIND      = 1 << 8;
     }
 }
 
@@ -2553,8 +2524,8 @@ impl<S: Encoder> Encodable<S> for AttrId {
 }
 
 impl<D: Decoder> Decodable<D> for AttrId {
-    fn decode(_: &mut D) -> AttrId {
-        crate::attr::mk_attr_id()
+    default fn decode(_: &mut D) -> AttrId {
+        panic!("cannot decode `AttrId` with `{}`", std::any::type_name::<D>());
     }
 }
 
@@ -2562,7 +2533,7 @@ impl<D: Decoder> Decodable<D> for AttrId {
 pub struct AttrItem {
     pub path: Path,
     pub args: MacArgs,
-    pub tokens: Option<LazyTokenStream>,
+    pub tokens: Option<LazyAttrTokenStream>,
 }
 
 /// A list of attributes.
@@ -2582,7 +2553,7 @@ pub struct Attribute {
 #[derive(Clone, Encodable, Decodable, Debug)]
 pub struct NormalAttr {
     pub item: AttrItem,
-    pub tokens: Option<LazyTokenStream>,
+    pub tokens: Option<LazyAttrTokenStream>,
 }
 
 #[derive(Clone, Encodable, Decodable, Debug)]
@@ -2633,7 +2604,7 @@ impl PolyTraitRef {
 pub struct Visibility {
     pub kind: VisibilityKind,
     pub span: Span,
-    pub tokens: Option<LazyTokenStream>,
+    pub tokens: Option<LazyAttrTokenStream>,
 }
 
 #[derive(Clone, Encodable, Decodable, Debug)]
@@ -2719,7 +2690,7 @@ pub struct Item<K = ItemKind> {
     ///
     /// Note that the tokens here do not include the outer attributes, but will
     /// include inner attributes.
-    pub tokens: Option<LazyTokenStream>,
+    pub tokens: Option<LazyAttrTokenStream>,
 }
 
 impl Item {

@@ -1751,7 +1751,8 @@ fn assemble_candidates_from_impls<'cx, 'tcx>(
             super::ImplSource::AutoImpl(..)
             | super::ImplSource::Builtin(..)
             | super::ImplSource::TraitUpcasting(_)
-            | super::ImplSource::ConstDestruct(_) => {
+            | super::ImplSource::ConstDestruct(_)
+            | super::ImplSource::Tuple => {
                 // These traits have no associated types.
                 selcx.tcx().sess.delay_span_bug(
                     obligation.cause.span,
@@ -1829,7 +1830,8 @@ fn confirm_select_candidate<'cx, 'tcx>(
         | super::ImplSource::Builtin(..)
         | super::ImplSource::TraitUpcasting(_)
         | super::ImplSource::TraitAlias(..)
-        | super::ImplSource::ConstDestruct(_) => {
+        | super::ImplSource::ConstDestruct(_)
+        | super::ImplSource::Tuple => {
             // we don't create Select candidates with this kind of resolution
             span_bug!(
                 obligation.cause.span,
@@ -2225,8 +2227,6 @@ fn confirm_impl_trait_in_trait_candidate<'tcx>(
 
 // Get obligations corresponding to the predicates from the where-clause of the
 // associated type itself.
-// Note: `feature(generic_associated_types)` is required to write such
-// predicates, even for non-generic associated types.
 fn assoc_ty_own_obligations<'cx, 'tcx>(
     selcx: &mut SelectionContext<'cx, 'tcx>,
     obligation: &ProjectionTyObligation<'tcx>,

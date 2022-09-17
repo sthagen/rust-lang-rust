@@ -126,6 +126,8 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 let data = self.confirm_const_destruct_candidate(obligation, def_id)?;
                 ImplSource::ConstDestruct(data)
             }
+
+            TupleCandidate => ImplSource::Tuple,
         };
 
         if !obligation.predicate.is_const_if_const() {
@@ -782,7 +784,9 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         let upcast_trait_ref;
         match (source.kind(), target.kind()) {
             // TraitA+Kx+'a -> TraitB+Ky+'b (trait upcasting coercion).
-            (&ty::Dynamic(ref data_a, r_a), &ty::Dynamic(ref data_b, r_b)) => {
+            (&ty::Dynamic(ref data_a, r_a, repr_a), &ty::Dynamic(ref data_b, r_b, repr_b))
+                if repr_a == repr_b =>
+            {
                 // See `assemble_candidates_for_unsizing` for more info.
                 // We already checked the compatibility of auto traits within `assemble_candidates_for_unsizing`.
                 let principal_a = data_a.principal().unwrap();
@@ -808,7 +812,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                             .map(ty::Binder::dummy),
                     );
                 let existential_predicates = tcx.mk_poly_existential_predicates(iter);
-                let source_trait = tcx.mk_dynamic(existential_predicates, r_b);
+                let source_trait = tcx.mk_dynamic(existential_predicates, r_b, repr_b);
 
                 // Require that the traits involved in this upcast are **equal**;
                 // only the **lifetime bound** is changed.
@@ -886,7 +890,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         let mut nested = vec![];
         match (source.kind(), target.kind()) {
             // Trait+Kx+'a -> Trait+Ky+'b (auto traits and lifetime subtyping).
-            (&ty::Dynamic(ref data_a, r_a), &ty::Dynamic(ref data_b, r_b)) => {
+            (&ty::Dynamic(ref data_a, r_a, ty::Dyn), &ty::Dynamic(ref data_b, r_b, ty::Dyn)) => {
                 // See `assemble_candidates_for_unsizing` for more info.
                 // We already checked the compatibility of auto traits within `assemble_candidates_for_unsizing`.
                 let iter = data_a
@@ -905,7 +909,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                             .map(ty::Binder::dummy),
                     );
                 let existential_predicates = tcx.mk_poly_existential_predicates(iter);
-                let source_trait = tcx.mk_dynamic(existential_predicates, r_b);
+                let source_trait = tcx.mk_dynamic(existential_predicates, r_b, ty::Dyn);
 
                 // Require that the traits involved in this upcast are **equal**;
                 // only the **lifetime bound** is changed.
@@ -932,7 +936,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             }
 
             // `T` -> `Trait`
-            (_, &ty::Dynamic(ref data, r)) => {
+            (_, &ty::Dynamic(ref data, r, ty::Dyn)) => {
                 let mut object_dids = data.auto_traits().chain(data.principal_def_id());
                 if let Some(did) = object_dids.find(|did| !tcx.is_object_safe(*did)) {
                     return Err(TraitNotObjectSafe(did));
@@ -1035,9 +1039,25 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                     return Err(Unimplemented);
                 }
 
-                // Extract `TailField<T>` and `TailField<U>` from `Struct<T>` and `Struct<U>`.
-                let source_tail = tail_field_ty.subst(tcx, substs_a);
-                let target_tail = tail_field_ty.subst(tcx, substs_b);
+                // Extract `TailField<T>` and `TailField<U>` from `Struct<T>` and `Struct<U>`,
+                // normalizing in the process, since `type_of` returns something directly from
+                // astconv (which means it's un-normalized).
+                let source_tail = normalize_with_depth_to(
+                    self,
+                    obligation.param_env,
+                    obligation.cause.clone(),
+                    obligation.recursion_depth + 1,
+                    tail_field_ty.subst(tcx, substs_a),
+                    &mut nested,
+                );
+                let target_tail = normalize_with_depth_to(
+                    self,
+                    obligation.param_env,
+                    obligation.cause.clone(),
+                    obligation.recursion_depth + 1,
+                    tail_field_ty.subst(tcx, substs_b),
+                    &mut nested,
+                );
 
                 // Check that the source struct with the target's
                 // unsizing parameters is equal to the target.

@@ -3,9 +3,10 @@
 //! manage the caches, and so forth.
 
 use crate::keys::Key;
+use crate::on_disk_cache::CacheDecoder;
 use crate::{on_disk_cache, Queries};
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
-use rustc_data_structures::sync::Lock;
+use rustc_data_structures::sync::{AtomicU64, Lock};
 use rustc_errors::{Diagnostic, Handler};
 use rustc_middle::dep_graph::{
     self, DepKind, DepKindStruct, DepNode, DepNodeIndex, SerializedDepNodeIndex,
@@ -19,6 +20,7 @@ use rustc_query_system::query::{
     QuerySideEffects, QueryStackFrame,
 };
 use rustc_query_system::Value;
+use rustc_serialize::Decodable;
 use std::any::Any;
 use std::num::NonZeroU64;
 use thin_vec::ThinVec;
@@ -149,19 +151,31 @@ impl<'tcx> QueryCtxt<'tcx> {
         encoder: &mut on_disk_cache::CacheEncoder<'_, 'tcx>,
         query_result_index: &mut on_disk_cache::EncodedDepNodeIndex,
     ) {
+        macro_rules! expand_if_cached {
+            ([] $encode:expr) => {};
+            ([(cache) $($rest:tt)*] $encode:expr) => {
+                $encode
+            };
+            ([$other:tt $($modifiers:tt)*] $encode:expr) => {
+                expand_if_cached!([$($modifiers)*] $encode)
+            };
+        }
+
         macro_rules! encode_queries {
-            ($($query:ident,)*) => {
+            (
+            $($(#[$attr:meta])*
+                [$($modifiers:tt)*] fn $query:ident($($K:tt)*) -> $V:ty,)*) => {
                 $(
-                    on_disk_cache::encode_query_results::<_, super::queries::$query<'_>>(
+                    expand_if_cached!([$($modifiers)*] on_disk_cache::encode_query_results::<_, super::queries::$query<'_>>(
                         self,
                         encoder,
                         query_result_index
-                    );
+                    ));
                 )*
             }
         }
 
-        rustc_cached_queries!(encode_queries!);
+        rustc_query_append!(encode_queries!);
     }
 
     pub fn try_print_query_stack(
@@ -253,6 +267,18 @@ macro_rules! get_provider {
     };
 }
 
+macro_rules! should_ever_cache_on_disk {
+    ([]) => {{
+        None
+    }};
+    ([(cache) $($rest:tt)*]) => {{
+        Some($crate::plumbing::try_load_from_disk::<Self::Value>)
+    }};
+    ([$other:tt $($modifiers:tt)*]) => {
+        should_ever_cache_on_disk!([$($modifiers)*])
+    };
+}
+
 pub(crate) fn create_query_frame<
     'tcx,
     K: Copy + Key + for<'a> HashStable<StableHashingContext<'a>>,
@@ -311,6 +337,16 @@ where
     if Q::cache_on_disk(tcx, &key) {
         let _ = Q::execute_query(tcx, key);
     }
+}
+
+pub(crate) fn try_load_from_disk<'tcx, V>(
+    tcx: QueryCtxt<'tcx>,
+    id: SerializedDepNodeIndex,
+) -> Option<V>
+where
+    V: for<'a> Decodable<CacheDecoder<'a, 'tcx>>,
+{
+    tcx.on_disk_cache().as_ref()?.try_load_query_result(*tcx, id)
 }
 
 fn force_from_dep_node<'tcx, Q>(tcx: TyCtxt<'tcx>, dep_node: DepNode) -> bool
@@ -418,8 +454,7 @@ macro_rules! define_queries {
                     hash_result: hash_result!([$($modifiers)*]),
                     handle_cycle_error: handle_cycle_error!([$($modifiers)*]),
                     compute,
-                    cache_on_disk,
-                    try_load_from_disk: Self::TRY_LOAD_FROM_DISK,
+                    try_load_from_disk: if cache_on_disk { should_ever_cache_on_disk!([$($modifiers)*]) } else { None },
                 }
             }
 
@@ -499,9 +534,28 @@ macro_rules! define_queries {
     }
 }
 
+use crate::{ExternProviders, OnDiskCache, Providers};
+
+impl<'tcx> Queries<'tcx> {
+    pub fn new(
+        local_providers: Providers,
+        extern_providers: ExternProviders,
+        on_disk_cache: Option<OnDiskCache<'tcx>>,
+    ) -> Self {
+        Queries {
+            local_providers: Box::new(local_providers),
+            extern_providers: Box::new(extern_providers),
+            on_disk_cache,
+            jobs: AtomicU64::new(1),
+            ..Queries::default()
+        }
+    }
+}
+
 macro_rules! define_queries_struct {
     (
      input: ($(([$($modifiers:tt)*] [$($attr:tt)*] [$name:ident]))*)) => {
+        #[derive(Default)]
         pub struct Queries<'tcx> {
             local_providers: Box<Providers>,
             extern_providers: Box<ExternProviders>,
@@ -514,20 +568,6 @@ macro_rules! define_queries_struct {
         }
 
         impl<'tcx> Queries<'tcx> {
-            pub fn new(
-                local_providers: Providers,
-                extern_providers: ExternProviders,
-                on_disk_cache: Option<OnDiskCache<'tcx>>,
-            ) -> Self {
-                Queries {
-                    local_providers: Box::new(local_providers),
-                    extern_providers: Box::new(extern_providers),
-                    on_disk_cache,
-                    jobs: AtomicU64::new(1),
-                    $($name: Default::default()),*
-                }
-            }
-
             pub(crate) fn try_collect_active_jobs(
                 &'tcx self,
                 tcx: TyCtxt<'tcx>,

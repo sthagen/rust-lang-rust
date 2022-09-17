@@ -160,7 +160,7 @@ fn collect_unwrap_info<'tcx>(
             let name = method_name.ident.as_str();
             if is_relevant_option_call(cx, ty, name) || is_relevant_result_call(cx, ty, name);
             then {
-                assert!(args.len() == 0);
+                assert!(args.is_empty());
                 let unwrappable = match name {
                     "is_some" | "is_ok" => true,
                     "is_err" | "is_none" => false,
@@ -326,6 +326,6 @@ impl<'tcx> LateLintPass<'tcx> for Unwrap {
             unwrappables: Vec::new(),
         };
 
-        walk_fn(&mut v, kind, decl, body.id(), span, fn_id);
+        walk_fn(&mut v, kind, decl, body.id(), fn_id);
     }
 }

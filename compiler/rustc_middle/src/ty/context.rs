@@ -4,7 +4,7 @@ use crate::arena::Arena;
 use crate::dep_graph::{DepGraph, DepKind, DepKindStruct};
 use crate::hir::place::Place as HirPlace;
 use crate::infer::canonical::{Canonical, CanonicalVarInfo, CanonicalVarInfos};
-use crate::lint::{struct_lint_level, LintLevelSource};
+use crate::lint::struct_lint_level;
 use crate::middle::codegen_fn_attrs::CodegenFnAttrs;
 use crate::middle::resolve_lifetime;
 use crate::middle::stability;
@@ -53,7 +53,7 @@ use rustc_query_system::ich::StableHashingContext;
 use rustc_serialize::opaque::{FileEncodeResult, FileEncoder};
 use rustc_session::config::{CrateType, OutputFilenames};
 use rustc_session::cstore::CrateStoreDyn;
-use rustc_session::lint::{Level, Lint};
+use rustc_session::lint::Lint;
 use rustc_session::Limit;
 use rustc_session::Session;
 use rustc_span::def_id::{DefPathHash, StableCrateId};
@@ -63,7 +63,7 @@ use rustc_span::{Span, DUMMY_SP};
 use rustc_target::abi::{Layout, LayoutS, TargetDataLayout, VariantIdx};
 use rustc_target::spec::abi;
 use rustc_type_ir::sty::TyKind::*;
-use rustc_type_ir::{InternAs, InternIteratorElement, Interner, TypeFlags};
+use rustc_type_ir::{DynKind, InternAs, InternIteratorElement, Interner, TypeFlags};
 
 use std::any::Any;
 use std::borrow::Borrow;
@@ -276,9 +276,6 @@ pub struct CommonTypes<'tcx> {
 }
 
 pub struct CommonLifetimes<'tcx> {
-    /// `ReEmpty` in the root universe.
-    pub re_root_empty: Region<'tcx>,
-
     /// `ReStatic`
     pub re_static: Region<'tcx>,
 
@@ -987,11 +984,7 @@ impl<'tcx> CommonLifetimes<'tcx> {
             ))
         };
 
-        CommonLifetimes {
-            re_root_empty: mk(ty::ReEmpty(ty::UniverseIndex::ROOT)),
-            re_static: mk(ty::ReStatic),
-            re_erased: mk(ty::ReErased),
-        }
+        CommonLifetimes { re_static: mk(ty::ReStatic), re_erased: mk(ty::ReErased) }
     }
 }
 
@@ -1597,7 +1590,7 @@ impl<'tcx> TyCtxt<'tcx> {
         })
     }
 
-    // Returns the `DefId` and the `BoundRegionKind` corresponding to the given region.
+    /// Returns the `DefId` and the `BoundRegionKind` corresponding to the given region.
     pub fn is_suitable_region(self, region: Region<'tcx>) -> Option<FreeRegionInfo> {
         let (suitable_region_binding_scope, bound_region) = match *region {
             ty::ReFree(ref free_region) => {
@@ -1827,7 +1820,9 @@ nop_list_lift! {bound_variable_kinds; ty::BoundVariableKind => ty::BoundVariable
 // This is the impl for `&'a InternalSubsts<'a>`.
 nop_list_lift! {substs; GenericArg<'a> => GenericArg<'tcx>}
 
-CloneLiftImpls! { for<'tcx> { Constness, traits::WellFormedLoc, } }
+CloneLiftImpls! { for<'tcx> {
+    Constness, traits::WellFormedLoc, ImplPolarity, crate::mir::ReturnConstraint,
+} }
 
 pub mod tls {
     use super::{ptr_eq, GlobalCtxt, TyCtxt};
@@ -2552,8 +2547,9 @@ impl<'tcx> TyCtxt<'tcx> {
         self,
         obj: &'tcx List<ty::Binder<'tcx, ExistentialPredicate<'tcx>>>,
         reg: ty::Region<'tcx>,
+        repr: DynKind,
     ) -> Ty<'tcx> {
-        self.mk_ty(Dynamic(obj, reg))
+        self.mk_ty(Dynamic(obj, reg, repr))
     }
 
     #[inline]
@@ -2814,44 +2810,6 @@ impl<'tcx> TyCtxt<'tcx> {
         iter: I,
     ) -> I::Output {
         iter.intern_with(|xs| self.intern_bound_variable_kinds(xs))
-    }
-
-    /// Walks upwards from `id` to find a node which might change lint levels with attributes.
-    /// It stops at `bound` and just returns it if reached.
-    pub fn maybe_lint_level_root_bounded(self, mut id: HirId, bound: HirId) -> HirId {
-        let hir = self.hir();
-        loop {
-            if id == bound {
-                return bound;
-            }
-
-            if hir.attrs(id).iter().any(|attr| Level::from_attr(attr).is_some()) {
-                return id;
-            }
-            let next = hir.get_parent_node(id);
-            if next == id {
-                bug!("lint traversal reached the root of the crate");
-            }
-            id = next;
-        }
-    }
-
-    pub fn lint_level_at_node(
-        self,
-        lint: &'static Lint,
-        mut id: hir::HirId,
-    ) -> (Level, LintLevelSource) {
-        let sets = self.lint_levels(());
-        loop {
-            if let Some(pair) = sets.level_and_source(lint, id, self.sess) {
-                return pair;
-            }
-            let next = self.hir().get_parent_node(id);
-            if next == id {
-                bug!("lint traversal reached the root of the crate");
-            }
-            id = next;
-        }
     }
 
     /// Emit a lint at `span` from a lint struct (some type that implements `DecorateLint`,

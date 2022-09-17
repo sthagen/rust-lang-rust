@@ -619,12 +619,16 @@ pub trait PrettyPrinter<'tcx>:
             ty::Adt(def, substs) => {
                 p!(print_def_path(def.did(), substs));
             }
-            ty::Dynamic(data, r) => {
+            ty::Dynamic(data, r, repr) => {
                 let print_r = self.should_print_region(r);
                 if print_r {
                     p!("(");
                 }
-                p!("dyn ", print(data));
+                match repr {
+                    ty::Dyn => p!("dyn "),
+                    ty::DynStar => p!("dyn* "),
+                }
+                p!(print(data));
                 if print_r {
                     p!(" + ", print(r), ")");
                 }
@@ -1197,15 +1201,9 @@ pub trait PrettyPrinter<'tcx>:
         }
 
         match ct.kind() {
-            ty::ConstKind::Unevaluated(ty::Unevaluated {
-                def,
-                substs,
-                promoted: Some(promoted),
-            }) => {
-                p!(print_value_path(def.did, substs));
-                p!(write("::{:?}", promoted));
-            }
-            ty::ConstKind::Unevaluated(ty::Unevaluated { def, substs, promoted: None }) => {
+            ty::ConstKind::Unevaluated(ty::Unevaluated { def, substs, promoted }) => {
+                assert_eq!(promoted, ());
+
                 match self.tcx().def_kind(def.did) {
                     DefKind::Static(..) | DefKind::Const | DefKind::AssocConst => {
                         p!(print_value_path(def.did, substs))
@@ -1405,14 +1403,7 @@ pub trait PrettyPrinter<'tcx>:
     }
 
     fn pretty_print_byte_str(mut self, byte_str: &'tcx [u8]) -> Result<Self::Const, Self::Error> {
-        define_scoped_cx!(self);
-        p!("b\"");
-        for &c in byte_str {
-            for e in std::ascii::escape_default(c) {
-                self.write_char(e as char)?;
-            }
-        }
-        p!("\"");
+        write!(self, "b\"{}\"", byte_str.escape_ascii())?;
         Ok(self)
     }
 
@@ -1986,7 +1977,7 @@ impl<'tcx> PrettyPrinter<'tcx> for FmtPrinter<'_, 'tcx> {
 
             ty::ReVar(_) | ty::ReErased => false,
 
-            ty::ReStatic | ty::ReEmpty(_) => true,
+            ty::ReStatic => true,
         }
     }
 
@@ -2068,14 +2059,6 @@ impl<'tcx> FmtPrinter<'_, 'tcx> {
             ty::ReErased => {}
             ty::ReStatic => {
                 p!("'static");
-                return Ok(self);
-            }
-            ty::ReEmpty(ty::UniverseIndex::ROOT) => {
-                p!("'<empty>");
-                return Ok(self);
-            }
-            ty::ReEmpty(ui) => {
-                p!(write("'<empty:{:?}>", ui));
                 return Ok(self);
             }
         }

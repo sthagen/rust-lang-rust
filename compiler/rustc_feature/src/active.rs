@@ -221,6 +221,8 @@ declare_features! (
     (active, rustc_private, "1.0.0", Some(27812), None),
     /// Allows using internal rustdoc features like `doc(primitive)` or `doc(keyword)`.
     (active, rustdoc_internals, "1.58.0", Some(90418), None),
+    /// Allows using the `rustdoc::missing_doc_code_examples` lint
+    (active, rustdoc_missing_doc_code_examples, "1.31.0", Some(101730), None),
     /// Allows using `#[start]` on a function indicating that it is the program entrypoint.
     (active, start, "1.0.0", Some(29633), None),
     /// Allows using `#[structural_match]` which indicates that a type is structurally matchable.
@@ -336,6 +338,8 @@ declare_features! (
     (active, closure_track_caller, "1.57.0", Some(87417), None),
     /// Allows to use the `#[cmse_nonsecure_entry]` attribute.
     (active, cmse_nonsecure_entry, "1.48.0", Some(75835), None),
+    /// Allows use of the `#[collapse_debuginfo]` attribute.
+    (active, collapse_debuginfo, "CURRENT_RUSTC_VERSION", Some(100758), None),
     /// Allows `async {}` expressions in const contexts.
     (active, const_async_blocks, "1.53.0", Some(85368), None),
     // Allows limiting the evaluation steps of const expressions
@@ -380,6 +384,8 @@ declare_features! (
     (active, doc_cfg_hide, "1.57.0", Some(43781), None),
     /// Allows `#[doc(masked)]`.
     (active, doc_masked, "1.21.0", Some(44027), None),
+    /// Allows `dyn* Trait` objects.
+    (incomplete, dyn_star, "CURRENT_RUSTC_VERSION", Some(91611), None),
     /// Allows `X..Y` patterns.
     (active, exclusive_range_pattern, "1.11.0", Some(37854), None),
     /// Allows exhaustive pattern matching on types that contain uninhabited types.
@@ -394,12 +400,12 @@ declare_features! (
     (active, ffi_returns_twice, "1.34.0", Some(58314), None),
     /// Allows using `#[repr(align(...))]` on function items
     (active, fn_align, "1.53.0", Some(82232), None),
+    /// Allows generators to be cloned.
+    (active, generator_clone, "CURRENT_RUSTC_VERSION", Some(95360), None),
     /// Allows defining generators.
     (active, generators, "1.21.0", Some(43122), None),
     /// Infer generic args for both consts and types.
     (active, generic_arg_infer, "1.55.0", Some(85077), None),
-    /// Allows associated types to be generic, e.g., `type Foo<T>;` (RFC 1598).
-    (active, generic_associated_types, "1.23.0", Some(44265), None),
     /// An extension to the `generic_associated_types` feature, allowing incomplete features.
     (incomplete, generic_associated_types_extended, "1.61.0", Some(95451), None),
     /// Allows non-trivial generic constants which have to have wfness manually propagated to callers
@@ -478,7 +484,7 @@ declare_features! (
     /// Allows macro attributes on expressions, statements and non-inline modules.
     (active, proc_macro_hygiene, "1.30.0", Some(54727), None),
     /// Allows the use of raw-dylibs (RFC 2627).
-    (incomplete, raw_dylib, "1.40.0", Some(58713), None),
+    (active, raw_dylib, "CURRENT_RUSTC_VERSION", Some(58713), None),
     /// Allows `&raw const $place_expr` and `&raw mut $place_expr` expressions.
     (active, raw_ref_op, "1.41.0", Some(64490), None),
     /// Allows using the `#[register_tool]` attribute.

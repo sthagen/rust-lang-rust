@@ -441,7 +441,9 @@ pub fn super_relate_tys<'tcx, R: TypeRelation<'tcx>>(
 
         (&ty::Foreign(a_id), &ty::Foreign(b_id)) if a_id == b_id => Ok(tcx.mk_foreign(a_id)),
 
-        (&ty::Dynamic(a_obj, a_region), &ty::Dynamic(b_obj, b_region)) => {
+        (&ty::Dynamic(a_obj, a_region, a_repr), &ty::Dynamic(b_obj, b_region, b_repr))
+            if a_repr == b_repr =>
+        {
             let region_bound = relation.with_cause(Cause::ExistentialRegionBound, |relation| {
                 relation.relate_with_variance(
                     ty::Contravariant,
@@ -450,7 +452,7 @@ pub fn super_relate_tys<'tcx, R: TypeRelation<'tcx>>(
                     b_region,
                 )
             })?;
-            Ok(tcx.mk_dynamic(relation.relate(a_obj, b_obj)?, region_bound))
+            Ok(tcx.mk_dynamic(relation.relate(a_obj, b_obj)?, region_bound, a_repr))
         }
 
         (&ty::Generator(a_id, a_substs, movability), &ty::Generator(b_id, b_substs, _))
@@ -613,7 +615,7 @@ pub fn super_relate_consts<'tcx, R: TypeRelation<'tcx>>(
         (ty::ConstKind::Unevaluated(au), ty::ConstKind::Unevaluated(bu))
             if tcx.features().generic_const_exprs =>
         {
-            tcx.try_unify_abstract_consts(relation.param_env().and((au.shrink(), bu.shrink())))
+            tcx.try_unify_abstract_consts(relation.param_env().and((au, bu)))
         }
 
         // While this is slightly incorrect, it shouldn't matter for `min_const_generics`
@@ -622,6 +624,8 @@ pub fn super_relate_consts<'tcx, R: TypeRelation<'tcx>>(
         (ty::ConstKind::Unevaluated(au), ty::ConstKind::Unevaluated(bu))
             if au.def == bu.def && au.promoted == bu.promoted =>
         {
+            assert_eq!(au.promoted, ());
+
             let substs = relation.relate_with_variance(
                 ty::Variance::Invariant,
                 ty::VarianceDiagInfo::default(),
@@ -632,7 +636,7 @@ pub fn super_relate_consts<'tcx, R: TypeRelation<'tcx>>(
                 kind: ty::ConstKind::Unevaluated(ty::Unevaluated {
                     def: au.def,
                     substs,
-                    promoted: au.promoted,
+                    promoted: (),
                 }),
                 ty: a.ty(),
             }));

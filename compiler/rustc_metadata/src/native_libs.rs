@@ -4,8 +4,10 @@ use rustc_data_structures::fx::FxHashSet;
 use rustc_hir as hir;
 use rustc_hir::def::DefKind;
 use rustc_middle::ty::{List, ParamEnv, ParamEnvAnd, Ty, TyCtxt};
+use rustc_session::config::CrateType;
 use rustc_session::cstore::{DllCallingConvention, DllImport, NativeLib, PeImportNameType};
 use rustc_session::parse::feature_err;
+use rustc_session::search_paths::PathKind;
 use rustc_session::utils::NativeLibKind;
 use rustc_session::Session;
 use rustc_span::symbol::{sym, Symbol};
@@ -16,12 +18,65 @@ use crate::errors::{
     FrameworkOnlyWindows, ImportNameTypeForm, ImportNameTypeRaw, ImportNameTypeX86,
     IncompatibleWasmLink, InvalidLinkModifier, LibFrameworkApple, LinkCfgForm,
     LinkCfgSinglePredicate, LinkFrameworkApple, LinkKindForm, LinkModifiersForm, LinkNameForm,
-    LinkOrdinalRawDylib, LinkRequiresName, MultipleCfgs, MultipleImportNameType,
-    MultipleKindsInLink, MultipleLinkModifiers, MultipleModifiers, MultipleNamesInLink,
-    MultipleRenamings, MultipleWasmImport, NoLinkModOverride, RawDylibNoNul, RenamingNoLink,
-    UnexpectedLinkArg, UnknownImportNameType, UnknownLinkKind, UnknownLinkModifier, UnsupportedAbi,
-    UnsupportedAbiI686, WasmImportForm, WholeArchiveNeedsStatic,
+    LinkOrdinalRawDylib, LinkRequiresName, MissingNativeLibrary, MultipleCfgs,
+    MultipleImportNameType, MultipleKindsInLink, MultipleLinkModifiers, MultipleModifiers,
+    MultipleNamesInLink, MultipleRenamings, MultipleWasmImport, NoLinkModOverride, RawDylibNoNul,
+    RenamingNoLink, UnexpectedLinkArg, UnknownImportNameType, UnknownLinkKind, UnknownLinkModifier,
+    UnsupportedAbi, UnsupportedAbiI686, WasmImportForm, WholeArchiveNeedsStatic,
 };
+
+use std::path::PathBuf;
+
+pub fn find_native_static_library(
+    name: &str,
+    verbatim: Option<bool>,
+    search_paths: &[PathBuf],
+    sess: &Session,
+) -> PathBuf {
+    let verbatim = verbatim.unwrap_or(false);
+    // On Windows, static libraries sometimes show up as libfoo.a and other
+    // times show up as foo.lib
+    let oslibname = if verbatim {
+        name.to_string()
+    } else {
+        format!("{}{}{}", sess.target.staticlib_prefix, name, sess.target.staticlib_suffix)
+    };
+    let unixlibname = format!("lib{}.a", name);
+
+    for path in search_paths {
+        let test = path.join(&oslibname);
+        if test.exists() {
+            return test;
+        }
+        if oslibname != unixlibname {
+            let test = path.join(&unixlibname);
+            if test.exists() {
+                return test;
+            }
+        }
+    }
+    sess.emit_fatal(MissingNativeLibrary { libname: name });
+}
+
+fn find_bundled_library(
+    name: Option<Symbol>,
+    verbatim: Option<bool>,
+    kind: NativeLibKind,
+    sess: &Session,
+) -> Option<Symbol> {
+    if sess.opts.unstable_opts.packed_bundled_libs &&
+            sess.crate_types().iter().any(|ct| ct == &CrateType::Rlib || ct == &CrateType::Staticlib) &&
+            let NativeLibKind::Static { bundle: Some(true) | None, .. } = kind {
+        find_native_static_library(
+            name.unwrap().as_str(),
+            verbatim,
+            &sess.target_filesearch(PathKind::Native).search_path_dirs(),
+            sess,
+        ).file_name().and_then(|s| s.to_str()).map(Symbol::intern)
+    } else {
+        None
+    }
+}
 
 pub(crate) fn collect(tcx: TyCtxt<'_>) -> Vec<NativeLib> {
     let mut collector = Collector { tcx, libs: Vec::new() };
@@ -113,12 +168,12 @@ impl<'tcx> Collector<'tcx> {
                             "raw-dylib" => {
                                 if !sess.target.is_like_windows {
                                     sess.emit_err(FrameworkOnlyWindows { span });
-                                } else if !features.raw_dylib {
+                                } else if !features.raw_dylib && sess.target.arch == "x86" {
                                     feature_err(
                                         &sess.parse_sess,
                                         sym::raw_dylib,
                                         span,
-                                        "link kind `raw-dylib` is unstable",
+                                        "link kind `raw-dylib` is unstable on x86",
                                     )
                                     .emit();
                                 }
@@ -341,9 +396,14 @@ impl<'tcx> Collector<'tcx> {
                     Vec::new()
                 }
             };
+
+            let name = name.map(|(name, _)| name);
+            let kind = kind.unwrap_or(NativeLibKind::Unspecified);
+            let filename = find_bundled_library(name, verbatim, kind, sess);
             self.libs.push(NativeLib {
-                name: name.map(|(name, _)| name),
-                kind: kind.unwrap_or(NativeLibKind::Unspecified),
+                name,
+                filename,
+                kind,
                 cfg,
                 foreign_module: Some(it.def_id.to_def_id()),
                 wasm_import_module: wasm_import_module.map(|(name, _)| name),
@@ -423,8 +483,13 @@ impl<'tcx> Collector<'tcx> {
             if existing.is_empty() {
                 // Add if not found
                 let new_name: Option<&str> = passed_lib.new_name.as_deref();
+                let name = Some(Symbol::intern(new_name.unwrap_or(&passed_lib.name)));
+                let sess = self.tcx.sess;
+                let filename =
+                    find_bundled_library(name, passed_lib.verbatim, passed_lib.kind, sess);
                 self.libs.push(NativeLib {
-                    name: Some(Symbol::intern(new_name.unwrap_or(&passed_lib.name))),
+                    name,
+                    filename,
                     kind: passed_lib.kind,
                     cfg: None,
                     foreign_module: None,
@@ -495,14 +560,13 @@ impl<'tcx> Collector<'tcx> {
             }
         };
 
-        let import_name_type = self
-            .tcx
-            .codegen_fn_attrs(item.id.def_id)
+        let codegen_fn_attrs = self.tcx.codegen_fn_attrs(item.id.def_id);
+        let import_name_type = codegen_fn_attrs
             .link_ordinal
             .map_or(import_name_type, |ord| Some(PeImportNameType::Ordinal(ord)));
 
         DllImport {
-            name: item.ident.name,
+            name: codegen_fn_attrs.link_name.unwrap_or(item.ident.name),
             import_name_type,
             calling_convention,
             span: item.span,

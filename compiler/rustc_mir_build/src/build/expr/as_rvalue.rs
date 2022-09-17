@@ -216,6 +216,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 };
                 let from_ty = CastTy::from_ty(ty);
                 let cast_ty = CastTy::from_ty(expr.ty);
+                debug!("ExprKind::Cast from_ty={from_ty:?}, cast_ty={:?}/{cast_ty:?}", expr.ty,);
                 let cast_kind = match (from_ty, cast_ty) {
                     (Some(CastTy::Ptr(_) | CastTy::FnPtr), Some(CastTy::Int(_))) => {
                         CastKind::PointerExposeAddress
@@ -223,6 +224,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                     (Some(CastTy::Int(_)), Some(CastTy::Ptr(_))) => {
                         CastKind::PointerFromExposedAddress
                     }
+                    (_, Some(CastTy::DynStar)) => CastKind::DynStar,
                     (_, _) => CastKind::Misc,
                 };
                 block.and(Rvalue::Cast(cast_kind, source, expr.ty))
@@ -328,10 +330,9 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                         unpack!(block = this.as_place_builder(block, &this.thir[*thir_place]));
 
                     if let Ok(place_builder_resolved) =
-                        place_builder.try_upvars_resolved(this.tcx, this.typeck_results)
+                        place_builder.try_upvars_resolved(this.tcx, &this.upvars)
                     {
-                        let mir_place =
-                            place_builder_resolved.into_place(this.tcx, this.typeck_results);
+                        let mir_place = place_builder_resolved.into_place(this.tcx, &this.upvars);
                         this.cfg.push_fake_read(
                             block,
                             this.source_info(this.tcx.hir().span(*hir_id)),
@@ -623,7 +624,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             // is same as that of the capture in the parent closure.
             PlaceBase::Upvar { .. } => {
                 let enclosing_upvars_resolved =
-                    arg_place_builder.clone().into_place(this.tcx, this.typeck_results);
+                    arg_place_builder.clone().into_place(this.tcx, &this.upvars);
 
                 match enclosing_upvars_resolved.as_ref() {
                     PlaceRef {
@@ -643,12 +644,12 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                         );
                         // Not in a closure
                         debug_assert!(
-                            this.upvar_mutbls.len() > upvar_index.index(),
-                            "Unexpected capture place, upvar_mutbls={:#?}, upvar_index={:?}",
-                            this.upvar_mutbls,
+                            this.upvars.len() > upvar_index.index(),
+                            "Unexpected capture place, upvars={:#?}, upvar_index={:?}",
+                            this.upvars,
                             upvar_index
                         );
-                        this.upvar_mutbls[upvar_index.index()]
+                        this.upvars[upvar_index.index()].mutability
                     }
                     _ => bug!("Unexpected capture place"),
                 }
@@ -660,7 +661,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             Mutability::Mut => BorrowKind::Mut { allow_two_phase_borrow: false },
         };
 
-        let arg_place = arg_place_builder.into_place(this.tcx, this.typeck_results);
+        let arg_place = arg_place_builder.into_place(this.tcx, &this.upvars);
 
         this.cfg.push_assign(
             block,

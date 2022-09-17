@@ -370,6 +370,12 @@ pub struct FailedWriteError {
 }
 
 #[derive(SessionDiagnostic)]
+#[diag(metadata::missing_native_library)]
+pub struct MissingNativeLibrary<'a> {
+    pub libname: &'a str,
+}
+
+#[derive(SessionDiagnostic)]
 #[diag(metadata::failed_create_tempdir)]
 pub struct FailedCreateTempdir {
     pub err: Error,
@@ -572,6 +578,7 @@ impl SessionDiagnostic<'_> for CannotFindCrate {
     ) -> rustc_errors::DiagnosticBuilder<'_, ErrorGuaranteed> {
         let mut diag = handler.struct_err(rustc_errors::fluent::metadata::cannot_find_crate);
         diag.set_arg("crate_name", self.crate_name);
+        diag.set_arg("current_crate", self.current_crate);
         diag.set_arg("add_info", self.add_info);
         diag.set_arg("locator_triple", self.locator_triple.triple());
         diag.code(error_code!(E0463));

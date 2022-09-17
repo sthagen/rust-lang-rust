@@ -58,6 +58,7 @@ use std::ops::ControlFlow;
 use std::{fmt, str};
 
 pub use crate::ty::diagnostics::*;
+pub use rustc_type_ir::DynKind::*;
 pub use rustc_type_ir::InferTy::*;
 pub use rustc_type_ir::RegionKind::*;
 pub use rustc_type_ir::TyKind::*;
@@ -635,7 +636,7 @@ impl rustc_errors::IntoDiagnosticArg for Predicate<'_> {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, TyEncodable, TyDecodable)]
-#[derive(HashStable, TypeFoldable, TypeVisitable)]
+#[derive(HashStable, TypeFoldable, TypeVisitable, Lift)]
 pub enum PredicateKind<'tcx> {
     /// Corresponds to `where Foo: Bar<A, B, C>`. `Foo` here would be
     /// the `Self` type of the trait reference and `A`, `B`, and `C`
@@ -807,7 +808,7 @@ impl<'tcx> Predicate<'tcx> {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, TyEncodable, TyDecodable)]
-#[derive(HashStable, TypeFoldable, TypeVisitable)]
+#[derive(HashStable, TypeFoldable, TypeVisitable, Lift)]
 pub struct TraitPredicate<'tcx> {
     pub trait_ref: TraitRef<'tcx>,
 
@@ -887,7 +888,7 @@ impl<'tcx> PolyTraitPredicate<'tcx> {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, TyEncodable, TyDecodable)]
-#[derive(HashStable, TypeFoldable, TypeVisitable)]
+#[derive(HashStable, TypeFoldable, TypeVisitable, Lift)]
 pub struct OutlivesPredicate<A, B>(pub A, pub B); // `A: B`
 pub type RegionOutlivesPredicate<'tcx> = OutlivesPredicate<ty::Region<'tcx>, ty::Region<'tcx>>;
 pub type TypeOutlivesPredicate<'tcx> = OutlivesPredicate<Ty<'tcx>, ty::Region<'tcx>>;
@@ -898,7 +899,7 @@ pub type PolyTypeOutlivesPredicate<'tcx> = ty::Binder<'tcx, TypeOutlivesPredicat
 /// whether the `a` type is the type that we should label as "expected" when
 /// presenting user diagnostics.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, TyEncodable, TyDecodable)]
-#[derive(HashStable, TypeFoldable, TypeVisitable)]
+#[derive(HashStable, TypeFoldable, TypeVisitable, Lift)]
 pub struct SubtypePredicate<'tcx> {
     pub a_is_expected: bool,
     pub a: Ty<'tcx>,
@@ -908,7 +909,7 @@ pub type PolySubtypePredicate<'tcx> = ty::Binder<'tcx, SubtypePredicate<'tcx>>;
 
 /// Encodes that we have to coerce *from* the `a` type to the `b` type.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, TyEncodable, TyDecodable)]
-#[derive(HashStable, TypeFoldable, TypeVisitable)]
+#[derive(HashStable, TypeFoldable, TypeVisitable, Lift)]
 pub struct CoercePredicate<'tcx> {
     pub a: Ty<'tcx>,
     pub b: Ty<'tcx>,
@@ -1057,7 +1058,7 @@ impl<'tcx> TermKind<'tcx> {
 /// Form #2 eventually yields one of these `ProjectionPredicate`
 /// instances to normalize the LHS.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, TyEncodable, TyDecodable)]
-#[derive(HashStable, TypeFoldable, TypeVisitable)]
+#[derive(HashStable, TypeFoldable, TypeVisitable, Lift)]
 pub struct ProjectionPredicate<'tcx> {
     pub projection_ty: ProjectionTy<'tcx>,
     pub term: Term<'tcx>,
@@ -1111,6 +1112,12 @@ impl<'tcx> ToPolyTraitRef<'tcx> for PolyTraitPredicate<'tcx> {
 
 pub trait ToPredicate<'tcx> {
     fn to_predicate(self, tcx: TyCtxt<'tcx>) -> Predicate<'tcx>;
+}
+
+impl<'tcx> ToPredicate<'tcx> for Predicate<'tcx> {
+    fn to_predicate(self, _tcx: TyCtxt<'tcx>) -> Predicate<'tcx> {
+        self
+    }
 }
 
 impl<'tcx> ToPredicate<'tcx> for Binder<'tcx, PredicateKind<'tcx>> {
@@ -1519,7 +1526,7 @@ impl<'tcx> TypeFoldable<'tcx> for ParamEnv<'tcx> {
         Ok(ParamEnv::new(
             self.caller_bounds().try_fold_with(folder)?,
             self.reveal().try_fold_with(folder)?,
-            self.constness().try_fold_with(folder)?,
+            self.constness(),
         ))
     }
 }
@@ -1527,8 +1534,7 @@ impl<'tcx> TypeFoldable<'tcx> for ParamEnv<'tcx> {
 impl<'tcx> TypeVisitable<'tcx> for ParamEnv<'tcx> {
     fn visit_with<V: TypeVisitor<'tcx>>(&self, visitor: &mut V) -> ControlFlow<V::BreakTy> {
         self.caller_bounds().visit_with(visitor)?;
-        self.reveal().visit_with(visitor)?;
-        self.constness().visit_with(visitor)
+        self.reveal().visit_with(visitor)
     }
 }
 
@@ -1685,7 +1691,7 @@ impl<'tcx> PolyTraitRef<'tcx> {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, TypeFoldable, TypeVisitable)]
-#[derive(HashStable)]
+#[derive(HashStable, Lift)]
 pub struct ParamEnvAnd<'tcx, T> {
     pub param_env: ParamEnv<'tcx>,
     pub value: T,
@@ -2468,6 +2474,23 @@ impl<'tcx> TyCtxt<'tcx> {
             .and_then(|actual_expansion| actual_expansion.expn_data().parent_module)
             .unwrap_or_else(|| self.parent_module(block).to_def_id());
         (ident, scope)
+    }
+
+    /// Returns `true` if the debuginfo for `span` should be collapsed to the outermost expansion
+    /// site. Only applies when `Span` is the result of macro expansion.
+    ///
+    /// - If the `collapse_debuginfo` feature is enabled then debuginfo is not collapsed by default
+    ///   and only when a macro definition is annotated with `#[collapse_debuginfo]`.
+    /// - If `collapse_debuginfo` is not enabled, then debuginfo is collapsed by default.
+    ///
+    /// When `-Zdebug-macros` is provided then debuginfo will never be collapsed.
+    pub fn should_collapse_debuginfo(self, span: Span) -> bool {
+        !self.sess.opts.unstable_opts.debug_macros
+            && if self.features().collapse_debuginfo {
+                span.in_macro_expansion_with_collapse_debuginfo()
+            } else {
+                span.from_expansion()
+            }
     }
 
     pub fn is_object_safe(self, key: DefId) -> bool {

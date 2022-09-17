@@ -2,7 +2,7 @@
 #![feature(decl_macro)]
 #![feature(drain_filter)]
 #![feature(generators)]
-#![feature(generic_associated_types)]
+#![cfg_attr(bootstrap, feature(generic_associated_types))]
 #![feature(iter_from_generator)]
 #![feature(let_chains)]
 #![feature(let_else)]
@@ -44,4 +44,5 @@ pub mod fs;
 pub mod locator;
 
 pub use fs::{emit_metadata, METADATA_FILENAME};
+pub use native_libs::find_native_static_library;
 pub use rmeta::{encode_metadata, EncodedMetadata, METADATA_HEADER};

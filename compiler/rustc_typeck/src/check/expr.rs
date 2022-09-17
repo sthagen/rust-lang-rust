@@ -3,18 +3,15 @@
 //! See `mod.rs` for more context on type checking in general.
 
 use crate::astconv::AstConv as _;
-use crate::check::cast;
+use crate::check::cast::{self, CastCheckResult};
 use crate::check::coercion::CoerceMany;
 use crate::check::fatally_break_rust;
 use crate::check::method::SelfSource;
-use crate::check::report_unexpected_variant_res;
-use crate::check::BreakableCtxt;
-use crate::check::Diverges;
-use crate::check::DynamicCoerceMany;
 use crate::check::Expectation::{self, ExpectCastableToType, ExpectHasType, NoExpectation};
-use crate::check::FnCtxt;
-use crate::check::Needs;
-use crate::check::TupleArgumentsFlag::DontTupleArguments;
+use crate::check::{
+    report_unexpected_variant_res, BreakableCtxt, Diverges, DynamicCoerceMany, FnCtxt, Needs,
+    TupleArgumentsFlag::DontTupleArguments,
+};
 use crate::errors::{
     FieldMultiplySpecifiedInInitializer, FunctionalRecordUpdateOnNonStruct,
     YieldExprOutsideOfGenerator,
@@ -1252,8 +1249,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         } else {
             // Defer other checks until we're done type checking.
             let mut deferred_cast_checks = self.deferred_cast_checks.borrow_mut();
-            match cast::CastCheck::new(self, e, t_expr, t_cast, t.span, expr.span) {
-                Ok(cast_check) => {
+            match cast::check_cast(self, e, t_expr, t_cast, t.span, expr.span) {
+                CastCheckResult::Ok => t_cast,
+                CastCheckResult::Deferred(cast_check) => {
                     debug!(
                         "check_expr_cast: deferring cast from {:?} to {:?}: {:?}",
                         t_cast, t_expr, cast_check,
@@ -1261,7 +1259,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     deferred_cast_checks.push(cast_check);
                     t_cast
                 }
-                Err(_) => self.tcx.ty_error(),
+                CastCheckResult::Err(ErrorGuaranteed { .. }) => self.tcx.ty_error(),
             }
         }
     }
@@ -1305,31 +1303,30 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     }
 
     fn suggest_array_len(&self, expr: &'tcx hir::Expr<'tcx>, array_len: u64) {
-        if let Some(parent_hir_id) = self.tcx.hir().find_parent_node(expr.hir_id) {
-            let ty = match self.tcx.hir().find(parent_hir_id) {
-                Some(
-                    hir::Node::Local(hir::Local { ty: Some(ty), .. })
-                    | hir::Node::Item(hir::Item { kind: hir::ItemKind::Const(ty, _), .. }),
-                ) => Some(ty),
-                _ => None,
-            };
-            if let Some(ty) = ty
-                && let hir::TyKind::Array(_, length) = ty.kind
-                && let hir::ArrayLen::Body(hir::AnonConst { hir_id, .. }) = length
-                && let Some(span) = self.tcx.hir().opt_span(hir_id)
-            {
-                match self.tcx.sess.diagnostic().steal_diagnostic(span, StashKey::UnderscoreForArrayLengths) {
-                    Some(mut err) => {
-                        err.span_suggestion(
-                            span,
-                            "consider specifying the array length",
-                            array_len,
-                            Applicability::MaybeIncorrect,
-                        );
-                        err.emit();
-                    }
-                    None => ()
+        let parent_node = self.tcx.hir().parent_iter(expr.hir_id).find(|(_, node)| {
+            !matches!(node, hir::Node::Expr(hir::Expr { kind: hir::ExprKind::AddrOf(..), .. }))
+        });
+        let Some((_,
+            hir::Node::Local(hir::Local { ty: Some(ty), .. })
+            | hir::Node::Item(hir::Item { kind: hir::ItemKind::Const(ty, _), .. }))
+        ) = parent_node else {
+            return
+        };
+        if let hir::TyKind::Array(_, length) = ty.peel_refs().kind
+            && let hir::ArrayLen::Body(hir::AnonConst { hir_id, .. }) = length
+            && let Some(span) = self.tcx.hir().opt_span(hir_id)
+        {
+            match self.tcx.sess.diagnostic().steal_diagnostic(span, StashKey::UnderscoreForArrayLengths) {
+                Some(mut err) => {
+                    err.span_suggestion(
+                        span,
+                        "consider specifying the array length",
+                        array_len,
+                        Applicability::MaybeIncorrect,
+                    );
+                    err.emit();
                 }
+                None => ()
             }
         }
     }

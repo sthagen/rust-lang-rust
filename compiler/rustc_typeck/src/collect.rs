@@ -1346,16 +1346,12 @@ fn has_late_bound_regions<'tcx>(tcx: TyCtxt<'tcx>, node: Node<'tcx>) -> Option<S
             }
         }
 
-        fn visit_poly_trait_ref(
-            &mut self,
-            tr: &'tcx hir::PolyTraitRef<'tcx>,
-            m: hir::TraitBoundModifier,
-        ) {
+        fn visit_poly_trait_ref(&mut self, tr: &'tcx hir::PolyTraitRef<'tcx>) {
             if self.has_late_bound_regions.is_some() {
                 return;
             }
             self.outer_index.shift_in(1);
-            intravisit::walk_poly_trait_ref(self, tr, m);
+            intravisit::walk_poly_trait_ref(self, tr);
             self.outer_index.shift_out(1);
         }
 
@@ -1816,6 +1812,7 @@ pub fn get_infer_ret_ty<'hir>(output: &'hir hir::FnRetTy<'hir>) -> Option<&'hir 
     None
 }
 
+#[instrument(level = "debug", skip(tcx))]
 fn fn_sig(tcx: TyCtxt<'_>, def_id: DefId) -> ty::PolyFnSig<'_> {
     use rustc_hir::Node::*;
     use rustc_hir::*;
@@ -2046,8 +2043,8 @@ fn early_bound_lifetimes_from_generics<'a, 'tcx: 'a>(
 /// Returns a list of type predicates for the definition with ID `def_id`, including inferred
 /// lifetime constraints. This includes all predicates returned by `explicit_predicates_of`, plus
 /// inferred constraints concerning which regions outlive other regions.
+#[instrument(level = "debug", skip(tcx))]
 fn predicates_defined_on(tcx: TyCtxt<'_>, def_id: DefId) -> ty::GenericPredicates<'_> {
-    debug!("predicates_defined_on({:?})", def_id);
     let mut result = tcx.explicit_predicates_of(def_id);
     debug!("predicates_defined_on: explicit_predicates_of({:?}) = {:?}", def_id, result,);
     let inferred_outlives = tcx.inferred_outlives_of(def_id);
@@ -2371,10 +2368,10 @@ fn const_evaluatable_predicates_of<'tcx>(
             let def_id = self.tcx.hir().local_def_id(c.hir_id);
             let ct = ty::Const::from_anon_const(self.tcx, def_id);
             if let ty::ConstKind::Unevaluated(uv) = ct.kind() {
-                assert_eq!(uv.promoted, None);
+                assert_eq!(uv.promoted, ());
                 let span = self.tcx.hir().span(c.hir_id);
                 self.preds.insert((
-                    ty::Binder::dummy(ty::PredicateKind::ConstEvaluatable(uv.shrink()))
+                    ty::Binder::dummy(ty::PredicateKind::ConstEvaluatable(uv))
                         .to_predicate(self.tcx),
                     span,
                 ));
@@ -3287,6 +3284,15 @@ fn should_inherit_track_caller(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
 
 fn check_link_ordinal(tcx: TyCtxt<'_>, attr: &ast::Attribute) -> Option<u16> {
     use rustc_ast::{Lit, LitIntType, LitKind};
+    if !tcx.features().raw_dylib && tcx.sess.target.arch == "x86" {
+        feature_err(
+            &tcx.sess.parse_sess,
+            sym::raw_dylib,
+            attr.span,
+            "`#[link_ordinal]` is unstable on x86",
+        )
+        .emit();
+    }
     let meta_item_list = attr.meta_item_list();
     let meta_item_list: Option<&[ast::NestedMetaItem]> = meta_item_list.as_ref().map(Vec::as_ref);
     let sole_meta_list = match meta_item_list {

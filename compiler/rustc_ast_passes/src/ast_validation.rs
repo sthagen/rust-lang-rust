@@ -223,11 +223,9 @@ impl<'a> AstValidator<'a> {
                 for (i, segment) in path.segments.iter().enumerate() {
                     // Allow `impl Trait` iff we're on the final path segment
                     if i == path.segments.len() - 1 {
-                        self.visit_path_segment(path.span, segment);
+                        self.visit_path_segment(segment);
                     } else {
-                        self.with_banned_impl_trait(|this| {
-                            this.visit_path_segment(path.span, segment)
-                        });
+                        self.with_banned_impl_trait(|this| this.visit_path_segment(segment));
                     }
                 }
             }
@@ -839,10 +837,10 @@ fn validate_generic_param_order(
         let (kind, bounds, span) = (&param.kind, &param.bounds, ident.span);
         let (ord_kind, ident) = match &param.kind {
             GenericParamKind::Lifetime => (ParamKindOrd::Lifetime, ident.to_string()),
-            GenericParamKind::Type { default: _ } => (ParamKindOrd::Type, ident.to_string()),
+            GenericParamKind::Type { default: _ } => (ParamKindOrd::TypeOrConst, ident.to_string()),
             GenericParamKind::Const { ref ty, kw_span: _, default: _ } => {
                 let ty = pprust::ty_to_string(ty);
-                (ParamKindOrd::Const, format!("const {}: {}", ident, ty))
+                (ParamKindOrd::TypeOrConst, format!("const {}: {}", ident, ty))
             }
         };
         param_idents.push((kind, ord_kind, bounds, idx, ident));
@@ -1293,7 +1291,7 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
     }
 
     // Mirrors `visit::walk_generic_args`, but tracks relevant state.
-    fn visit_generic_args(&mut self, _: Span, generic_args: &'a GenericArgs) {
+    fn visit_generic_args(&mut self, generic_args: &'a GenericArgs) {
         match *generic_args {
             GenericArgs::AngleBracketed(ref data) => {
                 self.check_generic_args_before_constraints(data);
@@ -1529,7 +1527,7 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
             matches!(fk.header(), Some(FnHeader { constness: Const::Yes(_), .. }))
                 || matches!(fk.ctxt(), Some(FnCtxt::Assoc(_)));
 
-        self.with_tilde_const(tilde_const_allowed, |this| visit::walk_fn(this, fk, span));
+        self.with_tilde_const(tilde_const_allowed, |this| visit::walk_fn(this, fk));
     }
 
     fn visit_assoc_item(&mut self, item: &'a AssocItem, ctxt: AssocCtxt) {

@@ -1067,7 +1067,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
         self_ty: Ty<'tcx>,
         object_ty: Ty<'tcx>,
     ) {
-        let ty::Dynamic(predicates, _) = object_ty.kind() else { return; };
+        let ty::Dynamic(predicates, _, ty::Dyn) = object_ty.kind() else { return; };
         let self_ref_ty = self.tcx.mk_imm_ref(self.tcx.lifetimes.re_erased, self_ty);
 
         for predicate in predicates.iter() {
@@ -1160,8 +1160,8 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                     // and if not maybe suggest doing something else? If we kept the expression around we
                     // could also check if it is an fn call (very likely) and suggest changing *that*, if
                     // it is from the local crate.
-                    err.span_suggestion_verbose(
-                        expr.span.shrink_to_hi().with_hi(span.hi()),
+                    err.span_suggestion(
+                        span,
                         "remove the `.await`",
                         "",
                         Applicability::MachineApplicable,
@@ -1365,7 +1365,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
         let trait_pred = self.resolve_vars_if_possible(trait_pred);
         let ty = trait_pred.skip_binder().self_ty();
         let is_object_safe = match ty.kind() {
-            ty::Dynamic(predicates, _) => {
+            ty::Dynamic(predicates, _, ty::Dyn) => {
                 // If the `dyn Trait` is not object safe, do not suggest `Box<dyn Trait>`.
                 predicates
                     .principal_def_id()
@@ -1425,7 +1425,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
         let mut spans_and_needs_box = vec![];
 
         match liberated_sig.output().kind() {
-            ty::Dynamic(predicates, _) => {
+            ty::Dynamic(predicates, _, _) => {
                 let cause = ObligationCause::misc(ret_ty.span, fn_hir_id);
                 let param_env = ty::ParamEnv::empty();
 

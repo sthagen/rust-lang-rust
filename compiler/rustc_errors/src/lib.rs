@@ -12,7 +12,6 @@
 #![feature(result_option_inspect)]
 #![feature(rustc_attrs)]
 #![allow(incomplete_features)]
-#![allow(rustc::potential_query_instability)]
 
 #[macro_use]
 extern crate rustc_macros;
@@ -27,7 +26,7 @@ use Level::*;
 
 use emitter::{is_case_difference, Emitter, EmitterWriter};
 use registry::Registry;
-use rustc_data_structures::fx::{FxHashMap, FxHashSet, FxIndexMap};
+use rustc_data_structures::fx::{FxHashMap, FxHashSet, FxIndexMap, FxIndexSet};
 use rustc_data_structures::stable_hasher::StableHasher;
 use rustc_data_structures::sync::{self, Lock, Lrc};
 use rustc_data_structures::AtomicRef;
@@ -151,21 +150,20 @@ pub struct SubstitutionHighlight {
 
 impl SubstitutionPart {
     pub fn is_addition(&self, sm: &SourceMap) -> bool {
-        !self.snippet.is_empty()
-            && sm
-                .span_to_snippet(self.span)
-                .map_or(self.span.is_empty(), |snippet| snippet.trim().is_empty())
+        !self.snippet.is_empty() && !self.replaces_meaningful_content(sm)
     }
 
-    pub fn is_deletion(&self) -> bool {
-        self.snippet.trim().is_empty()
+    pub fn is_deletion(&self, sm: &SourceMap) -> bool {
+        self.snippet.trim().is_empty() && self.replaces_meaningful_content(sm)
     }
 
     pub fn is_replacement(&self, sm: &SourceMap) -> bool {
-        !self.snippet.is_empty()
-            && sm
-                .span_to_snippet(self.span)
-                .map_or(!self.span.is_empty(), |snippet| !snippet.trim().is_empty())
+        !self.snippet.is_empty() && self.replaces_meaningful_content(sm)
+    }
+
+    fn replaces_meaningful_content(&self, sm: &SourceMap) -> bool {
+        sm.span_to_snippet(self.span)
+            .map_or(!self.span.is_empty(), |snippet| !snippet.trim().is_empty())
     }
 }
 
@@ -413,7 +411,7 @@ struct HandlerInner {
     taught_diagnostics: FxHashSet<DiagnosticId>,
 
     /// Used to suggest rustc --explain <error code>
-    emitted_diagnostic_codes: FxHashSet<DiagnosticId>,
+    emitted_diagnostic_codes: FxIndexSet<DiagnosticId>,
 
     /// This set contains a hash of every diagnostic that has been emitted by
     /// this handler. These hashes is used to avoid emitting the same error
@@ -1169,7 +1167,7 @@ impl HandlerInner {
 
         if let Some(expectation_id) = diagnostic.level.get_expectation_id() {
             self.suppressed_expected_diag = true;
-            self.fulfilled_expectations.insert(expectation_id);
+            self.fulfilled_expectations.insert(expectation_id.normalize());
         }
 
         if matches!(diagnostic.level, Warning(_))
