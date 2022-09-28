@@ -2,7 +2,7 @@
 //! the type of each expression and pattern.
 //!
 //! For type inference, compare the implementations in rustc (the various
-//! check_* methods in librustc_typeck/check/mod.rs are a good entry point) and
+//! check_* methods in rustc_hir_analysis/check/mod.rs are a good entry point) and
 //! IntelliJ-Rust (org.rust.lang.core.types.infer). Our entry point for
 //! inference here is the `infer` function, which infers the types of all
 //! expressions in a given function.
@@ -673,10 +673,6 @@ impl<'a> InferenceContext<'a> {
         )
     }
 
-    fn resolve_obligations_as_possible(&mut self) {
-        self.table.resolve_obligations_as_possible();
-    }
-
     fn push_obligation(&mut self, o: DomainGoal) {
         self.table.register_obligation(o.cast(Interner));
     }
@@ -696,7 +692,6 @@ impl<'a> InferenceContext<'a> {
     }
 
     fn resolve_ty_shallow(&mut self, ty: &Ty) -> Ty {
-        self.resolve_obligations_as_possible();
         self.table.resolve_ty_shallow(ty)
     }
 

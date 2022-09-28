@@ -16,13 +16,13 @@ use rustc_middle::hir::place::ProjectionKind;
 use rustc_middle::mir::{FakeReadCause, Mutability};
 use rustc_middle::ty;
 use rustc_span::source_map::{BytePos, CharPos, Pos, Span, SyntaxContext};
-use rustc_typeck::expr_use_visitor::{Delegate, ExprUseVisitor, PlaceBase, PlaceWithHirId};
+use rustc_hir_analysis::expr_use_visitor::{Delegate, ExprUseVisitor, PlaceBase, PlaceWithHirId};
 use std::borrow::Cow;
 use std::fmt::{Display, Write as _};
 use std::ops::{Add, Neg, Not, Sub};
 
 /// A helper type to build suggestion correctly handling parentheses.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Sugg<'a> {
     /// An expression that never needs parentheses such as `1337` or `[0; 42]`.
     NonParen(Cow<'a, str>),
@@ -155,8 +155,8 @@ impl<'a> Sugg<'a> {
             | hir::ExprKind::Ret(..)
             | hir::ExprKind::Struct(..)
             | hir::ExprKind::Tup(..)
-            | hir::ExprKind::DropTemps(_)
             | hir::ExprKind::Err => Sugg::NonParen(get_snippet(expr.span)),
+            hir::ExprKind::DropTemps(inner) => Self::hir_from_snippet(inner, get_snippet),
             hir::ExprKind::Assign(lhs, rhs, _) => {
                 Sugg::BinOp(AssocOp::Assign, get_snippet(lhs.span), get_snippet(rhs.span))
             },
@@ -177,11 +177,11 @@ impl<'a> Sugg<'a> {
     pub fn ast(cx: &EarlyContext<'_>, expr: &ast::Expr, default: &'a str) -> Self {
         use rustc_ast::ast::RangeLimits;
 
-        let get_whole_snippet = || {
-            if expr.span.from_expansion() {
-                snippet_with_macro_callsite(cx, expr.span, default)
+        let snippet_without_expansion = |cx, span: Span, default| {
+            if span.from_expansion() {
+                snippet_with_macro_callsite(cx, span, default)
             } else {
-                snippet(cx, expr.span, default)
+                snippet(cx, span, default)
             }
         };
 
@@ -192,7 +192,7 @@ impl<'a> Sugg<'a> {
             | ast::ExprKind::If(..)
             | ast::ExprKind::Let(..)
             | ast::ExprKind::Unary(..)
-            | ast::ExprKind::Match(..) => Sugg::MaybeParen(get_whole_snippet()),
+            | ast::ExprKind::Match(..) => Sugg::MaybeParen(snippet_without_expansion(cx, expr.span, default)),
             ast::ExprKind::Async(..)
             | ast::ExprKind::Block(..)
             | ast::ExprKind::Break(..)
@@ -221,41 +221,45 @@ impl<'a> Sugg<'a> {
             | ast::ExprKind::Array(..)
             | ast::ExprKind::While(..)
             | ast::ExprKind::Await(..)
-            | ast::ExprKind::Err => Sugg::NonParen(get_whole_snippet()),
+            | ast::ExprKind::Err => Sugg::NonParen(snippet_without_expansion(cx, expr.span, default)),
             ast::ExprKind::Range(ref lhs, ref rhs, RangeLimits::HalfOpen) => Sugg::BinOp(
                 AssocOp::DotDot,
-                lhs.as_ref().map_or("".into(), |lhs| snippet(cx, lhs.span, default)),
-                rhs.as_ref().map_or("".into(), |rhs| snippet(cx, rhs.span, default)),
+                lhs.as_ref()
+                    .map_or("".into(), |lhs| snippet_without_expansion(cx, lhs.span, default)),
+                rhs.as_ref()
+                    .map_or("".into(), |rhs| snippet_without_expansion(cx, rhs.span, default)),
             ),
             ast::ExprKind::Range(ref lhs, ref rhs, RangeLimits::Closed) => Sugg::BinOp(
                 AssocOp::DotDotEq,
-                lhs.as_ref().map_or("".into(), |lhs| snippet(cx, lhs.span, default)),
-                rhs.as_ref().map_or("".into(), |rhs| snippet(cx, rhs.span, default)),
+                lhs.as_ref()
+                    .map_or("".into(), |lhs| snippet_without_expansion(cx, lhs.span, default)),
+                rhs.as_ref()
+                    .map_or("".into(), |rhs| snippet_without_expansion(cx, rhs.span, default)),
             ),
             ast::ExprKind::Assign(ref lhs, ref rhs, _) => Sugg::BinOp(
                 AssocOp::Assign,
-                snippet(cx, lhs.span, default),
-                snippet(cx, rhs.span, default),
+                snippet_without_expansion(cx, lhs.span, default),
+                snippet_without_expansion(cx, rhs.span, default),
             ),
             ast::ExprKind::AssignOp(op, ref lhs, ref rhs) => Sugg::BinOp(
                 astbinop2assignop(op),
-                snippet(cx, lhs.span, default),
-                snippet(cx, rhs.span, default),
+                snippet_without_expansion(cx, lhs.span, default),
+                snippet_without_expansion(cx, rhs.span, default),
             ),
             ast::ExprKind::Binary(op, ref lhs, ref rhs) => Sugg::BinOp(
                 AssocOp::from_ast_binop(op.node),
-                snippet(cx, lhs.span, default),
-                snippet(cx, rhs.span, default),
+                snippet_without_expansion(cx, lhs.span, default),
+                snippet_without_expansion(cx, rhs.span, default),
             ),
             ast::ExprKind::Cast(ref lhs, ref ty) => Sugg::BinOp(
                 AssocOp::As,
-                snippet(cx, lhs.span, default),
-                snippet(cx, ty.span, default),
+                snippet_without_expansion(cx, lhs.span, default),
+                snippet_without_expansion(cx, ty.span, default),
             ),
             ast::ExprKind::Type(ref lhs, ref ty) => Sugg::BinOp(
                 AssocOp::Colon,
-                snippet(cx, lhs.span, default),
-                snippet(cx, ty.span, default),
+                snippet_without_expansion(cx, lhs.span, default),
+                snippet_without_expansion(cx, ty.span, default),
             ),
         }
     }
@@ -1052,7 +1056,7 @@ impl<'tcx> Delegate<'tcx> for DerefDelegate<'_, 'tcx> {
 
     fn mutate(&mut self, _: &PlaceWithHirId<'tcx>, _: HirId) {}
 
-    fn fake_read(&mut self, _: &rustc_typeck::expr_use_visitor::PlaceWithHirId<'tcx>, _: FakeReadCause, _: HirId) {}
+    fn fake_read(&mut self, _: &rustc_hir_analysis::expr_use_visitor::PlaceWithHirId<'tcx>, _: FakeReadCause, _: HirId) {}
 }
 
 #[cfg(test)]

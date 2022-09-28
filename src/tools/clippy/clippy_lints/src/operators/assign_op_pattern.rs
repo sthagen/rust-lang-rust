@@ -11,7 +11,7 @@ use rustc_lint::LateContext;
 use rustc_middle::mir::FakeReadCause;
 use rustc_middle::ty::BorrowKind;
 use rustc_trait_selection::infer::TyCtxtInferExt;
-use rustc_typeck::expr_use_visitor::{Delegate, ExprUseVisitor, PlaceBase, PlaceWithHirId};
+use rustc_hir_analysis::expr_use_visitor::{Delegate, ExprUseVisitor, PlaceBase, PlaceWithHirId};
 
 use super::ASSIGN_OP_PATTERN;
 
@@ -28,7 +28,7 @@ pub(super) fn check<'tcx>(
             if_chain! {
                 if let Some((_, lang_item)) = binop_traits(op.node);
                 if let Ok(trait_id) = cx.tcx.lang_items().require(lang_item);
-                let parent_fn = cx.tcx.hir().get_parent_item(e.hir_id);
+                let parent_fn = cx.tcx.hir().get_parent_item(e.hir_id).def_id;
                 if trait_ref_of_method(cx, parent_fn)
                     .map_or(true, |t| t.path.res.def_id() != trait_id);
                 if implements_trait(cx, ty, trait_id, &[rty.into()]);

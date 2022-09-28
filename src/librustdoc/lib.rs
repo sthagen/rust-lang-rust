@@ -9,14 +9,12 @@
 #![feature(control_flow_enum)]
 #![feature(drain_filter)]
 #![feature(let_chains)]
-#![feature(let_else)]
 #![feature(test)]
 #![feature(never_type)]
 #![feature(once_cell)]
 #![feature(type_ascription)]
 #![feature(iter_intersperse)]
 #![feature(type_alias_impl_trait)]
-#![cfg_attr(bootstrap, feature(generic_associated_types))]
 #![recursion_limit = "256"]
 #![warn(rustc::internal)]
 #![allow(clippy::collapsible_if, clippy::collapsible_else_if)]
@@ -43,6 +41,7 @@ extern crate rustc_errors;
 extern crate rustc_expand;
 extern crate rustc_feature;
 extern crate rustc_hir;
+extern crate rustc_hir_analysis;
 extern crate rustc_hir_pretty;
 extern crate rustc_index;
 extern crate rustc_infer;
@@ -61,7 +60,6 @@ extern crate rustc_session;
 extern crate rustc_span;
 extern crate rustc_target;
 extern crate rustc_trait_selection;
-extern crate rustc_typeck;
 extern crate test;
 
 // See docs in https://github.com/rust-lang/rust/blob/master/compiler/rustc/src/main.rs
@@ -461,7 +459,7 @@ fn opts() -> Vec<RustcOptGroup> {
                 "human|json|short",
             )
         }),
-        unstable("diagnostic-width", |o| {
+        stable("diagnostic-width", |o| {
             o.optopt(
                 "",
                 "diagnostic-width",

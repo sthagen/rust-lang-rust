@@ -25,10 +25,9 @@ use super::Unimplemented;
 use super::{FulfillmentError, FulfillmentErrorCode};
 use super::{ObligationCause, PredicateObligation};
 
-use crate::traits::error_reporting::InferCtxtExt as _;
 use crate::traits::project::PolyProjectionObligation;
 use crate::traits::project::ProjectionCacheKeyExt as _;
-use crate::traits::query::evaluate_obligation::InferCtxtExt as _;
+use crate::traits::query::evaluate_obligation::InferCtxtExt;
 
 impl<'tcx> ForestObligation for PendingPredicateObligation<'tcx> {
     /// Note that we include both the `ParamEnv` and the `Predicate`,
@@ -103,7 +102,7 @@ impl<'a, 'tcx> FulfillmentContext<'tcx> {
     }
 
     /// Attempts to select obligations using `selcx`.
-    fn select(&mut self, selcx: &mut SelectionContext<'a, 'tcx>) -> Vec<FulfillmentError<'tcx>> {
+    fn select(&mut self, selcx: SelectionContext<'a, 'tcx>) -> Vec<FulfillmentError<'tcx>> {
         let span = debug_span!("select", obligation_forest_size = ?self.predicates.len());
         let _enter = span.enter();
 
@@ -198,8 +197,8 @@ impl<'tcx> TraitEngine<'tcx> for FulfillmentContext<'tcx> {
         &mut self,
         infcx: &InferCtxt<'_, 'tcx>,
     ) -> Vec<FulfillmentError<'tcx>> {
-        let mut selcx = SelectionContext::new(infcx);
-        self.select(&mut selcx)
+        let selcx = SelectionContext::new(infcx);
+        self.select(selcx)
     }
 
     fn pending_obligations(&self) -> Vec<PredicateObligation<'tcx>> {
@@ -211,8 +210,8 @@ impl<'tcx> TraitEngine<'tcx> for FulfillmentContext<'tcx> {
     }
 }
 
-struct FulfillProcessor<'a, 'b, 'tcx> {
-    selcx: &'a mut SelectionContext<'b, 'tcx>,
+struct FulfillProcessor<'a, 'tcx> {
+    selcx: SelectionContext<'a, 'tcx>,
 }
 
 fn mk_pending(os: Vec<PredicateObligation<'_>>) -> Vec<PendingPredicateObligation<'_>> {
@@ -221,9 +220,10 @@ fn mk_pending(os: Vec<PredicateObligation<'_>>) -> Vec<PendingPredicateObligatio
         .collect()
 }
 
-impl<'a, 'b, 'tcx> ObligationProcessor for FulfillProcessor<'a, 'b, 'tcx> {
+impl<'a, 'tcx> ObligationProcessor for FulfillProcessor<'a, 'tcx> {
     type Obligation = PendingPredicateObligation<'tcx>;
     type Error = FulfillmentErrorCode<'tcx>;
+    type OUT = Outcome<Self::Obligation, Self::Error>;
 
     /// Identifies whether a predicate obligation needs processing.
     ///
@@ -291,7 +291,7 @@ impl<'a, 'b, 'tcx> ObligationProcessor for FulfillProcessor<'a, 'b, 'tcx> {
         if obligation.predicate.has_projections() {
             let mut obligations = Vec::new();
             let predicate = crate::traits::project::try_normalize_with_depth_to(
-                self.selcx,
+                &mut self.selcx,
                 obligation.param_env,
                 obligation.cause.clone(),
                 obligation.recursion_depth + 1,
@@ -594,19 +594,21 @@ impl<'a, 'b, 'tcx> ObligationProcessor for FulfillProcessor<'a, 'b, 'tcx> {
         &mut self,
         cycle: I,
         _marker: PhantomData<&'c PendingPredicateObligation<'tcx>>,
-    ) where
+    ) -> Result<(), FulfillmentErrorCode<'tcx>>
+    where
         I: Clone + Iterator<Item = &'c PendingPredicateObligation<'tcx>>,
     {
         if self.selcx.coinductive_match(cycle.clone().map(|s| s.obligation.predicate)) {
             debug!("process_child_obligations: coinductive match");
+            Ok(())
         } else {
             let cycle: Vec<_> = cycle.map(|c| c.obligation.clone()).collect();
-            self.selcx.infcx().report_overflow_error_cycle(&cycle);
+            Err(FulfillmentErrorCode::CodeCycle(cycle))
         }
     }
 }
 
-impl<'a, 'b, 'tcx> FulfillProcessor<'a, 'b, 'tcx> {
+impl<'a, 'tcx> FulfillProcessor<'a, 'tcx> {
     #[instrument(level = "debug", skip(self, obligation, stalled_on))]
     fn process_trait_obligation(
         &mut self,
@@ -641,7 +643,7 @@ impl<'a, 'b, 'tcx> FulfillProcessor<'a, 'b, 'tcx> {
                 // information about the types in the trait.
                 stalled_on.clear();
                 stalled_on.extend(substs_infer_vars(
-                    self.selcx,
+                    &self.selcx,
                     trait_obligation.predicate.map_bound(|pred| pred.trait_ref.substs),
                 ));
 
@@ -693,12 +695,12 @@ impl<'a, 'b, 'tcx> FulfillProcessor<'a, 'b, 'tcx> {
             }
         }
 
-        match project::poly_project_and_unify_type(self.selcx, &project_obligation) {
+        match project::poly_project_and_unify_type(&mut self.selcx, &project_obligation) {
             ProjectAndUnifyResult::Holds(os) => ProcessResult::Changed(mk_pending(os)),
             ProjectAndUnifyResult::FailedNormalization => {
                 stalled_on.clear();
                 stalled_on.extend(substs_infer_vars(
-                    self.selcx,
+                    &self.selcx,
                     project_obligation.predicate.map_bound(|pred| pred.projection_ty.substs),
                 ));
                 ProcessResult::Unchanged
@@ -716,7 +718,7 @@ impl<'a, 'b, 'tcx> FulfillProcessor<'a, 'b, 'tcx> {
 
 /// Returns the set of inference variables contained in `substs`.
 fn substs_infer_vars<'a, 'tcx>(
-    selcx: &mut SelectionContext<'a, 'tcx>,
+    selcx: &SelectionContext<'a, 'tcx>,
     substs: ty::Binder<'tcx, SubstsRef<'tcx>>,
 ) -> impl Iterator<Item = TyOrConstInferVar<'tcx>> {
     selcx

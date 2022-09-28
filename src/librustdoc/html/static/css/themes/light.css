@@ -22,6 +22,14 @@
 	--codeblock-error-color: rgba(255, 0, 0, .5);
 	--codeblock-ignore-hover-color: rgb(255, 142, 0);
 	--codeblock-ignore-color: rgba(255, 142, 0, .6);
+	--type-link-color: #ad378a;
+	--trait-link-color: #6e4fc9;
+	--assoc-item-link-color: #3873ad;
+	--function-link-color: #ad7c37;
+	--macro-link-color: #068000;
+	--keyword-link-color: #3873ad;
+	--mod-link-color: #3873ad;
+	--link-color: #3873ad;
 }
 
 .slider {
@@ -45,8 +53,8 @@ input:focus + .slider {
 	background-color: #fff;
 }
 
-.line-numbers span { color: #c67e2d; }
-.line-numbers .line-highlighted {
+.src-line-numbers span { color: #c67e2d; }
+.src-line-numbers .line-highlighted {
 	background-color: #FDFFD3 !important;
 }
 
@@ -82,25 +90,6 @@ a.result-keyword:focus { background-color: #afc6e4; }
 
 .content .item-info::before { color: #ccc; }
 
-.content span.enum, .content a.enum { color: #AD378A; }
-.content span.struct, .content a.struct { color: #AD378A; }
-.content span.type, .content a.type { color:  #AD378A; }
-.content span.associatedtype, .content a.associatedtype { color: #3873AD; }
-.content span.foreigntype, .content a.foreigntype { color: #3873AD; }
-.content span.attr, .content a.attr,
-.content span.derive, .content a.derive,
-.content span.macro, .content a.macro { color: #068000; }
-.content span.union, .content a.union { color: #AD378A; }
-.content span.constant, .content a.constant,
-.content span.static, .content a.static { color: #3873AD; }
-.content span.primitive, .content a.primitive { color: #AD378A; }
-.content span.mod, .content a.mod { color: #3873AD; }
-.content span.trait, .content a.trait { color: #6E4FC9; }
-.content span.traitalias, .content a.traitalias { color: #5137AD; }
-.content span.fn, .content a.fn,
-.content .fnname { color: #AD7C37; }
-.content span.keyword, .content a.keyword { color: #3873AD; }
-
 .sidebar a { color: #356da4; }
 .sidebar a.current.enum { color: #a63283; }
 .sidebar a.current.struct { color: #a63283; }
@@ -117,10 +106,6 @@ a.result-keyword:focus { background-color: #afc6e4; }
 .sidebar a.current.traitalias { color: #4b349e; }
 .sidebar a.current.fn { color: #a67736; }
 .sidebar a.current.keyword { color: #356da4; }
-
-a {
-	color: #3873AD;
-}
 
 body.source .example-wrap pre.rust a {
 	background: #eee;
@@ -140,7 +125,7 @@ body.source .example-wrap pre.rust a {
 .stab { background: #FFF5D6; border-color: #FFC600; }
 .stab.portability > code { background: none; }
 
-.line-numbers :target { background-color: transparent; }
+.src-line-numbers :target { background-color: transparent; }
 
 /* Code highlighting */
 pre.rust .kw { color: #8959A8; }
@@ -156,7 +141,7 @@ pre.rust .question-mark {
 	color: #ff9011;
 }
 
-.example-wrap > pre.line-number {
+pre.example-line-numbers {
 	border-color: #c7c7c7;
 }
 

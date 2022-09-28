@@ -746,7 +746,7 @@ impl<'p, 'tcx> Witness<'p, 'tcx> {
 /// Report that a match of a `non_exhaustive` enum marked with `non_exhaustive_omitted_patterns`
 /// is not exhaustive enough.
 ///
-/// NB: The partner lint for structs lives in `compiler/rustc_typeck/src/check/pat.rs`.
+/// NB: The partner lint for structs lives in `compiler/rustc_hir_analysis/src/check/pat.rs`.
 fn lint_non_exhaustive_omitted_patterns<'p, 'tcx>(
     cx: &MatchCheckCtxt<'p, 'tcx>,
     scrut_ty: Ty<'tcx>,
@@ -842,7 +842,15 @@ fn is_useful<'p, 'tcx>(
             }
         }
     } else {
-        let ty = v.head().ty();
+        let mut ty = v.head().ty();
+
+        // Opaque types can't get destructured/split, but the patterns can
+        // actually hint at hidden types, so we use the patterns' types instead.
+        if let ty::Opaque(..) = ty.kind() {
+            if let Some(row) = rows.first() {
+                ty = row.head().ty();
+            }
+        }
         let is_non_exhaustive = cx.is_foreign_non_exhaustive_enum(ty);
         debug!("v.head: {:?}, v.span: {:?}", v.head(), v.head().span());
         let pcx = &PatCtxt { cx, ty, span: v.head().span(), is_top_level, is_non_exhaustive };

@@ -326,6 +326,7 @@ fn convert_named_region_map(named_region_map: NamedRegionMap) -> ResolveLifetime
     }
 
     debug!(?rl.defs);
+    debug!(?rl.late_bound_vars);
     rl
 }
 
@@ -339,24 +340,25 @@ fn convert_named_region_map(named_region_map: NamedRegionMap) -> ResolveLifetime
 /// This allows us to avoid cycles. Importantly, if we ask for lifetimes for lifetimes that have an owner
 /// other than the trait itself (like the trait methods or associated types), then we just use the regular
 /// `resolve_lifetimes`.
-fn resolve_lifetimes_for<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> &'tcx ResolveLifetimes {
-    let item_id = item_for(tcx, def_id);
-    if item_id == def_id {
-        let item = tcx.hir().item(hir::ItemId { def_id: item_id });
+fn resolve_lifetimes_for<'tcx>(tcx: TyCtxt<'tcx>, def_id: hir::OwnerId) -> &'tcx ResolveLifetimes {
+    let item_id = item_for(tcx, def_id.def_id);
+    let local_def_id = item_id.def_id.def_id;
+    if item_id.def_id == def_id {
+        let item = tcx.hir().item(item_id);
         match item.kind {
-            hir::ItemKind::Trait(..) => tcx.resolve_lifetimes_trait_definition(item_id),
-            _ => tcx.resolve_lifetimes(item_id),
+            hir::ItemKind::Trait(..) => tcx.resolve_lifetimes_trait_definition(local_def_id),
+            _ => tcx.resolve_lifetimes(local_def_id),
         }
     } else {
-        tcx.resolve_lifetimes(item_id)
+        tcx.resolve_lifetimes(local_def_id)
     }
 }
 
 /// Finds the `Item` that contains the given `LocalDefId`
-fn item_for(tcx: TyCtxt<'_>, local_def_id: LocalDefId) -> LocalDefId {
+fn item_for(tcx: TyCtxt<'_>, local_def_id: LocalDefId) -> hir::ItemId {
     match tcx.hir().find_by_def_id(local_def_id) {
         Some(Node::Item(item)) => {
-            return item.def_id;
+            return item.item_id();
         }
         _ => {}
     }
@@ -366,7 +368,7 @@ fn item_for(tcx: TyCtxt<'_>, local_def_id: LocalDefId) -> LocalDefId {
         loop {
             let node = parent_iter.next().map(|n| n.1);
             match node {
-                Some(hir::Node::Item(item)) => break item.def_id,
+                Some(hir::Node::Item(item)) => break item.item_id(),
                 Some(hir::Node::Crate(_)) | None => bug!("Called `item_for` on an Item."),
                 _ => {}
             }
@@ -506,7 +508,7 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
                     })
                     .unzip();
 
-            self.map.late_bound_vars.insert(e.hir_id, binders);
+            self.record_late_bound_vars(e.hir_id, binders);
             let scope = Scope::Binder {
                 hir_id: e.hir_id,
                 lifetimes,
@@ -530,7 +532,7 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
         match &item.kind {
             hir::ItemKind::Impl(hir::Impl { of_trait, .. }) => {
                 if let Some(of_trait) = of_trait {
-                    self.map.late_bound_vars.insert(of_trait.hir_ref_id, Vec::default());
+                    self.record_late_bound_vars(of_trait.hir_ref_id, Vec::default());
                 }
             }
             _ => {}
@@ -566,13 +568,12 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
                 // their owner, we can keep going until we find the Item that owns that. We then
                 // conservatively add all resolved lifetimes. Otherwise we run into problems in
                 // cases like `type Foo<'a> = impl Bar<As = impl Baz + 'a>`.
-                for (_hir_id, node) in
-                    self.tcx.hir().parent_iter(self.tcx.hir().local_def_id_to_hir_id(item.def_id))
-                {
+                for (_hir_id, node) in self.tcx.hir().parent_iter(item.def_id.into()) {
                     match node {
                         hir::Node::Item(parent_item) => {
-                            let resolved_lifetimes: &ResolveLifetimes =
-                                self.tcx.resolve_lifetimes(item_for(self.tcx, parent_item.def_id));
+                            let resolved_lifetimes: &ResolveLifetimes = self.tcx.resolve_lifetimes(
+                                item_for(self.tcx, parent_item.def_id.def_id).def_id.def_id,
+                            );
                             // We need to add *all* deps, since opaque tys may want them from *us*
                             for (&owner, defs) in resolved_lifetimes.defs.iter() {
                                 defs.iter().for_each(|(&local_id, region)| {
@@ -583,7 +584,7 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
                                 resolved_lifetimes.late_bound_vars.iter()
                             {
                                 late_bound_vars.iter().for_each(|(&local_id, late_bound_vars)| {
-                                    self.map.late_bound_vars.insert(
+                                    self.record_late_bound_vars(
                                         hir::HirId { owner, local_id },
                                         late_bound_vars.clone(),
                                     );
@@ -614,7 +615,7 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
                         GenericParamKind::Type { .. } | GenericParamKind::Const { .. } => None,
                     })
                     .collect();
-                self.map.late_bound_vars.insert(item.hir_id(), vec![]);
+                self.record_late_bound_vars(item.hir_id(), vec![]);
                 let scope = Scope::Binder {
                     hir_id: item.hir_id(),
                     lifetimes,
@@ -663,7 +664,7 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
                         (pair, r)
                     })
                     .unzip();
-                self.map.late_bound_vars.insert(ty.hir_id, binders);
+                self.record_late_bound_vars(ty.hir_id, binders);
                 let scope = Scope::Binder {
                     hir_id: ty.hir_id,
                     lifetimes,
@@ -817,7 +818,7 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
                         GenericParamKind::Type { .. } | GenericParamKind::Const { .. } => {}
                     }
                 }
-                self.map.late_bound_vars.insert(ty.hir_id, vec![]);
+                self.record_late_bound_vars(ty.hir_id, vec![]);
 
                 let scope = Scope::Binder {
                     hir_id: ty.hir_id,
@@ -861,7 +862,7 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
                         GenericParamKind::Type { .. } | GenericParamKind::Const { .. } => None,
                     })
                     .collect();
-                self.map.late_bound_vars.insert(trait_item.hir_id(), vec![]);
+                self.record_late_bound_vars(trait_item.hir_id(), vec![]);
                 let scope = Scope::Binder {
                     hir_id: trait_item.hir_id(),
                     lifetimes,
@@ -909,9 +910,9 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
                         GenericParamKind::Const { .. } | GenericParamKind::Type { .. } => None,
                     })
                     .collect();
-                self.map.late_bound_vars.insert(ty.hir_id, vec![]);
+                self.record_late_bound_vars(impl_item.hir_id(), vec![]);
                 let scope = Scope::Binder {
-                    hir_id: ty.hir_id,
+                    hir_id: impl_item.hir_id(),
                     lifetimes,
                     s: self.scope,
                     scope_type: BinderScopeType::Normal,
@@ -995,13 +996,14 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
             for predicate in generics.predicates {
                 match predicate {
                     &hir::WherePredicate::BoundPredicate(hir::WhereBoundPredicate {
+                        hir_id,
                         ref bounded_ty,
                         bounds,
                         ref bound_generic_params,
                         origin,
                         ..
                     }) => {
-                        let (lifetimes, binders): (FxIndexMap<LocalDefId, Region>, Vec<_>) =
+                        let lifetimes: FxIndexMap<LocalDefId, Region> =
                             bound_generic_params
                                 .iter()
                                 .filter(|param| {
@@ -1009,19 +1011,23 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
                                 })
                                 .enumerate()
                                 .map(|(late_bound_idx, param)| {
-                                    let pair =
-                                        Region::late(late_bound_idx as u32, this.tcx.hir(), param);
-                                    let r = late_region_as_bound_region(this.tcx, &pair.1);
-                                    (pair, r)
+                                        Region::late(late_bound_idx as u32, this.tcx.hir(), param)
                                 })
-                                .unzip();
-                        this.map.late_bound_vars.insert(bounded_ty.hir_id, binders.clone());
+                                .collect();
+                        let binders: Vec<_> =
+                            lifetimes
+                                .iter()
+                                .map(|(_, region)| {
+                                     late_region_as_bound_region(this.tcx, region)
+                                })
+                                .collect();
+                        this.record_late_bound_vars(hir_id, binders.clone());
                         // Even if there are no lifetimes defined here, we still wrap it in a binder
                         // scope. If there happens to be a nested poly trait ref (an error), that
                         // will be `Concatenating` anyways, so we don't have to worry about the depth
                         // being wrong.
                         let scope = Scope::Binder {
-                            hir_id: bounded_ty.hir_id,
+                            hir_id,
                             lifetimes,
                             s: this.scope,
                             scope_type: BinderScopeType::Normal,
@@ -1089,7 +1095,7 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
                 // imagine there's a better way to go about this.
                 let (binders, scope_type) = self.poly_trait_ref_binder_info();
 
-                self.map.late_bound_vars.insert(*hir_id, binders);
+                self.record_late_bound_vars(*hir_id, binders);
                 let scope = Scope::Binder {
                     hir_id: *hir_id,
                     lifetimes: FxIndexMap::default(),
@@ -1127,7 +1133,7 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
         binders.extend(binders_iter);
 
         debug!(?binders);
-        self.map.late_bound_vars.insert(trait_ref.trait_ref.hir_ref_id, binders);
+        self.record_late_bound_vars(trait_ref.trait_ref.hir_ref_id, binders);
 
         // Always introduce a scope here, even if this is in a where clause and
         // we introduced the binders around the bounded Ty. In that case, we
@@ -1211,6 +1217,15 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
         }
     }
 
+    fn record_late_bound_vars(&mut self, hir_id: hir::HirId, binder: Vec<ty::BoundVariableKind>) {
+        if let Some(old) = self.map.late_bound_vars.insert(hir_id, binder) {
+            bug!(
+                "overwrote bound vars for {hir_id:?}:\nold={old:?}\nnew={:?}",
+                self.map.late_bound_vars[&hir_id]
+            )
+        }
+    }
+
     /// Visits self by adding a scope and handling recursive walk over the contents with `walk`.
     ///
     /// Handles visiting fns and methods. These are a bit complicated because we must distinguish
@@ -1268,7 +1283,7 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
                 late_region_as_bound_region(self.tcx, &pair.1)
             })
             .collect();
-        self.map.late_bound_vars.insert(hir_id, binders);
+        self.record_late_bound_vars(hir_id, binders);
         let scope = Scope::Binder {
             hir_id,
             lifetimes,
@@ -1315,7 +1330,7 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
                     // regular fns.
                     if let Some(hir::PredicateOrigin::ImplTrait) = where_bound_origin
                         && let hir::LifetimeName::Param(_, hir::ParamName::Fresh) = lifetime_ref.name
-                        && let hir::IsAsync::NotAsync = self.tcx.asyncness(lifetime_ref.hir_id.owner)
+                        && let hir::IsAsync::NotAsync = self.tcx.asyncness(lifetime_ref.hir_id.owner.def_id)
                         && !self.tcx.features().anonymous_lifetime_in_impl_trait
                     {
                         rustc_session::parse::feature_err(
