@@ -119,7 +119,7 @@ pub(crate) struct Crate {
     pub(crate) module: Item,
     pub(crate) primitives: ThinVec<(DefId, PrimitiveType)>,
     /// Only here so that they can be filtered through the rustdoc passes.
-    pub(crate) external_traits: Rc<RefCell<FxHashMap<DefId, TraitWithExtraInfo>>>,
+    pub(crate) external_traits: Rc<RefCell<FxHashMap<DefId, Trait>>>,
 }
 
 impl Crate {
@@ -130,13 +130,6 @@ impl Crate {
     pub(crate) fn src(&self, tcx: TyCtxt<'_>) -> FileName {
         ExternalCrate::LOCAL.src(tcx)
     }
-}
-
-/// This struct is used to wrap additional information added by rustdoc on a `trait` item.
-#[derive(Clone, Debug)]
-pub(crate) struct TraitWithExtraInfo {
-    pub(crate) trait_: Trait,
-    pub(crate) is_notable: bool,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -689,7 +682,7 @@ impl Item {
                 let abi = tcx.fn_sig(self.item_id.as_def_id().unwrap()).abi();
                 hir::FnHeader {
                     unsafety: if abi == Abi::RustIntrinsic {
-                        intrinsic_operation_unsafety(self.name.unwrap())
+                        intrinsic_operation_unsafety(tcx, self.item_id.as_def_id().unwrap())
                     } else {
                         hir::Unsafety::Unsafe
                     },
@@ -1530,6 +1523,9 @@ impl Trait {
     pub(crate) fn is_auto(&self, tcx: TyCtxt<'_>) -> bool {
         tcx.trait_is_auto(self.def_id)
     }
+    pub(crate) fn is_notable_trait(&self, tcx: TyCtxt<'_>) -> bool {
+        tcx.is_doc_notable_trait(self.def_id)
+    }
     pub(crate) fn unsafety(&self, tcx: TyCtxt<'_>) -> hir::Unsafety {
         tcx.trait_def(self.def_id).unsafety
     }
@@ -2201,8 +2197,11 @@ impl Path {
     /// Checks if this is a `T::Name` path for an associated type.
     pub(crate) fn is_assoc_ty(&self) -> bool {
         match self.res {
-            Res::SelfTy { .. } if self.segments.len() != 1 => true,
-            Res::Def(DefKind::TyParam, _) if self.segments.len() != 1 => true,
+            Res::SelfTyParam { .. } | Res::SelfTyAlias { .. } | Res::Def(DefKind::TyParam, _)
+                if self.segments.len() != 1 =>
+            {
+                true
+            }
             Res::Def(DefKind::AssocTy, _) => true,
             _ => false,
         }
@@ -2535,11 +2534,11 @@ mod size_asserts {
     // These are in alphabetical order, which is easy to maintain.
     static_assert_size!(Crate, 72); // frequently moved by-value
     static_assert_size!(DocFragment, 32);
-    static_assert_size!(GenericArg, 56);
+    static_assert_size!(GenericArg, 48);
     static_assert_size!(GenericArgs, 32);
     static_assert_size!(GenericParamDef, 56);
     static_assert_size!(Item, 56);
-    static_assert_size!(ItemKind, 96);
+    static_assert_size!(ItemKind, 88);
     static_assert_size!(PathSegment, 40);
-    static_assert_size!(Type, 56);
+    static_assert_size!(Type, 48);
 }

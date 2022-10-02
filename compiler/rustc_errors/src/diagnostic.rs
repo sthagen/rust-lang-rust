@@ -1,6 +1,6 @@
 use crate::snippet::Style;
 use crate::{
-    CodeSuggestion, DiagnosticMessage, EmissionGuarantee, Level, LintDiagnosticBuilder, MultiSpan,
+    CodeSuggestion, DiagnosticBuilder, DiagnosticMessage, EmissionGuarantee, Level, MultiSpan,
     SubdiagnosticMessage, Substitution, SubstitutionPart, SuggestionStyle,
 };
 use rustc_ast as ast;
@@ -209,7 +209,12 @@ pub trait AddToDiagnostic {
 #[rustc_diagnostic_item = "DecorateLint"]
 pub trait DecorateLint<'a, G: EmissionGuarantee> {
     /// Decorate and emit a lint.
-    fn decorate_lint(self, diag: LintDiagnosticBuilder<'a, G>);
+    fn decorate_lint<'b>(
+        self,
+        diag: &'b mut DiagnosticBuilder<'a, G>,
+    ) -> &'b mut DiagnosticBuilder<'a, G>;
+
+    fn msg(&self) -> DiagnosticMessage;
 }
 
 #[must_use]
@@ -359,9 +364,10 @@ impl Diagnostic {
             // The lint index inside the attribute is manually transferred here.
             let lint_index = expectation_id.get_lint_index();
             expectation_id.set_lint_index(None);
-            let mut stable_id = *unstable_to_stable
+            let mut stable_id = unstable_to_stable
                 .get(&expectation_id)
-                .expect("each unstable `LintExpectationId` must have a matching stable id");
+                .expect("each unstable `LintExpectationId` must have a matching stable id")
+                .normalize();
 
             stable_id.set_lint_index(lint_index);
             *expectation_id = stable_id;

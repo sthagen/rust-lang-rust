@@ -138,6 +138,13 @@ h1, h2, h3, h4 {
 .docblock h3, .docblock h4, h5, h6 {
 	margin: 15px 0 5px 0;
 }
+.docblock > h2:first-child,
+.docblock > h3:first-child,
+.docblock > h4:first-child,
+.docblock > h5:first-child,
+.docblock > h6:first-child {
+	margin-top: 0;
+}
 h1.fqn {
 	margin: 0;
 	padding: 0;
@@ -187,14 +194,13 @@ h4.code-header {
 .impl-items .associatedtype,
 .methods .associatedtype {
 	flex-basis: 100%;
-	font-weight: 600;
 	position: relative;
 }
 
+#crate-search,
 h1, h2, h3, h4, h5, h6,
 .sidebar,
 .mobile-topbar,
-a.source,
 .search-input,
 .search-results .result-name,
 .item-left > a,
@@ -303,16 +309,6 @@ summary {
 }
 
 /* Fix some style changes due to normalize.css 8 */
-
-button,
-input,
-optgroup,
-select,
-textarea {
-	color: inherit;
-	font: inherit;
-	margin: 0;
-}
 
 button {
 	/* Buttons on Safari have different default padding than other platforms. Make them the same. */
@@ -451,7 +447,6 @@ img {
 }
 
 .source .sidebar > *:not(#sidebar-toggle) {
-	opacity: 0;
 	visibility: hidden;
 }
 
@@ -460,7 +455,6 @@ img {
 }
 
 .source-sidebar-expanded .source .sidebar > *:not(#sidebar-toggle) {
-	opacity: 1;
 	visibility: visible;
 }
 
@@ -548,6 +542,14 @@ h2.location a {
 	font-weight: 500;
 	padding: 0;
 	margin: 0;
+}
+
+.sidebar a, .sidebar .current {
+	color: var(--sidebar-link-color);
+}
+.sidebar .current,
+.sidebar a:hover {
+	background-color: var(--sidebar-current-link-background-color);
 }
 
 .sidebar-elems .block {
@@ -887,6 +889,9 @@ table,
 	/* Removes default arrow from firefox */
 	text-indent: 0.01px;
 	background-color: var(--main-background-color);
+	color: inherit;
+	line-height: 1.5;
+	font-weight: 500;
 }
 /* cancel stylistic differences in padding in firefox
 for "appearance: none"-style (or equivalent) <select>s */
@@ -1247,13 +1252,11 @@ h3.variant {
 	font-weight: 600;
 	font-size: 1.125rem;
 	margin-bottom: 10px;
-	border-bottom: none;
 }
 
 .sub-variant h4 {
 	font-size: 1rem;
 	font-weight: 400;
-	border-bottom: none;
 	margin-top: 0;
 	margin-bottom: 0;
 }
@@ -1322,11 +1325,6 @@ h3.variant {
 	font-size: 1.25rem;
 }
 
-/* Example code has the "Run" button that needs to be positioned relative to the pre */
-pre.rust.rust-example-rendered {
-	position: relative;
-}
-
 pre.rust {
 	tab-size: 4;
 	-moz-tab-size: 4;
@@ -1363,6 +1361,8 @@ pre.rust {
 	border: 0;
 	border-top: 2px solid;
 	flex: 1;
+	line-height: 1.5;
+	color: inherit;
 }
 
 #titles > button > div.count {
@@ -1380,7 +1380,6 @@ pre.rust {
 	position: sticky;
 	top: 0;
 	left: 0;
-	font-weight: bold;
 	font-size: 1.25rem;
 	border-bottom: 1px solid;
 	display: flex;
@@ -1400,6 +1399,8 @@ pre.rust {
 	margin-bottom: 6px;
 }
 #sidebar-toggle > button {
+	font-size: inherit;
+	font-weight: bold;
 	background: none;
 	color: inherit;
 	cursor: pointer;
@@ -1428,6 +1429,7 @@ pre.rust {
 	border: 1px solid var(--border-color);
 	border-radius: 2px;
 	cursor: pointer;
+	line-height: 1.5;
 }
 
 #settings-menu > a, #help-button > button {
@@ -1887,7 +1889,6 @@ in storage.js plus the media query with (min-width: 701px)
 		border-top-right-radius: 3px;
 		border-bottom-right-radius: 3px;
 		cursor: pointer;
-		font-weight: bold;
 		border: 1px solid;
 		border-left: 0;
 	}
@@ -2011,7 +2012,11 @@ in storage.js plus the media query with (min-width: 701px)
 
 .method-toggle summary,
 .implementors-toggle summary,
-.impl {
+.impl,
+#implementors-list > .docblock,
+.impl-items > section,
+.methods > section
+{
 	margin-bottom: 0.75em;
 }
 

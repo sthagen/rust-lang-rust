@@ -30,7 +30,7 @@ use rustc_data_structures::stable_hasher::StableHasher;
 use rustc_data_structures::sync::{self, Lock, Lrc};
 use rustc_data_structures::AtomicRef;
 pub use rustc_error_messages::{
-    fallback_fluent_bundle, fluent, fluent_bundle, DiagnosticMessage, FluentBundle,
+    fallback_fluent_bundle, fluent, fluent_bundle, DelayDm, DiagnosticMessage, FluentBundle,
     LanguageIdentifier, LazyFallbackBundle, MultiSpan, SpanLabel, SubdiagnosticMessage,
     DEFAULT_LOCALE_RESOURCES,
 };
@@ -66,7 +66,7 @@ pub type PErr<'a> = DiagnosticBuilder<'a, ErrorGuaranteed>;
 pub type PResult<'a, T> = Result<T, PErr<'a>>;
 
 // `PResult` is used a lot. Make sure it doesn't unintentionally get bigger.
-// (See also the comment on `DiagnosticBuilder`'s `diagnostic` field.)
+// (See also the comment on `DiagnosticBuilderInner`'s `diagnostic` field.)
 #[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
 rustc_data_structures::static_assert_size!(PResult<'_, ()>, 16);
 #[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
@@ -374,7 +374,7 @@ pub use diagnostic::{
     AddToDiagnostic, DecorateLint, Diagnostic, DiagnosticArg, DiagnosticArgFromDisplay,
     DiagnosticArgValue, DiagnosticId, DiagnosticStyledString, IntoDiagnosticArg, SubDiagnostic,
 };
-pub use diagnostic_builder::{DiagnosticBuilder, EmissionGuarantee, LintDiagnosticBuilder};
+pub use diagnostic_builder::{DiagnosticBuilder, EmissionGuarantee};
 use std::backtrace::Backtrace;
 
 /// A handler deals with errors and other compiler output.
@@ -1134,6 +1134,12 @@ impl Handler {
         );
         std::mem::take(&mut self.inner.borrow_mut().fulfilled_expectations)
     }
+
+    pub fn flush_delayed(&self) {
+        let mut inner = self.inner.lock();
+        let bugs = std::mem::replace(&mut inner.delayed_span_bugs, Vec::new());
+        inner.flush_delayed(bugs, "no errors encountered even though `delay_span_bug` issued");
+    }
 }
 
 impl HandlerInner {
@@ -1205,7 +1211,7 @@ impl HandlerInner {
 
         if let Some(expectation_id) = diagnostic.level.get_expectation_id() {
             self.suppressed_expected_diag = true;
-            self.fulfilled_expectations.insert(expectation_id);
+            self.fulfilled_expectations.insert(expectation_id.normalize());
         }
 
         if matches!(diagnostic.level, Warning(_))

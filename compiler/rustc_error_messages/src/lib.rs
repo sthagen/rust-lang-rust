@@ -41,6 +41,7 @@ fluent_messages! {
     borrowck => "../locales/en-US/borrowck.ftl",
     builtin_macros => "../locales/en-US/builtin_macros.ftl",
     const_eval => "../locales/en-US/const_eval.ftl",
+    codegen_gcc => "../locales/en-US/codegen_gcc.ftl",
     driver => "../locales/en-US/driver.ftl",
     expand => "../locales/en-US/expand.ftl",
     session => "../locales/en-US/session.ftl",
@@ -354,6 +355,17 @@ impl DiagnosticMessage {
 impl<S: Into<String>> From<S> for DiagnosticMessage {
     fn from(s: S) -> Self {
         DiagnosticMessage::Str(s.into())
+    }
+}
+
+/// A workaround for "good path" ICEs when formatting types in disables lints.
+///
+/// Delays formatting until `.into(): DiagnosticMessage` is used.
+pub struct DelayDm<F>(pub F);
+
+impl<F: FnOnce() -> String> From<DelayDm<F>> for DiagnosticMessage {
+    fn from(DelayDm(f): DelayDm<F>) -> Self {
+        DiagnosticMessage::from(f())
     }
 }
 

@@ -276,9 +276,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
             item_segment.infer_args,
             None,
         );
-        let assoc_bindings = self.create_assoc_bindings_for_generic_args(item_segment.args());
-
-        if let Some(b) = assoc_bindings.first() {
+        if let Some(b) = item_segment.args().bindings.first() {
             Self::prohibit_assoc_ty_binding(self.tcx(), b.span);
         }
 
@@ -605,8 +603,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
             None,
         );
 
-        let assoc_bindings = self.create_assoc_bindings_for_generic_args(item_segment.args());
-        if let Some(b) = assoc_bindings.first() {
+        if let Some(b) = item_segment.args().bindings.first() {
             Self::prohibit_assoc_ty_binding(self.tcx(), b.span);
         }
 
@@ -794,8 +791,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
             trait_segment,
             is_impl,
         );
-        let assoc_bindings = self.create_assoc_bindings_for_generic_args(trait_segment.args());
-        if let Some(b) = assoc_bindings.first() {
+        if let Some(b) = trait_segment.args().bindings.first() {
             Self::prohibit_assoc_ty_binding(self.tcx(), b.span);
         }
         ty::TraitRef::new(trait_def_id, substs)
@@ -1902,7 +1898,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         // Find the type of the associated item, and the trait where the associated
         // item is declared.
         let bound = match (&qself_ty.kind(), qself_res) {
-            (_, Res::SelfTy { trait_: Some(_), alias_to: Some((impl_def_id, _)) }) => {
+            (_, Res::SelfTyAlias { alias_to: impl_def_id, is_trait_impl: true, .. }) => {
                 // `Self` in an impl of a trait -- we have a concrete self type and a
                 // trait reference.
                 let Some(trait_ref) = tcx.impl_trait_ref(impl_def_id) else {
@@ -1921,8 +1917,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
             }
             (
                 &ty::Param(_),
-                Res::SelfTy { trait_: Some(param_did), alias_to: None }
-                | Res::Def(DefKind::TyParam, param_did),
+                Res::SelfTyParam { trait_: param_did } | Res::Def(DefKind::TyParam, param_did),
             ) => self.find_bound_for_assoc_item(param_did.expect_local(), assoc_ident, span)?,
             _ => {
                 let reported = if variant_resolution.is_some() {
@@ -2015,30 +2010,35 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         tcx.check_stability(item.def_id, Some(hir_ref_id), span, None);
 
         if let Some(variant_def_id) = variant_resolution {
-            tcx.struct_span_lint_hir(AMBIGUOUS_ASSOCIATED_ITEMS, hir_ref_id, span, |lint| {
-                let mut err = lint.build("ambiguous associated item");
-                let mut could_refer_to = |kind: DefKind, def_id, also| {
-                    let note_msg = format!(
-                        "`{}` could{} refer to the {} defined here",
-                        assoc_ident,
-                        also,
-                        kind.descr(def_id)
+            tcx.struct_span_lint_hir(
+                AMBIGUOUS_ASSOCIATED_ITEMS,
+                hir_ref_id,
+                span,
+                "ambiguous associated item",
+                |lint| {
+                    let mut could_refer_to = |kind: DefKind, def_id, also| {
+                        let note_msg = format!(
+                            "`{}` could{} refer to the {} defined here",
+                            assoc_ident,
+                            also,
+                            kind.descr(def_id)
+                        );
+                        lint.span_note(tcx.def_span(def_id), &note_msg);
+                    };
+
+                    could_refer_to(DefKind::Variant, variant_def_id, "");
+                    could_refer_to(kind, item.def_id, " also");
+
+                    lint.span_suggestion(
+                        span,
+                        "use fully-qualified syntax",
+                        format!("<{} as {}>::{}", qself_ty, tcx.item_name(trait_did), assoc_ident),
+                        Applicability::MachineApplicable,
                     );
-                    err.span_note(tcx.def_span(def_id), &note_msg);
-                };
 
-                could_refer_to(DefKind::Variant, variant_def_id, "");
-                could_refer_to(kind, item.def_id, " also");
-
-                err.span_suggestion(
-                    span,
-                    "use fully-qualified syntax",
-                    format!("<{} as {}>::{}", qself_ty, tcx.item_name(trait_did), assoc_ident),
-                    Applicability::MachineApplicable,
-                );
-
-                err.emit();
-            });
+                    lint
+                },
+            );
         }
         Ok((ty, kind, item.def_id))
     }
@@ -2208,8 +2208,8 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
 
         for segment in segments {
             // Only emit the first error to avoid overloading the user with error messages.
-            if let [binding, ..] = segment.args().bindings {
-                Self::prohibit_assoc_ty_binding(self.tcx(), binding.span);
+            if let Some(b) = segment.args().bindings.first() {
+                Self::prohibit_assoc_ty_binding(self.tcx(), b.span);
                 return true;
             }
         }
@@ -2417,7 +2417,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                 let index = generics.param_def_id_to_index[&def_id.to_def_id()];
                 tcx.mk_ty_param(index, tcx.hir().ty_param_name(def_id))
             }
-            Res::SelfTy { trait_: Some(_), alias_to: None } => {
+            Res::SelfTyParam { .. } => {
                 // `Self` in trait or type alias.
                 assert_eq!(opt_self_ty, None);
                 self.prohibit_generics(path.segments.iter(), |err| {
@@ -2432,7 +2432,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                 });
                 tcx.types.self_param
             }
-            Res::SelfTy { trait_: _, alias_to: Some((def_id, forbid_generic)) } => {
+            Res::SelfTyAlias { alias_to: def_id, forbid_generic, .. } => {
                 // `Self` in impl (we know the concrete type).
                 assert_eq!(opt_self_ty, None);
                 // Try to evaluate any array length constants.
@@ -3084,15 +3084,15 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                     BARE_TRAIT_OBJECTS,
                     self_ty.hir_id,
                     self_ty.span,
+                    msg,
                     |lint| {
-                        let mut diag = lint.build(msg);
-                        diag.multipart_suggestion_verbose(
+                        lint.multipart_suggestion_verbose(
                             "use `dyn`",
                             sugg,
                             Applicability::MachineApplicable,
                         );
-                        self.maybe_lint_blanket_trait_impl(&self_ty, &mut diag);
-                        diag.emit();
+                        self.maybe_lint_blanket_trait_impl(&self_ty, lint);
+                        lint
                     },
                 );
             }

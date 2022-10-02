@@ -274,10 +274,15 @@ rustc_queries! {
         separate_provide_extern
     }
 
-    query lint_levels(_: ()) -> LintLevelMap {
+    query shallow_lint_levels_on(key: hir::OwnerId) -> rustc_middle::lint::ShallowLintLevelMap {
+        eval_always // fetches `resolutions`
         arena_cache
-        eval_always
-        desc { "computing the lint levels for items in this crate" }
+        desc { |tcx| "looking up lint levels for `{}`", tcx.def_path_str(key.to_def_id()) }
+    }
+
+    query lint_expectations(_: ()) -> Vec<(LintExpectationId, LintExpectation)> {
+        arena_cache
+        desc { "computing `#[expect]`ed lints in this crate" }
     }
 
     query parent_module_from_def_id(key: LocalDefId) -> LocalDefId {
@@ -1124,6 +1129,11 @@ rustc_queries! {
     /// Determines whether an item is annotated with `doc(hidden)`.
     query is_doc_hidden(def_id: DefId) -> bool {
         desc { |tcx| "checking whether `{}` is `doc(hidden)`", tcx.def_path_str(def_id) }
+    }
+
+    /// Determines whether an item is annotated with `doc(notable_trait)`.
+    query is_doc_notable_trait(def_id: DefId) -> bool {
+        desc { |tcx| "checking whether `{}` is `doc(notable_trait)`", tcx.def_path_str(def_id) }
     }
 
     /// Returns the attributes on the item at `def_id`.

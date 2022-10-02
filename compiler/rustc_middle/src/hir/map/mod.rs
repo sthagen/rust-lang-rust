@@ -14,7 +14,7 @@ use rustc_index::vec::Idx;
 use rustc_middle::hir::nested_filter;
 use rustc_span::def_id::StableCrateId;
 use rustc_span::symbol::{kw, sym, Ident, Symbol};
-use rustc_span::Span;
+use rustc_span::{Span, DUMMY_SP};
 use rustc_target::spec::abi::Abi;
 
 #[inline]
@@ -61,7 +61,7 @@ pub struct ParentHirIterator<'hir> {
 }
 
 impl<'hir> Iterator for ParentHirIterator<'hir> {
-    type Item = (HirId, Node<'hir>);
+    type Item = HirId;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.current_id == CRATE_HIR_ID {
@@ -77,10 +77,7 @@ impl<'hir> Iterator for ParentHirIterator<'hir> {
             }
 
             self.current_id = parent_id;
-            if let Some(node) = self.map.find(parent_id) {
-                return Some((parent_id, node));
-            }
-            // If this `HirId` doesn't have an entry, skip it and look for its `parent_id`.
+            return Some(parent_id);
         }
     }
 }
@@ -393,8 +390,8 @@ impl<'hir> Map<'hir> {
     }
 
     pub fn enclosing_body_owner(self, hir_id: HirId) -> LocalDefId {
-        for (parent, _) in self.parent_iter(hir_id) {
-            if let Some(body) = self.find(parent).map(associated_body).flatten() {
+        for (_, node) in self.parent_iter(hir_id) {
+            if let Some(body) = associated_body(node) {
                 return self.body_owner_def_id(body);
             }
         }
@@ -635,8 +632,15 @@ impl<'hir> Map<'hir> {
     /// Returns an iterator for the nodes in the ancestor tree of the `current_id`
     /// until the crate root is reached. Prefer this over your own loop using `get_parent_node`.
     #[inline]
-    pub fn parent_iter(self, current_id: HirId) -> ParentHirIterator<'hir> {
+    pub fn parent_id_iter(self, current_id: HirId) -> impl Iterator<Item = HirId> + 'hir {
         ParentHirIterator { current_id, map: self }
+    }
+
+    /// Returns an iterator for the nodes in the ancestor tree of the `current_id`
+    /// until the crate root is reached. Prefer this over your own loop using `get_parent_node`.
+    #[inline]
+    pub fn parent_iter(self, current_id: HirId) -> impl Iterator<Item = (HirId, Node<'hir>)> {
+        self.parent_id_iter(current_id).filter_map(move |id| Some((id, self.find(id)?)))
     }
 
     /// Returns an iterator for the nodes in the ancestor tree of the `current_id`
@@ -937,9 +941,19 @@ impl<'hir> Map<'hir> {
 
         let span = match self.find(hir_id)? {
             // Function-like.
-            Node::Item(Item { kind: ItemKind::Fn(sig, ..), .. })
-            | Node::TraitItem(TraitItem { kind: TraitItemKind::Fn(sig, ..), .. })
-            | Node::ImplItem(ImplItem { kind: ImplItemKind::Fn(sig, ..), .. }) => sig.span,
+            Node::Item(Item { kind: ItemKind::Fn(sig, ..), span: outer_span, .. })
+            | Node::TraitItem(TraitItem {
+                kind: TraitItemKind::Fn(sig, ..),
+                span: outer_span,
+                ..
+            })
+            | Node::ImplItem(ImplItem {
+                kind: ImplItemKind::Fn(sig, ..), span: outer_span, ..
+            }) => {
+                // Ensure that the returned span has the item's SyntaxContext, and not the
+                // SyntaxContext of the visibility.
+                sig.span.find_ancestor_in_same_ctxt(*outer_span).unwrap_or(*outer_span)
+            }
             // Constants and Statics.
             Node::Item(Item {
                 kind:
@@ -981,7 +995,11 @@ impl<'hir> Map<'hir> {
             }
             // Other cases.
             Node::Item(item) => match &item.kind {
-                ItemKind::Use(path, _) => path.span,
+                ItemKind::Use(path, _) => {
+                    // Ensure that the returned span has the item's SyntaxContext, and not the
+                    // SyntaxContext of the path.
+                    path.span.find_ancestor_in_same_ctxt(item.span).unwrap_or(item.span)
+                }
                 _ => named_span(item.span, item.ident, item.kind.generics()),
             },
             Node::Variant(variant) => named_span(variant.span, variant.ident, None),
@@ -991,11 +1009,17 @@ impl<'hir> Map<'hir> {
                 _ => named_span(item.span, item.ident, None),
             },
             Node::Ctor(_) => return self.opt_span(self.get_parent_node(hir_id)),
-            Node::Expr(Expr { kind: ExprKind::Closure(Closure { fn_decl_span, .. }), .. }) => {
-                *fn_decl_span
+            Node::Expr(Expr {
+                kind: ExprKind::Closure(Closure { fn_decl_span, .. }),
+                span,
+                ..
+            }) => {
+                // Ensure that the returned span has the item's SyntaxContext.
+                fn_decl_span.find_ancestor_in_same_ctxt(*span).unwrap_or(*span)
             }
             _ => self.span_with_body(hir_id),
         };
+        debug_assert_eq!(span.ctxt(), self.span_with_body(hir_id).ctxt());
         Some(span)
     }
 
@@ -1131,7 +1155,7 @@ pub(super) fn crate_hash(tcx: TyCtxt<'_>, crate_num: CrateNum) -> Svh {
                 .filter_map(|(def_id, info)| {
                     let _ = info.as_owner()?;
                     let def_path_hash = definitions.def_path_hash(def_id);
-                    let span = resolutions.source_span[def_id];
+                    let span = resolutions.source_span.get(def_id).unwrap_or(&DUMMY_SP);
                     debug_assert_eq!(span.parent(), None);
                     Some((def_path_hash, span))
                 })

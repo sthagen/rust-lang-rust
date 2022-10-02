@@ -1180,18 +1180,12 @@ impl<'a> WasmLd<'a> {
         //   sharing memory and instantiating the module multiple times. As a
         //   result if it were exported then we'd just have no sharing.
         //
-        // * `--export=__wasm_init_memory` - when using `--passive-segments` the
-        //   linker will synthesize this function, and so we need to make sure
-        //   that our usage of `--export` below won't accidentally cause this
-        //   function to get deleted.
-        //
         // * `--export=*tls*` - when `#[thread_local]` symbols are used these
         //   symbols are how the TLS segments are initialized and configured.
         if sess.target_features.contains(&sym::atomics) {
             cmd.arg("--shared-memory");
             cmd.arg("--max-memory=1073741824");
             cmd.arg("--import-memory");
-            cmd.arg("--export=__wasm_init_memory");
             cmd.arg("--export=__wasm_init_tls");
             cmd.arg("--export=__tls_size");
             cmd.arg("--export=__tls_align");
@@ -1320,10 +1314,12 @@ impl<'a> Linker for WasmLd<'a> {
 
         // LLD will hide these otherwise-internal symbols since it only exports
         // symbols explicitly passed via the `--export` flags above and hides all
-        // others. Various bits and pieces of tooling use this, so be sure these
-        // symbols make their way out of the linker as well.
-        self.cmd.arg("--export=__heap_base");
-        self.cmd.arg("--export=__data_end");
+        // others. Various bits and pieces of wasm32-unknown-unknown tooling use
+        // this, so be sure these symbols make their way out of the linker as well.
+        if self.sess.target.os == "unknown" {
+            self.cmd.arg("--export=__heap_base");
+            self.cmd.arg("--export=__data_end");
+        }
     }
 
     fn subsystem(&mut self, _subsystem: &str) {}

@@ -48,9 +48,13 @@ pub(super) fn check_abi(tcx: TyCtxt<'_>, hir_id: hir::HirId, span: Span, abi: Ab
             .emit();
         }
         None => {
-            tcx.struct_span_lint_hir(UNSUPPORTED_CALLING_CONVENTIONS, hir_id, span, |lint| {
-                lint.build("use of calling convention not supported on this target").emit();
-            });
+            tcx.struct_span_lint_hir(
+                UNSUPPORTED_CALLING_CONVENTIONS,
+                hir_id,
+                span,
+                "use of calling convention not supported on this target",
+                |lint| lint,
+            );
         }
     }
 
@@ -510,10 +514,10 @@ fn check_static_inhabited<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) {
             UNINHABITED_STATIC,
             tcx.hir().local_def_id_to_hir_id(def_id),
             span,
+            "static of uninhabited type",
             |lint| {
-                lint.build("static of uninhabited type")
+                lint
                 .note("uninhabited statics cannot be initialized, and any access would be an immediate error")
-                .emit();
             },
         );
     }
@@ -609,9 +613,12 @@ pub(super) fn check_opaque_for_inheriting_lifetimes<'tcx>(
         fn visit_ty(&mut self, arg: &'tcx hir::Ty<'tcx>) {
             match arg.kind {
                 hir::TyKind::Path(hir::QPath::Resolved(None, path)) => match &path.segments {
-                    [PathSegment { res: Res::SelfTy { trait_: _, alias_to: impl_ref }, .. }] => {
-                        let impl_ty_name =
-                            impl_ref.map(|(def_id, _)| self.tcx.def_path_str(def_id));
+                    [PathSegment { res: Res::SelfTyParam { .. }, .. }] => {
+                        let impl_ty_name = None;
+                        self.selftys.push((path.span, impl_ty_name));
+                    }
+                    [PathSegment { res: Res::SelfTyAlias { alias_to: def_id, .. }, .. }] => {
+                        let impl_ty_name = Some(self.tcx.def_path_str(*def_id));
                         self.selftys.push((path.span, impl_ty_name));
                     }
                     _ => {}
@@ -1434,6 +1441,7 @@ pub(super) fn check_transparent<'tcx>(tcx: TyCtxt<'tcx>, sp: Span, adt: ty::AdtD
                 REPR_TRANSPARENT_EXTERNAL_PRIVATE_FIELDS,
                 tcx.hir().local_def_id_to_hir_id(adt.did().expect_local()),
                 span,
+                "zero-sized fields in `repr(transparent)` cannot contain external non-exhaustive types",
                 |lint| {
                     let note = if non_exhaustive {
                         "is marked with `#[non_exhaustive]`"
@@ -1441,10 +1449,9 @@ pub(super) fn check_transparent<'tcx>(tcx: TyCtxt<'tcx>, sp: Span, adt: ty::AdtD
                         "contains private fields"
                     };
                     let field_ty = tcx.def_path_str_with_substs(def_id, substs);
-                    lint.build("zero-sized fields in repr(transparent) cannot contain external non-exhaustive types")
+                    lint
                         .note(format!("this {descr} contains `{field_ty}`, which {note}, \
                             and makes it not a breaking change to become non-zero-sized in the future."))
-                        .emit();
                 },
             )
         }

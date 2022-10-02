@@ -760,8 +760,8 @@ impl<'a> Parser<'a> {
                 )
                 .span_label(self.token.span, "this doc comment doesn't document anything")
                 .help(
-                    "doc comments must come before what they document, maybe a \
-                    comment was intended with `//`?",
+                    "doc comments must come before what they document, if a comment was \
+                    intended use `//`",
                 )
                 .emit();
                 self.bump();
@@ -1753,18 +1753,24 @@ impl<'a> Parser<'a> {
                 };
                 // We use `parse_fn` to get a span for the function
                 let fn_parse_mode = FnParseMode { req_name: |_| true, req_body: true };
-                if let Err(mut db) =
-                    self.parse_fn(&mut AttrVec::new(), fn_parse_mode, lo, &inherited_vis)
-                {
-                    db.delay_as_bug();
+                match self.parse_fn(&mut AttrVec::new(), fn_parse_mode, lo, &inherited_vis) {
+                    Ok(_) => {
+                        let mut err = self.struct_span_err(
+                            lo.to(self.prev_token.span),
+                            &format!("functions are not allowed in {adt_ty} definitions"),
+                        );
+                        err.help(
+                            "unlike in C++, Java, and C#, functions are declared in `impl` blocks",
+                        );
+                        err.help("see https://doc.rust-lang.org/book/ch05-03-method-syntax.html for more information");
+                        err
+                    }
+                    Err(err) => {
+                        err.cancel();
+                        self.restore_snapshot(snapshot);
+                        self.expected_ident_found()
+                    }
                 }
-                let mut err = self.struct_span_err(
-                    lo.to(self.prev_token.span),
-                    &format!("functions are not allowed in {adt_ty} definitions"),
-                );
-                err.help("unlike in C++, Java, and C#, functions are declared in `impl` blocks");
-                err.help("see https://doc.rust-lang.org/book/ch05-03-method-syntax.html for more information");
-                err
             } else if self.eat_keyword(kw::Struct) {
                 match self.parse_item_struct() {
                     Ok((ident, _)) => {
