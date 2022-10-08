@@ -18,7 +18,7 @@ use rustc_span::source_map::Spanned;
 use rustc_span::symbol::{sym, Ident};
 use rustc_span::Span;
 use rustc_trait_selection::infer::InferCtxtExt;
-use rustc_trait_selection::traits::error_reporting::suggestions::InferCtxtExt as _;
+use rustc_trait_selection::traits::error_reporting::suggestions::TypeErrCtxtExt as _;
 use rustc_trait_selection::traits::{FulfillmentError, TraitEngine, TraitEngineExt};
 use rustc_type_ir::sty::TyKind::*;
 
@@ -471,7 +471,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         // This has nothing here because it means we did string
                         // concatenation (e.g., "Hello " + "World!"). This means
                         // we don't want the note in the else clause to be emitted
-                    } else if lhs_ty.has_param_types_or_consts() {
+                    } else if lhs_ty.has_non_region_param() {
                         // Look for a TraitPredicate in the Fulfillment errors,
                         // and use it to generate a suggestion.
                         //
@@ -512,7 +512,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                                         _ => None,
                                     };
 
-                                    self.suggest_restricting_param_bound(
+                                    self.err_ctxt().suggest_restricting_param_bound(
                                         &mut err,
                                         trait_pred,
                                         output_associated_item,
@@ -657,12 +657,12 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         format!("cannot apply unary operator `{}`", op.as_str()),
                     );
 
-                    if operand_ty.has_param_types_or_consts() {
+                    if operand_ty.has_non_region_param() {
                         let predicates = errors.iter().filter_map(|error| {
                             error.obligation.predicate.to_opt_poly_trait_pred()
                         });
                         for pred in predicates {
-                            self.suggest_restricting_param_bound(
+                            self.err_ctxt().suggest_restricting_param_bound(
                                 &mut err,
                                 pred,
                                 None,

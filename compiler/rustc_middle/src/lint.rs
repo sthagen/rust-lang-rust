@@ -274,29 +274,28 @@ pub fn explain_lint_level_source(
     }
 }
 
-pub fn struct_lint_level<'s, 'd>(
-    sess: &'s Session,
+pub fn struct_lint_level(
+    sess: &Session,
     lint: &'static Lint,
     level: Level,
     src: LintLevelSource,
     span: Option<MultiSpan>,
     msg: impl Into<DiagnosticMessage>,
-    decorate: impl 'd
-    + for<'a, 'b> FnOnce(
+    decorate: impl for<'a, 'b> FnOnce(
         &'b mut DiagnosticBuilder<'a, ()>,
     ) -> &'b mut DiagnosticBuilder<'a, ()>,
 ) {
     // Avoid codegen bloat from monomorphization by immediately doing dyn dispatch of `decorate` to
     // the "real" work.
-    fn struct_lint_level_impl<'s, 'd>(
-        sess: &'s Session,
+    fn struct_lint_level_impl(
+        sess: &Session,
         lint: &'static Lint,
         level: Level,
         src: LintLevelSource,
         span: Option<MultiSpan>,
         msg: impl Into<DiagnosticMessage>,
         decorate: Box<
-            dyn 'd
+            dyn '_
                 + for<'a, 'b> FnOnce(
                     &'b mut DiagnosticBuilder<'a, ()>,
                 ) -> &'b mut DiagnosticBuilder<'a, ()>,
@@ -351,7 +350,6 @@ pub fn struct_lint_level<'s, 'd>(
             (Level::Deny | Level::Forbid, None) => sess.diagnostic().struct_err_lint(""),
         };
 
-        err.set_primary_message(msg);
         err.set_is_lint();
 
         // If this code originates in a foreign macro, aka something that this crate
@@ -375,6 +373,10 @@ pub fn struct_lint_level<'s, 'd>(
                 return;
             }
         }
+
+        // Delay evaluating and setting the primary message until after we've
+        // suppressed the lint due to macros.
+        err.set_primary_message(msg);
 
         // Lint diagnostics that are covered by the expect level will not be emitted outside
         // the compiler. It is therefore not necessary to add any information for the user.
@@ -444,7 +446,9 @@ pub fn in_external_macro(sess: &Session, span: Span) -> bool {
     match expn_data.kind {
         ExpnKind::Inlined
         | ExpnKind::Root
-        | ExpnKind::Desugaring(DesugaringKind::ForLoop | DesugaringKind::WhileLoop) => false,
+        | ExpnKind::Desugaring(
+            DesugaringKind::ForLoop | DesugaringKind::WhileLoop | DesugaringKind::OpaqueTy,
+        ) => false,
         ExpnKind::AstPass(_) | ExpnKind::Desugaring(_) => true, // well, it's "external"
         ExpnKind::Macro(MacroKind::Bang, _) => {
             // Dummy span for the `def_site` means it's an external macro.

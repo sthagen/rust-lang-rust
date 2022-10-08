@@ -62,6 +62,7 @@ mod non_ascii_idents;
 mod non_fmt_panic;
 mod nonstandard_style;
 mod noop_method_call;
+mod opaque_hidden_inferred_bound;
 mod pass_by_value;
 mod passes;
 mod redundant_semicolon;
@@ -93,6 +94,7 @@ use non_ascii_idents::*;
 use non_fmt_panic::NonPanicFmt;
 use nonstandard_style::*;
 use noop_method_call::*;
+use opaque_hidden_inferred_bound::*;
 use pass_by_value::*;
 use redundant_semicolon::*;
 use traits::*;
@@ -223,6 +225,7 @@ macro_rules! late_lint_mod_passes {
                 EnumIntrinsicsNonEnums: EnumIntrinsicsNonEnums,
                 InvalidAtomicOrdering: InvalidAtomicOrdering,
                 NamedAsmLabels: NamedAsmLabels,
+                OpaqueHiddenInferredBound: OpaqueHiddenInferredBound,
             ]
         );
     };
@@ -518,6 +521,11 @@ fn register_builtins(store: &mut LintStore, no_interleave_lints: bool) {
         "mutable_borrow_reservation_conflict",
         "now allowed, see issue #59159 \
          <https://github.com/rust-lang/rust/issues/59159> for more information",
+    );
+    store.register_removed(
+        "const_err",
+        "converted into hard error, see issue #71800 \
+         <https://github.com/rust-lang/rust/issues/71800> for more information",
     );
 }
 

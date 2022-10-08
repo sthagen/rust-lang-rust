@@ -297,7 +297,7 @@ dependencies = [
  "cargo-test-macro",
  "cargo-test-support",
  "cargo-util",
- "clap",
+ "clap 4.0.9",
  "crates-io",
  "curl",
  "curl-sys",
@@ -385,11 +385,12 @@ version = "0.1.0"
 dependencies = [
  "cargo_metadata 0.15.0",
  "directories",
+ "rustc-build-sysroot",
  "rustc-workspace-hack",
+ "rustc_tools_util",
  "rustc_version",
  "serde",
  "serde_json",
- "vergen",
 ]
 
 [[package]]
@@ -591,7 +592,7 @@ dependencies = [
  "atty",
  "bitflags",
  "clap_derive",
- "clap_lex",
+ "clap_lex 0.2.2",
  "indexmap",
  "once_cell",
  "strsim",
@@ -600,12 +601,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "clap"
+version = "4.0.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "30607dd93c420c6f1f80b544be522a0238a7db35e6a12968d28910983fee0df0"
+dependencies = [
+ "atty",
+ "bitflags",
+ "clap_lex 0.3.0",
+ "strsim",
+ "termcolor",
+]
+
+[[package]]
 name = "clap_complete"
 version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df6f3613c0a3cddfd78b41b10203eb322cb29b600cbdf808a7d3db95691b8e25"
 dependencies = [
- "clap",
+ "clap 3.2.20",
 ]
 
 [[package]]
@@ -631,8 +645,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "clap_lex"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d4198f73e42b4936b35b5bb248d81d2b595ecb170da0bac7655c54eedfa8da8"
+dependencies = [
+ "os_str_bytes",
+]
+
+[[package]]
 name = "clippy"
-version = "0.1.65"
+version = "0.1.66"
 dependencies = [
  "clippy_lints",
  "clippy_utils",
@@ -664,7 +687,7 @@ name = "clippy_dev"
 version = "0.0.1"
 dependencies = [
  "aho-corasick",
- "clap",
+ "clap 3.2.20",
  "indoc",
  "itertools",
  "opener",
@@ -675,7 +698,7 @@ dependencies = [
 
 [[package]]
 name = "clippy_lints"
-version = "0.1.65"
+version = "0.1.66"
 dependencies = [
  "cargo_metadata 0.14.0",
  "clippy_utils",
@@ -697,7 +720,7 @@ dependencies = [
 
 [[package]]
 name = "clippy_utils"
-version = "0.1.65"
+version = "0.1.66"
 dependencies = [
  "arrayvec",
  "if_chain",
@@ -806,9 +829,9 @@ dependencies = [
 
 [[package]]
 name = "compiletest_rs"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "262134ef87408da1ddfe45e33daa0ca43b75286d6b1076446e602d264cf9847e"
+checksum = "70489bbb718aea4f92e5f48f2e3b5be670c2051de30e57cb6e5377b4aa08b372"
 dependencies = [
  "diff",
  "filetime",
@@ -1082,9 +1105,9 @@ dependencies = [
 
 [[package]]
 name = "directories"
-version = "3.0.2"
+version = "4.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e69600ff1703123957937708eb27f7a564e48885c537782722ed0ba3189ce1d7"
+checksum = "f51c5d4ddabd36886dd3e1438cb358cdcb0d7c499cb99cb4ac2e38e18b5cb210"
 dependencies = [
  "dirs-sys",
 ]
@@ -1172,26 +1195,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7402b94a93c24e742487327a7cd839dc9d36fec9de9fb25b09f2dae459f36c3"
 dependencies = [
  "log",
-]
-
-[[package]]
-name = "enum-iterator"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c79a6321a1197d7730510c7e3f6cb80432dfefecb32426de8cea0aa19b4bb8d7"
-dependencies = [
- "enum-iterator-derive",
-]
-
-[[package]]
-name = "enum-iterator-derive"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e94aa31f7c0dc764f57896dc615ddd76fc13b0d5dca7eb6cc5e018a5a09ec06"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]
@@ -1532,18 +1535,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "getset"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "24b328c01a4d71d2d8173daa93562a73ab0fe85616876f02500f53d82948c504"
-dependencies = [
- "proc-macro-error",
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
 name = "gimli"
 version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1809,7 +1800,7 @@ name = "installer"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "clap",
+ "clap 3.2.20",
  "flate2",
  "lazy_static",
  "num_cpus",
@@ -2152,7 +2143,7 @@ dependencies = [
  "ammonia",
  "anyhow",
  "chrono",
- "clap",
+ "clap 3.2.20",
  "clap_complete",
  "elasticlunr-rs",
  "env_logger 0.9.0",
@@ -3024,9 +3015,20 @@ dependencies = [
 name = "rustbook"
 version = "0.1.0"
 dependencies = [
- "clap",
+ "clap 3.2.20",
  "env_logger 0.7.1",
  "mdbook",
+]
+
+[[package]]
+name = "rustc-build-sysroot"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec5f3689b6c560d6a3a17fcbe54204cd870b4fcf46342d60de16715b660d2c92"
+dependencies = [
+ "anyhow",
+ "rustc_version",
+ "tempfile",
 ]
 
 [[package]]
@@ -3111,7 +3113,7 @@ name = "rustc-workspace-hack"
 version = "1.0.0"
 dependencies = [
  "bstr",
- "clap",
+ "clap 3.2.20",
  "libz-sys",
  "regex",
  "serde_json",
@@ -3297,6 +3299,7 @@ dependencies = [
  "rustc_symbol_mangling",
  "rustc_target",
  "smallvec",
+ "tempfile",
  "tracing",
 ]
 
@@ -3781,8 +3784,6 @@ dependencies = [
  "either",
  "gsgdt",
  "polonius-engine",
- "rand 0.8.5",
- "rand_xoshiro",
  "rustc-rayon",
  "rustc-rayon-core",
  "rustc_apfloat",
@@ -4163,7 +4164,9 @@ dependencies = [
 
 [[package]]
 name = "rustc_tools_util"
-version = "0.2.0"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "598f48ce2a421542b3e64828aa742b687cc1b91d2f96591cfdb7ac5988cd6366"
 
 [[package]]
 name = "rustc_trait_selection"
@@ -4228,6 +4231,8 @@ dependencies = [
 name = "rustc_ty_utils"
 version = "0.0.0"
 dependencies = [
+ "rand 0.8.5",
+ "rand_xoshiro",
  "rustc_data_structures",
  "rustc_errors",
  "rustc_hir",
@@ -4338,7 +4343,7 @@ dependencies = [
  "anyhow",
  "bytecount",
  "cargo_metadata 0.14.0",
- "clap",
+ "clap 3.2.20",
  "derive-new",
  "diff",
  "dirs",
@@ -5329,21 +5334,6 @@ name = "vcpkg"
 version = "0.2.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6454029bf181f092ad1b853286f23e2c507d8e8194d01d92da4a55c274a5508c"
-
-[[package]]
-name = "vergen"
-version = "5.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dfbc87f9a7a9d61b15d51d1d3547284f67b6b4f1494ce3fc5814c101f35a5183"
-dependencies = [
- "anyhow",
- "chrono",
- "enum-iterator",
- "getset",
- "git2",
- "rustversion",
- "thiserror",
-]
 
 [[package]]
 name = "version_check"

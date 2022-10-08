@@ -5,7 +5,6 @@ edition = "2021"
 
 [lib]
 test = false
-doctest = false
 
 [dependencies]
 bitflags = "1.0"
@@ -34,3 +33,4 @@ rustc_target = { path = "../rustc_target" }
 smallvec = { version = "1.8.1", features = ["union", "may_dangle"] }
 rustc_ast = { path = "../rustc_ast" }
 rustc_span = { path = "../rustc_span" }
+tempfile = "3.2.0"

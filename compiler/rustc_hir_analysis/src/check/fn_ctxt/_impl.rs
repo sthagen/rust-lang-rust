@@ -32,7 +32,7 @@ use rustc_span::hygiene::DesugaringKind;
 use rustc_span::symbol::{kw, sym, Ident};
 use rustc_span::{Span, DUMMY_SP};
 use rustc_trait_selection::infer::InferCtxtExt as _;
-use rustc_trait_selection::traits::error_reporting::InferCtxtExt as _;
+use rustc_trait_selection::traits::error_reporting::TypeErrCtxtExt as _;
 use rustc_trait_selection::traits::{
     self, ObligationCause, ObligationCauseCode, TraitEngine, TraitEngineExt,
 };
@@ -91,14 +91,14 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         mutate_fulfillment_errors: impl Fn(&mut Vec<traits::FulfillmentError<'tcx>>),
     ) -> Ty<'tcx> {
         // No Infer()? Nothing needs doing.
-        if !ty.has_infer_types_or_consts() {
+        if !ty.has_non_region_infer() {
             debug!("no inference var, nothing needs doing");
             return ty;
         }
 
         // If `ty` is a type variable, see whether we already know what it is.
         ty = self.resolve_vars_if_possible(ty);
-        if !ty.has_infer_types_or_consts() {
+        if !ty.has_non_region_infer() {
             debug!(?ty);
             return ty;
         }
@@ -615,7 +615,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
         if !errors.is_empty() {
             self.adjust_fulfillment_errors_for_expr_obligation(&mut errors);
-            self.report_fulfillment_errors(&errors, self.inh.body_id, false);
+            self.err_ctxt().report_fulfillment_errors(&errors, self.inh.body_id, false);
         }
     }
 
@@ -629,7 +629,11 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         if !result.is_empty() {
             mutate_fulfillment_errors(&mut result);
             self.adjust_fulfillment_errors_for_expr_obligation(&mut result);
-            self.report_fulfillment_errors(&result, self.inh.body_id, fallback_has_occurred);
+            self.err_ctxt().report_fulfillment_errors(
+                &result,
+                self.inh.body_id,
+                fallback_has_occurred,
+            );
         }
     }
 
@@ -1466,7 +1470,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             ty
         } else {
             if !self.is_tainted_by_errors() {
-                self.emit_inference_failure_err((**self).body_id, sp, ty.into(), E0282, true)
+                self.err_ctxt()
+                    .emit_inference_failure_err((**self).body_id, sp, ty.into(), E0282, true)
                     .emit();
             }
             let err = self.tcx.ty_error();

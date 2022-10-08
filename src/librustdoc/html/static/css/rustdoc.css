@@ -148,6 +148,13 @@ h1, h2, h3, h4 {
 h1.fqn {
 	margin: 0;
 	padding: 0;
+	flex-grow: 1;
+	/* We use overflow-wrap: break-word for Safari, which doesn't recognize
+	   `anywhere`: https://developer.mozilla.org/en-US/docs/Web/CSS/overflow-wrap */
+	overflow-wrap: break-word;
+	/* Then override it with `anywhere`, which is required to make non-Safari browsers break
+	   more aggressively when we want them to. */
+	overflow-wrap: anywhere;
 }
 .main-heading {
 	display: flex;
@@ -184,18 +191,6 @@ h4.code-header {
 	margin: 0;
 	padding: 0;
 }
-.impl,
-.impl-items .method,
-.methods .method,
-.impl-items .type,
-.methods .type,
-.impl-items .associatedconstant,
-.methods .associatedconstant,
-.impl-items .associatedtype,
-.methods .associatedtype {
-	flex-basis: 100%;
-	position: relative;
-}
 
 #crate-search,
 h1, h2, h3, h4, h5, h6,
@@ -206,13 +201,10 @@ h1, h2, h3, h4, h5, h6,
 .item-left > a,
 .out-of-band,
 span.since,
-details.rustdoc-toggle > summary::before,
 a.srclink,
 #help-button > button,
 details.rustdoc-toggle.top-doc > summary,
-details.rustdoc-toggle.top-doc > summary::before,
 details.rustdoc-toggle.non-exhaustive > summary,
-details.rustdoc-toggle.non-exhaustive > summary::before,
 .scraped-example-title,
 .more-examples-toggle summary, .more-examples-toggle .hide-more,
 .example-links a,
@@ -229,7 +221,7 @@ pre.rust a,
 .sidebar h2 a,
 .sidebar h3 a,
 .mobile-topbar h2 a,
-.in-band a,
+h1.fqn a,
 .search-results a,
 .module-item .stab,
 .import-item .stab,
@@ -669,23 +661,6 @@ pre.example-line-numbers {
 	font-weight: normal;
 }
 
-.method > .code-header, .trait-impl > .code-header {
-	display: block;
-}
-
-.in-band {
-	flex-grow: 1;
-	margin: 0px;
-	padding: 0px;
-	/* We use overflow-wrap: break-word for Safari, which doesn't recognize
-	   `anywhere`: https://developer.mozilla.org/en-US/docs/Web/CSS/overflow-wrap */
-	overflow-wrap: break-word;
-	/* Then override it with `anywhere`, which is required to make non-Safari browsers break
-	   more aggressively when we want them to. */
-	overflow-wrap: anywhere;
-	background-color: var(--main-background-color);
-}
-
 .docblock code, .docblock-short code,
 pre, .rustdoc.source .example-wrap {
 	background-color: var(--code-block-background-color);
@@ -713,11 +688,6 @@ pre, .rustdoc.source .example-wrap {
 	padding: .5em;
 	text-align: left;
 	border: 1px solid var(--border-color);
-}
-
-.content .item-list {
-	list-style-type: none;
-	padding: 0;
 }
 
 /* Shift "where ..." part of method or fn definition down a line */
@@ -771,7 +741,7 @@ a {
 	display: initial;
 }
 
-.in-band:hover > .anchor, .impl:hover > .anchor, .method.trait-impl:hover > .anchor,
+.impl:hover > .anchor, .method.trait-impl:hover > .anchor,
 .type.trait-impl:hover > .anchor, .associatedconstant.trait-impl:hover > .anchor,
 .associatedtype.trait-impl:hover > .anchor {
 	display: inline-block;
@@ -798,8 +768,9 @@ h2.small-section-header > .anchor {
 }
 
 .all-items a:hover,
-.docblock a:not(.srclink):not(.test-arrow):not(.scrape-help):hover,
-.docblock-short a:not(.srclink):not(.test-arrow):not(.scrape-help):hover, .item-info a {
+.docblock a:not(.test-arrow):not(.scrape-help):hover,
+.docblock-short a:not(.test-arrow):not(.scrape-help):hover,
+.item-info a {
 	text-decoration: underline;
 }
 
@@ -939,6 +910,7 @@ so that we can apply CSS-filters to change the arrow color in themes */
 	font-size: 1rem;
 	width: 100%;
 	background-color: var(--button-background-color);
+	color: var(--search-color);
 }
 .search-input:focus {
 	border-color: var(--search-input-focused-border-color);
@@ -980,6 +952,11 @@ so that we can apply CSS-filters to change the arrow color in themes */
 }
 .search-results .result-name {
 	padding-right: 1em;
+}
+
+.search-results a:hover,
+.search-results a:focus {
+	background-color: var(--search-result-link-focus-background-color);
 }
 
 .popover {
@@ -1062,6 +1039,13 @@ so that we can apply CSS-filters to change the arrow color in themes */
 	margin-bottom: 5px;
 	font-size: 0.875rem;
 	font-weight: normal;
+	color: var(--main-color);
+	background-color: var(--stab-background-color);
+}
+
+.stab.portability > code {
+	background: none;
+	color: var(--stab-code-color);
 }
 
 .stab .emoji {
@@ -1572,7 +1556,6 @@ details.rustdoc-toggle > summary::before {
 }
 
 details.rustdoc-toggle > summary.hideme > span,
-details.rustdoc-toggle > summary::before,
 .more-examples-toggle summary, .more-examples-toggle .hide-more {
 	color: var(--toggles-color);
 }
@@ -1834,6 +1817,7 @@ in storage.js plus the media query with (min-width: 701px)
 		   as an icon, it's okay to specify its sizes in pixels. */
 		font-size: 32px;
 		border: none;
+		color: var(--main-color);
 	}
 
 	.sidebar-elems {

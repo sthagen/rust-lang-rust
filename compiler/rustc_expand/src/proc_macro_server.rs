@@ -110,10 +110,26 @@ impl FromInternal<(TokenStream, &mut Rustc<'_, '_>)> for Vec<TokenTree<TokenStre
                 tokenstream::TokenTree::Token(token, spacing) => (token, spacing == Joint),
             };
 
+            // Split the operator into one or more `Punct`s, one per character.
+            // The final one inherits the jointness of the original token. Any
+            // before that get `joint = true`.
             let mut op = |s: &str| {
                 assert!(s.is_ascii());
-                trees.extend(s.as_bytes().iter().enumerate().map(|(idx, &ch)| {
-                    TokenTree::Punct(Punct { ch, joint: joint || idx != s.len() - 1, span })
+                trees.extend(s.bytes().enumerate().map(|(i, ch)| {
+                    let is_final = i == s.len() - 1;
+                    // Split the token span into single chars. Unless the span
+                    // is an unusual one, e.g. due to proc macro expansion. We
+                    // determine this by assuming any span with a length that
+                    // matches the operator length is a normal one, and any
+                    // span with a different length is an unusual one.
+                    let span = if (span.hi() - span.lo()).to_usize() == s.len() {
+                        let lo = span.lo() + BytePos::from_usize(i);
+                        let hi = lo + BytePos::from_usize(1);
+                        span.with_lo(lo).with_hi(hi)
+                    } else {
+                        span
+                    };
+                    TokenTree::Punct(Punct { ch, joint: if is_final { joint } else { true }, span })
                 }));
             };
 

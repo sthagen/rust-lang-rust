@@ -32,6 +32,10 @@
 	--link-color: #d2991d;
 	--sidebar-link-color: #fdbf35;
 	--sidebar-current-link-background-color: #444;
+	--search-result-link-focus-background-color: #616161;
+	--stab-background-color: #314559;
+	--stab-code-color: #e6e1cf;
+	--search-color: #111;
 }
 
 .slider {
@@ -56,36 +60,6 @@ input:focus + .slider {
 	background-color: #0a042f !important;
 }
 
-.search-results a:hover {
-	background-color: #777;
-}
-
-.search-results a:focus {
-	color: #eee !important;
-	background-color: #616161;
-}
-.search-results a:focus span { color: #eee !important; }
-a.result-trait:focus { background-color: #013191; }
-a.result-traitalias:focus { background-color: #013191; }
-a.result-mod:focus,
-a.result-externcrate:focus { background-color: #884719; }
-a.result-enum:focus { background-color: #194e9f; }
-a.result-struct:focus { background-color: #194e9f; }
-a.result-union:focus { background-color: #194e9f; }
-a.result-fn:focus,
-a.result-method:focus,
-a.result-tymethod:focus { background-color: #4950ed; }
-a.result-type:focus { background-color: #194e9f; }
-a.result-associatedtype:focus { background-color: #884719; }
-a.result-foreigntype:focus { background-color: #194e9f; }
-a.result-attr:focus,
-a.result-derive:focus,
-a.result-macro:focus { background-color: #217d1c; }
-a.result-constant:focus,
-a.result-static:focus { background-color: #884719; }
-a.result-primitive:focus { background-color: #194e9f; }
-a.result-keyword:focus { background-color: #884719; }
-
 .content .item-info::before { color: #ccc; }
 
 pre.rust .comment { color: #8d8d8b; }
@@ -99,10 +73,6 @@ details.rustdoc-toggle > summary::before {
 	filter: invert(100%);
 }
 
-.search-input {
-	color: #111;
-}
-
 #crate-search-div::after {
 	/* match border-color; uses https://codepen.io/sosuke/pen/Pjoqqp */
 	filter: invert(94%) sepia(0%) saturate(721%) hue-rotate(255deg) brightness(90%) contrast(90%);
@@ -112,13 +82,6 @@ details.rustdoc-toggle > summary::before {
 }
 #crate-search-div:hover::after, #crate-search-div:focus-within::after {
 	filter: invert(69%) sepia(60%) saturate(6613%) hue-rotate(184deg) brightness(100%) contrast(91%);
-}
-
-.stab { background: #314559; }
-
-.stab.portability > code {
-	color: #e6e1cf;
-	background: none;
 }
 
 .src-line-numbers :target { background-color: transparent; }
