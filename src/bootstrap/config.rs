@@ -161,6 +161,8 @@ pub struct Config {
     pub llvm_profile_use: Option<String>,
     pub llvm_profile_generate: bool,
     pub llvm_libunwind_default: Option<LlvmLibunwind>,
+    pub llvm_bolt_profile_generate: bool,
+    pub llvm_bolt_profile_use: Option<String>,
 
     pub build: TargetSelection,
     pub hosts: Vec<TargetSelection>,
@@ -806,6 +808,15 @@ impl Config {
         }
         config.llvm_profile_use = flags.llvm_profile_use;
         config.llvm_profile_generate = flags.llvm_profile_generate;
+        config.llvm_bolt_profile_generate = flags.llvm_bolt_profile_generate;
+        config.llvm_bolt_profile_use = flags.llvm_bolt_profile_use;
+
+        if config.llvm_bolt_profile_generate && config.llvm_bolt_profile_use.is_some() {
+            eprintln!(
+                "Cannot use both `llvm_bolt_profile_generate` and `llvm_bolt_profile_use` at the same time"
+            );
+            crate::detail_exit(1);
+        }
 
         // Infer the rest of the configuration.
 
@@ -829,10 +840,19 @@ impl Config {
             let s = git_root.to_str().unwrap();
 
             // Bootstrap is quite bad at handling /? in front of paths
-            config.src = match s.strip_prefix("\\\\?\\") {
+            let src = match s.strip_prefix("\\\\?\\") {
                 Some(p) => PathBuf::from(p),
                 None => PathBuf::from(git_root),
             };
+            // If this doesn't have at least `stage0.json`, we guessed wrong. This can happen when,
+            // for example, the build directory is inside of another unrelated git directory.
+            // In that case keep the original `CARGO_MANIFEST_DIR` handling.
+            //
+            // NOTE: this implies that downloadable bootstrap isn't supported when the build directory is outside
+            // the source directory. We could fix that by setting a variable from all three of python, ./x, and x.ps1.
+            if src.join("src").join("stage0.json").exists() {
+                config.src = src;
+            }
         } else {
             // We're building from a tarball, not git sources.
             // We don't support pre-downloaded bootstrap in this case.

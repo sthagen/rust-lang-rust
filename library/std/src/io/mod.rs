@@ -262,9 +262,12 @@ use crate::sys_common::memchr;
 
 #[stable(feature = "bufwriter_into_parts", since = "1.56.0")]
 pub use self::buffered::WriterPanicked;
+pub(crate) use self::stdio::attempt_print_to_stderr;
 #[unstable(feature = "internal_output_capture", issue = "none")]
 #[doc(no_inline, hidden)]
 pub use self::stdio::set_output_capture;
+#[unstable(feature = "is_terminal", issue = "98070")]
+pub use self::stdio::IsTerminal;
 #[unstable(feature = "print_internals", issue = "none")]
 pub use self::stdio::{_eprint, _print};
 #[stable(feature = "rust1", since = "1.0.0")]

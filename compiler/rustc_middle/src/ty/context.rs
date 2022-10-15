@@ -56,7 +56,6 @@ use rustc_query_system::ich::StableHashingContext;
 use rustc_serialize::opaque::{FileEncodeResult, FileEncoder};
 use rustc_session::config::{CrateType, OutputFilenames};
 use rustc_session::cstore::CrateStoreDyn;
-use rustc_session::errors::TargetDataLayoutErrorsWrapper;
 use rustc_session::lint::Lint;
 use rustc_session::Limit;
 use rustc_session::Session;
@@ -539,12 +538,10 @@ pub struct TypeckResults<'tcx> {
     pub tainted_by_errors: Option<ErrorGuaranteed>,
 
     /// All the opaque types that have hidden types set
-    /// by this function. For return-position-impl-trait we also store the
-    /// type here, so that mir-borrowck can figure out hidden types,
+    /// by this function. We also store the
+    /// type here, so that mir-borrowck can use it as a hint for figuring out hidden types,
     /// even if they are only set in dead code (which doesn't show up in MIR).
-    /// For type-alias-impl-trait, this map is only used to prevent query cycles,
-    /// so the hidden types are all `None`.
-    pub concrete_opaque_types: VecMap<LocalDefId, Option<Ty<'tcx>>>,
+    pub concrete_opaque_types: VecMap<LocalDefId, ty::OpaqueHiddenType<'tcx>>,
 
     /// Tracks the minimum captures required for a closure;
     /// see `MinCaptureInformationMap` for more details.
@@ -1249,7 +1246,7 @@ impl<'tcx> TyCtxt<'tcx> {
         output_filenames: OutputFilenames,
     ) -> GlobalCtxt<'tcx> {
         let data_layout = TargetDataLayout::parse(&s.target).unwrap_or_else(|err| {
-            s.emit_fatal(TargetDataLayoutErrorsWrapper(err));
+            s.emit_fatal(err);
         });
         let interners = CtxtInterners::new(arena);
         let common_types = CommonTypes::new(

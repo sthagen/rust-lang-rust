@@ -4,6 +4,9 @@
 //! ["Queries: demand-driven compilation"](https://rustc-dev-guide.rust-lang.org/query.html).
 //! This chapter includes instructions for adding new queries.
 
+use crate::ty::{self, print::describe_as_module, TyCtxt};
+use rustc_span::def_id::LOCAL_CRATE;
+
 // Each of these queries corresponds to a function pointer field in the
 // `Providers` struct for requesting a value of that type, and a method
 // on `tcx: TyCtxt` (and `tcx.at(span)`) for doing that request in a way
@@ -301,6 +304,32 @@ rustc_queries! {
         separate_provide_extern
     }
 
+    /// Checks whether a type is representable or infinitely sized
+    query representability(_: LocalDefId) -> rustc_middle::ty::Representability {
+        desc { "checking if {:?} is representable", tcx.def_path_str(key.to_def_id()) }
+        // infinitely sized types will cause a cycle
+        cycle_delay_bug
+        // we don't want recursive representability calls to be forced with
+        // incremental compilation because, if a cycle occurs, we need the
+        // entire cycle to be in memory for diagnostics
+        anon
+    }
+
+    /// An implementation detail for the `representability` query
+    query representability_adt_ty(_: Ty<'tcx>) -> rustc_middle::ty::Representability {
+        desc { "checking if {:?} is representable", key }
+        cycle_delay_bug
+        anon
+    }
+
+    /// Set of param indexes for type params that are in the type's representation
+    query params_in_repr(key: DefId) -> rustc_index::bit_set::BitSet<u32> {
+        desc { "finding type parameters in the representation" }
+        arena_cache
+        no_hash
+        separate_provide_extern
+    }
+
     /// Fetch the THIR for a given body. If typeck for that body failed, returns an empty `Thir`.
     query thir_body(key: ty::WithOptConstParam<LocalDefId>)
         -> Result<(&'tcx Steal<thir::Thir<'tcx>>, thir::ExprId), ErrorGuaranteed>
@@ -587,16 +616,8 @@ rustc_queries! {
         separate_provide_extern
     }
 
-    // The cycle error here should be reported as an error by `check_representable`.
-    // We consider the type as Sized in the meanwhile to avoid
-    // further errors (done in impl Value for AdtSizedConstraint).
-    // Use `cycle_delay_bug` to delay the cycle error here to be emitted later
-    // in case we accidentally otherwise don't emit an error.
-    query adt_sized_constraint(
-        key: DefId
-    ) -> AdtSizedConstraint<'tcx> {
+    query adt_sized_constraint(key: DefId) -> &'tcx [Ty<'tcx>] {
         desc { |tcx| "computing `Sized` constraints for `{}`", tcx.def_path_str(key) }
-        cycle_delay_bug
     }
 
     query adt_dtorck_constraint(
@@ -1196,7 +1217,7 @@ rustc_queries! {
         desc { |tcx| "finding all vtable entries for trait {}", tcx.def_path_str(key.def_id()) }
     }
 
-    query vtable_trait_upcasting_coercion_new_vptr_slot(key: (ty::Ty<'tcx>, ty::Ty<'tcx>)) -> Option<usize> {
+    query vtable_trait_upcasting_coercion_new_vptr_slot(key: (Ty<'tcx>, Ty<'tcx>)) -> Option<usize> {
         desc { |tcx| "finding the slot within vtable for trait object {} vtable ptr during trait upcasting coercion from {} vtable",
             key.1, key.0 }
     }

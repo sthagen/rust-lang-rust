@@ -152,6 +152,7 @@
 #![feature(core_panic)]
 #![feature(duration_consts_float)]
 #![feature(maybe_uninit_uninit_array)]
+#![feature(ptr_alignment_type)]
 #![feature(ptr_metadata)]
 #![feature(slice_ptr_get)]
 #![feature(slice_split_at_unchecked)]
@@ -209,6 +210,7 @@
 #![feature(simd_ffi)]
 #![feature(staged_api)]
 #![feature(stmt_expr_attributes)]
+#![feature(target_feature_11)]
 #![feature(trait_alias)]
 #![feature(transparent_unions)]
 #![feature(try_blocks)]
@@ -224,6 +226,7 @@
 #![feature(hexagon_target_feature)]
 #![feature(mips_target_feature)]
 #![feature(powerpc_target_feature)]
+#![feature(riscv_target_feature)]
 #![feature(rtm_target_feature)]
 #![feature(sse4a_target_feature)]
 #![feature(tbm_target_feature)]
@@ -326,8 +329,6 @@ pub mod cell;
 pub mod char;
 pub mod ffi;
 pub mod iter;
-#[unstable(feature = "once_cell", issue = "74465")]
-pub mod lazy;
 pub mod option;
 pub mod panic;
 pub mod panicking;

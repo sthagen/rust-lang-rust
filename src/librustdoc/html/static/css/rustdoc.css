@@ -163,9 +163,6 @@ h1.fqn {
 	padding-bottom: 6px;
 	margin-bottom: 15px;
 }
-.main-heading a:hover {
-	text-decoration: underline;
-}
 #toggle-all-docs {
 	text-decoration: none;
 }
@@ -221,55 +218,55 @@ pre.rust a,
 .sidebar h2 a,
 .sidebar h3 a,
 .mobile-topbar h2 a,
-h1.fqn a,
+h1 a,
 .search-results a,
 .module-item .stab,
 .import-item .stab,
 .result-name .primitive > i, .result-name .keyword > i,
-.content .method .where,
-.content .fn .where,
-.content .where.fmt-newline {
+.method .where,
+.fn .where,
+.where.fmt-newline {
 	color: var(--main-color);
 }
 
-.content span.enum, .content a.enum,
-.content span.struct, .content a.struct,
-.content span.union, .content a.union,
-.content span.primitive, .content a.primitive,
-.content span.type, .content a.type,
-.content span.foreigntype, .content a.foreigntype {
+span.enum, a.enum,
+span.struct, a.struct,
+span.union, a.union,
+span.primitive, a.primitive,
+span.type, a.type,
+span.foreigntype, a.foreigntype {
 	color: var(--type-link-color);
 }
 
-.content span.trait, .content a.trait,
-.content span.traitalias, .content a.traitalias {
+span.trait, a.trait,
+span.traitalias, a.traitalias {
 	color: var(--trait-link-color);
 }
 
-.content span.associatedtype, .content a.associatedtype,
-.content span.constant, .content a.constant,
-.content span.static, .content a.static {
+span.associatedtype, a.associatedtype,
+span.constant, a.constant,
+span.static, a.static {
 	color: var(--assoc-item-link-color);
 }
 
-.content span.fn, .content a.fn,
-.content .fnname,
-.content span.method, .content a.method,
-.content span.tymethod, .content a.tymethod {
+span.fn, a.fn,
+.fnname,
+span.method, a.method,
+span.tymethod, a.tymethod {
 	color: var(--function-link-color);
 }
 
-.content span.attr, .content a.attr,
-.content span.derive, .content a.derive,
-.content span.macro, .content a.macro {
+span.attr, a.attr,
+span.derive, a.derive,
+span.macro, a.macro {
 	color: var(--macro-link-color);
 }
 
-.content span.mod, .content a.mod, .block a.current.mod {
+span.mod, a.mod {
 	color: var(--mod-link-color);
 }
 
-.content span.keyword, .content a.keyword {
+span.keyword, a.keyword {
 	color: var(--keyword-link-color);
 }
 
@@ -504,13 +501,14 @@ img {
 	width: 100px;
 }
 
-.block ul, .block li {
+ul.block, .block li {
 	padding: 0;
 	margin: 0;
 	list-style: none;
 }
 
 .block a,
+.sidebar h3 a,
 h2.location a {
 	display: block;
 	padding: 0.25rem;
@@ -565,8 +563,6 @@ h2.location a {
 .rustdoc .example-wrap {
 	display: flex;
 	position: relative;
-}
-.rustdoc .example-wrap {
 	margin-bottom: 10px;
 }
 /* For the last child of a div, the margin will be taken care of
@@ -582,10 +578,6 @@ pre.example-line-numbers {
 	text-align: right;
 	border-top-left-radius: 5px;
 	border-bottom-left-radius: 5px;
-}
-
-.example-wrap > pre.rust a:hover {
-	text-decoration: underline;
 }
 
 .src-line-numbers {
@@ -691,23 +683,20 @@ pre, .rustdoc.source .example-wrap {
 }
 
 /* Shift "where ..." part of method or fn definition down a line */
-.content .method .where,
-.content .fn .where,
-.content .where.fmt-newline {
+.method .where,
+.fn .where,
+.where.fmt-newline {
 	display: block;
 	font-size: 0.875rem;
 }
 
 .item-info {
 	display: block;
-}
-
-.content .item-info code {
-	font-size: 0.875rem;
-}
-
-.content .item-info {
 	margin-left: 24px;
+}
+
+.item-info code {
+	font-size: 0.875rem;
 }
 
 #main-content > .item-info {
@@ -724,7 +713,6 @@ nav.sub {
 .source nav.sub {
 	margin-left: 32px;
 }
-nav.sum { text-align: right; }
 nav.sub form { display: inline; }
 
 a {
@@ -741,9 +729,7 @@ a {
 	display: initial;
 }
 
-.impl:hover > .anchor, .method.trait-impl:hover > .anchor,
-.type.trait-impl:hover > .anchor, .associatedconstant.trait-impl:hover > .anchor,
-.associatedtype.trait-impl:hover > .anchor {
+.impl:hover > .anchor, .trait-impl:hover > .anchor {
 	display: inline-block;
 	position: absolute;
 }
@@ -767,6 +753,8 @@ h2.small-section-header > .anchor {
 	content: '§';
 }
 
+.main-heading a:hover,
+.example-wrap > pre.rust a:hover,
 .all-items a:hover,
 .docblock a:not(.test-arrow):not(.scrape-help):hover,
 .docblock-short a:not(.test-arrow):not(.scrape-help):hover,
@@ -774,7 +762,7 @@ h2.small-section-header > .anchor {
 	text-decoration: underline;
 }
 
-.block a.current.crate { font-weight: 500; }
+.crate.block a.current { font-weight: 500; }
 
 /*  In most contexts we use `overflow-wrap: anywhere` to ensure that we can wrap
 	as much as needed on mobile (see
@@ -819,9 +807,6 @@ table,
 	display: flex;
 	height: 34px;
 	margin-top: 4px;
-}
-.search-container > * {
-	height: 100%;
 }
 .search-results-title {
 	margin-top: 0;
@@ -1093,7 +1078,6 @@ so that we can apply CSS-filters to change the arrow color in themes */
 .rightside {
 	padding-left: 12px;
 	padding-right: 2px;
-	position: initial;
 	float: right;
 }
 
@@ -1102,8 +1086,55 @@ so that we can apply CSS-filters to change the arrow color in themes */
 	color: var(--right-side-color);
 }
 
+pre.rust {
+	tab-size: 4;
+	-moz-tab-size: 4;
+}
+
+/* Code highlighting */
+pre.rust .kw {
+	color: var(--code-highlight-kw-color);
+}
+pre.rust .kw-2 {
+	color: var(--code-highlight-kw-2-color);
+}
+pre.rust .lifetime {
+	color: var(--code-highlight-lifetime-color);
+}
+pre.rust .prelude-ty {
+	color: var(--code-highlight-prelude-color);
+}
+pre.rust .prelude-val {
+	color: var(--code-highlight-prelude-val-color);
+}
+pre.rust .string {
+	color: var(--code-highlight-string-color);
+}
+pre.rust .number {
+	color: var(--code-highlight-number-color);
+}
+pre.rust .bool-val {
+	color: var(--code-highlight-literal-color);
+}
+pre.rust .self {
+	color: var(--code-highlight-self-color);
+}
+pre.rust .attribute {
+	color: var(--code-highlight-attribute-color);
+}
+pre.rust .macro,
+pre.rust .macro-nonterminal {
+	color: var(--code-highlight-macro-color);
+}
 pre.rust .question-mark {
 	font-weight: bold;
+	color: var(--code-highlight-question-mark-color);
+}
+pre.rust .comment {
+	color: var(--code-highlight-comment-color);
+}
+pre.rust .doccomment {
+	color: var(--code-highlight-doc-comment-color);
 }
 
 .example-wrap.compile_fail,
@@ -1309,11 +1340,6 @@ h3.variant {
 	font-size: 1.25rem;
 }
 
-pre.rust {
-	tab-size: 4;
-	-moz-tab-size: 4;
-}
-
 .search-failed {
 	text-align: center;
 	margin-top: 20px;
@@ -1500,10 +1526,31 @@ details.dir-entry {
 	padding-left: 4px;
 }
 
+details.dir-entry > summary::after {
+	content: " ►";
+	position: absolute;
+	left: -15px;
+	top: 0px;
+	font-size: 80%;
+	padding: 2px 0px;
+	/* set width to cover gap between arrow and text */
+	width: 25px;
+}
+
+details[open].dir-entry > summary::after {
+	content: " ▼";
+}
+
+details.dir-entry > summary::-webkit-details-marker,
+details.dir-entry > summary::marker {
+	display: none;
+}
+
 details.dir-entry > summary {
 	margin: 0 0 0 13px;
-	list-style-position: outside;
+	list-style: none;
 	cursor: pointer;
+	position: relative;
 }
 
 details.dir-entry div.folders, details.dir-entry div.files {
@@ -1807,10 +1854,6 @@ in storage.js plus the media query with (min-width: 701px)
 		top: 0;
 	}
 
-	.source .mobile-topbar {
-		display: none;
-	}
-
 	.sidebar-menu-toggle {
 		width: 45px;
 		/* Rare exception to specifying font sizes in rem. Since this is acting
@@ -1938,7 +1981,7 @@ in storage.js plus the media query with (min-width: 701px)
 	}
 
 	/* Align summary-nested and unnested item-info gizmos. */
-	.content .impl-items > .item-info {
+	.impl-items > .item-info {
 		margin-left: 34px;
 	}
 }

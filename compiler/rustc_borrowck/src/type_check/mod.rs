@@ -138,8 +138,6 @@ pub(crate) fn type_check<'mir, 'tcx>(
     use_polonius: bool,
 ) -> MirTypeckResults<'tcx> {
     let implicit_region_bound = infcx.tcx.mk_region(ty::ReVar(universal_regions.fr_fn_body));
-    let mut universe_causes = FxHashMap::default();
-    universe_causes.insert(ty::UniverseIndex::from_u32(0), UniverseInfo::other());
     let mut constraints = MirTypeckRegionConstraints {
         placeholder_indices: PlaceholderIndices::default(),
         placeholder_index_to_region: IndexVec::default(),
@@ -148,7 +146,7 @@ pub(crate) fn type_check<'mir, 'tcx>(
         member_constraints: MemberConstraintSet::default(),
         closure_bounds_mapping: Default::default(),
         type_tests: Vec::default(),
-        universe_causes,
+        universe_causes: FxHashMap::default(),
     };
 
     let CreateResult {
@@ -165,9 +163,8 @@ pub(crate) fn type_check<'mir, 'tcx>(
 
     debug!(?normalized_inputs_and_output);
 
-    for u in ty::UniverseIndex::ROOT..infcx.universe() {
-        let info = UniverseInfo::other();
-        constraints.universe_causes.insert(u, info);
+    for u in ty::UniverseIndex::ROOT..=infcx.universe() {
+        constraints.universe_causes.insert(u, UniverseInfo::other());
     }
 
     let mut borrowck_context = BorrowCheckContext {
@@ -587,6 +584,7 @@ impl<'a, 'b, 'tcx> TypeVerifier<'a, 'b, 'tcx> {
         // modify their locations.
         let all_facts = &mut None;
         let mut constraints = Default::default();
+        let mut type_tests = Default::default();
         let mut closure_bounds = Default::default();
         let mut liveness_constraints =
             LivenessValues::new(Rc::new(RegionValueElements::new(&promoted_body)));
@@ -598,6 +596,7 @@ impl<'a, 'b, 'tcx> TypeVerifier<'a, 'b, 'tcx> {
                 &mut this.cx.borrowck_context.constraints.outlives_constraints,
                 &mut constraints,
             );
+            mem::swap(&mut this.cx.borrowck_context.constraints.type_tests, &mut type_tests);
             mem::swap(
                 &mut this.cx.borrowck_context.constraints.closure_bounds_mapping,
                 &mut closure_bounds,
@@ -622,6 +621,13 @@ impl<'a, 'b, 'tcx> TypeVerifier<'a, 'b, 'tcx> {
         swap_constraints(self);
 
         let locations = location.to_locations();
+
+        // Use location of promoted const in collected constraints
+        for type_test in type_tests.iter() {
+            let mut type_test = type_test.clone();
+            type_test.locations = locations;
+            self.cx.borrowck_context.constraints.type_tests.push(type_test)
+        }
         for constraint in constraints.outlives().iter() {
             let mut constraint = constraint.clone();
             constraint.locations = locations;
@@ -2209,25 +2215,104 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                             }
                         }
                     }
-
-                    CastKind::Misc => {
+                    CastKind::IntToInt => {
                         let ty_from = op.ty(body, tcx);
                         let cast_ty_from = CastTy::from_ty(ty_from);
                         let cast_ty_to = CastTy::from_ty(*ty);
-                        // Misc casts are either between floats and ints, or one ptr type to another.
                         match (cast_ty_from, cast_ty_to) {
-                            (
-                                Some(CastTy::Int(_) | CastTy::Float),
-                                Some(CastTy::Int(_) | CastTy::Float),
-                            )
-                            | (Some(CastTy::Ptr(_) | CastTy::FnPtr), Some(CastTy::Ptr(_))) => (),
+                            (Some(CastTy::Int(_)), Some(CastTy::Int(_))) => (),
                             _ => {
                                 span_mirbug!(
                                     self,
                                     rvalue,
-                                    "Invalid Misc cast {:?} -> {:?}",
+                                    "Invalid IntToInt cast {:?} -> {:?}",
                                     ty_from,
-                                    ty,
+                                    ty
+                                )
+                            }
+                        }
+                    }
+                    CastKind::IntToFloat => {
+                        let ty_from = op.ty(body, tcx);
+                        let cast_ty_from = CastTy::from_ty(ty_from);
+                        let cast_ty_to = CastTy::from_ty(*ty);
+                        match (cast_ty_from, cast_ty_to) {
+                            (Some(CastTy::Int(_)), Some(CastTy::Float)) => (),
+                            _ => {
+                                span_mirbug!(
+                                    self,
+                                    rvalue,
+                                    "Invalid IntToFloat cast {:?} -> {:?}",
+                                    ty_from,
+                                    ty
+                                )
+                            }
+                        }
+                    }
+                    CastKind::FloatToInt => {
+                        let ty_from = op.ty(body, tcx);
+                        let cast_ty_from = CastTy::from_ty(ty_from);
+                        let cast_ty_to = CastTy::from_ty(*ty);
+                        match (cast_ty_from, cast_ty_to) {
+                            (Some(CastTy::Float), Some(CastTy::Int(_))) => (),
+                            _ => {
+                                span_mirbug!(
+                                    self,
+                                    rvalue,
+                                    "Invalid FloatToInt cast {:?} -> {:?}",
+                                    ty_from,
+                                    ty
+                                )
+                            }
+                        }
+                    }
+                    CastKind::FloatToFloat => {
+                        let ty_from = op.ty(body, tcx);
+                        let cast_ty_from = CastTy::from_ty(ty_from);
+                        let cast_ty_to = CastTy::from_ty(*ty);
+                        match (cast_ty_from, cast_ty_to) {
+                            (Some(CastTy::Float), Some(CastTy::Float)) => (),
+                            _ => {
+                                span_mirbug!(
+                                    self,
+                                    rvalue,
+                                    "Invalid FloatToFloat cast {:?} -> {:?}",
+                                    ty_from,
+                                    ty
+                                )
+                            }
+                        }
+                    }
+                    CastKind::FnPtrToPtr => {
+                        let ty_from = op.ty(body, tcx);
+                        let cast_ty_from = CastTy::from_ty(ty_from);
+                        let cast_ty_to = CastTy::from_ty(*ty);
+                        match (cast_ty_from, cast_ty_to) {
+                            (Some(CastTy::FnPtr), Some(CastTy::Ptr(_))) => (),
+                            _ => {
+                                span_mirbug!(
+                                    self,
+                                    rvalue,
+                                    "Invalid FnPtrToPtr cast {:?} -> {:?}",
+                                    ty_from,
+                                    ty
+                                )
+                            }
+                        }
+                    }
+                    CastKind::PtrToPtr => {
+                        let ty_from = op.ty(body, tcx);
+                        let cast_ty_from = CastTy::from_ty(ty_from);
+                        let cast_ty_to = CastTy::from_ty(*ty);
+                        match (cast_ty_from, cast_ty_to) {
+                            (Some(CastTy::Ptr(_)), Some(CastTy::Ptr(_))) => (),
+                            _ => {
+                                span_mirbug!(
+                                    self,
+                                    rvalue,
+                                    "Invalid PtrToPtr cast {:?} -> {:?}",
+                                    ty_from,
+                                    ty
                                 )
                             }
                         }

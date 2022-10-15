@@ -2028,6 +2028,7 @@ impl Step for RustDev {
             "llvm-nm",
             "llvm-dwarfdump",
             "llvm-dis",
+            "llvm-tblgen",
         ] {
             tarball.add_file(src_bindir.join(exe(bin, target)), "bin", 0o755);
         }
@@ -2155,6 +2156,10 @@ impl Step for ReproducibleArtifacts {
             added_anything = true;
         }
         if let Some(path) = builder.config.llvm_profile_use.as_ref() {
+            tarball.add_file(path, ".", 0o644);
+            added_anything = true;
+        }
+        if let Some(path) = builder.config.llvm_bolt_profile_use.as_ref() {
             tarball.add_file(path, ".", 0o644);
             added_anything = true;
         }

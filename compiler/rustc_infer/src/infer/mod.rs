@@ -1150,8 +1150,8 @@ impl<'tcx> InferCtxt<'tcx> {
     /// Return the universe that the region `r` was created in.  For
     /// most regions (e.g., `'static`, named regions from the user,
     /// etc) this is the root universe U0. For inference variables or
-    /// placeholders, however, it will return the universe which which
-    /// they are associated.
+    /// placeholders, however, it will return the universe which they
+    /// are associated.
     pub fn universe_of_region(&self, r: ty::Region<'tcx>) -> ty::UniverseIndex {
         self.inner.borrow_mut().unwrap_region_constraints().universe(r)
     }
@@ -1283,7 +1283,7 @@ impl<'tcx> InferCtxt<'tcx> {
         assert!(old_value.is_none());
     }
 
-    /// Process the region constraints and return any any errors that
+    /// Process the region constraints and return any errors that
     /// result. After this, no more unification operations should be
     /// done -- or the compiler will panic -- but it is legal to use
     /// `resolve_vars_if_possible` as well as `fully_resolve`.

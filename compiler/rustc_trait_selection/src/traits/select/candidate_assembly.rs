@@ -625,7 +625,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                     }
                 }
 
-                _ => candidates.vec.push(AutoImplCandidate(def_id)),
+                _ => candidates.vec.push(AutoImplCandidate),
             }
         }
     }
@@ -914,7 +914,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         let def_id = obligation.predicate.def_id();
 
         if self.tcx().is_trait_alias(def_id) {
-            candidates.vec.push(TraitAliasCandidate(def_id));
+            candidates.vec.push(TraitAliasCandidate);
         }
     }
 
@@ -1021,7 +1021,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         let self_ty = self.infcx().shallow_resolve(obligation.self_ty().skip_binder());
         match self_ty.kind() {
             ty::Tuple(_) => {
-                candidates.vec.push(TupleCandidate);
+                candidates.vec.push(BuiltinCandidate { has_nested: false });
             }
             ty::Infer(ty::TyVar(_)) => {
                 candidates.ambiguous = true;

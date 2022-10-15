@@ -160,6 +160,10 @@ trait ResolverAstLoweringExt {
     fn legacy_const_generic_args(&self, expr: &Expr) -> Option<Vec<usize>>;
     fn get_partial_res(&self, id: NodeId) -> Option<PartialRes>;
     fn get_import_res(&self, id: NodeId) -> PerNS<Option<Res<NodeId>>>;
+    // Clones the resolution (if any) on 'source' and applies it
+    // to 'target'. Used when desugaring a `UseTreeKind::Nested` to
+    // multiple `UseTreeKind::Simple`s
+    fn clone_res(&mut self, source: NodeId, target: NodeId);
     fn get_label_res(&self, id: NodeId) -> Option<NodeId>;
     fn get_lifetime_res(&self, id: NodeId) -> Option<LifetimeRes>;
     fn take_extra_lifetime_params(&mut self, id: NodeId) -> Vec<(Ident, NodeId, LifetimeRes)>;
@@ -175,12 +179,7 @@ impl ResolverAstLoweringExt for ResolverAstLowering {
                 return None;
             }
 
-            let partial_res = self.partial_res_map.get(&expr.id)?;
-            if partial_res.unresolved_segments() != 0 {
-                return None;
-            }
-
-            if let Res::Def(DefKind::Fn, def_id) = partial_res.base_res() {
+            if let Res::Def(DefKind::Fn, def_id) = self.partial_res_map.get(&expr.id)?.full_res()? {
                 // We only support cross-crate argument rewriting. Uses
                 // within the same crate should be updated to use the new
                 // const generics style.
@@ -195,6 +194,12 @@ impl ResolverAstLoweringExt for ResolverAstLowering {
         }
 
         None
+    }
+
+    fn clone_res(&mut self, source: NodeId, target: NodeId) {
+        if let Some(res) = self.partial_res_map.get(&source) {
+            self.partial_res_map.insert(target, *res);
+        }
     }
 
     /// Obtains resolution for a `NodeId` with a single resolution.
@@ -753,12 +758,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
     }
 
     fn expect_full_res(&mut self, id: NodeId) -> Res<NodeId> {
-        self.resolver.get_partial_res(id).map_or(Res::Err, |pr| {
-            if pr.unresolved_segments() != 0 {
-                panic!("path not fully resolved: {:?}", pr);
-            }
-            pr.base_res()
-        })
+        self.resolver.get_partial_res(id).map_or(Res::Err, |pr| pr.expect_full_res())
     }
 
     fn expect_full_res_from_use(&mut self, id: NodeId) -> impl Iterator<Item = Res<NodeId>> {
@@ -1138,8 +1138,11 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                     // type and value namespaces. If we resolved the path in the value namespace, we
                     // transform it into a generic const argument.
                     TyKind::Path(ref qself, ref path) => {
-                        if let Some(partial_res) = self.resolver.get_partial_res(ty.id) {
-                            let res = partial_res.base_res();
+                        if let Some(res) = self
+                            .resolver
+                            .get_partial_res(ty.id)
+                            .and_then(|partial_res| partial_res.full_res())
+                        {
                             if !res.matches_ns(Namespace::TypeNS) {
                                 debug!(
                                     "lower_generic_arg: Lowering type argument as const argument: {:?}",
@@ -1206,8 +1209,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         // by `ty_path`.
         if qself.is_none()
             && let Some(partial_res) = self.resolver.get_partial_res(t.id)
-            && partial_res.unresolved_segments() == 0
-            && let Res::Def(DefKind::Trait | DefKind::TraitAlias, _) = partial_res.base_res()
+            && let Some(Res::Def(DefKind::Trait | DefKind::TraitAlias, _)) = partial_res.full_res()
         {
             let (bounds, lifetime_bound) = self.with_dyn_type_scope(true, |this| {
                 let poly_trait_ref = this.ast_arena.ptr.alloc(PolyTraitRef {

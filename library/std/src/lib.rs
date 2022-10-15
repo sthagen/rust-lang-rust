@@ -253,6 +253,7 @@
 #![feature(exhaustive_patterns)]
 #![feature(if_let_guard)]
 #![feature(intra_doc_pointers)]
+#![feature(is_terminal)]
 #![feature(lang_items)]
 #![feature(let_chains)]
 #![feature(linkage)]
@@ -528,9 +529,6 @@ pub mod path;
 pub mod process;
 pub mod sync;
 pub mod time;
-
-#[unstable(feature = "once_cell", issue = "74465")]
-pub mod lazy;
 
 // Pull in `std_float` crate  into libstd. The contents of
 // `std_float` are in a different repository: rust-lang/portable-simd.

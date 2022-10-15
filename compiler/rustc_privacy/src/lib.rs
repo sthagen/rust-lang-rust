@@ -122,8 +122,20 @@ where
         &mut self,
         projection: ty::ProjectionTy<'tcx>,
     ) -> ControlFlow<V::BreakTy> {
-        let (trait_ref, assoc_substs) =
-            projection.trait_ref_and_own_substs(self.def_id_visitor.tcx());
+        let tcx = self.def_id_visitor.tcx();
+        let (trait_ref, assoc_substs) = if tcx.def_kind(projection.item_def_id)
+            != DefKind::ImplTraitPlaceholder
+        {
+            projection.trait_ref_and_own_substs(tcx)
+        } else {
+            // HACK(RPITIT): Remove this when RPITITs are lowered to regular assoc tys
+            let def_id = tcx.impl_trait_in_trait_parent(projection.item_def_id);
+            let trait_generics = tcx.generics_of(def_id);
+            (
+                ty::TraitRef { def_id, substs: projection.substs.truncate_to(tcx, trait_generics) },
+                &projection.substs[trait_generics.count()..],
+            )
+        };
         self.visit_trait(trait_ref)?;
         if self.def_id_visitor.shallow() {
             ControlFlow::CONTINUE
@@ -1574,7 +1586,7 @@ impl<'a, 'tcx> Visitor<'tcx> for ObsoleteVisiblePrivateTypesVisitor<'a, 'tcx> {
                             hir::ImplItemKind::Const(..) | hir::ImplItemKind::Fn(..) => {
                                 self.access_levels.is_reachable(impl_item_ref.id.def_id.def_id)
                             }
-                            hir::ImplItemKind::TyAlias(_) => false,
+                            hir::ImplItemKind::Type(_) => false,
                         }
                     });
 
@@ -1596,7 +1608,7 @@ impl<'a, 'tcx> Visitor<'tcx> for ObsoleteVisiblePrivateTypesVisitor<'a, 'tcx> {
                                     {
                                         intravisit::walk_impl_item(self, impl_item)
                                     }
-                                    hir::ImplItemKind::TyAlias(..) => {
+                                    hir::ImplItemKind::Type(..) => {
                                         intravisit::walk_impl_item(self, impl_item)
                                     }
                                     _ => {}
@@ -1622,7 +1634,7 @@ impl<'a, 'tcx> Visitor<'tcx> for ObsoleteVisiblePrivateTypesVisitor<'a, 'tcx> {
                             // Those in 3. are warned with this call.
                             for impl_item_ref in impl_.items {
                                 let impl_item = self.tcx.hir().impl_item(impl_item_ref.id);
-                                if let hir::ImplItemKind::TyAlias(ty) = impl_item.kind {
+                                if let hir::ImplItemKind::Type(ty) = impl_item.kind {
                                     self.visit_ty(ty);
                                 }
                             }

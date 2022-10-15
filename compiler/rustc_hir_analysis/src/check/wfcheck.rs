@@ -837,7 +837,7 @@ fn check_impl_item(tcx: TyCtxt<'_>, impl_item: &hir::ImplItem<'_>) {
     let (method_sig, span) = match impl_item.kind {
         hir::ImplItemKind::Fn(ref sig, _) => (Some(sig), impl_item.span),
         // Constrain binding and overflow error spans to `<Ty>` in `type foo = <Ty>`.
-        hir::ImplItemKind::TyAlias(ty) if ty.span != DUMMY_SP => (None, ty.span),
+        hir::ImplItemKind::Type(ty) if ty.span != DUMMY_SP => (None, ty.span),
         _ => (None, impl_item.span),
     };
 
@@ -1041,6 +1041,8 @@ fn check_type_defn<'tcx, F>(
 ) where
     F: FnMut(&WfCheckingCtxt<'_, 'tcx>) -> Vec<AdtVariant<'tcx>>,
 {
+    let _ = tcx.representability(item.def_id.def_id);
+
     enter_wf_checking_ctxt(tcx, item.span, item.def_id.def_id, |wfcx| {
         let variants = lookup_fields(wfcx);
         let packed = tcx.adt_def(item.def_id).repr().packed();

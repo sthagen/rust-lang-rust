@@ -26,9 +26,6 @@ use super::{
     Destructor, FieldDef, GenericPredicates, ReprOptions, Ty, TyCtxt, VariantDef, VariantDiscr,
 };
 
-#[derive(Copy, Clone, HashStable, Debug)]
-pub struct AdtSizedConstraint<'tcx>(pub &'tcx [Ty<'tcx>]);
-
 bitflags! {
     #[derive(HashStable, TyEncodable, TyDecodable)]
     pub struct AdtFlags: u32 {
@@ -332,13 +329,13 @@ impl<'tcx> AdtDef<'tcx> {
         self.flags().contains(AdtFlags::IS_PHANTOM_DATA)
     }
 
-    /// Returns `true` if this is Box<T>.
+    /// Returns `true` if this is `Box<T>`.
     #[inline]
     pub fn is_box(self) -> bool {
         self.flags().contains(AdtFlags::IS_BOX)
     }
 
-    /// Returns `true` if this is UnsafeCell<T>.
+    /// Returns `true` if this is `UnsafeCell<T>`.
     #[inline]
     pub fn is_unsafe_cell(self) -> bool {
         self.flags().contains(AdtFlags::IS_UNSAFE_CELL)
@@ -563,6 +560,13 @@ impl<'tcx> AdtDef<'tcx> {
     /// Due to normalization being eager, this applies even if
     /// the associated type is behind a pointer (e.g., issue #31299).
     pub fn sized_constraint(self, tcx: TyCtxt<'tcx>) -> ty::EarlyBinder<&'tcx [Ty<'tcx>]> {
-        ty::EarlyBinder(tcx.adt_sized_constraint(self.did()).0)
+        ty::EarlyBinder(tcx.adt_sized_constraint(self.did()))
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+#[derive(HashStable)]
+pub enum Representability {
+    Representable,
+    Infinite,
 }

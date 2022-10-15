@@ -46,6 +46,7 @@ use std::iter;
 
 mod generics_of;
 mod item_bounds;
+mod lifetimes;
 mod predicates_of;
 mod type_of;
 
@@ -57,6 +58,7 @@ fn collect_mod_item_types(tcx: TyCtxt<'_>, module_def_id: LocalDefId) {
 }
 
 pub fn provide(providers: &mut Providers) {
+    lifetimes::provide(providers);
     *providers = Providers {
         opt_const_param_of: type_of::opt_const_param_of,
         type_of: type_of::type_of,
@@ -738,7 +740,7 @@ fn convert_impl_item(tcx: TyCtxt<'_>, impl_item_id: hir::ImplItemId) {
         hir::ImplItemKind::Fn(..) => {
             tcx.ensure().fn_sig(def_id);
         }
-        hir::ImplItemKind::TyAlias(_) => {
+        hir::ImplItemKind::Type(_) => {
             // Account for `type T = _;`
             let mut visitor = HirPlaceholderCollector::default();
             visitor.visit_impl_item(impl_item);
@@ -1580,13 +1582,6 @@ fn codegen_fn_attrs(tcx: TyCtxt<'_>, did: DefId) -> CodegenFnAttrs {
         codegen_fn_attrs.flags |= CodegenFnAttrFlags::TRACK_CALLER;
     }
 
-    // The panic_no_unwind function called by TerminatorKind::Abort will never
-    // unwind. If the panic handler that it invokes unwind then it will simply
-    // call the panic handler again.
-    if Some(did.to_def_id()) == tcx.lang_items().panic_no_unwind() {
-        codegen_fn_attrs.flags |= CodegenFnAttrFlags::NEVER_UNWIND;
-    }
-
     let supported_target_features = tcx.supported_target_features(LOCAL_CRATE);
 
     let mut inline_span = None;
@@ -1647,7 +1642,7 @@ fn codegen_fn_attrs(tcx: TyCtxt<'_>, did: DefId) -> CodegenFnAttrs {
                 )
                 .emit();
             }
-        } else if attr.has_name(sym::rustc_allocator_nounwind) {
+        } else if attr.has_name(sym::rustc_nounwind) {
             codegen_fn_attrs.flags |= CodegenFnAttrFlags::NEVER_UNWIND;
         } else if attr.has_name(sym::rustc_reallocator) {
             codegen_fn_attrs.flags |= CodegenFnAttrFlags::REALLOCATOR;

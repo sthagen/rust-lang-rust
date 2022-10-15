@@ -51,6 +51,7 @@ use termcolor::{Color, ColorSpec};
 pub mod annotate_snippet_emitter_writer;
 mod diagnostic;
 mod diagnostic_builder;
+mod diagnostic_impls;
 pub mod emitter;
 pub mod json;
 mod lock;
@@ -371,10 +372,11 @@ impl fmt::Display for ExplicitBug {
 impl error::Error for ExplicitBug {}
 
 pub use diagnostic::{
-    AddToDiagnostic, DecorateLint, Diagnostic, DiagnosticArg, DiagnosticArgFromDisplay,
-    DiagnosticArgValue, DiagnosticId, DiagnosticStyledString, IntoDiagnosticArg, SubDiagnostic,
+    AddToDiagnostic, DecorateLint, Diagnostic, DiagnosticArg, DiagnosticArgValue, DiagnosticId,
+    DiagnosticStyledString, IntoDiagnosticArg, SubDiagnostic,
 };
-pub use diagnostic_builder::{DiagnosticBuilder, EmissionGuarantee};
+pub use diagnostic_builder::{DiagnosticBuilder, EmissionGuarantee, Noted};
+pub use diagnostic_impls::DiagnosticArgFromDisplay;
 use std::backtrace::Backtrace;
 
 /// A handler deals with errors and other compiler output.
@@ -411,7 +413,7 @@ struct HandlerInner {
     /// would be unnecessary repetition.
     taught_diagnostics: FxHashSet<DiagnosticId>,
 
-    /// Used to suggest rustc --explain <error code>
+    /// Used to suggest rustc --explain `<error code>`
     emitted_diagnostic_codes: FxIndexSet<DiagnosticId>,
 
     /// This set contains a hash of every diagnostic that has been emitted by
@@ -596,6 +598,17 @@ impl Handler {
                 fulfilled_expectations: Default::default(),
             }),
         }
+    }
+
+    /// Translate `message` eagerly with `args`.
+    pub fn eagerly_translate<'a>(
+        &self,
+        message: DiagnosticMessage,
+        args: impl Iterator<Item = DiagnosticArg<'a, 'static>>,
+    ) -> SubdiagnosticMessage {
+        let inner = self.inner.borrow();
+        let args = crate::translation::to_fluent_args(args);
+        SubdiagnosticMessage::Eager(inner.emitter.translate_message(&message, &args).to_string())
     }
 
     // This is here to not allow mutation of flags;

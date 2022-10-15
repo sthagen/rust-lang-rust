@@ -62,7 +62,8 @@ enum ProjectionCandidate<'tcx> {
     /// From a where-clause in the env or object type
     ParamEnv(ty::PolyProjectionPredicate<'tcx>),
 
-    /// From the definition of `Trait` when you have something like <<A as Trait>::B as Trait2>::C
+    /// From the definition of `Trait` when you have something like
+    /// `<<A as Trait>::B as Trait2>::C`.
     TraitDef(ty::PolyProjectionPredicate<'tcx>),
 
     /// Bounds specified on an object type
@@ -71,7 +72,15 @@ enum ProjectionCandidate<'tcx> {
     /// From an "impl" (or a "pseudo-impl" returned by select)
     Select(Selection<'tcx>),
 
-    ImplTraitInTrait(ImplSourceUserDefinedData<'tcx, PredicateObligation<'tcx>>),
+    ImplTraitInTrait(ImplTraitInTraitCandidate<'tcx>),
+}
+
+#[derive(PartialEq, Eq, Debug)]
+enum ImplTraitInTraitCandidate<'tcx> {
+    // The `impl Trait` from a trait function's default body
+    Trait,
+    // A concrete type provided from a trait's `impl Trait` from an impl
+    Impl(ImplSourceUserDefinedData<'tcx, PredicateObligation<'tcx>>),
 }
 
 enum ProjectionCandidateSet<'tcx> {
@@ -557,7 +566,7 @@ impl<'a, 'b, 'tcx> TypeFolder<'tcx> for AssocTypeNormalizer<'a, 'b, 'tcx> {
                     .unwrap_or_else(|| ty.super_fold_with(self).into())
                 };
                 // For cases like #95134 we would like to catch overflows early
-                // otherwise they slip away away and cause ICE.
+                // otherwise they slip away and cause ICE.
                 let recursion_limit = self.tcx().recursion_limit();
                 if !recursion_limit.value_within_limit(self.depth)
                     // HACK: Don't overflow when running cargo doc see #100991
@@ -1318,6 +1327,19 @@ fn assemble_candidate_for_impl_trait_in_trait<'cx, 'tcx>(
     let tcx = selcx.tcx();
     if tcx.def_kind(obligation.predicate.item_def_id) == DefKind::ImplTraitPlaceholder {
         let trait_fn_def_id = tcx.impl_trait_in_trait_parent(obligation.predicate.item_def_id);
+        // If we are trying to project an RPITIT with trait's default `Self` parameter,
+        // then we must be within a default trait body.
+        if obligation.predicate.self_ty()
+            == ty::InternalSubsts::identity_for_item(tcx, obligation.predicate.item_def_id)
+                .type_at(0)
+            && tcx.associated_item(trait_fn_def_id).defaultness(tcx).has_value()
+        {
+            candidate_set.push_candidate(ProjectionCandidate::ImplTraitInTrait(
+                ImplTraitInTraitCandidate::Trait,
+            ));
+            return;
+        }
+
         let trait_def_id = tcx.parent(trait_fn_def_id);
         let trait_substs =
             obligation.predicate.substs.truncate_to(tcx, tcx.generics_of(trait_def_id));
@@ -1329,7 +1351,9 @@ fn assemble_candidate_for_impl_trait_in_trait<'cx, 'tcx>(
         let _ =
             selcx.infcx().commit_if_ok(|_| match selcx.select(&obligation.with(trait_predicate)) {
                 Ok(Some(super::ImplSource::UserDefined(data))) => {
-                    candidate_set.push_candidate(ProjectionCandidate::ImplTraitInTrait(data));
+                    candidate_set.push_candidate(ProjectionCandidate::ImplTraitInTrait(
+                        ImplTraitInTraitCandidate::Impl(data),
+                    ));
                     Ok(())
                 }
                 Ok(None) => {
@@ -1367,7 +1391,7 @@ fn assemble_candidates_from_param_env<'cx, 'tcx>(
     );
 }
 
-/// In the case of a nested projection like <<A as Foo>::FooT as Bar>::BarT, we may find
+/// In the case of a nested projection like `<<A as Foo>::FooT as Bar>::BarT`, we may find
 /// that the definition of `Foo` has some clues:
 ///
 /// ```ignore (illustrative)
@@ -1750,8 +1774,7 @@ fn assemble_candidates_from_impls<'cx, 'tcx>(
             super::ImplSource::AutoImpl(..)
             | super::ImplSource::Builtin(..)
             | super::ImplSource::TraitUpcasting(_)
-            | super::ImplSource::ConstDestruct(_)
-            | super::ImplSource::Tuple => {
+            | super::ImplSource::ConstDestruct(_) => {
                 // These traits have no associated types.
                 selcx.tcx().sess.delay_span_bug(
                     obligation.cause.span,
@@ -1792,9 +1815,18 @@ fn confirm_candidate<'cx, 'tcx>(
         ProjectionCandidate::Select(impl_source) => {
             confirm_select_candidate(selcx, obligation, impl_source)
         }
-        ProjectionCandidate::ImplTraitInTrait(data) => {
+        ProjectionCandidate::ImplTraitInTrait(ImplTraitInTraitCandidate::Impl(data)) => {
             confirm_impl_trait_in_trait_candidate(selcx, obligation, data)
         }
+        // If we're projecting an RPITIT for a default trait body, that's just
+        // the same def-id, but as an opaque type (with regular RPIT semantics).
+        ProjectionCandidate::ImplTraitInTrait(ImplTraitInTraitCandidate::Trait) => Progress {
+            term: selcx
+                .tcx()
+                .mk_opaque(obligation.predicate.item_def_id, obligation.predicate.substs)
+                .into(),
+            obligations: vec![],
+        },
     };
 
     // When checking for cycle during evaluation, we compare predicates with
@@ -1829,8 +1861,7 @@ fn confirm_select_candidate<'cx, 'tcx>(
         | super::ImplSource::Builtin(..)
         | super::ImplSource::TraitUpcasting(_)
         | super::ImplSource::TraitAlias(..)
-        | super::ImplSource::ConstDestruct(_)
-        | super::ImplSource::Tuple => {
+        | super::ImplSource::ConstDestruct(_) => {
             // we don't create Select candidates with this kind of resolution
             span_bug!(
                 obligation.cause.span,
@@ -2210,6 +2241,16 @@ fn confirm_impl_trait_in_trait_candidate<'tcx>(
     };
     if !leaf_def.item.defaultness(tcx).has_value() {
         return Progress { term: tcx.ty_error().into(), obligations };
+    }
+
+    // Use the default `impl Trait` for the trait, e.g., for a default trait body
+    if leaf_def.item.container == ty::AssocItemContainer::TraitContainer {
+        return Progress {
+            term: tcx
+                .mk_opaque(obligation.predicate.item_def_id, obligation.predicate.substs)
+                .into(),
+            obligations,
+        };
     }
 
     let impl_fn_def_id = leaf_def.item.def_id;

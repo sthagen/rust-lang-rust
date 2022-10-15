@@ -545,7 +545,11 @@ impl<'hir> LoweringContext<'_, 'hir> {
                     let ident = *ident;
                     let mut path = path.clone();
                     for seg in &mut path.segments {
-                        seg.id = self.next_node_id();
+                        // Give the cloned segment the same resolution information
+                        // as the old one (this is needed for stability checking).
+                        let new_id = self.next_node_id();
+                        self.resolver.clone_res(seg.id, new_id);
+                        seg.id = new_id;
                     }
                     let span = path.span;
 
@@ -614,7 +618,11 @@ impl<'hir> LoweringContext<'_, 'hir> {
 
                     // Give the segments new node-ids since they are being cloned.
                     for seg in &mut prefix.segments {
-                        seg.id = self.next_node_id();
+                        // Give the cloned segment the same resolution information
+                        // as the old one (this is needed for stability checking).
+                        let new_id = self.next_node_id();
+                        self.resolver.clone_res(seg.id, new_id);
+                        seg.id = new_id;
                     }
 
                     // Each `use` import is an item and thus are owners of the
@@ -804,7 +812,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                 );
                 (generics, hir::TraitItemKind::Fn(sig, hir::TraitFn::Provided(body_id)), true)
             }
-            AssocItemKind::TyAlias(box TyAlias {
+            AssocItemKind::Type(box TyAlias {
                 ref generics,
                 where_clauses,
                 ref bounds,
@@ -850,7 +858,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
     fn lower_trait_item_ref(&mut self, i: &AssocItem) -> hir::TraitItemRef {
         let kind = match &i.kind {
             AssocItemKind::Const(..) => hir::AssocItemKind::Const,
-            AssocItemKind::TyAlias(..) => hir::AssocItemKind::Type,
+            AssocItemKind::Type(..) => hir::AssocItemKind::Type,
             AssocItemKind::Fn(box Fn { sig, .. }) => {
                 hir::AssocItemKind::Fn { has_self: sig.decl.has_self() }
             }
@@ -898,7 +906,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
 
                 (generics, hir::ImplItemKind::Fn(sig, body_id))
             }
-            AssocItemKind::TyAlias(box TyAlias { generics, where_clauses, ty, .. }) => {
+            AssocItemKind::Type(box TyAlias { generics, where_clauses, ty, .. }) => {
                 let mut generics = generics.clone();
                 add_ty_alias_where_clause(&mut generics, *where_clauses, false);
                 self.lower_generics(
@@ -908,11 +916,11 @@ impl<'hir> LoweringContext<'_, 'hir> {
                     |this| match ty {
                         None => {
                             let ty = this.arena.alloc(this.ty(i.span, hir::TyKind::Err));
-                            hir::ImplItemKind::TyAlias(ty)
+                            hir::ImplItemKind::Type(ty)
                         }
                         Some(ty) => {
                             let ty = this.lower_ty(ty, &ImplTraitContext::TypeAliasesOpaqueTy);
-                            hir::ImplItemKind::TyAlias(ty)
+                            hir::ImplItemKind::Type(ty)
                         }
                     },
                 )
@@ -941,13 +949,16 @@ impl<'hir> LoweringContext<'_, 'hir> {
             span: self.lower_span(i.span),
             kind: match &i.kind {
                 AssocItemKind::Const(..) => hir::AssocItemKind::Const,
-                AssocItemKind::TyAlias(..) => hir::AssocItemKind::Type,
+                AssocItemKind::Type(..) => hir::AssocItemKind::Type,
                 AssocItemKind::Fn(box Fn { sig, .. }) => {
                     hir::AssocItemKind::Fn { has_self: sig.decl.has_self() }
                 }
                 AssocItemKind::MacCall(..) => unimplemented!(),
             },
-            trait_item_def_id: self.resolver.get_partial_res(i.id).map(|r| r.base_res().def_id()),
+            trait_item_def_id: self
+                .resolver
+                .get_partial_res(i.id)
+                .map(|r| r.expect_full_res().def_id()),
         }
     }
 
@@ -1349,9 +1360,9 @@ impl<'hir> LoweringContext<'_, 'hir> {
                 match self
                     .resolver
                     .get_partial_res(bound_pred.bounded_ty.id)
-                    .map(|d| (d.base_res(), d.unresolved_segments()))
+                    .and_then(|r| r.full_res())
                 {
-                    Some((Res::Def(DefKind::TyParam, def_id), 0))
+                    Some(Res::Def(DefKind::TyParam, def_id))
                         if bound_pred.bound_generic_params.is_empty() =>
                     {
                         generics

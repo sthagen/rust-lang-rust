@@ -442,18 +442,15 @@ function loadCss(cssFileName) {
                 return;
             }
 
-            const div = document.createElement("div");
-            div.className = "block " + shortty;
             const h3 = document.createElement("h3");
             h3.innerHTML = `<a href="index.html#${id}">${longty}</a>`;
-            div.appendChild(h3);
             const ul = document.createElement("ul");
+            ul.className = "block " + shortty;
 
             for (const item of filtered) {
                 const name = item[0];
                 const desc = item[1]; // can be null
 
-                let klass = shortty;
                 let path;
                 if (shortty === "mod") {
                     path = name + "/index.html";
@@ -461,20 +458,19 @@ function loadCss(cssFileName) {
                     path = shortty + "." + name + ".html";
                 }
                 const current_page = document.location.href.split("/").pop();
-                if (path === current_page) {
-                    klass += " current";
-                }
                 const link = document.createElement("a");
                 link.href = path;
                 link.title = desc;
-                link.className = klass;
+                if (path === current_page) {
+                    link.className = "current";
+                }
                 link.textContent = name;
                 const li = document.createElement("li");
                 li.appendChild(link);
                 ul.appendChild(li);
             }
-            div.appendChild(ul);
-            sidebar.appendChild(div);
+            sidebar.appendChild(h3);
+            sidebar.appendChild(ul);
         }
 
         if (sidebar) {
@@ -592,27 +588,25 @@ function loadCss(cssFileName) {
             return;
         }
         // Draw a convenient sidebar of known crates if we have a listing
-        const div = document.createElement("div");
-        div.className = "block crate";
-        div.innerHTML = "<h3>Crates</h3>";
+        const h3 = document.createElement("h3");
+        h3.innerHTML = "Crates";
         const ul = document.createElement("ul");
-        div.appendChild(ul);
+        ul.className = "block crate";
 
         for (const crate of window.ALL_CRATES) {
-            let klass = "crate";
-            if (window.rootPath !== "./" && crate === window.currentCrate) {
-                klass += " current";
-            }
             const link = document.createElement("a");
             link.href = window.rootPath + crate + "/index.html";
-            link.className = klass;
+            if (window.rootPath !== "./" && crate === window.currentCrate) {
+                link.className = "current";
+            }
             link.textContent = crate;
 
             const li = document.createElement("li");
             li.appendChild(link);
             ul.appendChild(li);
         }
-        sidebarElems.appendChild(div);
+        sidebarElems.appendChild(h3);
+        sidebarElems.appendChild(ul);
     }
 
 
@@ -735,14 +729,15 @@ function loadCss(cssFileName) {
     let oldSidebarScrollPosition = null;
 
     function showSidebar() {
-        if (window.innerWidth < window.RUSTDOC_MOBILE_BREAKPOINT) {
+        const mobile_topbar = document.querySelector(".mobile-topbar");
+        if (window.innerWidth < window.RUSTDOC_MOBILE_BREAKPOINT && mobile_topbar) {
             // This is to keep the scroll position on mobile.
             oldSidebarScrollPosition = window.scrollY;
             document.body.style.width = `${document.body.offsetWidth}px`;
             document.body.style.position = "fixed";
             document.body.style.top = `-${oldSidebarScrollPosition}px`;
-            document.querySelector(".mobile-topbar").style.top = `${oldSidebarScrollPosition}px`;
-            document.querySelector(".mobile-topbar").style.position = "relative";
+            mobile_topbar.style.top = `${oldSidebarScrollPosition}px`;
+            mobile_topbar.style.position = "relative";
         } else {
             oldSidebarScrollPosition = null;
         }
@@ -751,13 +746,14 @@ function loadCss(cssFileName) {
     }
 
     function hideSidebar() {
-        if (oldSidebarScrollPosition !== null) {
+        const mobile_topbar = document.querySelector(".mobile-topbar");
+        if (oldSidebarScrollPosition !== null && mobile_topbar) {
             // This is to keep the scroll position on mobile.
             document.body.style.width = "";
             document.body.style.position = "";
             document.body.style.top = "";
-            document.querySelector(".mobile-topbar").style.top = "";
-            document.querySelector(".mobile-topbar").style.position = "";
+            mobile_topbar.style.top = "";
+            mobile_topbar.style.position = "";
             // The scroll position is lost when resetting the style, hence why we store it in
             // `oldSidebarScrollPosition`.
             window.scrollTo(0, oldSidebarScrollPosition);
