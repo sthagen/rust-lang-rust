@@ -2051,6 +2051,10 @@ impl<'a> Parser<'a> {
 
         if self.token.kind == TokenKind::Semi
             && matches!(self.token_cursor.frame.delim_sp, Some((Delimiter::Parenthesis, _)))
+            // HACK: This is needed so we can detect whether we're inside a macro,
+            // where regular assumptions about what tokens can follow other tokens
+            // don't necessarily apply.
+            && self.subparser_name.is_none()
         {
             // It is likely that the closure body is a block but where the
             // braces have been removed. We will recover and eat the next
@@ -2172,7 +2176,7 @@ impl<'a> Parser<'a> {
                     },
                 ExprKind::Block(_, None) => {
                     self.sess.emit_err(IfExpressionMissingCondition {
-                        if_span: self.sess.source_map().next_point(lo),
+                        if_span: lo.shrink_to_hi(),
                         block_span: self.sess.source_map().start_point(cond_span),
                     });
                     std::mem::replace(&mut cond, this.mk_expr_err(cond_span.shrink_to_hi()))

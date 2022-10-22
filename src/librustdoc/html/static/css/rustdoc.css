@@ -171,7 +171,7 @@ h1.fqn {
 	 Rustdoc-generated h2 section headings (e.g. "Implementations", "Required Methods", etc)
 	Underlines elsewhere in the documentation break up visual flow and tend to invert
 	section hierarchies. */
-h2,
+.content h2,
 .top-doc .docblock > h3,
 .top-doc .docblock > h4 {
 	border-bottom: 1px solid var(--headings-border-bottom-color);
@@ -199,7 +199,7 @@ h1, h2, h3, h4, h5, h6,
 .out-of-band,
 span.since,
 a.srclink,
-#help-button > button,
+#help-button > a,
 details.rustdoc-toggle.top-doc > summary,
 details.rustdoc-toggle.non-exhaustive > summary,
 .scraped-example-title,
@@ -229,44 +229,44 @@ h1 a,
 	color: var(--main-color);
 }
 
-span.enum, a.enum,
-span.struct, a.struct,
-span.union, a.union,
-span.primitive, a.primitive,
-span.type, a.type,
-span.foreigntype, a.foreigntype {
+.content span.enum, .content a.enum,
+.content span.struct, .content a.struct,
+.content span.union, .content a.union,
+.content span.primitive, .content a.primitive,
+.content span.type, .content a.type,
+.content span.foreigntype, .content a.foreigntype {
 	color: var(--type-link-color);
 }
 
-span.trait, a.trait,
-span.traitalias, a.traitalias {
+.content span.trait, .content a.trait,
+.content span.traitalias, .content a.traitalias {
 	color: var(--trait-link-color);
 }
 
-span.associatedtype, a.associatedtype,
-span.constant, a.constant,
-span.static, a.static {
+.content span.associatedtype, .content a.associatedtype,
+.content span.constant, .content a.constant,
+.content span.static, .content a.static {
 	color: var(--assoc-item-link-color);
 }
 
-span.fn, a.fn,
-.fnname,
-span.method, a.method,
-span.tymethod, a.tymethod {
+.content span.fn, .content a.fn,
+.content .fnname,
+.content span.method, .content a.method,
+.content span.tymethod, .content a.tymethod {
 	color: var(--function-link-color);
 }
 
-span.attr, a.attr,
-span.derive, a.derive,
-span.macro, a.macro {
+.content span.attr, .content a.attr,
+.content span.derive, .content a.derive,
+.content span.macro, .content a.macro {
 	color: var(--macro-link-color);
 }
 
-span.mod, a.mod {
+.content span.mod, .content a.mod {
 	color: var(--mod-link-color);
 }
 
-span.keyword, a.keyword {
+.content span.keyword, .content a.keyword {
 	color: var(--keyword-link-color);
 }
 
@@ -365,22 +365,11 @@ img {
 	overflow: visible;
 }
 
-.sub-container {
-	display: flex;
-	flex-direction: row;
-	flex-wrap: nowrap;
-}
-
 .sub-logo-container {
-	display: none;
-	margin-right: 20px;
+	line-height: 0;
 }
 
-.source .sub-logo-container {
-	display: block;
-}
-
-.source .sub-logo-container > img {
+.sub-logo-container > img {
 	height: 60px;
 	width: 60px;
 	object-fit: contain;
@@ -399,15 +388,6 @@ img {
 	height: 100vh;
 	top: 0;
 	left: 0;
-}
-
-.sidebar-elems,
-.sidebar > .location {
-	padding-left: 24px;
-}
-
-.sidebar .location {
-	overflow-wrap: anywhere;
 }
 
 .rustdoc.source .sidebar {
@@ -441,6 +421,7 @@ img {
 
 .source-sidebar-expanded .source .sidebar {
 	overflow-y: auto;
+	width: 300px;
 }
 
 .source-sidebar-expanded .source .sidebar > *:not(#sidebar-toggle) {
@@ -508,8 +489,8 @@ ul.block, .block li {
 }
 
 .block a,
-.sidebar h3 a,
-h2.location a {
+.sidebar h2 a,
+.sidebar h3 a {
 	display: block;
 	padding: 0.25rem;
 	margin-left: -0.25rem;
@@ -519,8 +500,7 @@ h2.location a {
 }
 
 .sidebar h2 {
-	border-bottom: none;
-	font-weight: 500;
+	overflow-wrap: anywhere;
 	padding: 0;
 	margin: 0;
 	margin-top: 0.7rem;
@@ -529,9 +509,13 @@ h2.location a {
 
 .sidebar h3 {
 	font-size: 1.125rem; /* 18px */
-	font-weight: 500;
 	padding: 0;
 	margin: 0;
+}
+
+.sidebar-elems,
+.sidebar > h2 {
+	padding-left: 24px;
 }
 
 .sidebar a, .sidebar .current {
@@ -650,7 +634,6 @@ pre.example-line-numbers {
 .out-of-band {
 	flex-grow: 0;
 	font-size: 1.125rem;
-	font-weight: normal;
 }
 
 .docblock code, .docblock-short code,
@@ -705,15 +688,21 @@ pre, .rustdoc.source .example-wrap {
 }
 
 nav.sub {
-	position: relative;
-	font-size: 1rem;
 	flex-grow: 1;
-	margin-bottom: 25px;
+	flex-flow: row nowrap;
+	margin: 4px 0 25px 0;
+	display: flex;
+	align-items: center;
+}
+nav.sub form {
+	flex-grow: 1;
 }
 .source nav.sub {
+	margin: 0 0 15px 0;
+}
+.source nav.sub form {
 	margin-left: 32px;
 }
-nav.sub form { display: inline; }
 
 a {
 	text-decoration: none;
@@ -806,7 +795,6 @@ table,
 	position: relative;
 	display: flex;
 	height: 34px;
-	margin-top: 4px;
 }
 .search-results-title {
 	margin-top: 0;
@@ -974,32 +962,33 @@ so that we can apply CSS-filters to change the arrow color in themes */
 	color: var(--main-color);
 }
 
-#help-button .popover {
+/* use larger max-width for help popover, but not for help.html */
+#help.popover {
 	max-width: 600px;
 }
 
-#help-button .popover::before {
+#help.popover::before {
 	right: 48px;
 }
 
-#help-button dt {
+#help dt {
 	float: left;
 	clear: left;
 	display: block;
 	margin-right: 0.5rem;
 }
-#help-button span.top, #help-button span.bottom {
+#help span.top, #help span.bottom {
 	text-align: center;
 	display: block;
 	font-size: 1.125rem;
 }
-#help-button span.top {
+#help span.top {
 	margin: 10px 0;
 	border-bottom: 1px solid var(--border-color);
 	padding-bottom: 4px;
 	margin-bottom: 6px;
 }
-#help-button span.bottom {
+#help span.bottom {
 	clear: both;
 	border-top: 1px solid var(--border-color);
 }
@@ -1433,24 +1422,29 @@ h3.variant {
 	outline: none;
 }
 
-#settings-menu > a, #help-button > button, #copy-path {
-	padding: 5px;
+#settings-menu > a, #help-button > a, #copy-path {
 	width: 33px;
-	border: 1px solid var(--border-color);
-	border-radius: 2px;
 	cursor: pointer;
 	line-height: 1.5;
 }
 
-#settings-menu > a, #help-button > button {
+#settings-menu > a, #help-button > a {
 	padding: 5px;
 	height: 100%;
 	display: block;
 	background-color: var(--button-background-color);
+	border: 1px solid var(--border-color);
+	border-radius: 2px;
 }
 
 #copy-path {
 	color: var(--copy-path-button-color);
+	background: var(--main-background-color);
+	height: 34px;
+	margin-left: 10px;
+	padding: 0;
+	padding-left: 2px;
+	border: 0;
 }
 #copy-path > img {
 	filter: var(--copy-path-img-filter);
@@ -1471,40 +1465,12 @@ h3.variant {
 	animation: rotating 2s linear infinite;
 }
 
-.setting-line .radio-line input:checked {
-	box-shadow: inset 0 0 0 3px var(--main-background-color);
-	background-color: var(--settings-input-color);
-}
-.setting-line .radio-line input:focus {
-	box-shadow: 0 0 1px 1px var(--settings-input-color);
-}
-/* In here we combine both `:focus` and `:checked` properties. */
-.setting-line .radio-line input:checked:focus {
-	box-shadow: inset 0 0 0 3px var(--main-background-color),
-		0 0 2px 2px var(--settings-input-color);
-}
-.setting-line .radio-line input:hover {
-	border-color: var(--settings-input-color) !important;
-}
-input:checked + .slider {
-	background-color: var(--settings-input-color);
-}
-
-#help-button > button {
+#help-button > a {
 	text-align: center;
 	/* Rare exception to specifying font sizes in rem. Since this is acting
 	   as an icon, it's okay to specify their sizes in pixels. */
 	font-size: 20px;
 	padding-top: 2px;
-}
-
-#copy-path {
-	height: 34px;
-	background-color: var(--main-background-color);
-	margin-left: 10px;
-	padding: 0;
-	padding-left: 2px;
-	border: 0;
 }
 
 kbd {
@@ -1569,6 +1535,7 @@ details.dir-entry a {
 	https://developer.mozilla.org/en-US/docs/Web/CSS/contain */
 details.rustdoc-toggle {
 	contain: layout;
+	position: relative;
 }
 
 /* The hideme class is used on summary tags that contain a span with
@@ -1662,10 +1629,6 @@ details.rustdoc-toggle[open] > summary.hideme {
 	position: absolute;
 }
 
-details.rustdoc-toggle {
-	position: relative;
-}
-
 details.rustdoc-toggle[open] > summary.hideme > span {
 	display: none;
 }
@@ -1699,37 +1662,20 @@ details.rustdoc-toggle[open] > summary.hideme::after {
 	display: inline-block;
 }
 
-/* Media Queries */
-
-/*
-WARNING: RUSTDOC_MOBILE_BREAKPOINT MEDIA QUERY;
-If you update this line, then you also need to update the line with the same warning
-in storage.js plus the media query with (max-width: 700px)
-*/
-@media (min-width: 701px) {
-	/* In case there is no documentation before a code block, we need to add some margin at the top
-	to prevent an overlay between the "collapse toggle" and the information tooltip.
-	However, it's not needed with smaller screen width because the doc/code block is always put
-	"one line" below. */
-	.docblock > .example-wrap:first-child .tooltip {
-		margin-top: 16px;
-	}
-
-	/* When we expand the sidebar on the source code page, we hide the logo on the left of the
-	search bar to have more space. */
-	.source-sidebar-expanded .source .sidebar + main .width-limiter .sub-logo-container.rust-logo {
-		display: none;
-	}
-
-	.source-sidebar-expanded .source .sidebar {
-		width: 300px;
-	}
+/* In case there is no documentation before a code block, we need to add some margin at the top
+to prevent an overlay between the "collapse toggle" and the information tooltip.
+However, it's not needed with smaller screen width because the doc/code block is always put
+"one line" below. */
+.docblock > .example-wrap:first-child .tooltip {
+	margin-top: 16px;
 }
+
+/* Media Queries */
 
 /*
 WARNING: RUSTDOC_MOBILE_BREAKPOINT MEDIA QUERY
 If you update this line, then you also need to update the line with the same warning
-in storage.js plus the media query with (min-width: 701px)
+in storage.js
 */
 @media (max-width: 700px) {
 	/* When linking to an item with an `id` (for instance, by clicking a link in the sidebar,
@@ -1811,23 +1757,22 @@ in storage.js plus the media query with (min-width: 701px)
 		width: 0;
 	}
 
-	.mobile-topbar .location a {
-		padding: 0;
-		margin: 0;
-	}
-
-	.mobile-topbar .location {
-		border: none;
-		padding: 0;
+	.mobile-topbar h2 {
+		padding-bottom: 0;
 		margin: auto 0.5em auto auto;
-		text-overflow: ellipsis;
 		overflow: hidden;
-		white-space: nowrap;
 		/* Rare exception to specifying font sizes in rem. Since the topbar
 		   height is specified in pixels, this also has to be specified in
 		   pixels to avoid overflowing the topbar when the user sets a bigger
 		   font size. */
 		font-size: 24px;
+	}
+
+	.mobile-topbar h2 a {
+		display: block;
+		text-overflow: ellipsis;
+		overflow: hidden;
+		white-space: nowrap;
 	}
 
 	.mobile-topbar .logo-container {
@@ -1870,10 +1815,6 @@ in storage.js plus the media query with (min-width: 701px)
 
 	.content {
 		margin-left: 0px;
-	}
-
-	.source .content {
-		margin-top: 10px;
 	}
 
 	.anchor {
@@ -1984,6 +1925,11 @@ in storage.js plus the media query with (min-width: 701px)
 	.impl-items > .item-info {
 		margin-left: 34px;
 	}
+
+	.source nav.sub {
+		margin: 0;
+		padding: 8px;
+	}
 }
 
 @media print {
@@ -2003,10 +1949,6 @@ in storage.js plus the media query with (min-width: 701px)
 }
 
 @media (max-width: 464px) {
-	#crate-search {
-		border-radius: 4px;
-	}
-
 	.docblock {
 		margin-left: 12px;
 	}
@@ -2016,15 +1958,15 @@ in storage.js plus the media query with (min-width: 701px)
 		overflow-wrap: anywhere;
 	}
 
-	.sub-container {
+	nav.sub {
 		flex-direction: column;
 	}
 
-	.sub-logo-container {
-		align-self: center;
+	nav.sub form {
+		align-self: stretch;
 	}
 
-	.source .sub-logo-container > img {
+	.sub-logo-container > img {
 		height: 35px;
 		width: 35px;
 	}
@@ -2037,8 +1979,8 @@ in storage.js plus the media query with (min-width: 701px)
 	}
 }
 
-.method-toggle summary,
-.implementors-toggle summary,
+.method-toggle > summary,
+.implementors-toggle > summary,
 .impl,
 #implementors-list > .docblock,
 .impl-items > section,
@@ -2047,10 +1989,7 @@ in storage.js plus the media query with (min-width: 701px)
 	margin-bottom: 0.75em;
 }
 
-.method-toggle[open]:not(:last-child) {
-	margin-bottom: 2em;
-}
-
+.method-toggle[open]:not(:last-child),
 .implementors-toggle[open]:not(:last-child) {
 	margin-bottom: 2em;
 }

@@ -15,7 +15,7 @@ use rustc_infer::infer::region_constraints::{GenericKind, VarInfos, VerifyBound,
 use rustc_infer::infer::{InferCtxt, NllRegionVariableOrigin, RegionVariableOrigin};
 use rustc_middle::mir::{
     Body, ClosureOutlivesRequirement, ClosureOutlivesSubject, ClosureRegionRequirements,
-    ConstraintCategory, Local, Location, ReturnConstraint,
+    ConstraintCategory, Local, Location, ReturnConstraint, TerminatorKind,
 };
 use rustc_middle::traits::ObligationCause;
 use rustc_middle::traits::ObligationCauseCode;
@@ -91,7 +91,7 @@ pub struct RegionInferenceContext<'tcx> {
 
     /// Map closure bounds to a `Span` that should be used for error reporting.
     closure_bounds_mapping:
-        FxHashMap<Location, FxHashMap<(RegionVid, RegionVid), (ConstraintCategory<'tcx>, Span)>>,
+        FxHashMap<Location, FxHashMap<(RegionVid, RegionVid), (ConstraintCategory, Span)>>,
 
     /// Map universe indexes to information on why we created it.
     universe_causes: FxHashMap<ty::UniverseIndex, UniverseInfo<'tcx>>,
@@ -267,7 +267,7 @@ impl<'tcx> RegionInferenceContext<'tcx> {
         member_constraints_in: MemberConstraintSet<'tcx, RegionVid>,
         closure_bounds_mapping: FxHashMap<
             Location,
-            FxHashMap<(RegionVid, RegionVid), (ConstraintCategory<'tcx>, Span)>,
+            FxHashMap<(RegionVid, RegionVid), (ConstraintCategory, Span)>,
         >,
         universe_causes: FxHashMap<ty::UniverseIndex, UniverseInfo<'tcx>>,
         type_tests: Vec<TypeTest<'tcx>>,
@@ -1807,7 +1807,7 @@ impl<'tcx> RegionInferenceContext<'tcx> {
     pub(crate) fn retrieve_closure_constraint_info(
         &self,
         constraint: OutlivesConstraint<'tcx>,
-    ) -> Option<(ConstraintCategory<'tcx>, Span)> {
+    ) -> Option<(ConstraintCategory, Span)> {
         match constraint.locations {
             Locations::All(_) => None,
             Locations::Single(loc) => {
@@ -1822,7 +1822,7 @@ impl<'tcx> RegionInferenceContext<'tcx> {
         fr1: RegionVid,
         fr1_origin: NllRegionVariableOrigin,
         fr2: RegionVid,
-    ) -> (ConstraintCategory<'tcx>, ObligationCause<'tcx>) {
+    ) -> (ConstraintCategory, ObligationCause<'tcx>) {
         let BlameConstraint { category, cause, .. } = self
             .best_blame_constraint(fr1, fr1_origin, |r| self.provides_universal_region(r, fr1, fr2))
             .0;
@@ -2236,6 +2236,27 @@ impl<'tcx> RegionInferenceContext<'tcx> {
     pub(crate) fn universe_info(&self, universe: ty::UniverseIndex) -> UniverseInfo<'tcx> {
         self.universe_causes[&universe].clone()
     }
+
+    /// Tries to find the terminator of the loop in which the region 'r' resides.
+    /// Returns the location of the terminator if found.
+    pub(crate) fn find_loop_terminator_location(
+        &self,
+        r: RegionVid,
+        body: &Body<'_>,
+    ) -> Option<Location> {
+        let scc = self.constraint_sccs.scc(r.to_region_vid());
+        let locations = self.scc_values.locations_outlived_by(scc);
+        for location in locations {
+            let bb = &body[location.block];
+            if let Some(terminator) = &bb.terminator {
+                // terminator of a loop should be TerminatorKind::FalseUnwind
+                if let TerminatorKind::FalseUnwind { .. } = terminator.kind {
+                    return Some(location);
+                }
+            }
+        }
+        None
+    }
 }
 
 impl<'tcx> RegionDefinition<'tcx> {
@@ -2341,7 +2362,7 @@ impl<'tcx> ClosureRegionRequirementsExt<'tcx> for ClosureRegionRequirements<'tcx
 
 #[derive(Clone, Debug)]
 pub struct BlameConstraint<'tcx> {
-    pub category: ConstraintCategory<'tcx>,
+    pub category: ConstraintCategory,
     pub from_closure: bool,
     pub cause: ObligationCause<'tcx>,
     pub variance_info: ty::VarianceDiagInfo<'tcx>,

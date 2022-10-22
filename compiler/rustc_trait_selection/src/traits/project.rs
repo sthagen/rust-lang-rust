@@ -264,7 +264,7 @@ fn project_and_unify_type<'cx, 'tcx>(
     };
     debug!(?normalized, ?obligations, "project_and_unify_type result");
     let actual = obligation.predicate.term;
-    // For an example where this is neccessary see src/test/ui/impl-trait/nested-return-type2.rs
+    // For an example where this is necessary see src/test/ui/impl-trait/nested-return-type2.rs
     // This allows users to omit re-mentioning all bounds on an associated type and just use an
     // `impl Trait` for the assoc type to add more bounds.
     let InferOk { value: actual, obligations: new } =
@@ -2254,7 +2254,10 @@ fn confirm_impl_trait_in_trait_candidate<'tcx>(
     }
 
     let impl_fn_def_id = leaf_def.item.def_id;
-    let impl_fn_substs = obligation.predicate.substs.rebase_onto(tcx, trait_fn_def_id, data.substs);
+    // Rebase from {trait}::{fn}::{opaque} to {impl}::{fn}::{opaque},
+    // since `data.substs` are the impl substs.
+    let impl_fn_substs =
+        obligation.predicate.substs.rebase_onto(tcx, tcx.parent(trait_fn_def_id), data.substs);
 
     let cause = ObligationCause::new(
         obligation.cause.span,

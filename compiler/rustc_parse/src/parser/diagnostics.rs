@@ -1374,9 +1374,17 @@ impl<'a> Parser<'a> {
         kind: IncDecRecovery,
         (pre_span, post_span): (Span, Span),
     ) -> MultiSugg {
+        let mut patches = Vec::new();
+
+        if !pre_span.is_empty() {
+            patches.push((pre_span, String::new()));
+        }
+
+        patches.push((post_span, format!(" {}= 1", kind.op.chr())));
+
         MultiSugg {
             msg: format!("use `{}= 1` instead", kind.op.chr()),
-            patches: vec![(pre_span, String::new()), (post_span, format!(" {}= 1", kind.op.chr()))],
+            patches,
             applicability: Applicability::MachineApplicable,
         }
     }
@@ -1461,7 +1469,7 @@ impl<'a> Parser<'a> {
         let (prev_sp, sp) = match (&self.token.kind, self.subparser_name) {
             // Point at the end of the macro call when reaching end of macro arguments.
             (token::Eof, Some(_)) => {
-                let sp = self.sess.source_map().next_point(self.prev_token.span);
+                let sp = self.prev_token.span.shrink_to_hi();
                 (sp, sp)
             }
             // We don't want to point at the following span after DUMMY_SP.
@@ -2039,7 +2047,7 @@ impl<'a> Parser<'a> {
     pub(super) fn expected_expression_found(&self) -> DiagnosticBuilder<'a, ErrorGuaranteed> {
         let (span, msg) = match (&self.token.kind, self.subparser_name) {
             (&token::Eof, Some(origin)) => {
-                let sp = self.sess.source_map().next_point(self.prev_token.span);
+                let sp = self.prev_token.span.shrink_to_hi();
                 (sp, format!("expected expression, found end of {origin}"))
             }
             _ => (
