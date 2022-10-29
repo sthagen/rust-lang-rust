@@ -23,7 +23,7 @@ rustc_queries! {
         desc { "triggering a delay span bug" }
     }
 
-    query resolutions(_: ()) -> &'tcx ty::ResolverOutputs {
+    query resolutions(_: ()) -> &'tcx ty::ResolverGlobalCtxt {
         eval_always
         no_hash
         desc { "getting the resolver outputs" }
@@ -912,7 +912,7 @@ rustc_queries! {
         cache_on_disk_if { true }
     }
 
-    query used_trait_imports(key: LocalDefId) -> &'tcx FxHashSet<LocalDefId> {
+    query used_trait_imports(key: LocalDefId) -> &'tcx UnordSet<LocalDefId> {
         desc { |tcx| "finding used_trait_imports `{}`", tcx.def_path_str(key.to_def_id()) }
         cache_on_disk_if { true }
     }
@@ -1065,10 +1065,10 @@ rustc_queries! {
         cache_on_disk_if { key.is_local() }
     }
 
-    /// Performs part of the privacy check and computes "access levels".
-    query privacy_access_levels(_: ()) -> &'tcx AccessLevels {
+    /// Performs part of the privacy check and computes effective visibilities.
+    query effective_visibilities(_: ()) -> &'tcx EffectiveVisibilities {
         eval_always
-        desc { "checking privacy access levels" }
+        desc { "checking effective visibilities" }
     }
     query check_private_in_public(_: ()) -> () {
         eval_always
@@ -1643,14 +1643,13 @@ rustc_queries! {
         separate_provide_extern
     }
 
-    /// Computes the set of modules from which this type is visibly uninhabited.
-    /// To check whether a type is uninhabited at all (not just from a given module), you could
-    /// check whether the forest is empty.
-    query type_uninhabited_from(
-        key: ty::ParamEnvAnd<'tcx, Ty<'tcx>>
-    ) -> ty::inhabitedness::DefIdForest<'tcx> {
-        desc { "computing the inhabitedness of `{}`", key.value }
-        remap_env_constness
+    query inhabited_predicate_adt(key: DefId) -> ty::inhabitedness::InhabitedPredicate<'tcx> {
+        desc { "computing the uninhabited predicate of `{:?}`", key }
+    }
+
+    /// Do not call this query directly: invoke `Ty::inhabited_predicate` instead.
+    query inhabited_predicate_type(key: Ty<'tcx>) -> ty::inhabitedness::InhabitedPredicate<'tcx> {
+        desc { "computing the uninhabited predicate of `{}`", key }
     }
 
     query dep_kind(_: CrateNum) -> CrateDepKind {

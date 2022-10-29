@@ -20,6 +20,7 @@
 #![feature(is_terminal)]
 #![feature(staged_api)]
 #![feature(process_exitcode_internals)]
+#![feature(panic_can_unwind)]
 #![feature(test)]
 
 // Public reexports
@@ -54,6 +55,7 @@ use std::{
     collections::VecDeque,
     env, io,
     io::prelude::Write,
+    mem::ManuallyDrop,
     panic::{self, catch_unwind, AssertUnwindSafe, PanicInfo},
     process::{self, Command, Termination},
     sync::mpsc::{channel, Sender},
@@ -112,6 +114,29 @@ pub fn test_main(args: &[String], tests: Vec<TestDescAndFn>, options: Option<Opt
             process::exit(ERROR_EXIT_CODE);
         }
     } else {
+        if !opts.nocapture {
+            // If we encounter a non-unwinding panic, flush any captured output from the current test,
+            // and stop  capturing output to ensure that the non-unwinding panic message is visible.
+            // We also acquire the locks for both output streams to prevent output from other threads
+            // from interleaving with the panic message or appearing after it.
+            let builtin_panic_hook = panic::take_hook();
+            let hook = Box::new({
+                move |info: &'_ PanicInfo<'_>| {
+                    if !info.can_unwind() {
+                        std::mem::forget(std::io::stderr().lock());
+                        let mut stdout = ManuallyDrop::new(std::io::stdout().lock());
+                        if let Some(captured) = io::set_output_capture(None) {
+                            if let Ok(data) = captured.lock() {
+                                let _ = stdout.write_all(&data);
+                                let _ = stdout.flush();
+                            }
+                        }
+                    }
+                    builtin_panic_hook(info);
+                }
+            });
+            panic::set_hook(hook);
+        }
         match console::run_tests_console(&opts, tests) {
             Ok(true) => {}
             Ok(false) => process::exit(ERROR_EXIT_CODE),
@@ -247,7 +272,7 @@ where
     let event = TestEvent::TeFiltered(filtered_descs, shuffle_seed);
     notify_about_test_event(event)?;
 
-    let (filtered_tests, filtered_benchs): (Vec<_>, _) = filtered_tests
+    let (mut filtered_tests, filtered_benchs): (Vec<_>, _) = filtered_tests
         .into_iter()
         .enumerate()
         .map(|(i, e)| (TestId(i), e))
@@ -255,12 +280,12 @@ where
 
     let concurrency = opts.test_threads.unwrap_or_else(get_concurrency);
 
-    let mut remaining = filtered_tests;
     if let Some(shuffle_seed) = shuffle_seed {
-        shuffle_tests(shuffle_seed, &mut remaining);
-    } else {
-        remaining.reverse();
+        shuffle_tests(shuffle_seed, &mut filtered_tests);
     }
+    // Store the tests in a VecDeque so we can efficiently remove the first element to run the
+    // tests in the order they were passed (unless shuffled).
+    let mut remaining = VecDeque::from(filtered_tests);
     let mut pending = 0;
 
     let (tx, rx) = channel::<CompletedTest>();
@@ -300,7 +325,7 @@ where
 
     if concurrency == 1 {
         while !remaining.is_empty() {
-            let (id, test) = remaining.pop().unwrap();
+            let (id, test) = remaining.pop_front().unwrap();
             let event = TestEvent::TeWait(test.desc.clone());
             notify_about_test_event(event)?;
             let join_handle =
@@ -314,7 +339,7 @@ where
     } else {
         while pending > 0 || !remaining.is_empty() {
             while pending < concurrency && !remaining.is_empty() {
-                let (id, test) = remaining.pop().unwrap();
+                let (id, test) = remaining.pop_front().unwrap();
                 let timeout = time::get_default_test_timeout();
                 let desc = test.desc.clone();
 
@@ -425,9 +450,6 @@ pub fn filter_tests(opts: &TestOpts, tests: Vec<TestDescAndFn>) -> Vec<TestDescA
         }
         RunIgnored::No => {}
     }
-
-    // Sort the tests alphabetically
-    filtered.sort_by(|t1, t2| t1.desc.name.as_slice().cmp(t2.desc.name.as_slice()));
 
     filtered
 }

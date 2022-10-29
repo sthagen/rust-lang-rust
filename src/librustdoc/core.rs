@@ -1,6 +1,7 @@
 use rustc_ast::NodeId;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_data_structures::sync::{self, Lrc};
+use rustc_data_structures::unord::UnordSet;
 use rustc_errors::emitter::{Emitter, EmitterWriter};
 use rustc_errors::json::JsonEmitter;
 use rustc_feature::UnstableFeatures;
@@ -38,7 +39,6 @@ pub(crate) struct ResolverCaches {
     /// Traits in scope for a given module.
     /// See `collect_intra_doc_links::traits_implemented_by` for more details.
     pub(crate) traits_in_scope: DefIdMap<Vec<TraitCandidate>>,
-    pub(crate) all_traits: Option<Vec<DefId>>,
     pub(crate) all_trait_impls: Option<Vec<DefId>>,
     pub(crate) all_macro_rules: FxHashMap<Symbol, Res<NodeId>>,
 }
@@ -132,12 +132,6 @@ impl<'tcx> DocContext<'tcx> {
             // FIXME: Can this be `Some` for `Auto` or `Blanket`?
             _ => None,
         }
-    }
-
-    pub(crate) fn with_all_traits(&mut self, f: impl FnOnce(&mut Self, &[DefId])) {
-        let all_traits = self.resolver_caches.all_traits.take();
-        f(self, all_traits.as_ref().expect("`all_traits` are already borrowed"));
-        self.resolver_caches.all_traits = all_traits;
     }
 
     pub(crate) fn with_all_trait_impls(&mut self, f: impl FnOnce(&mut Self, &[DefId])) {
@@ -295,8 +289,7 @@ pub(crate) fn create_config(
             providers.typeck_item_bodies = |_, _| {};
             // hack so that `used_trait_imports` won't try to call typeck
             providers.used_trait_imports = |_, _| {
-                static EMPTY_SET: LazyLock<FxHashSet<LocalDefId>> =
-                    LazyLock::new(FxHashSet::default);
+                static EMPTY_SET: LazyLock<UnordSet<LocalDefId>> = LazyLock::new(UnordSet::default);
                 &EMPTY_SET
             };
             // In case typeck does end up being called, don't ICE in case there were name resolution errors
@@ -353,15 +346,9 @@ pub(crate) fn run_global_ctxt(
     });
     rustc_passes::stability::check_unused_or_stable_features(tcx);
 
-    let auto_traits = resolver_caches
-        .all_traits
-        .as_ref()
-        .expect("`all_traits` are already borrowed")
-        .iter()
-        .copied()
-        .filter(|&trait_def_id| tcx.trait_is_auto(trait_def_id))
-        .collect();
-    let access_levels = tcx.privacy_access_levels(()).map_id(Into::into);
+    let auto_traits =
+        tcx.all_traits().filter(|&trait_def_id| tcx.trait_is_auto(trait_def_id)).collect();
+    let effective_visibilities = tcx.effective_visibilities(()).map_id(Into::into);
 
     let mut ctxt = DocContext {
         tcx,
@@ -374,7 +361,7 @@ pub(crate) fn run_global_ctxt(
         impl_trait_bounds: Default::default(),
         generated_synthetics: Default::default(),
         auto_traits,
-        cache: Cache::new(access_levels, render_options.document_private),
+        cache: Cache::new(effective_visibilities, render_options.document_private),
         inlined: FxHashSet::default(),
         output_format,
         render_options,

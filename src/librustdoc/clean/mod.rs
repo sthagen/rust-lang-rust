@@ -415,6 +415,16 @@ fn clean_projection<'tcx>(
     cx: &mut DocContext<'tcx>,
     def_id: Option<DefId>,
 ) -> Type {
+    if cx.tcx.def_kind(ty.item_def_id) == DefKind::ImplTraitPlaceholder {
+        let bounds = cx
+            .tcx
+            .explicit_item_bounds(ty.item_def_id)
+            .iter()
+            .map(|(bound, _)| EarlyBinder(*bound).subst(cx.tcx, ty.substs))
+            .collect::<Vec<_>>();
+        return clean_middle_opaque_bounds(cx, bounds);
+    }
+
     let trait_ = clean_trait_ref_with_bindings(cx, ty.trait_ref(cx.tcx), ThinVec::new());
     let self_type = clean_middle_ty(ty.self_ty(), cx, None);
     let self_def_id = if let Some(def_id) = def_id {
@@ -774,31 +784,36 @@ fn clean_ty_generics<'tcx>(
     let mut where_predicates =
         where_predicates.into_iter().flat_map(|p| clean_predicate(*p, cx)).collect::<Vec<_>>();
 
-    // Type parameters have a Sized bound by default unless removed with
-    // ?Sized. Scan through the predicates and mark any type parameter with
-    // a Sized bound, removing the bounds as we find them.
+    // In the surface language, all type parameters except `Self` have an
+    // implicit `Sized` bound unless removed with `?Sized`.
+    // However, in the list of where-predicates below, `Sized` appears like a
+    // normal bound: It's either present (the type is sized) or
+    // absent (the type is unsized) but never *maybe* (i.e. `?Sized`).
     //
-    // Note that associated types also have a sized bound by default, but we
+    // This is unsuitable for rendering.
+    // Thus, as a first step remove all `Sized` bounds that should be implicit.
+    //
+    // Note that associated types also have an implicit `Sized` bound but we
     // don't actually know the set of associated types right here so that's
-    // handled in cleaning associated types
+    // handled when cleaning associated types.
     let mut sized_params = FxHashSet::default();
-    where_predicates.retain(|pred| match *pred {
-        WherePredicate::BoundPredicate { ty: Generic(ref g), ref bounds, .. } => {
-            if bounds.iter().any(|b| b.is_sized_bound(cx)) {
-                sized_params.insert(*g);
-                false
-            } else {
-                true
-            }
+    where_predicates.retain(|pred| {
+        if let WherePredicate::BoundPredicate { ty: Generic(g), bounds, .. } = pred
+        && *g != kw::SelfUpper
+        && bounds.iter().any(|b| b.is_sized_bound(cx))
+        {
+            sized_params.insert(*g);
+            false
+        } else {
+            true
         }
-        _ => true,
     });
 
-    // Run through the type parameters again and insert a ?Sized
-    // unbound for any we didn't find to be Sized.
+    // As a final step, go through the type parameters again and insert a
+    // `?Sized` bound for each one we didn't find to be `Sized`.
     for tp in &stripped_params {
-        if matches!(tp.kind, types::GenericParamDefKind::Type { .. })
-            && !sized_params.contains(&tp.name)
+        if let types::GenericParamDefKind::Type { .. } = tp.kind
+        && !sized_params.contains(&tp.name)
         {
             where_predicates.push(WherePredicate::BoundPredicate {
                 ty: Type::Generic(tp.name),
@@ -1027,7 +1042,7 @@ fn clean_poly_trait_ref<'tcx>(
 }
 
 fn clean_trait_item<'tcx>(trait_item: &hir::TraitItem<'tcx>, cx: &mut DocContext<'tcx>) -> Item {
-    let local_did = trait_item.def_id.to_def_id();
+    let local_did = trait_item.owner_id.to_def_id();
     cx.with_param_env(local_did, |cx| {
         let inner = match trait_item.kind {
             hir::TraitItemKind::Const(ty, Some(default)) => AssocConstItem(
@@ -1079,7 +1094,7 @@ pub(crate) fn clean_impl_item<'tcx>(
     impl_: &hir::ImplItem<'tcx>,
     cx: &mut DocContext<'tcx>,
 ) -> Item {
-    let local_did = impl_.def_id.to_def_id();
+    let local_did = impl_.owner_id.to_def_id();
     cx.with_param_env(local_did, |cx| {
         let inner = match impl_.kind {
             hir::ImplItemKind::Const(ty, expr) => {
@@ -1088,7 +1103,7 @@ pub(crate) fn clean_impl_item<'tcx>(
             }
             hir::ImplItemKind::Fn(ref sig, body) => {
                 let m = clean_function(cx, sig, impl_.generics, body);
-                let defaultness = cx.tcx.impl_defaultness(impl_.def_id);
+                let defaultness = cx.tcx.impl_defaultness(impl_.owner_id);
                 MethodItem(m, Some(defaultness))
             }
             hir::ImplItemKind::Type(hir_ty) => {
@@ -1105,7 +1120,7 @@ pub(crate) fn clean_impl_item<'tcx>(
         let mut what_rustc_thinks =
             Item::from_def_id_and_parts(local_did, Some(impl_.ident.name), inner, cx);
 
-        let impl_ref = cx.tcx.impl_trait_ref(cx.tcx.local_parent(impl_.def_id.def_id));
+        let impl_ref = cx.tcx.impl_trait_ref(cx.tcx.local_parent(impl_.owner_id.def_id));
 
         // Trait impl items always inherit the impl's visibility --
         // we don't want to show `pub`.
@@ -1416,7 +1431,7 @@ fn maybe_expand_private_type_alias<'tcx>(
     let Res::Def(DefKind::TyAlias, def_id) = path.res else { return None };
     // Substitute private type aliases
     let def_id = def_id.as_local()?;
-    let alias = if !cx.cache.access_levels.is_exported(def_id.to_def_id()) {
+    let alias = if !cx.cache.effective_visibilities.is_exported(def_id.to_def_id()) {
         &cx.tcx.hir().expect_item(def_id).kind
     } else {
         return None;
@@ -1715,59 +1730,7 @@ pub(crate) fn clean_middle_ty<'tcx>(
                 .iter()
                 .map(|(bound, _)| EarlyBinder(*bound).subst(cx.tcx, substs))
                 .collect::<Vec<_>>();
-            let mut regions = vec![];
-            let mut has_sized = false;
-            let mut bounds = bounds
-                .iter()
-                .filter_map(|bound| {
-                    let bound_predicate = bound.kind();
-                    let trait_ref = match bound_predicate.skip_binder() {
-                        ty::PredicateKind::Trait(tr) => bound_predicate.rebind(tr.trait_ref),
-                        ty::PredicateKind::TypeOutlives(ty::OutlivesPredicate(_ty, reg)) => {
-                            if let Some(r) = clean_middle_region(reg) {
-                                regions.push(GenericBound::Outlives(r));
-                            }
-                            return None;
-                        }
-                        _ => return None,
-                    };
-
-                    if let Some(sized) = cx.tcx.lang_items().sized_trait() {
-                        if trait_ref.def_id() == sized {
-                            has_sized = true;
-                            return None;
-                        }
-                    }
-
-                    let bindings: ThinVec<_> = bounds
-                        .iter()
-                        .filter_map(|bound| {
-                            if let ty::PredicateKind::Projection(proj) = bound.kind().skip_binder()
-                            {
-                                if proj.projection_ty.trait_ref(cx.tcx) == trait_ref.skip_binder() {
-                                    Some(TypeBinding {
-                                        assoc: projection_to_path_segment(proj.projection_ty, cx),
-                                        kind: TypeBindingKind::Equality {
-                                            term: clean_middle_term(proj.term, cx),
-                                        },
-                                    })
-                                } else {
-                                    None
-                                }
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-
-                    Some(clean_poly_trait_ref_with_bindings(cx, trait_ref, bindings))
-                })
-                .collect::<Vec<_>>();
-            bounds.extend(regions);
-            if !has_sized && !bounds.is_empty() {
-                bounds.insert(0, GenericBound::maybe_sized(cx));
-            }
-            ImplTrait(bounds)
+            clean_middle_opaque_bounds(cx, bounds)
         }
 
         ty::Closure(..) => panic!("Closure"),
@@ -1778,6 +1741,64 @@ pub(crate) fn clean_middle_ty<'tcx>(
         ty::Infer(..) => panic!("Infer"),
         ty::Error(_) => panic!("Error"),
     }
+}
+
+fn clean_middle_opaque_bounds<'tcx>(
+    cx: &mut DocContext<'tcx>,
+    bounds: Vec<ty::Predicate<'tcx>>,
+) -> Type {
+    let mut regions = vec![];
+    let mut has_sized = false;
+    let mut bounds = bounds
+        .iter()
+        .filter_map(|bound| {
+            let bound_predicate = bound.kind();
+            let trait_ref = match bound_predicate.skip_binder() {
+                ty::PredicateKind::Trait(tr) => bound_predicate.rebind(tr.trait_ref),
+                ty::PredicateKind::TypeOutlives(ty::OutlivesPredicate(_ty, reg)) => {
+                    if let Some(r) = clean_middle_region(reg) {
+                        regions.push(GenericBound::Outlives(r));
+                    }
+                    return None;
+                }
+                _ => return None,
+            };
+
+            if let Some(sized) = cx.tcx.lang_items().sized_trait() {
+                if trait_ref.def_id() == sized {
+                    has_sized = true;
+                    return None;
+                }
+            }
+
+            let bindings: ThinVec<_> = bounds
+                .iter()
+                .filter_map(|bound| {
+                    if let ty::PredicateKind::Projection(proj) = bound.kind().skip_binder() {
+                        if proj.projection_ty.trait_ref(cx.tcx) == trait_ref.skip_binder() {
+                            Some(TypeBinding {
+                                assoc: projection_to_path_segment(proj.projection_ty, cx),
+                                kind: TypeBindingKind::Equality {
+                                    term: clean_middle_term(proj.term, cx),
+                                },
+                            })
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            Some(clean_poly_trait_ref_with_bindings(cx, trait_ref, bindings))
+        })
+        .collect::<Vec<_>>();
+    bounds.extend(regions);
+    if !has_sized && !bounds.is_empty() {
+        bounds.insert(0, GenericBound::maybe_sized(cx));
+    }
+    ImplTrait(bounds)
 }
 
 pub(crate) fn clean_field<'tcx>(field: &hir::FieldDef<'tcx>, cx: &mut DocContext<'tcx>) -> Item {
@@ -1937,7 +1958,7 @@ fn clean_maybe_renamed_item<'tcx>(
 ) -> Vec<Item> {
     use hir::ItemKind;
 
-    let def_id = item.def_id.to_def_id();
+    let def_id = item.owner_id.to_def_id();
     let mut name = renamed.unwrap_or_else(|| cx.tcx.hir().name(item.hir_id()));
     cx.with_param_env(def_id, |cx| {
         let kind = match item.kind {
@@ -2079,11 +2100,11 @@ fn clean_extern_crate<'tcx>(
     cx: &mut DocContext<'tcx>,
 ) -> Vec<Item> {
     // this is the ID of the `extern crate` statement
-    let cnum = cx.tcx.extern_mod_stmt_cnum(krate.def_id.def_id).unwrap_or(LOCAL_CRATE);
+    let cnum = cx.tcx.extern_mod_stmt_cnum(krate.owner_id.def_id).unwrap_or(LOCAL_CRATE);
     // this is the ID of the crate itself
     let crate_def_id = cnum.as_def_id();
     let attrs = cx.tcx.hir().attrs(krate.hir_id());
-    let ty_vis = cx.tcx.visibility(krate.def_id);
+    let ty_vis = cx.tcx.visibility(krate.owner_id);
     let please_inline = ty_vis.is_public()
         && attrs.iter().any(|a| {
             a.has_name(sym::doc)
@@ -2101,7 +2122,7 @@ fn clean_extern_crate<'tcx>(
         if let Some(items) = inline::try_inline(
             cx,
             cx.tcx.parent_module(krate.hir_id()).to_def_id(),
-            Some(krate.def_id.to_def_id()),
+            Some(krate.owner_id.to_def_id()),
             res,
             name,
             Some(attrs),
@@ -2137,11 +2158,11 @@ fn clean_use_statement<'tcx>(
         return Vec::new();
     }
 
-    let visibility = cx.tcx.visibility(import.def_id);
+    let visibility = cx.tcx.visibility(import.owner_id);
     let attrs = cx.tcx.hir().attrs(import.hir_id());
     let inline_attr = attrs.lists(sym::doc).get_word_attr(sym::inline);
     let pub_underscore = visibility.is_public() && name == kw::Underscore;
-    let current_mod = cx.tcx.parent_module_from_def_id(import.def_id.def_id);
+    let current_mod = cx.tcx.parent_module_from_def_id(import.owner_id.def_id);
 
     // The parent of the module in which this import resides. This
     // is the same as `current_mod` if that's already the top
@@ -2212,7 +2233,7 @@ fn clean_use_statement<'tcx>(
         }
         if !denied {
             let mut visited = FxHashSet::default();
-            let import_def_id = import.def_id.to_def_id();
+            let import_def_id = import.owner_id.to_def_id();
 
             if let Some(mut items) = inline::try_inline(
                 cx,
@@ -2235,7 +2256,7 @@ fn clean_use_statement<'tcx>(
         Import::new_simple(name, resolve_use_source(cx, path), true)
     };
 
-    vec![Item::from_def_id_and_parts(import.def_id.to_def_id(), None, ImportItem(inner), cx)]
+    vec![Item::from_def_id_and_parts(import.owner_id.to_def_id(), None, ImportItem(inner), cx)]
 }
 
 fn clean_maybe_renamed_foreign_item<'tcx>(
@@ -2243,7 +2264,7 @@ fn clean_maybe_renamed_foreign_item<'tcx>(
     item: &hir::ForeignItem<'tcx>,
     renamed: Option<Symbol>,
 ) -> Item {
-    let def_id = item.def_id.to_def_id();
+    let def_id = item.owner_id.to_def_id();
     cx.with_param_env(def_id, |cx| {
         let kind = match item.kind {
             hir::ForeignItemKind::Fn(decl, names, generics) => {

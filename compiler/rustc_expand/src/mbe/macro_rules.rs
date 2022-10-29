@@ -250,6 +250,7 @@ fn expand_macro<'cx>(
     // hacky, but speeds up the `html5ever` benchmark significantly. (Issue
     // 68836 suggests a more comprehensive but more complex change to deal with
     // this situation.)
+    // FIXME(Nilstrieb): Stop recovery from happening on this parser and retry later with recovery if the macro failed to match.
     let parser = parser_from_cx(sess, arg.clone());
 
     // Try each arm's matchers.
@@ -598,12 +599,12 @@ pub fn compile_declarative_macro(
 
 #[derive(Subdiagnostic)]
 enum ExplainDocComment {
-    #[label(expand::explain_doc_comment_inner)]
+    #[label(expand_explain_doc_comment_inner)]
     Inner {
         #[primary_span]
         span: Span,
     },
-    #[label(expand::explain_doc_comment_outer)]
+    #[label(expand_explain_doc_comment_outer)]
     Outer {
         #[primary_span]
         span: Span,

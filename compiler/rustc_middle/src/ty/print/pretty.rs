@@ -16,6 +16,7 @@ use rustc_session::cstore::{ExternCrate, ExternCrateSource};
 use rustc_span::symbol::{kw, Ident, Symbol};
 use rustc_target::abi::Size;
 use rustc_target::spec::abi::Abi;
+use smallvec::SmallVec;
 
 use std::cell::Cell;
 use std::char;
@@ -62,6 +63,7 @@ thread_local! {
     static NO_TRIMMED_PATH: Cell<bool> = const { Cell::new(false) };
     static NO_QUERIES: Cell<bool> = const { Cell::new(false) };
     static NO_VISIBLE_PATH: Cell<bool> = const { Cell::new(false) };
+    static NO_VERBOSE_CONSTANTS: Cell<bool> = const { Cell::new(false) };
 }
 
 macro_rules! define_helper {
@@ -116,6 +118,9 @@ define_helper!(
     /// Prevent selection of visible paths. `Display` impl of DefId will prefer
     /// visible (public) reexports of types as paths.
     fn with_no_visible_paths(NoVisibleGuard, NO_VISIBLE_PATH);
+    /// Prevent verbose printing of constants. Verbose printing of constants is
+    /// never desirable in some contexts like `std::any::type_name`.
+    fn with_no_verbose_constants(NoVerboseConstantsGuard, NO_VERBOSE_CONSTANTS);
 );
 
 /// The "region highlights" are used to control region printing during
@@ -758,7 +763,7 @@ pub trait PrettyPrinter<'tcx>:
             }
             ty::Array(ty, sz) => {
                 p!("[", print(ty), "; ");
-                if self.tcx().sess.verbose() {
+                if !NO_VERBOSE_CONSTANTS.with(|flag| flag.get()) && self.tcx().sess.verbose() {
                     p!(write("{:?}", sz));
                 } else if let ty::ConstKind::Unevaluated(..) = sz.kind() {
                     // Do not try to evaluate unevaluated constants. If we are const evaluating an
@@ -794,9 +799,9 @@ pub trait PrettyPrinter<'tcx>:
         let mut traits = FxIndexMap::default();
         let mut fn_traits = FxIndexMap::default();
         let mut is_sized = false;
+        let mut lifetimes = SmallVec::<[ty::Region<'tcx>; 1]>::new();
 
-        for predicate in bounds.transpose_iter().map(|e| e.map_bound(|(p, _)| *p)) {
-            let predicate = predicate.subst(tcx, substs);
+        for (predicate, _) in bounds.subst_iter_copied(tcx, substs) {
             let bound_predicate = predicate.kind();
 
             match bound_predicate.skip_binder() {
@@ -824,6 +829,9 @@ pub trait PrettyPrinter<'tcx>:
                         &mut traits,
                         &mut fn_traits,
                     );
+                }
+                ty::PredicateKind::TypeOutlives(outlives) => {
+                    lifetimes.push(outlives.1);
                 }
                 _ => {}
             }
@@ -976,6 +984,11 @@ pub trait PrettyPrinter<'tcx>:
             write!(self, "{}?Sized", if first { "" } else { " + " })?;
         } else if first {
             write!(self, "Sized")?;
+        }
+
+        for re in lifetimes {
+            write!(self, " + ")?;
+            self = self.print_region(re)?;
         }
 
         Ok(self)
@@ -1172,7 +1185,7 @@ pub trait PrettyPrinter<'tcx>:
     ) -> Result<Self::Const, Self::Error> {
         define_scoped_cx!(self);
 
-        if self.tcx().sess.verbose() {
+        if !NO_VERBOSE_CONSTANTS.with(|flag| flag.get()) && self.tcx().sess.verbose() {
             p!(write("Const({:?}: {:?})", ct.kind(), ct.ty()));
             return Ok(self);
         }
@@ -1407,7 +1420,7 @@ pub trait PrettyPrinter<'tcx>:
     ) -> Result<Self::Const, Self::Error> {
         define_scoped_cx!(self);
 
-        if self.tcx().sess.verbose() {
+        if !NO_VERBOSE_CONSTANTS.with(|flag| flag.get()) && self.tcx().sess.verbose() {
             p!(write("ValTree({:?}: ", valtree), print(ty), ")");
             return Ok(self);
         }
@@ -2727,7 +2740,7 @@ fn for_each_def(tcx: TyCtxt<'_>, mut collect_fn: impl for<'b> FnMut(&'b Ident, N
     // Iterate all local crate items no matter where they are defined.
     let hir = tcx.hir();
     for id in hir.items() {
-        if matches!(tcx.def_kind(id.def_id), DefKind::Use) {
+        if matches!(tcx.def_kind(id.owner_id), DefKind::Use) {
             continue;
         }
 
@@ -2736,7 +2749,7 @@ fn for_each_def(tcx: TyCtxt<'_>, mut collect_fn: impl for<'b> FnMut(&'b Ident, N
             continue;
         }
 
-        let def_id = item.def_id.to_def_id();
+        let def_id = item.owner_id.to_def_id();
         let ns = tcx.def_kind(def_id).ns().unwrap_or(Namespace::TypeNS);
         collect_fn(&item.ident, ns, def_id);
     }
