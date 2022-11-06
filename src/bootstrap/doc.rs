@@ -85,18 +85,6 @@ book!(
     StyleGuide, "src/doc/style-guide", "style-guide";
 );
 
-fn open(builder: &Builder<'_>, path: impl AsRef<Path>) {
-    if builder.config.dry_run || !builder.config.cmd.open() {
-        return;
-    }
-
-    let path = path.as_ref();
-    builder.info(&format!("Opening doc {}", path.display()));
-    if let Err(err) = opener::open(path) {
-        builder.info(&format!("{}\n", err));
-    }
-}
-
 // "library/std" -> ["library", "std"]
 //
 // Used for deciding whether a particular step is one requested by the user on
@@ -240,11 +228,9 @@ impl Step for TheBook {
             invoke_rustdoc(builder, compiler, &shared_assets, target, path);
         }
 
-        if builder.was_invoked_explicitly::<Self>(Kind::Doc) {
-            let out = builder.doc_out(target);
-            let index = out.join("book").join("index.html");
-            open(builder, &index);
-        }
+        let out = builder.doc_out(target);
+        let index = out.join("book").join("index.html");
+        builder.maybe_open_in_browser::<Self>(index);
     }
 }
 
@@ -386,7 +372,7 @@ impl Step for Standalone {
         // with no particular explicit doc requested (e.g. library/core).
         if builder.paths.is_empty() || builder.was_invoked_explicitly::<Self>(Kind::Doc) {
             let index = out.join("index.html");
-            open(builder, &index);
+            builder.open_in_browser(&index);
         }
     }
 }
@@ -434,6 +420,7 @@ impl Step for SharedAssets {
 pub struct Std {
     pub stage: u32,
     pub target: TargetSelection,
+    pub format: DocumentationFormat,
 }
 
 impl Step for Std {
@@ -446,7 +433,15 @@ impl Step for Std {
     }
 
     fn make_run(run: RunConfig<'_>) {
-        run.builder.ensure(Std { stage: run.builder.top_stage, target: run.target });
+        run.builder.ensure(Std {
+            stage: run.builder.top_stage,
+            target: run.target,
+            format: if run.builder.config.cmd.json() {
+                DocumentationFormat::JSON
+            } else {
+                DocumentationFormat::HTML
+            },
+        });
     }
 
     /// Compile all standard library documentation.
@@ -456,19 +451,26 @@ impl Step for Std {
     fn run(self, builder: &Builder<'_>) {
         let stage = self.stage;
         let target = self.target;
-        let out = builder.doc_out(target);
+        let out = match self.format {
+            DocumentationFormat::HTML => builder.doc_out(target),
+            DocumentationFormat::JSON => builder.json_doc_out(target),
+        };
+
         t!(fs::create_dir_all(&out));
 
         builder.ensure(SharedAssets { target: self.target });
 
         let index_page = builder.src.join("src/doc/index.md").into_os_string();
-        let mut extra_args = vec![
-            OsStr::new("--markdown-css"),
-            OsStr::new("rust.css"),
-            OsStr::new("--markdown-no-toc"),
-            OsStr::new("--index-page"),
-            &index_page,
-        ];
+        let mut extra_args = match self.format {
+            DocumentationFormat::HTML => vec![
+                OsStr::new("--markdown-css"),
+                OsStr::new("rust.css"),
+                OsStr::new("--markdown-no-toc"),
+                OsStr::new("--index-page"),
+                &index_page,
+            ],
+            DocumentationFormat::JSON => vec![OsStr::new("--output-format"), OsStr::new("json")],
+        };
 
         if !builder.config.docs_minification {
             extra_args.push(OsStr::new("--disable-minification"));
@@ -492,56 +494,21 @@ impl Step for Std {
             })
             .collect::<Vec<_>>();
 
-        doc_std(
-            builder,
-            DocumentationFormat::HTML,
-            stage,
-            target,
-            &out,
-            &extra_args,
-            &requested_crates,
-        );
+        doc_std(builder, self.format, stage, target, &out, &extra_args, &requested_crates);
+
+        // Don't open if the format is json
+        if let DocumentationFormat::JSON = self.format {
+            return;
+        }
 
         // Look for library/std, library/core etc in the `x.py doc` arguments and
         // open the corresponding rendered docs.
         for requested_crate in requested_crates {
             if STD_PUBLIC_CRATES.iter().any(|k| *k == requested_crate.as_str()) {
                 let index = out.join(requested_crate).join("index.html");
-                open(builder, &index);
+                builder.open_in_browser(index);
             }
         }
-    }
-}
-
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct JsonStd {
-    pub stage: u32,
-    pub target: TargetSelection,
-}
-
-impl Step for JsonStd {
-    type Output = ();
-    const DEFAULT: bool = false;
-
-    fn should_run(run: ShouldRun<'_>) -> ShouldRun<'_> {
-        let default = run.builder.config.docs && run.builder.config.cmd.json();
-        run.all_krates("test").path("library").default_condition(default)
-    }
-
-    fn make_run(run: RunConfig<'_>) {
-        run.builder.ensure(Std { stage: run.builder.top_stage, target: run.target });
-    }
-
-    /// Build JSON documentation for the standard library crates.
-    ///
-    /// This is largely just a wrapper around `cargo doc`.
-    fn run(self, builder: &Builder<'_>) {
-        let stage = self.stage;
-        let target = self.target;
-        let out = builder.json_doc_out(target);
-        t!(fs::create_dir_all(&out));
-        let extra_args = [OsStr::new("--output-format"), OsStr::new("json")];
-        doc_std(builder, DocumentationFormat::JSON, stage, target, &out, &extra_args, &[])
     }
 }
 
@@ -557,7 +524,7 @@ impl Step for JsonStd {
 const STD_PUBLIC_CRATES: [&str; 5] = ["core", "alloc", "std", "proc_macro", "test"];
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-enum DocumentationFormat {
+pub enum DocumentationFormat {
     HTML,
     JSON,
 }
@@ -759,13 +726,13 @@ impl Step for Rustc {
         // Let's open the first crate documentation page:
         if let Some(krate) = to_open {
             let index = out.join(krate).join("index.html");
-            open(builder, &index);
+            builder.open_in_browser(index);
         }
     }
 }
 
 macro_rules! tool_doc {
-    ($tool: ident, $should_run: literal, $path: literal, [$($krate: literal),+ $(,)?], in_tree = $in_tree:expr $(,)?) => {
+    ($tool: ident, $should_run: literal, $path: literal, [$($krate: literal),+ $(,)?] $(,)?) => {
         #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
         pub struct $tool {
             target: TargetSelection,
@@ -821,12 +788,6 @@ macro_rules! tool_doc {
                 t!(fs::create_dir_all(&out_dir));
                 t!(symlink_dir_force(&builder.config, &out, &out_dir));
 
-                let source_type = if $in_tree == true {
-                    SourceType::InTree
-                } else {
-                    SourceType::Submodule
-                };
-
                 // Build cargo command.
                 let mut cargo = prepare_tool_cargo(
                     builder,
@@ -835,7 +796,7 @@ macro_rules! tool_doc {
                     target,
                     "doc",
                     $path,
-                    source_type,
+                    SourceType::InTree,
                     &[],
                 );
 
@@ -851,38 +812,21 @@ macro_rules! tool_doc {
                 cargo.rustdocflag("--show-type-layout");
                 cargo.rustdocflag("--generate-link-to-definition");
                 cargo.rustdocflag("-Zunstable-options");
-                if $in_tree == true {
-                    builder.run(&mut cargo.into());
-                } else {
-                    // Allow out-of-tree docs to fail (since the tool might be in a broken state).
-                    if !builder.try_run(&mut cargo.into()) {
-                        builder.info(&format!(
-                            "WARNING: tool {} failed to document; ignoring failure because it is an out-of-tree tool",
-                            stringify!($tool).to_lowercase(),
-                        ));
-                    }
-                }
+                builder.run(&mut cargo.into());
             }
         }
     }
 }
 
-tool_doc!(
-    Rustdoc,
-    "rustdoc-tool",
-    "src/tools/rustdoc",
-    ["rustdoc", "rustdoc-json-types"],
-    in_tree = true
-);
+tool_doc!(Rustdoc, "rustdoc-tool", "src/tools/rustdoc", ["rustdoc", "rustdoc-json-types"],);
 tool_doc!(
     Rustfmt,
     "rustfmt-nightly",
     "src/tools/rustfmt",
     ["rustfmt-nightly", "rustfmt-config_proc_macro"],
-    in_tree = true
 );
-tool_doc!(Clippy, "clippy", "src/tools/clippy", ["clippy_utils"], in_tree = true);
-tool_doc!(Miri, "miri", "src/tools/miri", ["miri"], in_tree = false);
+tool_doc!(Clippy, "clippy", "src/tools/clippy", ["clippy_utils"]);
+tool_doc!(Miri, "miri", "src/tools/miri", ["miri"]);
 
 #[derive(Ord, PartialOrd, Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct ErrorIndex {
@@ -1042,10 +986,9 @@ impl Step for RustcBook {
             name: INTERNER.intern_str("rustc"),
             src: INTERNER.intern_path(out_base),
         });
-        if builder.was_invoked_explicitly::<Self>(Kind::Doc) {
-            let out = builder.doc_out(self.target);
-            let index = out.join("rustc").join("index.html");
-            open(builder, &index);
-        }
+
+        let out = builder.doc_out(self.target);
+        let index = out.join("rustc").join("index.html");
+        builder.maybe_open_in_browser::<Self>(index);
     }
 }

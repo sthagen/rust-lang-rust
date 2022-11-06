@@ -271,6 +271,10 @@ rustc_queries! {
         desc { |tcx| "elaborating item bounds for `{}`", tcx.def_path_str(key) }
     }
 
+    /// Look up all native libraries this crate depends on.
+    /// These are assembled from the following places:
+    /// - `extern` blocks (depending on their `link` attributes)
+    /// - the `libs` (`-l`) option
     query native_libraries(_: CrateNum) -> Vec<NativeLib> {
         arena_cache
         desc { "looking up the native libraries of a linked crate" }
@@ -1391,6 +1395,13 @@ rustc_queries! {
         desc { "checking if the crate has_global_allocator" }
         separate_provide_extern
     }
+    query has_alloc_error_handler(_: CrateNum) -> bool {
+        // This query depends on untracked global state in CStore
+        eval_always
+        fatal_cycle
+        desc { "checking if the crate has_alloc_error_handler" }
+        separate_provide_extern
+    }
     query has_panic_handler(_: CrateNum) -> bool {
         fatal_cycle
         desc { "checking if the crate has_panic_handler" }
@@ -1532,6 +1543,7 @@ rustc_queries! {
         desc { "available upstream drop-glue for `{:?}`", substs }
     }
 
+    /// Returns a list of all `extern` blocks of a crate.
     query foreign_modules(_: CrateNum) -> FxHashMap<DefId, ForeignModule> {
         arena_cache
         desc { "looking up the foreign modules of a linked crate" }
@@ -1543,9 +1555,12 @@ rustc_queries! {
     query entry_fn(_: ()) -> Option<(DefId, EntryFnType)> {
         desc { "looking up the entry function of a crate" }
     }
+
+    /// Finds the `rustc_proc_macro_decls` item of a crate.
     query proc_macro_decls_static(_: ()) -> Option<LocalDefId> {
-        desc { "looking up the derive registrar for a crate" }
+        desc { "looking up the proc macro declarations for a crate" }
     }
+
     // The macro which defines `rustc_metadata::provide_extern` depends on this query's name.
     // Changing the name should cause a compiler error, but in case that changes, be aware.
     query crate_hash(_: CrateNum) -> Svh {
@@ -1553,17 +1568,24 @@ rustc_queries! {
         desc { "looking up the hash a crate" }
         separate_provide_extern
     }
+
+    /// Gets the hash for the host proc macro. Used to support -Z dual-proc-macro.
     query crate_host_hash(_: CrateNum) -> Option<Svh> {
         eval_always
         desc { "looking up the hash of a host version of a crate" }
         separate_provide_extern
     }
+
+    /// Gets the extra data to put in each output filename for a crate.
+    /// For example, compiling the `foo` crate with `extra-filename=-a` creates a `libfoo-b.rlib` file.
     query extra_filename(_: CrateNum) -> String {
         arena_cache
         eval_always
         desc { "looking up the extra filename for a crate" }
         separate_provide_extern
     }
+
+    /// Gets the paths where the crate came from in the file system.
     query crate_extern_paths(_: CrateNum) -> Vec<PathBuf> {
         arena_cache
         eval_always
@@ -1587,6 +1609,7 @@ rustc_queries! {
         separate_provide_extern
     }
 
+    /// Get the corresponding native library from the `native_libraries` query
     query native_library(def_id: DefId) -> Option<&'tcx NativeLib> {
         desc { |tcx| "getting the native library for `{}`", tcx.def_path_str(def_id) }
     }
@@ -1705,7 +1728,7 @@ rustc_queries! {
     }
 
     /// Returns the lang items defined in another crate by loading it from metadata.
-    query defined_lang_items(_: CrateNum) -> &'tcx [(DefId, usize)] {
+    query defined_lang_items(_: CrateNum) -> &'tcx [(DefId, LangItem)] {
         desc { "calculating the lang items defined in a crate" }
         separate_provide_extern
     }
@@ -1760,6 +1783,10 @@ rustc_queries! {
     query allocator_kind(_: ()) -> Option<AllocatorKind> {
         eval_always
         desc { "getting the allocator kind for the current crate" }
+    }
+    query alloc_error_handler_kind(_: ()) -> Option<AllocatorKind> {
+        eval_always
+        desc { "alloc error handler kind for the current crate" }
     }
 
     query upvars_mentioned(def_id: DefId) -> Option<&'tcx FxIndexMap<hir::HirId, hir::Upvar>> {

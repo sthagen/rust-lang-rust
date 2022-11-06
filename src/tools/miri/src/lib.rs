@@ -38,6 +38,8 @@
     clippy::cast_lossless,
     clippy::cast_possible_truncation,
 )]
+// Needed for rustdoc from bootstrap (with `-Znormalize-docs`).
+#![recursion_limit = "256"]
 
 extern crate rustc_apfloat;
 extern crate rustc_ast;
@@ -98,8 +100,8 @@ pub use crate::eval::{
 pub use crate::helpers::{CurrentSpan, EvalContextExt as _};
 pub use crate::intptrcast::ProvenanceMode;
 pub use crate::machine::{
-    AllocExtra, FrameData, MiriInterpCx, MiriInterpCxExt, MiriMachine, MiriMemoryKind, Provenance,
-    ProvenanceExtra, PAGE_SIZE, STACK_ADDR, STACK_SIZE,
+    AllocExtra, FrameData, MiriInterpCx, MiriInterpCxExt, MiriMachine, MiriMemoryKind,
+    PrimitiveLayouts, Provenance, ProvenanceExtra, PAGE_SIZE, STACK_ADDR, STACK_SIZE,
 };
 pub use crate::mono_hash_map::MonoHashMap;
 pub use crate::operator::EvalContextExt as _;

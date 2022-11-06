@@ -391,6 +391,7 @@ pub const BUILTIN_ATTRIBUTES: &[BuiltinAttribute] = &[
         DuplicatesOk, @only_local: true,
     ),
     ungated!(track_caller, Normal, template!(Word), WarnFollowing),
+    ungated!(instruction_set, Normal, template!(List: "set"), ErrorPreceding),
     gated!(
         no_sanitize, Normal,
         template!(List: "address, memory, thread"), DuplicatesOk,
@@ -451,11 +452,6 @@ pub const BUILTIN_ATTRIBUTES: &[BuiltinAttribute] = &[
     gated!(
         optimize, Normal, template!(List: "size|speed"), ErrorPreceding, optimize_attribute,
         experimental!(optimize),
-    ),
-    // RFC 2867
-    gated!(
-        instruction_set, Normal, template!(List: "set"), ErrorPreceding,
-        isa_attribute, experimental!(instruction_set)
     ),
 
     gated!(
@@ -554,10 +550,6 @@ pub const BUILTIN_ATTRIBUTES: &[BuiltinAttribute] = &[
     rustc_attr!(rustc_reallocator, Normal, template!(Word), WarnFollowing, IMPL_DETAIL),
     rustc_attr!(rustc_deallocator, Normal, template!(Word), WarnFollowing, IMPL_DETAIL),
     rustc_attr!(rustc_allocator_zeroed, Normal, template!(Word), WarnFollowing, IMPL_DETAIL),
-    gated!(
-        alloc_error_handler, Normal, template!(Word), WarnFollowing,
-        experimental!(alloc_error_handler)
-    ),
     gated!(
         default_lib_allocator, Normal, template!(Word), WarnFollowing, allocator_internals,
         experimental!(default_lib_allocator),

@@ -388,6 +388,9 @@ declare_features! (
     (active, exclusive_range_pattern, "1.11.0", Some(37854), None),
     /// Allows exhaustive pattern matching on types that contain uninhabited types.
     (active, exhaustive_patterns, "1.13.0", Some(51085), None),
+    /// Allows using `efiapi`, `sysv64` and `win64` as calling convention
+    /// for functions with varargs.
+    (active, extended_varargs_abi_support, "1.65.0", Some(100189), None),
     /// Allows defining `extern type`s.
     (active, extern_types, "1.23.0", Some(43467), None),
     /// Allows the use of `#[ffi_const]` on foreign functions.
@@ -412,6 +415,8 @@ declare_features! (
     (active, half_open_range_patterns_in_slices, "CURRENT_RUSTC_VERSION", Some(67264), None),
     /// Allows `if let` guard in match arms.
     (active, if_let_guard, "1.47.0", Some(51114), None),
+    /// Allows `impl Trait` as output type in `Fn` traits in return position of functions.
+    (active, impl_trait_in_fn_trait_return, "1.64.0", Some(99697), None),
     /// Allows using imported `main` function
     (active, imported_main, "1.53.0", Some(28937), None),
     /// Allows associated types in inherent impls.
@@ -422,8 +427,6 @@ declare_features! (
     (incomplete, inline_const_pat, "1.58.0", Some(76001), None),
     /// Allows using `pointer` and `reference` in intra-doc links
     (active, intra_doc_pointers, "1.51.0", Some(80896), None),
-    /// Allows `#[instruction_set(_)]` attribute
-    (active, isa_attribute, "1.48.0", Some(74727), None),
     // Allows setting the threshold for the `large_assignments` lint.
     (active, large_assignments, "1.52.0", Some(83518), None),
     /// Allows `if/while p && let q = r && ...` chains.
