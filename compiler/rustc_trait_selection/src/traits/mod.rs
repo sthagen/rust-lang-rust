@@ -12,7 +12,6 @@ pub mod error_reporting;
 mod fulfill;
 pub mod misc;
 mod object_safety;
-mod on_unimplemented;
 pub mod outlives_bounds;
 mod project;
 pub mod query;
@@ -58,7 +57,6 @@ pub use self::object_safety::astconv_object_safety_violations;
 pub use self::object_safety::is_vtable_safe_method;
 pub use self::object_safety::MethodViolationCode;
 pub use self::object_safety::ObjectSafetyViolation;
-pub use self::on_unimplemented::{OnUnimplementedDirective, OnUnimplementedNote};
 pub use self::project::{normalize, normalize_projection_type, normalize_to};
 pub use self::select::{EvaluationCache, SelectionCache, SelectionContext};
 pub use self::select::{EvaluationResult, IntercrateAmbiguityCause, OverflowError};
@@ -214,7 +212,7 @@ fn do_normalize_predicates<'tcx>(
     let predicates = match fully_normalize(&infcx, cause, elaborated_env, predicates) {
         Ok(predicates) => predicates,
         Err(errors) => {
-            let reported = infcx.err_ctxt().report_fulfillment_errors(&errors, None, false);
+            let reported = infcx.err_ctxt().report_fulfillment_errors(&errors, None);
             return Err(reported);
         }
     };
@@ -900,25 +898,13 @@ pub fn vtable_trait_upcasting_coercion_new_vptr_slot<'tcx>(
         def_id: unsize_trait_did,
         substs: tcx.mk_substs_trait(source, &[target.into()]),
     };
-    let obligation = Obligation::new(
-        ObligationCause::dummy(),
-        ty::ParamEnv::reveal_all(),
-        ty::Binder::dummy(ty::TraitPredicate {
-            trait_ref,
-            constness: ty::BoundConstness::NotConst,
-            polarity: ty::ImplPolarity::Positive,
-        }),
-    );
 
-    let infcx = tcx.infer_ctxt().build();
-    let mut selcx = SelectionContext::new(&infcx);
-    let implsrc = selcx.select(&obligation).unwrap();
-
-    let Some(ImplSource::TraitUpcasting(implsrc_traitcasting)) = implsrc else {
-        bug!();
-    };
-
-    implsrc_traitcasting.vtable_vptr_slot
+    match tcx.codegen_select_candidate((ty::ParamEnv::reveal_all(), ty::Binder::dummy(trait_ref))) {
+        Ok(ImplSource::TraitUpcasting(implsrc_traitcasting)) => {
+            implsrc_traitcasting.vtable_vptr_slot
+        }
+        otherwise => bug!("expected TraitUpcasting candidate, got {otherwise:?}"),
+    }
 }
 
 pub fn provide(providers: &mut ty::query::Providers) {

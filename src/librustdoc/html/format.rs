@@ -107,10 +107,6 @@ impl Buffer {
         self.buffer
     }
 
-    pub(crate) fn insert_str(&mut self, idx: usize, s: &str) {
-        self.buffer.insert_str(idx, s);
-    }
-
     pub(crate) fn push_str(&mut self, s: &str) {
         self.buffer.push_str(s);
     }
@@ -1232,9 +1228,8 @@ impl clean::Arguments {
     ) -> impl fmt::Display + 'a + Captures<'tcx> {
         display_fn(move |f| {
             for (i, input) in self.values.iter().enumerate() {
-                if !input.name.is_empty() {
-                    write!(f, "{}: ", input.name)?;
-                }
+                write!(f, "{}: ", input.name)?;
+
                 if f.alternate() {
                     write!(f, "{:#}", input.type_.print(cx))?;
                 } else {
@@ -1367,10 +1362,8 @@ impl clean::FnDecl {
                     args.push_str("const ");
                     args_plain.push_str("const ");
                 }
-                if !input.name.is_empty() {
-                    write!(args, "{}: ", input.name);
-                    write!(args_plain, "{}: ", input.name);
-                }
+                write!(args, "{}: ", input.name);
+                write!(args_plain, "{}: ", input.name);
 
                 if f.alternate() {
                     write!(args, "{:#}", input.type_.print(cx));

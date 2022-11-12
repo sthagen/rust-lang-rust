@@ -1653,15 +1653,29 @@ impl<'a> Parser<'a> {
             (token::CloseDelim(Delimiter::Parenthesis), Some(begin_par_sp)) => {
                 self.bump();
 
+                let sm = self.sess.source_map();
+                let left = begin_par_sp;
+                let right = self.prev_token.span;
+                let left_snippet = if let Ok(snip) = sm.span_to_prev_source(left) &&
+                        !snip.ends_with(" ") {
+                                " ".to_string()
+                            } else {
+                                "".to_string()
+                            };
+
+                let right_snippet = if let Ok(snip) = sm.span_to_next_source(right) &&
+                        !snip.starts_with(" ") {
+                                " ".to_string()
+                            } else {
+                                "".to_string()
+                        };
+
                 self.sess.emit_err(ParenthesesInForHead {
-                    span: vec![begin_par_sp, self.prev_token.span],
+                    span: vec![left, right],
                     // With e.g. `for (x) in y)` this would replace `(x) in y)`
                     // with `x) in y)` which is syntactically invalid.
                     // However, this is prevented before we get here.
-                    sugg: ParenthesesInForHeadSugg {
-                        left: begin_par_sp,
-                        right: self.prev_token.span,
-                    },
+                    sugg: ParenthesesInForHeadSugg { left, right, left_snippet, right_snippet },
                 });
 
                 // Unwrap `(pat)` into `pat` to avoid the `unused_parens` lint.
@@ -2468,11 +2482,15 @@ impl<'a> Parser<'a> {
     }
 
     pub(crate) fn maybe_recover_unexpected_block_label(&mut self) -> bool {
-        let Some(label) = self.eat_label().filter(|_| {
-            self.eat(&token::Colon) && self.token.kind == token::OpenDelim(Delimiter::Brace)
-        }) else {
+        // Check for `'a : {`
+        if !(self.check_lifetime()
+            && self.look_ahead(1, |tok| tok.kind == token::Colon)
+            && self.look_ahead(2, |tok| tok.kind == token::OpenDelim(Delimiter::Brace)))
+        {
             return false;
-        };
+        }
+        let label = self.eat_label().expect("just checked if a label exists");
+        self.bump(); // eat `:`
         let span = label.ident.span.to(self.prev_token.span);
         let mut err = self.struct_span_err(span, "block label not supported here");
         err.span_label(span, "not supported here");

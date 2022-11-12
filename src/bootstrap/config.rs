@@ -80,7 +80,7 @@ pub struct Config {
     pub keep_stage_std: Vec<u32>,
     pub src: PathBuf,
     /// defaults to `config.toml`
-    pub config: PathBuf,
+    pub config: Option<PathBuf>,
     pub jobs: Option<u32>,
     pub cmd: Subcommand,
     pub incremental: bool,
@@ -781,7 +781,7 @@ impl Config {
         config.llvm_optimize = true;
         config.ninja_in_file = true;
         config.llvm_version_check = true;
-        config.llvm_static_stdcpp = true;
+        config.llvm_static_stdcpp = false;
         config.backtrace = true;
         config.rust_optimize = true;
         config.rust_optimize_tests = true;
@@ -926,8 +926,10 @@ impl Config {
         // Give a hard error if `--config` or `RUST_BOOTSTRAP_CONFIG` are set to a missing path,
         // but not if `config.toml` hasn't been created.
         let mut toml = if !using_default_path || toml_path.exists() {
+            config.config = Some(toml_path.clone());
             get_toml(&toml_path)
         } else {
+            config.config = None;
             TomlConfig::default()
         };
 
@@ -942,7 +944,6 @@ impl Config {
         }
 
         config.changelog_seen = toml.changelog_seen;
-        config.config = toml_path;
 
         let build = toml.build.unwrap_or_default();
 

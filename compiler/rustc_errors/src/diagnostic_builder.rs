@@ -482,9 +482,9 @@ impl<'a, G: EmissionGuarantee> DiagnosticBuilder<'a, G> {
     /// In the meantime, though, callsites are required to deal with the "bug"
     /// locally in whichever way makes the most sense.
     #[track_caller]
-    pub fn delay_as_bug(&mut self) {
+    pub fn delay_as_bug(&mut self) -> G {
         self.downgrade_to_delayed_bug();
-        self.emit();
+        self.emit()
     }
 
     forward!(
@@ -599,13 +599,13 @@ impl<'a, G: EmissionGuarantee> DiagnosticBuilder<'a, G> {
         &mut self,
         sp: Span,
         msg: impl Into<SubdiagnosticMessage>,
-        suggestions: impl Iterator<Item = String>,
+        suggestions: impl IntoIterator<Item = String>,
         applicability: Applicability,
     ) -> &mut Self);
     forward!(pub fn multipart_suggestions(
         &mut self,
         msg: impl Into<SubdiagnosticMessage>,
-        suggestions: impl Iterator<Item = Vec<(Span, String)>>,
+        suggestions: impl IntoIterator<Item = Vec<(Span, String)>>,
         applicability: Applicability,
     ) -> &mut Self);
     forward!(pub fn span_suggestion_short(
