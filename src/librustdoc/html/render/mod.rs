@@ -1071,7 +1071,7 @@ fn write_impl_section_heading(w: &mut Buffer, title: &str, id: &str) {
         w,
         "<h2 id=\"{id}\" class=\"small-section-header\">\
             {title}\
-            <a href=\"#{id}\" class=\"anchor\"></a>\
+            <a href=\"#{id}\" class=\"anchor\">§</a>\
          </h2>"
     );
 }
@@ -1312,9 +1312,7 @@ pub(crate) fn notable_traits_button(ty: &clean::Type, cx: &mut Context<'_>) -> O
     if has_notable_trait {
         cx.types_with_notable_traits.insert(ty.clone());
         Some(format!(
-            "<span class=\"notable-traits\" data-ty=\"{ty}\">\
-                <span class=\"notable-traits-tooltip\">ⓘ</span>\
-            </span>",
+            " <a href=\"#\" class=\"notable-traits\" data-ty=\"{ty}\">ⓘ</a>",
             ty = Escape(&format!("{:#}", ty.print(cx))),
         ))
     } else {
@@ -1343,7 +1341,7 @@ fn notable_traits_decl(ty: &clean::Type, cx: &Context<'_>) -> (String, String) {
                 if out.is_empty() {
                     write!(
                         &mut out,
-                        "<h3 class=\"notable\">Notable traits for <code>{}</code></h3>\
+                        "<h3>Notable traits for <code>{}</code></h3>\
                      <pre class=\"content\"><code>",
                         impl_.for_.print(cx)
                     );
@@ -1538,7 +1536,7 @@ fn render_impl(
                     render_rightside(w, cx, item, containing_item, render_mode);
                     if trait_.is_some() {
                         // Anchors are only used on trait impls.
-                        write!(w, "<a href=\"#{}\" class=\"anchor\"></a>", id);
+                        write!(w, "<a href=\"#{}\" class=\"anchor\">§</a>", id);
                     }
                     w.write_str("<h4 class=\"code-header\">");
                     render_assoc_item(
@@ -1564,7 +1562,7 @@ fn render_impl(
                 render_rightside(w, cx, item, containing_item, render_mode);
                 if trait_.is_some() {
                     // Anchors are only used on trait impls.
-                    write!(w, "<a href=\"#{}\" class=\"anchor\"></a>", id);
+                    write!(w, "<a href=\"#{}\" class=\"anchor\">§</a>", id);
                 }
                 w.write_str("<h4 class=\"code-header\">");
                 assoc_const(
@@ -1589,7 +1587,7 @@ fn render_impl(
                 write!(w, "<section id=\"{}\" class=\"{}{}\">", id, item_type, in_trait_class);
                 if trait_.is_some() {
                     // Anchors are only used on trait impls.
-                    write!(w, "<a href=\"#{}\" class=\"anchor\"></a>", id);
+                    write!(w, "<a href=\"#{}\" class=\"anchor\">§</a>", id);
                 }
                 w.write_str("<h4 class=\"code-header\">");
                 assoc_type(
@@ -1615,7 +1613,7 @@ fn render_impl(
                 );
                 if trait_.is_some() {
                     // Anchors are only used on trait impls.
-                    write!(w, "<a href=\"#{}\" class=\"anchor\"></a>", id);
+                    write!(w, "<a href=\"#{}\" class=\"anchor\">§</a>", id);
                 }
                 w.write_str("<h4 class=\"code-header\">");
                 assoc_type(
@@ -1848,7 +1846,7 @@ pub(crate) fn render_impl_summary(
     };
     write!(w, "<section id=\"{}\" class=\"impl has-srclink\"{}>", id, aliases);
     render_rightside(w, cx, &i.impl_item, containing_item, RenderMode::Normal);
-    write!(w, "<a href=\"#{}\" class=\"anchor\"></a>", id);
+    write!(w, "<a href=\"#{}\" class=\"anchor\">§</a>", id);
     write!(w, "<h3 class=\"code-header\">");
 
     if let Some(use_absolute) = use_absolute {
@@ -2282,12 +2280,12 @@ fn sidebar_struct(cx: &Context<'_>, buf: &mut Buffer, it: &clean::Item, s: &clea
     let fields = get_struct_fields_name(&s.fields);
 
     if !fields.is_empty() {
-        match s.struct_type {
-            CtorKind::Fictive => {
+        match s.ctor_kind {
+            None => {
                 print_sidebar_block(&mut sidebar, "fields", "Fields", fields.iter());
             }
-            CtorKind::Fn => print_sidebar_title(&mut sidebar, "fields", "Tuple Fields"),
-            CtorKind::Const => {}
+            Some(CtorKind::Fn) => print_sidebar_title(&mut sidebar, "fields", "Tuple Fields"),
+            Some(CtorKind::Const) => {}
         }
     }
 
@@ -2917,7 +2915,7 @@ fn render_call_locations(w: &mut Buffer, cx: &mut Context<'_>, item: &clean::Ite
         );
 
         if line_ranges.len() > 1 {
-            write!(w, r#"<span class="prev">&pr;</span> <span class="next">&sc;</span>"#);
+            write!(w, r#"<button class="prev">&pr;</button> <button class="next">&sc;</button>"#);
         }
 
         // Look for the example file in the source map if it exists, otherwise return a dummy span
@@ -2939,9 +2937,6 @@ fn render_call_locations(w: &mut Buffer, cx: &mut Context<'_>, item: &clean::Ite
         })()
         .unwrap_or(rustc_span::DUMMY_SP);
 
-        // The root path is the inverse of Context::current
-        let root_path = vec!["../"; cx.current.len() - 1].join("");
-
         let mut decoration_info = FxHashMap::default();
         decoration_info.insert("highlight focus", vec![byte_ranges.remove(0)]);
         decoration_info.insert("highlight", byte_ranges);
@@ -2951,7 +2946,7 @@ fn render_call_locations(w: &mut Buffer, cx: &mut Context<'_>, item: &clean::Ite
             contents_subset,
             file_span,
             cx,
-            &root_path,
+            &cx.root_path(),
             highlight::DecorationInfo(decoration_info),
             sources::SourceContext::Embedded { offset: line_min, needs_expansion },
         );

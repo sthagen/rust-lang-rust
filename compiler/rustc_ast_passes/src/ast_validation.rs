@@ -1051,6 +1051,7 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
 
                     walk_list!(this, visit_assoc_item, items, AssocCtxt::Impl);
                 });
+                walk_list!(self, visit_attribute, &item.attrs);
                 return; // Avoid visiting again.
             }
             ItemKind::Impl(box Impl {
@@ -1168,7 +1169,7 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
                 });
                 walk_list!(self, visit_assoc_item, items, AssocCtxt::Trait);
                 walk_list!(self, visit_attribute, &item.attrs);
-                return;
+                return; // Avoid visiting again
             }
             ItemKind::Mod(unsafety, ref mod_kind) => {
                 if let Unsafe::Yes(span) = unsafety {
@@ -1636,7 +1637,7 @@ fn deny_equality_constraints(
                                     // Remove `Bar` from `Foo::Bar`.
                                     assoc_path.segments.pop();
                                     let len = assoc_path.segments.len() - 1;
-                                    let gen_args = args.as_ref().map(|p| (**p).clone());
+                                    let gen_args = args.as_deref().cloned();
                                     // Build `<Bar = RhsTy>`.
                                     let arg = AngleBracketedArg::Constraint(AssocConstraint {
                                         id: rustc_ast::node_id::DUMMY_NODE_ID,

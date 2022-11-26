@@ -26,10 +26,12 @@ pub(super) fn check_fn<'a, 'tcx>(
     param_env: ty::ParamEnv<'tcx>,
     fn_sig: ty::FnSig<'tcx>,
     decl: &'tcx hir::FnDecl<'tcx>,
-    fn_id: hir::HirId,
+    fn_def_id: LocalDefId,
     body: &'tcx hir::Body<'tcx>,
     can_be_generator: Option<hir::Movability>,
 ) -> (FnCtxt<'a, 'tcx>, Option<GeneratorTypes<'tcx>>) {
+    let fn_id = inherited.tcx.hir().local_def_id_to_hir_id(fn_def_id);
+
     // Create the function context. This is either derived from scratch or,
     // in the case of closures, based on the outer context.
     let mut fcx = FnCtxt::new(inherited, param_env, body.value.hir_id);
@@ -54,10 +56,15 @@ pub(super) fn check_fn<'a, 'tcx>(
 
     fn_maybe_err(tcx, span, fn_sig.abi);
 
-    if body.generator_kind.is_some() && can_be_generator.is_some() {
-        let yield_ty = fcx
-            .next_ty_var(TypeVariableOrigin { kind: TypeVariableOriginKind::TypeInference, span });
-        fcx.require_type_is_sized(yield_ty, span, traits::SizedYieldType);
+    if let Some(kind) = body.generator_kind && can_be_generator.is_some() {
+        let yield_ty = if kind == hir::GeneratorKind::Gen {
+            let yield_ty = fcx
+                .next_ty_var(TypeVariableOrigin { kind: TypeVariableOriginKind::TypeInference, span });
+            fcx.require_type_is_sized(yield_ty, span, traits::SizedYieldType);
+            yield_ty
+        } else {
+            tcx.mk_unit()
+        };
 
         // Resume type defaults to `()` if the generator has no argument.
         let resume_ty = fn_sig.inputs().get(0).copied().unwrap_or_else(|| tcx.mk_unit());
@@ -100,7 +107,7 @@ pub(super) fn check_fn<'a, 'tcx>(
 
     inherited.typeck_results.borrow_mut().liberated_fn_sigs_mut().insert(fn_id, fn_sig);
 
-    if let ty::Dynamic(..) = declared_ret_ty.kind() {
+    if let ty::Dynamic(_, _, ty::Dyn) = declared_ret_ty.kind() {
         // FIXME: We need to verify that the return type is `Sized` after the return expression has
         // been evaluated so that we have types available for all the nodes being returned, but that
         // requires the coerced evaluated type to be stored. Moving `check_return_expr` before this

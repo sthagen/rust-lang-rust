@@ -93,7 +93,7 @@ impl<'a, 'tcx> ObligationCtxt<'a, 'tcx> {
         def_id: DefId,
     ) {
         let tcx = self.infcx.tcx;
-        let trait_ref = ty::TraitRef { def_id, substs: tcx.mk_substs_trait(ty, &[]) };
+        let trait_ref = tcx.mk_trait_ref(def_id, [ty]);
         self.register_obligation(Obligation {
             cause,
             recursion_depth: 0,
@@ -125,6 +125,21 @@ impl<'a, 'tcx> ObligationCtxt<'a, 'tcx> {
             .map(|infer_ok| self.register_infer_ok_obligations(infer_ok))
     }
 
+    /// Checks whether `expected` is a subtype of `actual`: `expected <: actual`.
+    pub fn sub<T: ToTrace<'tcx>>(
+        &self,
+        cause: &ObligationCause<'tcx>,
+        param_env: ty::ParamEnv<'tcx>,
+        expected: T,
+        actual: T,
+    ) -> Result<(), TypeError<'tcx>> {
+        self.infcx
+            .at(cause, param_env)
+            .sup(expected, actual)
+            .map(|infer_ok| self.register_infer_ok_obligations(infer_ok))
+    }
+
+    /// Checks whether `expected` is a supertype of `actual`: `expected :> actual`.
     pub fn sup<T: ToTrace<'tcx>>(
         &self,
         cause: &ObligationCause<'tcx>,
@@ -132,13 +147,10 @@ impl<'a, 'tcx> ObligationCtxt<'a, 'tcx> {
         expected: T,
         actual: T,
     ) -> Result<(), TypeError<'tcx>> {
-        match self.infcx.at(cause, param_env).sup(expected, actual) {
-            Ok(InferOk { obligations, value: () }) => {
-                self.register_obligations(obligations);
-                Ok(())
-            }
-            Err(e) => Err(e),
-        }
+        self.infcx
+            .at(cause, param_env)
+            .sup(expected, actual)
+            .map(|infer_ok| self.register_infer_ok_obligations(infer_ok))
     }
 
     pub fn select_where_possible(&self) -> Vec<FulfillmentError<'tcx>> {

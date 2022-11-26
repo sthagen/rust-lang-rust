@@ -173,7 +173,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 }
                 ty::Opaque(def_id, substs) => {
                     self.tcx.bound_item_bounds(def_id).subst(self.tcx, substs).iter().find_map(|pred| {
-                        if let ty::PredicateKind::Projection(proj) = pred.kind().skip_binder()
+                        if let ty::PredicateKind::Clause(ty::Clause::Projection(proj)) = pred.kind().skip_binder()
                         && Some(proj.projection_ty.item_def_id) == self.tcx.lang_items().fn_once_output()
                         // args tuple will always be substs[1]
                         && let ty::Tuple(args) = proj.projection_ty.substs.type_at(1).kind()
@@ -208,7 +208,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 ty::Param(param) => {
                     let def_id = self.tcx.generics_of(self.body_id.owner).type_param(&param, self.tcx).def_id;
                     self.tcx.predicates_of(self.body_id.owner).predicates.iter().find_map(|(pred, _)| {
-                        if let ty::PredicateKind::Projection(proj) = pred.kind().skip_binder()
+                        if let ty::PredicateKind::Clause(ty::Clause::Projection(proj)) = pred.kind().skip_binder()
                         && Some(proj.projection_ty.item_def_id) == self.tcx.lang_items().fn_once_output()
                         && proj.projection_ty.self_ty() == found
                         // args tuple will always be substs[1]
@@ -374,7 +374,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                                 let annotation_span = ty.span;
                                 err.span_suggestion(
                                     annotation_span.with_hi(annotation_span.lo()),
-                                    format!("alternatively, consider changing the type annotation"),
+                                    "alternatively, consider changing the type annotation",
                                     suggest_annotation,
                                     Applicability::MaybeIncorrect,
                                 );
@@ -464,7 +464,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     ref_cnt += 1;
                 }
                 if let ty::Adt(adt, _) = peeled.kind()
-                    && self.tcx.is_diagnostic_item(sym::String, adt.did())
+                    && Some(adt.did()) == self.tcx.lang_items().string()
                 {
                     err.span_suggestion_verbose(
                         expr.span.shrink_to_hi(),
@@ -1090,14 +1090,13 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
         if let Some(into_def_id) = self.tcx.get_diagnostic_item(sym::Into)
             && self.predicate_must_hold_modulo_regions(&traits::Obligation::new(
+                self.tcx,
                 self.misc(expr.span),
                 self.param_env,
-                ty::Binder::dummy(ty::TraitRef {
-                    def_id: into_def_id,
-                    substs: self.tcx.mk_substs_trait(expr_ty, &[expected_ty.into()]),
-                })
-                .to_poly_trait_predicate()
-                .to_predicate(self.tcx),
+                ty::Binder::dummy(self.tcx.mk_trait_ref(
+                    into_def_id,
+                    [expr_ty, expected_ty]
+                )),
             ))
         {
             let sugg = if expr.precedence().order() >= PREC_POSTFIX {
@@ -1201,6 +1200,48 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     }
                 }
             }
+        }
+    }
+
+    #[instrument(skip(self, err))]
+    pub(crate) fn suggest_floating_point_literal(
+        &self,
+        err: &mut Diagnostic,
+        expr: &hir::Expr<'_>,
+        expected_ty: Ty<'tcx>,
+    ) -> bool {
+        if !expected_ty.is_floating_point() {
+            return false;
+        }
+        match expr.kind {
+            ExprKind::Struct(QPath::LangItem(LangItem::Range, ..), [start, end], _) => {
+                err.span_suggestion_verbose(
+                    start.span.shrink_to_hi().with_hi(end.span.lo()),
+                    "remove the unnecessary `.` operator for a floating point literal",
+                    '.',
+                    Applicability::MaybeIncorrect,
+                );
+                true
+            }
+            ExprKind::Struct(QPath::LangItem(LangItem::RangeFrom, ..), [start], _) => {
+                err.span_suggestion_verbose(
+                    expr.span.with_lo(start.span.hi()),
+                    "remove the unnecessary `.` operator for a floating point literal",
+                    '.',
+                    Applicability::MaybeIncorrect,
+                );
+                true
+            }
+            ExprKind::Struct(QPath::LangItem(LangItem::RangeTo, ..), [end], _) => {
+                err.span_suggestion_verbose(
+                    expr.span.until(end.span),
+                    "remove the unnecessary `.` operator and add an integer part for a floating point literal",
+                    "0.",
+                    Applicability::MaybeIncorrect,
+                );
+                true
+            }
+            _ => false,
         }
     }
 

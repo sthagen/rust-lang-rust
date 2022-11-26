@@ -10,7 +10,7 @@ use rustc_middle::ty::layout::LayoutError;
 use rustc_middle::ty::{self, Adt, TyCtxt};
 use rustc_span::hygiene::MacroKind;
 use rustc_span::symbol::{kw, sym, Symbol};
-use rustc_target::abi::{Layout, Primitive, TagEncoding, Variants};
+use rustc_target::abi::{LayoutS, Primitive, TagEncoding, VariantIdx, Variants};
 use std::cmp::Ordering;
 use std::fmt;
 use std::rc::Rc;
@@ -19,8 +19,8 @@ use super::{
     collect_paths_for_type, document, ensure_trailing_slash, get_filtered_impls_for_reference,
     item_ty_to_section, notable_traits_button, notable_traits_json, render_all_impls,
     render_assoc_item, render_assoc_items, render_attributes_in_code, render_attributes_in_pre,
-    render_impl, render_rightside, render_stability_since_raw, AssocItemLink, Context,
-    ImplRenderingParameters,
+    render_impl, render_rightside, render_stability_since_raw,
+    render_stability_since_raw_with_extra, AssocItemLink, Context, ImplRenderingParameters,
 };
 use crate::clean;
 use crate::config::ModuleSorting;
@@ -717,7 +717,7 @@ fn item_trait(w: &mut Buffer, cx: &mut Context<'_>, it: &clean::Item, t: &clean:
         write!(
             w,
             "<h2 id=\"{0}\" class=\"small-section-header\">\
-                {1}<a href=\"#{0}\" class=\"anchor\"></a>\
+                {1}<a href=\"#{0}\" class=\"anchor\">§</a>\
              </h2>{2}",
             id, title, extra_content
         )
@@ -1147,7 +1147,7 @@ fn item_union(w: &mut Buffer, cx: &mut Context<'_>, it: &clean::Item, s: &clean:
         write!(
             w,
             "<h2 id=\"fields\" class=\"fields small-section-header\">\
-                Fields<a href=\"#fields\" class=\"anchor\"></a>\
+                Fields<a href=\"#fields\" class=\"anchor\">§</a>\
             </h2>"
         );
         for (field, ty) in fields {
@@ -1156,7 +1156,7 @@ fn item_union(w: &mut Buffer, cx: &mut Context<'_>, it: &clean::Item, s: &clean:
             write!(
                 w,
                 "<span id=\"{id}\" class=\"{shortty} small-section-header\">\
-                     <a href=\"#{id}\" class=\"anchor field\"></a>\
+                     <a href=\"#{id}\" class=\"anchor field\">§</a>\
                      <code>{name}: {ty}</code>\
                  </span>",
                 id = id,
@@ -1232,7 +1232,7 @@ fn item_enum(w: &mut Buffer, cx: &mut Context<'_>, it: &clean::Item, e: &clean::
                                     w,
                                     v,
                                     None,
-                                    s.struct_type,
+                                    s.ctor_kind,
                                     &s.fields,
                                     "    ",
                                     false,
@@ -1262,35 +1262,35 @@ fn item_enum(w: &mut Buffer, cx: &mut Context<'_>, it: &clean::Item, e: &clean::
         write!(
             w,
             "<h2 id=\"variants\" class=\"variants small-section-header\">\
-                Variants{}<a href=\"#variants\" class=\"anchor\"></a>\
+                Variants{}<a href=\"#variants\" class=\"anchor\">§</a>\
             </h2>",
             document_non_exhaustive_header(it)
         );
         document_non_exhaustive(w, it);
+        write!(w, "<div class=\"variants\">");
         for variant in e.variants() {
             let id = cx.derive_id(format!("{}.{}", ItemType::Variant, variant.name.unwrap()));
             write!(
                 w,
-                "<h3 id=\"{id}\" class=\"variant small-section-header\">\
-                    <a href=\"#{id}\" class=\"anchor field\"></a>\
-                    <code>{name}",
+                "<section id=\"{id}\" class=\"variant\">\
+                    <a href=\"#{id}\" class=\"anchor\">§</a>",
                 id = id,
-                name = variant.name.unwrap()
             );
-            if let clean::VariantItem(clean::Variant::Tuple(ref s)) = *variant.kind {
-                w.write_str("(");
-                print_tuple_struct_fields(w, cx, s);
-                w.write_str(")");
-            }
-            w.write_str("</code>");
-            render_stability_since_raw(
+            render_stability_since_raw_with_extra(
                 w,
                 variant.stable_since(tcx),
                 variant.const_stability(tcx),
                 it.stable_since(tcx),
                 it.const_stable_since(tcx),
+                " rightside",
             );
-            w.write_str("</h3>");
+            write!(w, "<h3 class=\"code-header\">{name}", name = variant.name.unwrap());
+            if let clean::VariantItem(clean::Variant::Tuple(ref s)) = *variant.kind {
+                w.write_str("(");
+                print_tuple_struct_fields(w, cx, s);
+                w.write_str(")");
+            }
+            w.write_str("</h3></section>");
 
             use crate::clean::Variant;
 
@@ -1324,8 +1324,8 @@ fn item_enum(w: &mut Buffer, cx: &mut Context<'_>, it: &clean::Item, e: &clean::
                             write!(
                                 w,
                                 "<div class=\"sub-variant-field\">\
-                                 <span id=\"{id}\" class=\"variant small-section-header\">\
-                                     <a href=\"#{id}\" class=\"anchor field\"></a>\
+                                 <span id=\"{id}\" class=\"small-section-header\">\
+                                     <a href=\"#{id}\" class=\"anchor field\">§</a>\
                                      <code>{f}:&nbsp;{t}</code>\
                                  </span>",
                                 id = id,
@@ -1343,6 +1343,7 @@ fn item_enum(w: &mut Buffer, cx: &mut Context<'_>, it: &clean::Item, e: &clean::
 
             document(w, cx, variant, Some(it), HeadingOffset::H4);
         }
+        write!(w, "</div>");
     }
     let def_id = it.item_id.expect_def_id();
     render_assoc_items(w, cx, it, def_id, AssocItemRender::All);
@@ -1457,7 +1458,7 @@ fn item_struct(w: &mut Buffer, cx: &mut Context<'_>, it: &clean::Item, s: &clean
     wrap_into_item_decl(w, |w| {
         wrap_item(w, "struct", |w| {
             render_attributes_in_code(w, it);
-            render_struct(w, it, Some(&s.generics), s.struct_type, &s.fields, "", true, cx);
+            render_struct(w, it, Some(&s.generics), s.ctor_kind, &s.fields, "", true, cx);
         });
     });
 
@@ -1471,14 +1472,14 @@ fn item_struct(w: &mut Buffer, cx: &mut Context<'_>, it: &clean::Item, s: &clean
             _ => None,
         })
         .peekable();
-    if let CtorKind::Fictive | CtorKind::Fn = s.struct_type {
+    if let None | Some(CtorKind::Fn) = s.ctor_kind {
         if fields.peek().is_some() {
             write!(
                 w,
                 "<h2 id=\"fields\" class=\"fields small-section-header\">\
-                     {}{}<a href=\"#fields\" class=\"anchor\"></a>\
+                     {}{}<a href=\"#fields\" class=\"anchor\">§</a>\
                  </h2>",
-                if let CtorKind::Fictive = s.struct_type { "Fields" } else { "Tuple Fields" },
+                if s.ctor_kind.is_none() { "Fields" } else { "Tuple Fields" },
                 document_non_exhaustive_header(it)
             );
             document_non_exhaustive(w, it);
@@ -1489,7 +1490,7 @@ fn item_struct(w: &mut Buffer, cx: &mut Context<'_>, it: &clean::Item, s: &clean
                 write!(
                     w,
                     "<span id=\"{id}\" class=\"{item_type} small-section-header\">\
-                         <a href=\"#{id}\" class=\"anchor field\"></a>\
+                         <a href=\"#{id}\" class=\"anchor field\">§</a>\
                          <code>{name}: {ty}</code>\
                      </span>",
                     item_type = ItemType::StructField,
@@ -1738,7 +1739,7 @@ fn render_struct(
     w: &mut Buffer,
     it: &clean::Item,
     g: Option<&clean::Generics>,
-    ty: CtorKind,
+    ty: Option<CtorKind>,
     fields: &[clean::Item],
     tab: &str,
     structhead: bool,
@@ -1756,7 +1757,7 @@ fn render_struct(
         write!(w, "{}", g.print(cx))
     }
     match ty {
-        CtorKind::Fictive => {
+        None => {
             let where_diplayed = g.map(|g| print_where_clause_and_check(w, g, cx)).unwrap_or(false);
 
             // If there wasn't a `where` clause, we add a whitespace.
@@ -1798,7 +1799,7 @@ fn render_struct(
             }
             w.write_str("}");
         }
-        CtorKind::Fn => {
+        Some(CtorKind::Fn) => {
             w.write_str("(");
             for (i, field) in fields.iter().enumerate() {
                 if i > 0 {
@@ -1826,7 +1827,7 @@ fn render_struct(
                 w.write_str(";");
             }
         }
-        CtorKind::Const => {
+        Some(CtorKind::Const) => {
             // Needed for PhantomData.
             if let Some(g) = g {
                 write!(w, "{}", print_where_clause(g, cx, 0, Ending::NoNewline));
@@ -1891,11 +1892,11 @@ fn document_non_exhaustive(w: &mut Buffer, item: &clean::Item) {
 }
 
 fn document_type_layout(w: &mut Buffer, cx: &Context<'_>, ty_def_id: DefId) {
-    fn write_size_of_layout(w: &mut Buffer, layout: Layout<'_>, tag_size: u64) {
-        if layout.abi().is_unsized() {
+    fn write_size_of_layout(w: &mut Buffer, layout: &LayoutS<VariantIdx>, tag_size: u64) {
+        if layout.abi.is_unsized() {
             write!(w, "(unsized)");
         } else {
-            let bytes = layout.size().bytes() - tag_size;
+            let bytes = layout.size.bytes() - tag_size;
             write!(w, "{size} byte{pl}", size = bytes, pl = if bytes == 1 { "" } else { "s" },);
         }
     }
@@ -1907,7 +1908,7 @@ fn document_type_layout(w: &mut Buffer, cx: &Context<'_>, ty_def_id: DefId) {
     writeln!(
         w,
         "<h2 id=\"layout\" class=\"small-section-header\"> \
-        Layout<a href=\"#layout\" class=\"anchor\"></a></h2>"
+        Layout<a href=\"#layout\" class=\"anchor\">§</a></h2>"
     );
     writeln!(w, "<div class=\"docblock\">");
 
@@ -1926,7 +1927,7 @@ fn document_type_layout(w: &mut Buffer, cx: &Context<'_>, ty_def_id: DefId) {
                  chapter for details on type layout guarantees.</p></div>"
             );
             w.write_str("<p><strong>Size:</strong> ");
-            write_size_of_layout(w, ty_layout.layout, 0);
+            write_size_of_layout(w, &ty_layout.layout.0, 0);
             writeln!(w, "</p>");
             if let Variants::Multiple { variants, tag, tag_encoding, .. } =
                 &ty_layout.layout.variants()
@@ -1952,7 +1953,7 @@ fn document_type_layout(w: &mut Buffer, cx: &Context<'_>, ty_def_id: DefId) {
                     for (index, layout) in variants.iter_enumerated() {
                         let name = adt.variant(index).name;
                         write!(w, "<li><code>{name}</code>: ", name = name);
-                        write_size_of_layout(w, *layout, tag_size);
+                        write_size_of_layout(w, layout, tag_size);
                         writeln!(w, "</li>");
                     }
                     w.write_str("</ul>");

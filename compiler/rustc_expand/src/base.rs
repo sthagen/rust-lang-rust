@@ -507,7 +507,7 @@ impl MacResult for MacEager {
             return Some(p);
         }
         if let Some(e) = self.expr {
-            if let ast::ExprKind::Lit(_) = e.kind {
+            if matches!(e.kind, ast::ExprKind::Lit(_) | ast::ExprKind::IncludedBytes(_)) {
                 return Some(P(ast::Pat {
                     id: ast::DUMMY_NODE_ID,
                     span: e.span,
@@ -676,8 +676,13 @@ pub enum SyntaxExtensionKind {
 
     /// A token-based derive macro.
     Derive(
-        /// An expander with signature TokenStream -> TokenStream (not yet).
+        /// An expander with signature TokenStream -> TokenStream.
         /// The produced TokenSteam is appended to the input TokenSteam.
+        ///
+        /// FIXME: The text above describes how this should work. Currently it
+        /// is handled identically to `LegacyDerive`. It should be migrated to
+        /// a token-based representation like `Bang` and `Attr`, instead of
+        /// using `MultiItemModifier`.
         Box<dyn MultiItemModifier + sync::Sync + sync::Send>,
     ),
 
@@ -1226,10 +1231,10 @@ pub fn expr_to_spanned_string<'a>(
     let expr = cx.expander().fully_expand_fragment(AstFragment::Expr(expr)).make_expr();
 
     Err(match expr.kind {
-        ast::ExprKind::Lit(ref l) => match l.kind {
-            ast::LitKind::Str(s, style) => return Ok((s, style, expr.span)),
-            ast::LitKind::ByteStr(_) => {
-                let mut err = cx.struct_span_err(l.span, err_msg);
+        ast::ExprKind::Lit(token_lit) => match ast::LitKind::from_token_lit(token_lit) {
+            Ok(ast::LitKind::Str(s, style)) => return Ok((s, style, expr.span)),
+            Ok(ast::LitKind::ByteStr(_)) => {
+                let mut err = cx.struct_span_err(expr.span, err_msg);
                 let span = expr.span.shrink_to_lo();
                 err.span_suggestion(
                     span.with_hi(span.lo() + BytePos(1)),
@@ -1239,8 +1244,9 @@ pub fn expr_to_spanned_string<'a>(
                 );
                 Some((err, true))
             }
-            ast::LitKind::Err => None,
-            _ => Some((cx.struct_span_err(l.span, err_msg), false)),
+            Ok(ast::LitKind::Err) => None,
+            Err(_) => None,
+            _ => Some((cx.struct_span_err(expr.span, err_msg), false)),
         },
         ast::ExprKind::Err => None,
         _ => Some((cx.struct_span_err(expr.span, err_msg), false)),
@@ -1435,7 +1441,7 @@ fn pretty_printing_compatibility_hack(item: &Item, sess: &ParseSess) -> bool {
                             let crate_matches = if c.starts_with("allsorts-rental") {
                                 true
                             } else {
-                                let mut version = c.trim_start_matches("rental-").split(".");
+                                let mut version = c.trim_start_matches("rental-").split('.');
                                 version.next() == Some("0")
                                     && version.next() == Some("5")
                                     && version

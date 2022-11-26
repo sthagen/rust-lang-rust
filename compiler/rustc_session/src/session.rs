@@ -538,8 +538,11 @@ impl Session {
     pub fn has_errors(&self) -> Option<ErrorGuaranteed> {
         self.diagnostic().has_errors()
     }
-    pub fn has_errors_or_delayed_span_bugs(&self) -> bool {
+    pub fn has_errors_or_delayed_span_bugs(&self) -> Option<ErrorGuaranteed> {
         self.diagnostic().has_errors_or_delayed_span_bugs()
+    }
+    pub fn is_compilation_going_to_fail(&self) -> Option<ErrorGuaranteed> {
+        self.diagnostic().is_compilation_going_to_fail()
     }
     pub fn abort_if_errors(&self) {
         self.diagnostic().abort_if_errors();
@@ -562,7 +565,10 @@ impl Session {
         if self.err_count() == old_count {
             Ok(result)
         } else {
-            Err(ErrorGuaranteed::unchecked_claim_error_was_emitted())
+            Err(self.delay_span_bug(
+                rustc_span::DUMMY_SP,
+                "`self.err_count()` changed but an error was not emitted",
+            ))
         }
     }
     #[allow(rustc::untranslatable_diagnostic)]
@@ -1354,7 +1360,7 @@ pub fn build_session(
         let profiler = SelfProfiler::new(
             directory,
             sopts.crate_name.as_deref(),
-            sopts.unstable_opts.self_profile_events.as_ref().map(|xs| &xs[..]),
+            sopts.unstable_opts.self_profile_events.as_deref(),
             &sopts.unstable_opts.self_profile_counter,
         );
         match profiler {
@@ -1388,7 +1394,7 @@ pub fn build_session(
         local_crate_source_file.map(|path| file_path_mapping.map_prefix(path).0);
 
     let optimization_fuel = Lock::new(OptimizationFuel {
-        remaining: sopts.unstable_opts.fuel.as_ref().map_or(0, |i| i.1),
+        remaining: sopts.unstable_opts.fuel.as_ref().map_or(0, |&(_, i)| i),
         out_of_fuel: false,
     });
     let print_fuel = AtomicU64::new(0);

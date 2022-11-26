@@ -65,7 +65,7 @@ use rustc_data_structures::fx::{FxIndexMap, FxIndexSet};
 use rustc_errors::{pluralize, struct_span_err, Diagnostic, ErrorGuaranteed, IntoDiagnosticArg};
 use rustc_errors::{Applicability, DiagnosticBuilder, DiagnosticStyledString, MultiSpan};
 use rustc_hir as hir;
-use rustc_hir::def::DefKind;
+use rustc_hir::def::{CtorKind, DefKind};
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_hir::intravisit::Visitor;
 use rustc_hir::lang_items::LangItem;
@@ -261,6 +261,7 @@ fn label_msg_span(
     }
 }
 
+#[instrument(level = "trace", skip(tcx))]
 pub fn unexpected_hidden_region_diagnostic<'tcx>(
     tcx: TyCtxt<'tcx>,
     span: Span,
@@ -350,7 +351,7 @@ impl<'tcx> InferCtxt<'tcx> {
                 let output = predicate
                     .kind()
                     .map_bound(|kind| match kind {
-                        ty::PredicateKind::Projection(projection_predicate)
+                        ty::PredicateKind::Clause(ty::Clause::Projection(projection_predicate))
                             if projection_predicate.projection_ty.item_def_id == item_def_id =>
                         {
                             projection_predicate.term.ty()
@@ -542,7 +543,7 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
 
             fn print_dyn_existential(
                 self,
-                _predicates: &'tcx ty::List<ty::Binder<'tcx, ty::ExistentialPredicate<'tcx>>>,
+                _predicates: &'tcx ty::List<ty::PolyExistentialPredicate<'tcx>>,
             ) -> Result<Self::DynExistential, Self::Error> {
                 Err(NonTrivialPath)
             }
@@ -1966,7 +1967,7 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                     .variants()
                     .iter()
                     .filter(|variant| {
-                        variant.fields.len() == 1 && variant.ctor_kind == hir::def::CtorKind::Fn
+                        variant.fields.len() == 1 && variant.ctor_kind() == Some(CtorKind::Fn)
                     })
                     .filter_map(|variant| {
                         let sole_field = &variant.fields[0];
@@ -2936,6 +2937,11 @@ impl<'tcx> TypeRelation<'tcx> for SameTypeModuloInfer<'_, 'tcx> {
         self.0.tcx
     }
 
+    fn intercrate(&self) -> bool {
+        assert!(!self.0.intercrate);
+        false
+    }
+
     fn param_env(&self) -> ty::ParamEnv<'tcx> {
         // Unused, only for consts which we treat as always equal
         ty::ParamEnv::empty()
@@ -2947,6 +2953,10 @@ impl<'tcx> TypeRelation<'tcx> for SameTypeModuloInfer<'_, 'tcx> {
 
     fn a_is_expected(&self) -> bool {
         true
+    }
+
+    fn mark_ambiguous(&mut self) {
+        bug!()
     }
 
     fn relate_with_variance<T: relate::Relate<'tcx>>(

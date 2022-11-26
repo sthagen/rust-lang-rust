@@ -542,10 +542,10 @@ fn check_must_not_suspend_ty<'tcx>(
     data: SuspendCheckData<'_, 'tcx>,
 ) -> bool {
     if ty.is_unit()
-    // FIXME: should this check `is_ty_uninhabited_from`. This query is not available in this stage
+    // FIXME: should this check `Ty::is_inhabited_from`. This query is not available in this stage
     // of typeck (before ReVar and RePlaceholder are removed), but may remove noise, like in
     // `must_use`
-    // || fcx.tcx.is_ty_uninhabited_from(fcx.tcx.parent_module(hir_id).to_def_id(), ty, fcx.param_env)
+    // || !ty.is_inhabited_from(fcx.tcx, fcx.tcx.parent_module(hir_id).to_def_id(), fcx.param_env)
     {
         return false;
     }
@@ -566,7 +566,7 @@ fn check_must_not_suspend_ty<'tcx>(
             let mut has_emitted = false;
             for &(predicate, _) in fcx.tcx.explicit_item_bounds(def) {
                 // We only look at the `DefId`, so it is safe to skip the binder here.
-                if let ty::PredicateKind::Trait(ref poly_trait_predicate) =
+                if let ty::PredicateKind::Clause(ty::Clause::Trait(ref poly_trait_predicate)) =
                     predicate.kind().skip_binder()
                 {
                     let def_id = poly_trait_predicate.trait_ref.def_id;

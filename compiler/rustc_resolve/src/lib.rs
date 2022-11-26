@@ -73,6 +73,7 @@ mod check_unused;
 mod def_collector;
 mod diagnostics;
 mod effective_visibilities;
+mod errors;
 mod ident;
 mod imports;
 mod late;
@@ -1919,7 +1920,7 @@ impl<'a> Resolver<'a> {
         if let Some(def_id) = def_id.as_local() {
             self.reexport_map.get(&def_id).cloned().unwrap_or_default()
         } else {
-            self.cstore().module_children_untracked(def_id, self.session)
+            self.cstore().module_children_untracked(def_id, self.session).collect()
         }
     }
 
@@ -1930,6 +1931,11 @@ impl<'a> Resolver<'a> {
             MacroRulesScope::Binding(mb) => (scope, mb.binding.res()),
             _ => unreachable!(),
         }
+    }
+
+    /// For rustdoc.
+    pub fn get_partial_res(&self, node_id: NodeId) -> Option<PartialRes> {
+        self.partial_res_map.get(&node_id).copied()
     }
 
     /// Retrieves the span of the given `DefId` if `DefId` is in the local crate.

@@ -85,7 +85,7 @@ pub enum MirPhase {
     ///
     /// Also note that the lint pass which reports eg `200_u8 + 200_u8` as an error is run as a part
     /// of analysis to runtime MIR lowering. To ensure lints are reported reliably, this means that
-    /// transformations which may supress such errors should not run on analysis MIR.
+    /// transformations which may suppress such errors should not run on analysis MIR.
     Runtime(RuntimePhase),
 }
 
@@ -1185,7 +1185,8 @@ pub enum NullOp {
     AlignOf,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, TyEncodable, TyDecodable, Hash, HashStable)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(HashStable, TyEncodable, TyDecodable, TypeFoldable, TypeVisitable)]
 pub enum UnOp {
     /// The `!` operator for logical inversion
     Not,
@@ -1193,7 +1194,8 @@ pub enum UnOp {
     Neg,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, PartialOrd, Eq, TyEncodable, TyDecodable, Hash, HashStable)]
+#[derive(Copy, Clone, Debug, PartialEq, PartialOrd, Ord, Eq, Hash)]
+#[derive(TyEncodable, TyDecodable, HashStable, TypeFoldable, TypeVisitable)]
 pub enum BinOp {
     /// The `+` operator (addition)
     Add,

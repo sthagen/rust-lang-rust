@@ -1,10 +1,5 @@
 # Miri
 
-[![Actions build status][actions-badge]][actions-url]
-
-[actions-badge]: https://github.com/rust-lang/miri/workflows/CI/badge.svg?branch=master
-[actions-url]: https://github.com/rust-lang/miri/actions
-
 An experimental interpreter for [Rust][rust]'s
 [mid-level intermediate representation][mir] (MIR). It can run binaries and
 test suites of cargo projects and detect certain classes of
@@ -200,7 +195,7 @@ randomness that is used to determine allocation base addresses. The following
 snippet calls Miri in a loop with different values for the seed:
 
 ```
-for SEED in $({ echo obase=16; seq 0 255; } | bc); do
+for SEED in $(seq 0 255); do
   echo "Trying seed: $SEED"
   MIRIFLAGS=-Zmiri-seed=$SEED cargo miri test || { echo "Failing seed: $SEED"; break; };
 done
@@ -308,7 +303,7 @@ environment variable. We first document the most relevant and most commonly used
   tell what it is doing when a program just keeps running. You can customize how frequently the
   report is printed via `-Zmiri-report-progress=<blocks>`, which prints the report every N basic
   blocks.
-* `-Zmiri-seed=<hex>` configures the seed of the RNG that Miri uses to resolve non-determinism. This
+* `-Zmiri-seed=<num>` configures the seed of the RNG that Miri uses to resolve non-determinism. This
   RNG is used to pick base addresses for allocations, to determine preemption and failure of
   `compare_exchange_weak`, and to control store buffering for weak memory emulation. When isolation
   is enabled (the default), this is also used to emulate system entropy. The default seed is 0. You
@@ -432,7 +427,9 @@ Moreover, Miri recognizes some environment variables:
   must point to the `library` subdirectory of a `rust-lang/rust` repository
   checkout. Note that changing files in that directory does not automatically
   trigger a re-build of the standard library; you have to clear the Miri build
-  cache manually (on Linux, `rm -rf ~/.cache/miri`).
+  cache manually (on Linux, `rm -rf ~/.cache/miri`;
+  on Windows, `rmdir /S "%LOCALAPPDATA%\rust-lang\miri\cache"`;
+  and on macOS, `rm -rf ~/Library/Caches/org.rust-lang.miri`).
 * `MIRI_SYSROOT` (recognized by `cargo miri` and the Miri driver) indicates the sysroot to use. When
   using `cargo miri`, this skips the automatic setup -- only set this if you do not want to use the
   automatically created sysroot. For directly invoking the Miri driver, this variable (or a
@@ -568,6 +565,15 @@ extern "Rust" {
     /// program) the contents of a section of program memory, as bytes. Bytes
     /// written using this function will emerge from the interpreter's stderr.
     fn miri_write_to_stderr(bytes: &[u8]);
+
+    /// Miri-provided extern function to allocate memory from the interpreter.
+    /// 
+    /// This is useful when no fundamental way of allocating memory is
+    /// available, e.g. when using `no_std` + `alloc`.
+    fn miri_alloc(size: usize, align: usize) -> *mut u8;
+
+    /// Miri-provided extern function to deallocate memory.
+    fn miri_dealloc(ptr: *mut u8, size: usize, align: usize);
 }
 ```
 
