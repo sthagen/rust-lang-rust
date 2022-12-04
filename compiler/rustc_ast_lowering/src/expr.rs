@@ -176,6 +176,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                     fn_decl,
                     body,
                     fn_decl_span,
+                    fn_arg_span,
                 }) => {
                     if let Async::Yes { closure_id, .. } = asyncness {
                         self.lower_expr_async_closure(
@@ -186,6 +187,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                             fn_decl,
                             body,
                             *fn_decl_span,
+                            *fn_arg_span,
                         )
                     } else {
                         self.lower_expr_closure(
@@ -196,6 +198,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                             fn_decl,
                             body,
                             *fn_decl_span,
+                            *fn_arg_span,
                         )
                     }
                 }
@@ -365,7 +368,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                 let node_id = self.next_node_id();
 
                 // Add a definition for the in-band const def.
-                self.create_def(parent_def_id.def_id, node_id, DefPathData::AnonConst);
+                self.create_def(parent_def_id.def_id, node_id, DefPathData::AnonConst, f.span);
 
                 let anon_const = AnonConst { id: node_id, value: arg };
                 generic_args.push(AngleBracketedArg::Arg(GenericArg::Const(anon_const)));
@@ -605,6 +608,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
             output,
             c_variadic: false,
             implicit_self: hir::ImplicitSelfKind::None,
+            lifetime_elision_allowed: false,
         });
 
         // Lower the argument pattern/ident. The ident is used again in the `.await` lowering.
@@ -641,6 +645,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                 fn_decl,
                 body,
                 fn_decl_span: self.lower_span(span),
+                fn_arg_span: None,
                 movability: Some(hir::Movability::Static),
             });
 
@@ -897,6 +902,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
         decl: &FnDecl,
         body: &Expr,
         fn_decl_span: Span,
+        fn_arg_span: Span,
     ) -> hir::ExprKind<'hir> {
         let (binder_clause, generic_params) = self.lower_closure_binder(binder);
 
@@ -917,7 +923,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
 
         let bound_generic_params = self.lower_lifetime_binder(closure_id, generic_params);
         // Lower outside new scope to preserve `is_in_loop_condition`.
-        let fn_decl = self.lower_fn_decl(decl, None, fn_decl_span, FnDeclKind::Closure, None);
+        let fn_decl = self.lower_fn_decl(decl, closure_id, fn_decl_span, FnDeclKind::Closure, None);
 
         let c = self.arena.alloc(hir::Closure {
             def_id: self.local_def_id(closure_id),
@@ -927,6 +933,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
             fn_decl,
             body: body_id,
             fn_decl_span: self.lower_span(fn_decl_span),
+            fn_arg_span: Some(self.lower_span(fn_arg_span)),
             movability: generator_option,
         });
 
@@ -983,6 +990,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
         decl: &FnDecl,
         body: &Expr,
         fn_decl_span: Span,
+        fn_arg_span: Span,
     ) -> hir::ExprKind<'hir> {
         if let &ClosureBinder::For { span, .. } = binder {
             self.tcx.sess.emit_err(NotSupportedForLifetimeBinderAsyncClosure { span });
@@ -1027,7 +1035,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
         // have to conserve the state of being inside a loop condition for the
         // closure argument types.
         let fn_decl =
-            self.lower_fn_decl(&outer_decl, None, fn_decl_span, FnDeclKind::Closure, None);
+            self.lower_fn_decl(&outer_decl, closure_id, fn_decl_span, FnDeclKind::Closure, None);
 
         let c = self.arena.alloc(hir::Closure {
             def_id: self.local_def_id(closure_id),
@@ -1037,6 +1045,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
             fn_decl,
             body,
             fn_decl_span: self.lower_span(fn_decl_span),
+            fn_arg_span: Some(self.lower_span(fn_arg_span)),
             movability: None,
         });
         hir::ExprKind::Closure(c)
@@ -1605,16 +1614,13 @@ impl<'hir> LoweringContext<'_, 'hir> {
         };
 
         // `#[allow(unreachable_code)]`
-        let attr = {
-            // `allow(unreachable_code)`
-            let allow = {
-                let allow_ident = Ident::new(sym::allow, self.lower_span(span));
-                let uc_ident = Ident::new(sym::unreachable_code, self.lower_span(span));
-                let uc_nested = attr::mk_nested_word_item(uc_ident);
-                attr::mk_list_item(allow_ident, vec![uc_nested])
-            };
-            attr::mk_attr_outer(&self.tcx.sess.parse_sess.attr_id_generator, allow)
-        };
+        let attr = attr::mk_attr_nested_word(
+            &self.tcx.sess.parse_sess.attr_id_generator,
+            AttrStyle::Outer,
+            sym::allow,
+            sym::unreachable_code,
+            self.lower_span(span),
+        );
         let attrs: AttrVec = thin_vec![attr];
 
         // `ControlFlow::Continue(val) => #[allow(unreachable_code)] val,`

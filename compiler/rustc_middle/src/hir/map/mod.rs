@@ -1022,7 +1022,7 @@ impl<'hir> Map<'hir> {
                 ..
             }) => {
                 // Ensure that the returned span has the item's SyntaxContext.
-                fn_decl_span.find_ancestor_in_same_ctxt(*span).unwrap_or(*span)
+                fn_decl_span.find_ancestor_inside(*span).unwrap_or(*span)
             }
             _ => self.span_with_body(hir_id),
         };
@@ -1058,7 +1058,7 @@ impl<'hir> Map<'hir> {
             Node::Arm(arm) => arm.span,
             Node::Block(block) => block.span,
             Node::Ctor(..) => self.span_with_body(self.get_parent_node(hir_id)),
-            Node::Lifetime(lifetime) => lifetime.span,
+            Node::Lifetime(lifetime) => lifetime.ident.span,
             Node::GenericParam(param) => param.span,
             Node::Infer(i) => i.span,
             Node::Local(local) => local.span,

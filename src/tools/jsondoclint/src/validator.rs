@@ -60,6 +60,8 @@ impl<'a> Validator<'a> {
 
     fn check_item(&mut self, id: &'a Id) {
         if let Some(item) = &self.krate.index.get(id) {
+            item.links.values().for_each(|id| self.add_any_id(id));
+
             match &item.inner {
                 ItemEnum::Import(x) => self.check_import(x),
                 ItemEnum::Union(x) => self.check_union(x),
@@ -103,9 +105,9 @@ impl<'a> Validator<'a> {
 
     fn check_import(&mut self, x: &'a Import) {
         if x.glob {
-            self.add_mod_id(x.id.as_ref().unwrap());
+            self.add_glob_import_item_id(x.id.as_ref().unwrap());
         } else if let Some(id) = &x.id {
-            self.add_mod_item_id(id);
+            self.add_import_item_id(id);
         }
     }
 
@@ -266,7 +268,7 @@ impl<'a> Validator<'a> {
 
     fn check_path(&mut self, x: &'a Path, kind: PathKind) {
         match kind {
-            PathKind::Trait => self.add_trait_id(&x.id),
+            PathKind::Trait => self.add_trait_or_alias_id(&x.id),
             PathKind::Type => self.add_type_id(&x.id),
         }
         if let Some(args) = &x.args {
@@ -376,6 +378,10 @@ impl<'a> Validator<'a> {
         }
     }
 
+    fn add_any_id(&mut self, id: &'a Id) {
+        self.add_id_checked(id, |_| true, "any kind of item");
+    }
+
     fn add_field_id(&mut self, id: &'a Id) {
         self.add_id_checked(id, Kind::is_struct_field, "StructField");
     }
@@ -391,8 +397,8 @@ impl<'a> Validator<'a> {
         self.add_id_checked(id, Kind::is_variant, "Variant");
     }
 
-    fn add_trait_id(&mut self, id: &'a Id) {
-        self.add_id_checked(id, Kind::is_trait, "Trait");
+    fn add_trait_or_alias_id(&mut self, id: &'a Id) {
+        self.add_id_checked(id, Kind::is_trait_or_alias, "Trait (or TraitAlias)");
     }
 
     fn add_type_id(&mut self, id: &'a Id) {
@@ -402,6 +408,15 @@ impl<'a> Validator<'a> {
     /// Add an Id that appeared in a trait
     fn add_trait_item_id(&mut self, id: &'a Id) {
         self.add_id_checked(id, Kind::can_appear_in_trait, "Trait inner item");
+    }
+
+    /// Add an Id that can be `use`d
+    fn add_import_item_id(&mut self, id: &'a Id) {
+        self.add_id_checked(id, Kind::can_appear_in_import, "Import inner item");
+    }
+
+    fn add_glob_import_item_id(&mut self, id: &'a Id) {
+        self.add_id_checked(id, Kind::can_appear_in_glob_import, "Glob import inner item");
     }
 
     /// Add an Id that appeared in a mod
@@ -437,3 +452,6 @@ fn set_remove<T: Hash + Eq + Clone>(set: &mut HashSet<T>) -> Option<T> {
         None
     }
 }
+
+#[cfg(test)]
+mod tests;

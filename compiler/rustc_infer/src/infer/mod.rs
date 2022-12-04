@@ -80,7 +80,6 @@ pub struct InferOk<'tcx, T> {
 }
 pub type InferResult<'tcx, T> = Result<InferOk<'tcx, T>, TypeError<'tcx>>;
 
-pub type Bound<T> = Option<T>;
 pub type UnitResult<'tcx> = RelateResult<'tcx, ()>; // "unify result"
 pub type FixupResult<'tcx, T> = Result<T, FixupError<'tcx>>; // "fixup result"
 
@@ -334,9 +333,6 @@ pub struct InferCtxt<'tcx> {
     /// bound.
     universe: Cell<ty::UniverseIndex>,
 
-    normalize_fn_sig_for_diagnostic:
-        Option<Lrc<dyn Fn(&InferCtxt<'tcx>, ty::PolyFnSig<'tcx>) -> ty::PolyFnSig<'tcx>>>,
-
     /// During coherence we have to assume that other crates may add
     /// additional impls which we currently don't know about.
     ///
@@ -573,8 +569,6 @@ pub struct InferCtxtBuilder<'tcx> {
     considering_regions: bool,
     /// Whether we are in coherence mode.
     intercrate: bool,
-    normalize_fn_sig_for_diagnostic:
-        Option<Lrc<dyn Fn(&InferCtxt<'tcx>, ty::PolyFnSig<'tcx>) -> ty::PolyFnSig<'tcx>>>,
 }
 
 pub trait TyCtxtInferExt<'tcx> {
@@ -587,7 +581,6 @@ impl<'tcx> TyCtxtInferExt<'tcx> for TyCtxt<'tcx> {
             tcx: self,
             defining_use_anchor: DefiningAnchor::Error,
             considering_regions: true,
-            normalize_fn_sig_for_diagnostic: None,
             intercrate: false,
         }
     }
@@ -615,14 +608,6 @@ impl<'tcx> InferCtxtBuilder<'tcx> {
         self
     }
 
-    pub fn with_normalize_fn_sig_for_diagnostic(
-        mut self,
-        fun: Lrc<dyn Fn(&InferCtxt<'tcx>, ty::PolyFnSig<'tcx>) -> ty::PolyFnSig<'tcx>>,
-    ) -> Self {
-        self.normalize_fn_sig_for_diagnostic = Some(fun);
-        self
-    }
-
     /// Given a canonical value `C` as a starting point, create an
     /// inference context that contains each of the bound values
     /// within instantiated as a fresh variable. The `f` closure is
@@ -644,13 +629,7 @@ impl<'tcx> InferCtxtBuilder<'tcx> {
     }
 
     pub fn build(&mut self) -> InferCtxt<'tcx> {
-        let InferCtxtBuilder {
-            tcx,
-            defining_use_anchor,
-            considering_regions,
-            ref normalize_fn_sig_for_diagnostic,
-            intercrate,
-        } = *self;
+        let InferCtxtBuilder { tcx, defining_use_anchor, considering_regions, intercrate } = *self;
         InferCtxt {
             tcx,
             defining_use_anchor,
@@ -666,9 +645,6 @@ impl<'tcx> InferCtxtBuilder<'tcx> {
             in_snapshot: Cell::new(false),
             skip_leak_check: Cell::new(false),
             universe: Cell::new(ty::UniverseIndex::ROOT),
-            normalize_fn_sig_for_diagnostic: normalize_fn_sig_for_diagnostic
-                .as_ref()
-                .map(|f| f.clone()),
             intercrate,
         }
     }
@@ -709,7 +685,12 @@ impl<'tcx> InferCtxt<'tcx> {
     /// Creates a `TypeErrCtxt` for emitting various inference errors.
     /// During typeck, use `FnCtxt::err_ctxt` instead.
     pub fn err_ctxt(&self) -> TypeErrCtxt<'_, 'tcx> {
-        TypeErrCtxt { infcx: self, typeck_results: None, fallback_has_occurred: false }
+        TypeErrCtxt {
+            infcx: self,
+            typeck_results: None,
+            fallback_has_occurred: false,
+            normalize_fn_sig: Box::new(|fn_sig| fn_sig),
+        }
     }
 
     pub fn is_in_snapshot(&self) -> bool {
@@ -1065,7 +1046,7 @@ impl<'tcx> InferCtxt<'tcx> {
     }
 
     pub fn next_const_var(&self, ty: Ty<'tcx>, origin: ConstVariableOrigin) -> ty::Const<'tcx> {
-        self.tcx.mk_const_var(self.next_const_var_id(origin), ty)
+        self.tcx.mk_const(self.next_const_var_id(origin), ty)
     }
 
     pub fn next_const_var_in_universe(
@@ -1079,7 +1060,7 @@ impl<'tcx> InferCtxt<'tcx> {
             .borrow_mut()
             .const_unification_table()
             .new_key(ConstVarValue { origin, val: ConstVariableValue::Unknown { universe } });
-        self.tcx.mk_const_var(vid, ty)
+        self.tcx.mk_const(vid, ty)
     }
 
     pub fn next_const_var_id(&self, origin: ConstVariableOrigin) -> ConstVid<'tcx> {
@@ -1195,7 +1176,7 @@ impl<'tcx> InferCtxt<'tcx> {
                         origin,
                         val: ConstVariableValue::Unknown { universe: self.universe() },
                     });
-                self.tcx.mk_const_var(const_var_id, self.tcx.type_of(param.def_id)).into()
+                self.tcx.mk_const(const_var_id, self.tcx.type_of(param.def_id)).into()
             }
         }
     }
@@ -1421,16 +1402,15 @@ impl<'tcx> InferCtxt<'tcx> {
         value.fold_with(&mut r)
     }
 
-    /// Returns the first unresolved variable contained in `T`. In the
-    /// process of visiting `T`, this will resolve (where possible)
-    /// type variables in `T`, but it never constructs the final,
-    /// resolved type, so it's more efficient than
-    /// `resolve_vars_if_possible()`.
-    pub fn unresolved_type_vars<T>(&self, value: &T) -> Option<(Ty<'tcx>, Option<Span>)>
+    /// Returns the first unresolved type or const variable contained in `T`.
+    pub fn first_unresolved_const_or_ty_var<T>(
+        &self,
+        value: &T,
+    ) -> Option<(ty::Term<'tcx>, Option<Span>)>
     where
         T: TypeVisitable<'tcx>,
     {
-        value.visit_with(&mut resolve::UnresolvedTypeFinder::new(self)).break_value()
+        value.visit_with(&mut resolve::UnresolvedTypeOrConstFinder::new(self)).break_value()
     }
 
     pub fn probe_const_var(
@@ -1581,7 +1561,7 @@ impl<'tcx> InferCtxt<'tcx> {
         span: Option<Span>,
     ) -> Result<ty::Const<'tcx>, ErrorHandled> {
         match self.const_eval_resolve(param_env, unevaluated, span) {
-            Ok(Some(val)) => Ok(ty::Const::from_value(self.tcx, val, ty)),
+            Ok(Some(val)) => Ok(self.tcx.mk_const(val, ty)),
             Ok(None) => {
                 let tcx = self.tcx;
                 let def_id = unevaluated.def.did;
@@ -2050,10 +2030,10 @@ fn replace_param_and_infer_substs_with_placeholder<'tcx>(
                     bug!("const `{ct}`'s type should not reference params or types");
                 }
                 tcx.mk_const(
-                    ty::ConstKind::Placeholder(ty::PlaceholderConst {
+                    ty::PlaceholderConst {
                         universe: ty::UniverseIndex::ROOT,
                         name: ty::BoundVar::from_usize(idx),
-                    }),
+                    },
                     ty,
                 )
                 .into()

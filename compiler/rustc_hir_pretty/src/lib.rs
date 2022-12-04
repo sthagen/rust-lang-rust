@@ -398,7 +398,7 @@ impl<'a> State<'a> {
             }
             hir::ForeignItemKind::Static(t, m) => {
                 self.head("static");
-                if m == hir::Mutability::Mut {
+                if m.is_mut() {
                     self.word_space("mut");
                 }
                 self.print_ident(item.ident);
@@ -519,7 +519,7 @@ impl<'a> State<'a> {
             }
             hir::ItemKind::Static(ty, m, expr) => {
                 self.head("static");
-                if m == hir::Mutability::Mut {
+                if m.is_mut() {
                     self.word_space("mut");
                 }
                 self.print_ident(item.ident);
@@ -1480,6 +1480,7 @@ impl<'a> State<'a> {
                 fn_decl,
                 body,
                 fn_decl_span: _,
+                fn_arg_span: _,
                 movability: _,
                 def_id: _,
             }) => {
@@ -1591,7 +1592,7 @@ impl<'a> State<'a> {
         self.print_ident(Ident::with_dummy_span(name))
     }
 
-    pub fn print_path(&mut self, path: &hir::Path<'_>, colons_before_params: bool) {
+    pub fn print_path<R>(&mut self, path: &hir::Path<'_, R>, colons_before_params: bool) {
         self.maybe_print_comment(path.span.lo());
 
         for (i, segment) in path.segments.iter().enumerate() {
@@ -2159,7 +2160,7 @@ impl<'a> State<'a> {
     }
 
     pub fn print_lifetime(&mut self, lifetime: &hir::Lifetime) {
-        self.print_ident(lifetime.name.ident())
+        self.print_ident(lifetime.ident)
     }
 
     pub fn print_where_clause(&mut self, generics: &hir::Generics<'_>) {

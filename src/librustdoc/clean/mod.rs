@@ -12,7 +12,7 @@ pub(crate) mod utils;
 
 use rustc_ast as ast;
 use rustc_attr as attr;
-use rustc_data_structures::fx::{FxHashMap, FxHashSet, FxIndexSet};
+use rustc_data_structures::fx::{FxHashMap, FxHashSet, FxIndexMap, FxIndexSet, IndexEntry};
 use rustc_hir as hir;
 use rustc_hir::def::{CtorKind, DefKind, Res};
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
@@ -182,9 +182,7 @@ fn clean_poly_trait_ref_with_bindings<'tcx>(
         .collect_referenced_late_bound_regions(&poly_trait_ref)
         .into_iter()
         .filter_map(|br| match br {
-            ty::BrNamed(_, name) if name != kw::UnderscoreLifetime => {
-                Some(GenericParamDef::lifetime(name))
-            }
+            ty::BrNamed(_, name) if br.is_named() => Some(GenericParamDef::lifetime(name)),
             _ => None,
         })
         .collect();
@@ -208,7 +206,7 @@ fn clean_lifetime<'tcx>(lifetime: &hir::Lifetime, cx: &mut DocContext<'tcx>) -> 
             return lt;
         }
     }
-    Lifetime(lifetime.name.ident().name)
+    Lifetime(lifetime.ident.name)
 }
 
 pub(crate) fn clean_const<'tcx>(constant: &hir::ConstArg, cx: &mut DocContext<'tcx>) -> Constant {
@@ -233,16 +231,11 @@ pub(crate) fn clean_middle_const<'tcx>(
 pub(crate) fn clean_middle_region<'tcx>(region: ty::Region<'tcx>) -> Option<Lifetime> {
     match *region {
         ty::ReStatic => Some(Lifetime::statik()),
+        _ if !region.has_name() => None,
         ty::ReLateBound(_, ty::BoundRegion { kind: ty::BrNamed(_, name), .. }) => {
-            if name != kw::UnderscoreLifetime { Some(Lifetime(name)) } else { None }
+            Some(Lifetime(name))
         }
-        ty::ReEarlyBound(ref data) => {
-            if data.name != kw::UnderscoreLifetime {
-                Some(Lifetime(data.name))
-            } else {
-                None
-            }
-        }
+        ty::ReEarlyBound(ref data) => Some(Lifetime(data.name)),
         ty::ReLateBound(..)
         | ty::ReFree(..)
         | ty::ReVar(..)
@@ -400,7 +393,7 @@ fn clean_projection_predicate<'tcx>(
         .collect_referenced_late_bound_regions(&pred)
         .into_iter()
         .filter_map(|br| match br {
-            ty::BrNamed(_, name) if name != kw::UnderscoreLifetime => Some(Lifetime(name)),
+            ty::BrNamed(_, name) if br.is_named() => Some(Lifetime(name)),
             _ => None,
         })
         .collect();
@@ -605,47 +598,105 @@ pub(crate) fn clean_generics<'tcx>(
         })
         .collect::<Vec<_>>();
 
-    let mut params = ThinVec::with_capacity(gens.params.len());
-    for p in gens.params.iter().filter(|p| !is_impl_trait(p) && !is_elided_lifetime(p)) {
-        let p = clean_generic_param(cx, Some(gens), p);
-        params.push(p);
-    }
-    params.extend(impl_trait_params);
-
-    let mut generics = Generics {
-        params,
-        where_predicates: gens
-            .predicates
-            .iter()
-            .filter_map(|x| clean_where_predicate(x, cx))
-            .collect(),
-    };
-
-    // Some duplicates are generated for ?Sized bounds between type params and where
-    // predicates. The point in here is to move the bounds definitions from type params
-    // to where predicates when such cases occur.
-    for where_pred in &mut generics.where_predicates {
-        match *where_pred {
-            WherePredicate::BoundPredicate { ty: Generic(ref name), ref mut bounds, .. } => {
-                if bounds.is_empty() {
-                    for param in &mut generics.params {
-                        match param.kind {
-                            GenericParamDefKind::Lifetime { .. } => {}
-                            GenericParamDefKind::Type { bounds: ref mut ty_bounds, .. } => {
-                                if &param.name == name {
-                                    mem::swap(bounds, ty_bounds);
-                                    break;
-                                }
+    let mut bound_predicates = FxIndexMap::default();
+    let mut region_predicates = FxIndexMap::default();
+    let mut eq_predicates = ThinVec::default();
+    for pred in gens.predicates.iter().filter_map(|x| clean_where_predicate(x, cx)) {
+        match pred {
+            WherePredicate::BoundPredicate { ty, bounds, bound_params } => {
+                match bound_predicates.entry(ty) {
+                    IndexEntry::Vacant(v) => {
+                        v.insert((bounds, bound_params));
+                    }
+                    IndexEntry::Occupied(mut o) => {
+                        // we merge both bounds.
+                        for bound in bounds {
+                            if !o.get().0.contains(&bound) {
+                                o.get_mut().0.push(bound);
                             }
-                            GenericParamDefKind::Const { .. } => {}
+                        }
+                        for bound_param in bound_params {
+                            if !o.get().1.contains(&bound_param) {
+                                o.get_mut().1.push(bound_param);
+                            }
                         }
                     }
                 }
             }
-            _ => continue,
+            WherePredicate::RegionPredicate { lifetime, bounds } => {
+                match region_predicates.entry(lifetime) {
+                    IndexEntry::Vacant(v) => {
+                        v.insert(bounds);
+                    }
+                    IndexEntry::Occupied(mut o) => {
+                        // we merge both bounds.
+                        for bound in bounds {
+                            if !o.get().contains(&bound) {
+                                o.get_mut().push(bound);
+                            }
+                        }
+                    }
+                }
+            }
+            WherePredicate::EqPredicate { lhs, rhs, bound_params } => {
+                eq_predicates.push(WherePredicate::EqPredicate { lhs, rhs, bound_params });
+            }
         }
     }
-    generics
+
+    let mut params = ThinVec::with_capacity(gens.params.len());
+    // In this loop, we gather the generic parameters (`<'a, B: 'a>`) and check if they have
+    // bounds in the where predicates. If so, we move their bounds into the where predicates
+    // while also preventing duplicates.
+    for p in gens.params.iter().filter(|p| !is_impl_trait(p) && !is_elided_lifetime(p)) {
+        let mut p = clean_generic_param(cx, Some(gens), p);
+        match &mut p.kind {
+            GenericParamDefKind::Lifetime { ref mut outlives } => {
+                if let Some(region_pred) = region_predicates.get_mut(&Lifetime(p.name)) {
+                    // We merge bounds in the `where` clause.
+                    for outlive in outlives.drain(..) {
+                        let outlive = GenericBound::Outlives(outlive);
+                        if !region_pred.contains(&outlive) {
+                            region_pred.push(outlive);
+                        }
+                    }
+                }
+            }
+            GenericParamDefKind::Type { bounds, synthetic: false, .. } => {
+                if let Some(bound_pred) = bound_predicates.get_mut(&Type::Generic(p.name)) {
+                    // We merge bounds in the `where` clause.
+                    for bound in bounds.drain(..) {
+                        if !bound_pred.0.contains(&bound) {
+                            bound_pred.0.push(bound);
+                        }
+                    }
+                }
+            }
+            GenericParamDefKind::Type { .. } | GenericParamDefKind::Const { .. } => {
+                // nothing to do here.
+            }
+        }
+        params.push(p);
+    }
+    params.extend(impl_trait_params);
+
+    Generics {
+        params,
+        where_predicates: bound_predicates
+            .into_iter()
+            .map(|(ty, (bounds, bound_params))| WherePredicate::BoundPredicate {
+                ty,
+                bounds,
+                bound_params,
+            })
+            .chain(
+                region_predicates
+                    .into_iter()
+                    .map(|(lifetime, bounds)| WherePredicate::RegionPredicate { lifetime, bounds }),
+            )
+            .chain(eq_predicates.into_iter())
+            .collect(),
+    }
 }
 
 fn clean_ty_generics<'tcx>(
@@ -664,7 +715,7 @@ fn clean_ty_generics<'tcx>(
         .params
         .iter()
         .filter_map(|param| match param.kind {
-            ty::GenericParamDefKind::Lifetime if param.name == kw::UnderscoreLifetime => None,
+            ty::GenericParamDefKind::Lifetime if param.is_anonymous_lifetime() => None,
             ty::GenericParamDefKind::Lifetime => Some(clean_generic_param_def(param, cx)),
             ty::GenericParamDefKind::Type { synthetic, .. } => {
                 if param.name == kw::SelfUpper {
@@ -900,7 +951,7 @@ fn clean_fn_decl_legacy_const_generics(func: &mut Function, attrs: &[ast::Attrib
         .filter(|a| a.has_name(sym::rustc_legacy_const_generics))
         .filter_map(|a| a.meta_item_list())
     {
-        for (pos, literal) in meta_item_list.iter().filter_map(|meta| meta.literal()).enumerate() {
+        for (pos, literal) in meta_item_list.iter().filter_map(|meta| meta.lit()).enumerate() {
             match literal.kind {
                 ast::LitKind::Int(a, _) => {
                     let gen = func.generics.params.remove(0);
@@ -1467,8 +1518,11 @@ fn maybe_expand_private_type_alias<'tcx>(
                 });
                 if let Some(lt) = lifetime {
                     let lt_def_id = cx.tcx.hir().local_def_id(param.hir_id);
-                    let cleaned =
-                        if !lt.is_elided() { clean_lifetime(lt, cx) } else { Lifetime::elided() };
+                    let cleaned = if !lt.is_anonymous() {
+                        clean_lifetime(lt, cx)
+                    } else {
+                        Lifetime::elided()
+                    };
                     substs.insert(lt_def_id.to_def_id(), SubstParam::Lifetime(cleaned));
                 }
                 indices.lifetimes += 1;
@@ -1531,16 +1585,7 @@ pub(crate) fn clean_ty<'tcx>(ty: &hir::Ty<'tcx>, cx: &mut DocContext<'tcx>) -> T
         TyKind::Never => Primitive(PrimitiveType::Never),
         TyKind::Ptr(ref m) => RawPointer(m.mutbl, Box::new(clean_ty(m.ty, cx))),
         TyKind::Rptr(ref l, ref m) => {
-            // There are two times a `Fresh` lifetime can be created:
-            // 1. For `&'_ x`, written by the user. This corresponds to `lower_lifetime` in `rustc_ast_lowering`.
-            // 2. For `&x` as a parameter to an `async fn`. This corresponds to `elided_ref_lifetime in `rustc_ast_lowering`.
-            //    See #59286 for more information.
-            // Ideally we would only hide the `'_` for case 2., but I don't know a way to distinguish it.
-            // Turning `fn f(&'_ self)` into `fn f(&self)` isn't the worst thing in the world, though;
-            // there's no case where it could cause the function to fail to compile.
-            let elided =
-                l.is_elided() || matches!(l.name, LifetimeName::Param(_, ParamName::Fresh));
-            let lifetime = if elided { None } else { Some(clean_lifetime(*l, cx)) };
+            let lifetime = if l.is_anonymous() { None } else { Some(clean_lifetime(*l, cx)) };
             BorrowedRef { lifetime, mutability: m.mutbl, type_: Box::new(clean_ty(m.ty, cx)) }
         }
         TyKind::Slice(ty) => Slice(Box::new(clean_ty(ty, cx))),
@@ -1594,14 +1639,14 @@ fn normalize<'tcx>(cx: &mut DocContext<'tcx>, ty: Ty<'tcx>) -> Option<Ty<'tcx>> 
     }
 
     use crate::rustc_trait_selection::infer::TyCtxtInferExt;
-    use crate::rustc_trait_selection::traits::query::normalize::AtExt;
+    use crate::rustc_trait_selection::traits::query::normalize::QueryNormalizeExt;
     use rustc_middle::traits::ObligationCause;
 
     // Try to normalize `<X as Y>::T` to a type
     let infcx = cx.tcx.infer_ctxt().build();
     let normalized = infcx
         .at(&ObligationCause::dummy(), cx.param_env)
-        .normalize(ty)
+        .query_normalize(ty)
         .map(|resolved| infcx.resolve_vars_if_possible(resolved.value));
     match normalized {
         Ok(normalized_value) => {
@@ -1915,7 +1960,7 @@ fn clean_generic_args<'tcx>(
             .args
             .iter()
             .map(|arg| match arg {
-                hir::GenericArg::Lifetime(lt) if !lt.is_elided() => {
+                hir::GenericArg::Lifetime(lt) if !lt.is_anonymous() => {
                     GenericArg::Lifetime(clean_lifetime(*lt, cx))
                 }
                 hir::GenericArg::Lifetime(_) => GenericArg::Lifetime(Lifetime::elided()),
@@ -2244,6 +2289,26 @@ fn clean_extern_crate<'tcx>(
 }
 
 fn clean_use_statement<'tcx>(
+    import: &hir::Item<'tcx>,
+    name: Symbol,
+    path: &hir::UsePath<'tcx>,
+    kind: hir::UseKind,
+    cx: &mut DocContext<'tcx>,
+    inlined_names: &mut FxHashSet<(ItemType, Symbol)>,
+) -> Vec<Item> {
+    let mut items = Vec::new();
+    let hir::UsePath { segments, ref res, span } = *path;
+    for &res in res {
+        if let Res::Def(DefKind::Ctor(..), _) | Res::SelfCtor(..) = res {
+            continue;
+        }
+        let path = hir::Path { segments, res, span };
+        items.append(&mut clean_use_statement_inner(import, name, &path, kind, cx, inlined_names));
+    }
+    items
+}
+
+fn clean_use_statement_inner<'tcx>(
     import: &hir::Item<'tcx>,
     name: Symbol,
     path: &hir::Path<'tcx>,

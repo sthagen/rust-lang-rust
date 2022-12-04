@@ -197,9 +197,7 @@ a.srclink,
 #help-button > a,
 details.rustdoc-toggle.top-doc > summary,
 details.rustdoc-toggle.non-exhaustive > summary,
-.scraped-example-title,
-.more-examples-toggle summary, .more-examples-toggle .hide-more,
-.example-links a,
+.scraped-example-list,
 /* This selector is for the items listed in the "all items" page. */
 ul.all-items {
 	font-family: "Fira Sans", Arial, NanumBarunGothic, sans-serif;
@@ -242,7 +240,6 @@ h1 a,
 }
 
 .content span.fn, .content a.fn,
-.content .fnname,
 .content span.method, .content a.method,
 .content span.tymethod, .content a.tymethod {
 	color: var(--function-link-color);
@@ -315,7 +312,7 @@ main {
 	position: relative;
 	flex-grow: 1;
 	padding: 10px 15px 40px 45px;
-	min-width: 0;
+	min-width: 0; /* avoid growing beyond the size limit */
 }
 
 .source main {
@@ -481,15 +478,11 @@ ul.block, .block li {
 	list-style: none;
 }
 
-.block a,
-.sidebar h2 a,
-.sidebar h3 a {
+.sidebar-elems a,
+.sidebar > h2 a {
 	display: block;
-	padding: 0.25rem;
+	padding: 0.25rem; /* 4px */
 	margin-left: -0.25rem;
-
-	text-overflow: ellipsis;
-	overflow: hidden;
 }
 
 .sidebar h2 {
@@ -523,6 +516,8 @@ ul.block, .block li {
 
 .sidebar-elems .block li a {
 	white-space: nowrap;
+	text-overflow: ellipsis;
+	overflow: hidden;
 }
 
 .mobile-topbar {
@@ -897,7 +892,6 @@ so that we can apply CSS-filters to change the arrow color in themes */
 	white-space: nowrap;
 	text-overflow: ellipsis;
 	overflow: hidden;
-	display: block;
 }
 
 .search-results a:hover,
@@ -914,6 +908,7 @@ so that we can apply CSS-filters to change the arrow color in themes */
 
 .popover {
 	position: absolute;
+	top: 100%;
 	right: 0;
 	z-index: 2;
 	display: block;
@@ -949,7 +944,6 @@ so that we can apply CSS-filters to change the arrow color in themes */
 #help dt {
 	float: left;
 	clear: left;
-	display: block;
 	margin-right: 0.5rem;
 }
 #help span.top, #help span.bottom {
@@ -1328,8 +1322,8 @@ a.test-arrow:hover {
 	border-bottom: 1px solid;
 	display: flex;
 	height: 40px;
-	justify-content: center;
-	align-items: center;
+	justify-content: stretch;
+	align-items: stretch;
 	z-index: 10;
 }
 #source-sidebar {
@@ -1357,35 +1351,31 @@ a.test-arrow:hover {
 	text-align: center;
 	border: none;
 	outline: none;
-	position: absolute;
-	top: 0;
-	bottom: 0;
-	left: 0;
-	right: 0;
-	/* work around button layout strangeness: https://stackoverflow.com/q/7271561 */
-	width: 100%;
+	flex: 1 1;
 	/* iOS button gradient: https://stackoverflow.com/q/5438567 */
 	-webkit-appearance: none;
 	opacity: 1;
 }
 #settings-menu, #help-button {
 	margin-left: 4px;
-	outline: none;
+	display: flex;
 }
 
 #settings-menu > a, #help-button > a, #copy-path {
 	width: 33px;
-	line-height: 1.5;
 }
 
 #settings-menu > a, #help-button > a {
-	padding: 5px;
-	height: 100%;
-	display: block;
+	display: flex;
+	align-items: center;
+	justify-content: center;
 	background-color: var(--button-background-color);
 	border: 1px solid var(--border-color);
 	border-radius: 2px;
 	color: var(--settings-button-color);
+	/* Rare exception to specifying font sizes in rem. Since this is acting
+	   as an icon, it's okay to specify their sizes in pixels. */
+	font-size: 20px;
 }
 
 #settings-menu > a:hover, #settings-menu > a:focus,
@@ -1419,14 +1409,6 @@ a.test-arrow:hover {
 }
 #settings-menu.rotate > a img {
 	animation: rotating 2s linear infinite;
-}
-
-#help-button > a {
-	text-align: center;
-	/* Rare exception to specifying font sizes in rem. Since this is acting
-	   as an icon, it's okay to specify their sizes in pixels. */
-	font-size: 20px;
-	padding-top: 2px;
 }
 
 kbd {
@@ -1519,15 +1501,15 @@ details.rustdoc-toggle > summary.hideme > span {
 }
 
 details.rustdoc-toggle > summary::before {
+	background: url("toggle-plus-1092eb4930d581b0.svg") no-repeat top left;
 	content: "";
 	cursor: pointer;
 	width: 16px;
 	height: 16px;
-	background-repeat: no-repeat;
-	background-position: top left;
 	display: inline-block;
 	vertical-align: middle;
 	opacity: .5;
+	filter: var(--toggle-filter);
 }
 
 details.rustdoc-toggle > summary.hideme > span,
@@ -1603,27 +1585,11 @@ details.rustdoc-toggle[open] > summary.hideme > span {
 	display: none;
 }
 
-details.rustdoc-toggle[open] > summary::before,
-details.rustdoc-toggle[open] > summary.hideme::before {
-	background-image: url("toggle-minus-31bbd6e4c77f5c96.svg");
+details.rustdoc-toggle[open] > summary::before {
+	background: url("toggle-minus-31bbd6e4c77f5c96.svg") no-repeat top left;
 }
 
-details.rustdoc-toggle > summary::before {
-	background-image: url("toggle-plus-1092eb4930d581b0.svg");
-}
-
-details.rustdoc-toggle[open] > summary::before,
-details.rustdoc-toggle[open] > summary.hideme::before {
-	width: 16px;
-	height: 16px;
-	background-repeat: no-repeat;
-	background-position: top left;
-	display: inline-block;
-	content: "";
-}
-
-details.rustdoc-toggle[open] > summary::after,
-details.rustdoc-toggle[open] > summary.hideme::after {
+details.rustdoc-toggle[open] > summary::after {
 	content: "Collapse";
 }
 
@@ -1679,10 +1645,6 @@ in storage.js
 
 	.out-of-band .since::before {
 		content: "Since ";
-	}
-
-	#copy-path {
-		display: none;
 	}
 
 	/* Hide the logo and item name from the sidebar. Those are displayed
@@ -1818,8 +1780,8 @@ in storage.js
 		border-bottom: 1px solid;
 	}
 
-	/* We don't display the help button on mobile devices. */
-	#help-button {
+	/* We don't display these buttons on mobile devices. */
+	#copy-path, #help-button {
 		display: none;
 	}
 

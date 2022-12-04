@@ -20,6 +20,7 @@ use rustc_span::Span;
 use rustc_trait_selection::infer::InferCtxtExt;
 use rustc_trait_selection::traits::error_reporting::DefIdOrName;
 use rustc_trait_selection::traits::query::evaluate_obligation::InferCtxtExt as _;
+use rustc_trait_selection::traits::NormalizeExt;
 
 impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     pub(crate) fn body_fn_sig(&self) -> Option<ty::FnSig<'tcx>> {
@@ -245,7 +246,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         // implied by wf, but also because that would possibly result in
         // erroneous errors later on.
         let infer::InferOk { value: output, obligations: _ } =
-            self.normalize_associated_types_in_as_infer_ok(expr.span, output);
+            self.at(&self.misc(expr.span), self.param_env).normalize(output);
 
         if output.is_ty_var() { None } else { Some((def_id_or_name, output, inputs)) }
     }
@@ -345,8 +346,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             }
             if annotation {
                 let suggest_annotation = match expr.peel_drop_temps().kind {
-                    hir::ExprKind::AddrOf(hir::BorrowKind::Ref, hir::Mutability::Not, _) => "&",
-                    hir::ExprKind::AddrOf(hir::BorrowKind::Ref, hir::Mutability::Mut, _) => "&mut ",
+                    hir::ExprKind::AddrOf(hir::BorrowKind::Ref, mutbl, _) => mutbl.ref_prefix_str(),
                     _ => return true,
                 };
                 let mut tuple_indexes = Vec::new();
@@ -760,7 +760,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 debug!("suggest_missing_return_type: expected type {:?}", ty);
                 let bound_vars = self.tcx.late_bound_vars(fn_id);
                 let ty = Binder::bind_with_vars(ty, bound_vars);
-                let ty = self.normalize_associated_types_in(span, ty);
+                let ty = self.normalize(span, ty);
                 let ty = self.tcx.erase_late_bound_regions(ty);
                 if self.can_coerce(expected, ty) {
                     err.subdiagnostic(ExpectedReturnTypeLabel::Other { span, expected });
@@ -921,19 +921,16 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             let ty = <dyn AstConv<'_>>::ast_ty_to_ty(self, ty);
             let bound_vars = self.tcx.late_bound_vars(fn_id);
             let ty = self.tcx.erase_late_bound_regions(Binder::bind_with_vars(ty, bound_vars));
-            let ty = self.normalize_associated_types_in(expr.span, ty);
+            let ty = self.normalize(expr.span, ty);
             let ty = match self.tcx.asyncness(fn_id.owner) {
                 hir::IsAsync::Async => {
                     let infcx = self.tcx.infer_ctxt().build();
-                    infcx
-                        .get_impl_future_output_ty(ty)
-                        .unwrap_or_else(|| {
-                            span_bug!(
-                                fn_decl.output.span(),
-                                "failed to get output type of async function"
-                            )
-                        })
-                        .skip_binder()
+                    infcx.get_impl_future_output_ty(ty).unwrap_or_else(|| {
+                        span_bug!(
+                            fn_decl.output.span(),
+                            "failed to get output type of async function"
+                        )
+                    })
                 }
                 hir::IsAsync::NotAsync => ty,
             };

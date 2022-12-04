@@ -366,7 +366,7 @@ impl<CTX> HashStable<CTX> for [u8] {
 impl<T: HashStable<CTX>, CTX> HashStable<CTX> for Vec<T> {
     #[inline]
     fn hash_stable(&self, ctx: &mut CTX, hasher: &mut StableHasher) {
-        (&self[..]).hash_stable(ctx, hasher);
+        self[..].hash_stable(ctx, hasher);
     }
 }
 
@@ -399,13 +399,13 @@ where
     }
 }
 
-impl<A, CTX> HashStable<CTX> for SmallVec<[A; 1]>
+impl<A, const N: usize, CTX> HashStable<CTX> for SmallVec<[A; N]>
 where
     A: HashStable<CTX>,
 {
     #[inline]
     fn hash_stable(&self, ctx: &mut CTX, hasher: &mut StableHasher) {
-        (&self[..]).hash_stable(ctx, hasher);
+        self[..].hash_stable(ctx, hasher);
     }
 }
 
@@ -440,7 +440,7 @@ impl<CTX> HashStable<CTX> for str {
 impl<CTX> HashStable<CTX> for String {
     #[inline]
     fn hash_stable(&self, hcx: &mut CTX, hasher: &mut StableHasher) {
-        (&self[..]).hash_stable(hcx, hasher);
+        self[..].hash_stable(hcx, hasher);
     }
 }
 

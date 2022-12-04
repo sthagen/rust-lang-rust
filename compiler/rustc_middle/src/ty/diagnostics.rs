@@ -355,6 +355,12 @@ pub fn suggest_constraining_type_params<'a>(
         ));
     }
 
+    // FIXME: remove the suggestions that are from derive, as the span is not correct
+    suggestions = suggestions
+        .into_iter()
+        .filter(|(span, _, _)| !span.in_derive_expansion())
+        .collect::<Vec<_>>();
+
     if suggestions.len() == 1 {
         let (span, suggestion, msg) = suggestions.pop().unwrap();
 
@@ -397,7 +403,7 @@ impl<'v> hir::intravisit::Visitor<'v> for TraitObjectVisitor<'v> {
             hir::TyKind::TraitObject(
                 _,
                 hir::Lifetime {
-                    name:
+                    res:
                         hir::LifetimeName::ImplicitObjectLifetimeDefault | hir::LifetimeName::Static,
                     ..
                 },
@@ -421,10 +427,9 @@ pub struct StaticLifetimeVisitor<'tcx>(pub Vec<Span>, pub crate::hir::map::Map<'
 
 impl<'v> hir::intravisit::Visitor<'v> for StaticLifetimeVisitor<'v> {
     fn visit_lifetime(&mut self, lt: &'v hir::Lifetime) {
-        if let hir::LifetimeName::ImplicitObjectLifetimeDefault | hir::LifetimeName::Static =
-            lt.name
+        if let hir::LifetimeName::ImplicitObjectLifetimeDefault | hir::LifetimeName::Static = lt.res
         {
-            self.0.push(lt.span);
+            self.0.push(lt.ident.span);
         }
     }
 }

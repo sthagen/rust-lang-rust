@@ -46,7 +46,6 @@ use rustc_span::def_id::{DefId, LOCAL_CRATE};
 use rustc_span::symbol::sym;
 use rustc_span::Span;
 use rustc_trait_selection::infer::InferCtxtExt;
-use rustc_trait_selection::traits::error_reporting::report_object_safety_error;
 
 /// Reifies a cast check to be checked once we have full type information for
 /// a function context.
@@ -727,9 +726,6 @@ impl<'a, 'tcx> CastCheck<'tcx> {
                     debug!(" -> CoercionCast");
                     fcx.typeck_results.borrow_mut().set_coercion_cast(self.expr.hir_id.local_id);
                 }
-                Err(ty::error::TypeError::ObjectUnsafeCoercion(did)) => {
-                    self.report_object_unsafe_cast(&fcx, did);
-                }
                 Err(_) => {
                     match self.do_check(fcx) {
                         Ok(k) => {
@@ -741,14 +737,6 @@ impl<'a, 'tcx> CastCheck<'tcx> {
             };
         }
     }
-
-    fn report_object_unsafe_cast(&self, fcx: &FnCtxt<'a, 'tcx>, did: DefId) {
-        let violations = fcx.tcx.object_safety_violations(did);
-        let mut err = report_object_safety_error(fcx.tcx, self.cast_span, did, violations);
-        err.note(&format!("required by cast to type '{}'", fcx.ty_to_string(self.cast_ty)));
-        err.emit();
-    }
-
     /// Checks a cast, and report an error if one exists. In some cases, this
     /// can return Ok and create type errors in the fcx rather than returning
     /// directly. coercion-cast is handled in check instead of here.
@@ -764,10 +752,7 @@ impl<'a, 'tcx> CastCheck<'tcx> {
                 match *self.expr_ty.kind() {
                     ty::FnDef(..) => {
                         // Attempt a coercion to a fn pointer type.
-                        let f = fcx.normalize_associated_types_in(
-                            self.expr_span,
-                            self.expr_ty.fn_sig(fcx.tcx),
-                        );
+                        let f = fcx.normalize(self.expr_span, self.expr_ty.fn_sig(fcx.tcx));
                         let res = fcx.try_coerce(
                             self.expr,
                             self.expr_ty,
@@ -951,7 +936,7 @@ impl<'a, 'tcx> CastCheck<'tcx> {
         m_cast: ty::TypeAndMut<'tcx>,
     ) -> Result<CastKind, CastError> {
         // array-ptr-cast: allow mut-to-mut, mut-to-const, const-to-const
-        if m_expr.mutbl == hir::Mutability::Mut || m_cast.mutbl == hir::Mutability::Not {
+        if m_expr.mutbl >= m_cast.mutbl {
             if let ty::Array(ety, _) = m_expr.ty.kind() {
                 // Due to the limitations of LLVM global constants,
                 // region pointers end up pointing at copies of

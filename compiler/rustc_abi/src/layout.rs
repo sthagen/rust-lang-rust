@@ -354,7 +354,7 @@ pub trait LayoutCalculator {
                 if !always_sized { StructKind::MaybeUnsized } else { StructKind::AlwaysSized }
             };
 
-            let mut st = self.univariant(dl, &variants[v], &repr, kind)?;
+            let mut st = self.univariant(dl, &variants[v], repr, kind)?;
             st.variants = Variants::Single { index: v };
 
             if is_unsafe_cell {
@@ -382,28 +382,26 @@ pub trait LayoutCalculator {
             let (start, end) = scalar_valid_range;
             match st.abi {
                 Abi::Scalar(ref mut scalar) | Abi::ScalarPair(ref mut scalar, _) => {
-                    // the asserts ensure that we are not using the
-                    // `#[rustc_layout_scalar_valid_range(n)]`
-                    // attribute to widen the range of anything as that would probably
-                    // result in UB somewhere
-                    // FIXME(eddyb) the asserts are probably not needed,
-                    // as larger validity ranges would result in missed
+                    // Enlarging validity ranges would result in missed
                     // optimizations, *not* wrongly assuming the inner
-                    // value is valid. e.g. unions enlarge validity ranges,
+                    // value is valid. e.g. unions already enlarge validity ranges,
                     // because the values may be uninitialized.
+                    //
+                    // Because of that we only check that the start and end
+                    // of the range is representable with this scalar type.
+
+                    let max_value = scalar.size(dl).unsigned_int_max();
                     if let Bound::Included(start) = start {
                         // FIXME(eddyb) this might be incorrect - it doesn't
                         // account for wrap-around (end < start) ranges.
-                        let valid_range = scalar.valid_range_mut();
-                        assert!(valid_range.start <= start);
-                        valid_range.start = start;
+                        assert!(start <= max_value, "{start} > {max_value}");
+                        scalar.valid_range_mut().start = start;
                     }
                     if let Bound::Included(end) = end {
                         // FIXME(eddyb) this might be incorrect - it doesn't
                         // account for wrap-around (end < start) ranges.
-                        let valid_range = scalar.valid_range_mut();
-                        assert!(valid_range.end >= end);
-                        valid_range.end = end;
+                        assert!(end <= max_value, "{end} > {max_value}");
+                        scalar.valid_range_mut().end = end;
                     }
 
                     // Update `largest_niche` if we have introduced a larger niche.
@@ -459,7 +457,7 @@ pub trait LayoutCalculator {
             let mut variant_layouts = variants
                 .iter_enumerated()
                 .map(|(j, v)| {
-                    let mut st = self.univariant(dl, v, &repr, StructKind::AlwaysSized)?;
+                    let mut st = self.univariant(dl, v, repr, StructKind::AlwaysSized)?;
                     st.variants = Variants::Single { index: j };
 
                     align = align.max(st.align);
@@ -649,8 +647,8 @@ pub trait LayoutCalculator {
             .map(|(i, field_layouts)| {
                 let mut st = self.univariant(
                     dl,
-                    &field_layouts,
-                    &repr,
+                    field_layouts,
+                    repr,
                     StructKind::Prefixed(min_ity.size(), prefix_align),
                 )?;
                 st.variants = Variants::Single { index: i };
@@ -757,7 +755,7 @@ pub trait LayoutCalculator {
             // Try to use a ScalarPair for all tagged enums.
             let mut common_prim = None;
             let mut common_prim_initialized_in_all_variants = true;
-            for (field_layouts, layout_variant) in iter::zip(&*variants, &layout_variants) {
+            for (field_layouts, layout_variant) in iter::zip(variants, &layout_variants) {
                 let FieldsShape::Arbitrary { ref offsets, .. } = layout_variant.fields else {
                     panic!();
                 };

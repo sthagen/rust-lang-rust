@@ -197,12 +197,12 @@ pub enum UnleashedFeatureHelp {
 
 #[derive(Diagnostic)]
 #[diag(session_invalid_literal_suffix)]
-pub(crate) struct InvalidLiteralSuffix {
+pub(crate) struct InvalidLiteralSuffix<'a> {
     #[primary_span]
     #[label]
     pub span: Span,
     // FIXME(#100717)
-    pub kind: String,
+    pub kind: &'a str,
     pub suffix: Symbol,
 }
 
@@ -311,17 +311,13 @@ pub fn report_lit_error(sess: &ParseSess, err: LitError, lit: token::Lit, span: 
         LitError::LexerError => {}
         LitError::InvalidSuffix => {
             if let Some(suffix) = suffix {
-                sess.emit_err(InvalidLiteralSuffix {
-                    span,
-                    kind: format!("{}", kind.descr()),
-                    suffix,
-                });
+                sess.emit_err(InvalidLiteralSuffix { span, kind: kind.descr(), suffix });
             }
         }
         LitError::InvalidIntSuffix => {
             let suf = suffix.expect("suffix error with no suffix");
             let suf = suf.as_str();
-            if looks_like_width_suffix(&['i', 'u'], &suf) {
+            if looks_like_width_suffix(&['i', 'u'], suf) {
                 // If it looks like a width, try to be helpful.
                 sess.emit_err(InvalidIntLiteralWidth { span, width: suf[1..].into() });
             } else if let Some(fixed) = fix_base_capitalisation(suf) {

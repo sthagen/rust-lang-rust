@@ -98,8 +98,8 @@ impl<'a, 'tcx> InteriorVisitor<'a, 'tcx> {
                 expr, scope, ty, self.expr_count, yield_data.span
             );
 
-            if let Some((unresolved_type, unresolved_type_span)) =
-                self.fcx.unresolved_type_vars(&ty)
+            if let Some((unresolved_term, unresolved_type_span)) =
+                self.fcx.first_unresolved_const_or_ty_var(&ty)
             {
                 // If unresolved type isn't a ty_var then unresolved_type_span is None
                 let span = self
@@ -108,21 +108,22 @@ impl<'a, 'tcx> InteriorVisitor<'a, 'tcx> {
 
                 // If we encounter an int/float variable, then inference fallback didn't
                 // finish due to some other error. Don't emit spurious additional errors.
-                if let ty::Infer(ty::InferTy::IntVar(_) | ty::InferTy::FloatVar(_)) =
-                    unresolved_type.kind()
+                if let Some(unresolved_ty) = unresolved_term.ty()
+                    && let ty::Infer(ty::InferTy::IntVar(_) | ty::InferTy::FloatVar(_)) = unresolved_ty.kind()
                 {
                     self.fcx
                         .tcx
                         .sess
-                        .delay_span_bug(span, &format!("Encountered var {:?}", unresolved_type));
+                        .delay_span_bug(span, &format!("Encountered var {:?}", unresolved_term));
                 } else {
                     let note = format!(
                         "the type is part of the {} because of this {}",
-                        self.kind, yield_data.source
+                        self.kind.descr(),
+                        yield_data.source
                     );
 
                     self.fcx
-                        .need_type_info_err_in_generator(self.kind, span, unresolved_type)
+                        .need_type_info_err_in_generator(self.kind, span, unresolved_term)
                         .span_note(yield_data.span, &*note)
                         .emit();
                 }
@@ -162,7 +163,7 @@ impl<'a, 'tcx> InteriorVisitor<'a, 'tcx> {
                 expr.map(|e| e.span)
             );
             if let Some((unresolved_type, unresolved_type_span)) =
-                self.fcx.unresolved_type_vars(&ty)
+                self.fcx.first_unresolved_const_or_ty_var(&ty)
             {
                 debug!(
                     "remained unresolved_type = {:?}, unresolved_type_span: {:?}",
@@ -234,7 +235,7 @@ pub fn resolve_interior<'a, 'tcx>(
                 counter += 1;
                 ty::BoundRegion { var, kind }
             };
-            let ty = fcx.normalize_associated_types_in(cause.span, cause.ty);
+            let ty = fcx.normalize(cause.span, cause.ty);
             let ty = fcx.tcx.fold_regions(ty, |region, current_depth| {
                 let br = match region.kind() {
                     ty::ReVar(vid) => {

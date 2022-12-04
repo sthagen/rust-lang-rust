@@ -29,15 +29,16 @@ use std::fmt;
 #[derive(Debug, Copy, Clone, Encodable, HashStable_Generic)]
 pub struct Lifetime {
     pub hir_id: HirId,
-    pub span: Span,
 
     /// Either "`'a`", referring to a named lifetime definition,
-    /// or "``" (i.e., `kw::Empty`), for elision placeholders.
+    /// `'_` referring to an anonymous lifetime (either explicitly `'_` or `&type`),
+    /// or "``" (i.e., `kw::Empty`) when appearing in path.
     ///
-    /// HIR lowering inserts these placeholders in type paths that
-    /// refer to type definitions needing lifetime parameters,
-    /// `&T` and `&mut T`, and trait objects without `... + 'a`.
-    pub name: LifetimeName,
+    /// See `Lifetime::suggestion_position` for practical use.
+    pub ident: Ident,
+
+    /// Semantics of this lifetime.
+    pub res: LifetimeName,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Encodable, Hash, Copy)]
@@ -88,7 +89,7 @@ impl ParamName {
 #[derive(HashStable_Generic)]
 pub enum LifetimeName {
     /// User-given names or fresh (synthetic) names.
-    Param(LocalDefId, ParamName),
+    Param(LocalDefId),
 
     /// Implicit lifetime in a context like `dyn Foo`. This is
     /// distinguished from implicit lifetimes elsewhere because the
@@ -116,25 +117,6 @@ pub enum LifetimeName {
 }
 
 impl LifetimeName {
-    pub fn ident(&self) -> Ident {
-        match *self {
-            LifetimeName::ImplicitObjectLifetimeDefault | LifetimeName::Error => Ident::empty(),
-            LifetimeName::Infer => Ident::with_dummy_span(kw::UnderscoreLifetime),
-            LifetimeName::Static => Ident::with_dummy_span(kw::StaticLifetime),
-            LifetimeName::Param(_, param_name) => param_name.ident(),
-        }
-    }
-
-    pub fn is_anonymous(&self) -> bool {
-        match *self {
-            LifetimeName::ImplicitObjectLifetimeDefault
-            | LifetimeName::Infer
-            | LifetimeName::Param(_, ParamName::Fresh)
-            | LifetimeName::Error => true,
-            LifetimeName::Static | LifetimeName::Param(..) => false,
-        }
-    }
-
     pub fn is_elided(&self) -> bool {
         match self {
             LifetimeName::ImplicitObjectLifetimeDefault | LifetimeName::Infer => true,
@@ -146,34 +128,54 @@ impl LifetimeName {
             LifetimeName::Error | LifetimeName::Param(..) | LifetimeName::Static => false,
         }
     }
-
-    fn is_static(&self) -> bool {
-        self == &LifetimeName::Static
-    }
-
-    pub fn normalize_to_macros_2_0(&self) -> LifetimeName {
-        match *self {
-            LifetimeName::Param(def_id, param_name) => {
-                LifetimeName::Param(def_id, param_name.normalize_to_macros_2_0())
-            }
-            lifetime_name => lifetime_name,
-        }
-    }
 }
 
 impl fmt::Display for Lifetime {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.name.ident().fmt(f)
+        if self.ident.name != kw::Empty { self.ident.name.fmt(f) } else { "'_".fmt(f) }
     }
+}
+
+pub enum LifetimeSuggestionPosition {
+    /// The user wrote `'a` or `'_`.
+    Normal,
+    /// The user wrote `&type` or `&mut type`.
+    Ampersand,
+    /// The user wrote `Path` and omitted the `<'_>`.
+    ElidedPath,
+    /// The user wrote `Path<T>`, and omitted the `'_,`.
+    ElidedPathArgument,
+    /// The user wrote `dyn Trait` and omitted the `+ '_`.
+    ObjectDefault,
 }
 
 impl Lifetime {
     pub fn is_elided(&self) -> bool {
-        self.name.is_elided()
+        self.res.is_elided()
+    }
+
+    pub fn is_anonymous(&self) -> bool {
+        self.ident.name == kw::Empty || self.ident.name == kw::UnderscoreLifetime
+    }
+
+    pub fn suggestion_position(&self) -> (LifetimeSuggestionPosition, Span) {
+        if self.ident.name == kw::Empty {
+            if self.ident.span.is_empty() {
+                (LifetimeSuggestionPosition::ElidedPathArgument, self.ident.span)
+            } else {
+                (LifetimeSuggestionPosition::ElidedPath, self.ident.span.shrink_to_hi())
+            }
+        } else if self.res == LifetimeName::ImplicitObjectLifetimeDefault {
+            (LifetimeSuggestionPosition::ObjectDefault, self.ident.span)
+        } else if self.ident.span.is_empty() {
+            (LifetimeSuggestionPosition::Ampersand, self.ident.span)
+        } else {
+            (LifetimeSuggestionPosition::Normal, self.ident.span)
+        }
     }
 
     pub fn is_static(&self) -> bool {
-        self.name.is_static()
+        self.res == LifetimeName::Static
     }
 }
 
@@ -181,13 +183,16 @@ impl Lifetime {
 /// `std::cmp::PartialEq`. It's represented as a sequence of identifiers,
 /// along with a bunch of supporting information.
 #[derive(Debug, HashStable_Generic)]
-pub struct Path<'hir> {
+pub struct Path<'hir, R = Res> {
     pub span: Span,
     /// The resolution for the path.
-    pub res: Res,
+    pub res: R,
     /// The segments in the path: the things separated by `::`.
     pub segments: &'hir [PathSegment<'hir>],
 }
+
+/// Up to three resolutions for type, value and macro namespaces.
+pub type UsePath<'hir> = Path<'hir, SmallVec<[Res; 3]>>;
 
 impl Path<'_> {
     pub fn is_global(&self) -> bool {
@@ -267,7 +272,7 @@ pub enum GenericArg<'hir> {
 impl GenericArg<'_> {
     pub fn span(&self) -> Span {
         match self {
-            GenericArg::Lifetime(l) => l.span,
+            GenericArg::Lifetime(l) => l.ident.span,
             GenericArg::Type(t) => t.span,
             GenericArg::Const(c) => c.span,
             GenericArg::Infer(i) => i.span,
@@ -284,7 +289,7 @@ impl GenericArg<'_> {
     }
 
     pub fn is_synthetic(&self) -> bool {
-        matches!(self, GenericArg::Lifetime(lifetime) if lifetime.name.ident() == Ident::empty())
+        matches!(self, GenericArg::Lifetime(lifetime) if lifetime.ident == Ident::empty())
     }
 
     pub fn descr(&self) -> &'static str {
@@ -446,7 +451,7 @@ impl GenericBound<'_> {
         match self {
             GenericBound::Trait(t, ..) => t.span,
             GenericBound::LangItemTrait(_, span, ..) => *span,
-            GenericBound::Outlives(l) => l.span,
+            GenericBound::Outlives(l) => l.ident.span,
         }
     }
 }
@@ -556,6 +561,19 @@ impl<'hir> Generics<'hir> {
             self.span.into()
         } else {
             self.params.iter().map(|p| p.span).collect::<Vec<Span>>().into()
+        }
+    }
+
+    /// If there are generic parameters, return where to introduce a new one.
+    pub fn span_for_lifetime_suggestion(&self) -> Option<Span> {
+        if let Some(first) = self.params.first()
+            && self.span.contains(first.span)
+        {
+            // `fn foo<A>(t: impl Trait)`
+            //         ^ suggest `'a, ` here
+            Some(first.span.shrink_to_lo())
+        } else {
+            None
         }
     }
 
@@ -765,10 +783,7 @@ pub struct WhereRegionPredicate<'hir> {
 impl<'hir> WhereRegionPredicate<'hir> {
     /// Returns `true` if `param_def_id` matches the `lifetime` of this predicate.
     pub fn is_param_bound(&self, param_def_id: LocalDefId) -> bool {
-        match self.lifetime.name {
-            LifetimeName::Param(id, _) => id == param_def_id,
-            _ => false,
-        }
+        self.lifetime.res == LifetimeName::Param(param_def_id)
     }
 }
 
@@ -928,7 +943,10 @@ pub struct Closure<'hir> {
     pub bound_generic_params: &'hir [GenericParam<'hir>],
     pub fn_decl: &'hir FnDecl<'hir>,
     pub body: BodyId,
+    /// The span of the declaration block: 'move |...| -> ...'
     pub fn_decl_span: Span,
+    /// The span of the argument block `|...|`
+    pub fn_arg_span: Option<Span>,
     pub movability: Option<Movability>,
 }
 
@@ -969,8 +987,8 @@ pub struct Pat<'hir> {
     pub hir_id: HirId,
     pub kind: PatKind<'hir>,
     pub span: Span,
-    // Whether to use default binding modes.
-    // At present, this is false only for destructuring assignment.
+    /// Whether to use default binding modes.
+    /// At present, this is false only for destructuring assignment.
     pub default_binding_modes: bool,
 }
 
@@ -1078,7 +1096,7 @@ impl fmt::Display for RangeEnd {
 pub struct DotDotPos(u32);
 
 impl DotDotPos {
-    // Panics if n >= u32::MAX.
+    /// Panics if n >= u32::MAX.
     pub fn new(n: Option<usize>) -> Self {
         match n {
             Some(n) => {
@@ -1514,9 +1532,9 @@ pub enum AsyncGeneratorKind {
 impl fmt::Display for AsyncGeneratorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            AsyncGeneratorKind::Block => "`async` block",
-            AsyncGeneratorKind::Closure => "`async` closure body",
-            AsyncGeneratorKind::Fn => "`async fn` body",
+            AsyncGeneratorKind::Block => "async block",
+            AsyncGeneratorKind::Closure => "async closure body",
+            AsyncGeneratorKind::Fn => "async fn body",
         })
     }
 }
@@ -1682,10 +1700,10 @@ impl Expr<'_> {
         }
     }
 
-    // Whether this looks like a place expr, without checking for deref
-    // adjustments.
-    // This will return `true` in some potentially surprising cases such as
-    // `CONSTANT.field`.
+    /// Whether this looks like a place expr, without checking for deref
+    /// adjustments.
+    /// This will return `true` in some potentially surprising cases such as
+    /// `CONSTANT.field`.
     pub fn is_syntactic_place_expr(&self) -> bool {
         self.is_place_expr(|_| true)
     }
@@ -1826,7 +1844,7 @@ impl Expr<'_> {
         }
     }
 
-    // To a first-order approximation, is this a pattern
+    /// To a first-order approximation, is this a pattern?
     pub fn is_approximately_pattern(&self) -> bool {
         match &self.kind {
             ExprKind::Box(_)
@@ -2148,11 +2166,11 @@ impl fmt::Display for LoopIdError {
 
 #[derive(Copy, Clone, Encodable, Debug, HashStable_Generic)]
 pub struct Destination {
-    // This is `Some(_)` iff there is an explicit user-specified `label
+    /// This is `Some(_)` iff there is an explicit user-specified 'label
     pub label: Option<Label>,
 
-    // These errors are caught and then reported during the diagnostics pass in
-    // librustc_passes/loops.rs
+    /// These errors are caught and then reported during the diagnostics pass in
+    /// `librustc_passes/loops.rs`
     pub target_id: Result<HirId, LoopIdError>,
 }
 
@@ -2323,7 +2341,7 @@ pub enum ImplItemKind<'hir> {
     Type(&'hir Ty<'hir>),
 }
 
-// The name of the associated type for `Fn` return types.
+/// The name of the associated type for `Fn` return types.
 pub const FN_OUTPUT_NAME: Symbol = sym::Output;
 
 /// Bind a type to an associated type (i.e., `A = Foo`).
@@ -2419,7 +2437,7 @@ impl<'hir> Ty<'hir> {
     pub fn peel_refs(&self) -> &Self {
         let mut final_ty = self;
         while let TyKind::Rptr(_, MutTy { ty, .. }) = &final_ty.kind {
-            final_ty = &ty;
+            final_ty = ty;
         }
         final_ty
     }
@@ -2688,6 +2706,8 @@ pub struct FnDecl<'hir> {
     pub c_variadic: bool,
     /// Does the function have an implicit self?
     pub implicit_self: ImplicitSelfKind,
+    /// Is lifetime elision allowed.
+    pub lifetime_elision_allowed: bool,
 }
 
 /// Represents what type of implicit self a function has, if any.
@@ -3054,7 +3074,7 @@ pub enum ItemKind<'hir> {
     /// or just
     ///
     /// `use foo::bar::baz;` (with `as baz` implicitly on the right).
-    Use(&'hir Path<'hir>, UseKind),
+    Use(&'hir UsePath<'hir>, UseKind),
 
     /// A `static` item.
     Static(&'hir Ty<'hir>, Mutability, BodyId),
@@ -3247,7 +3267,7 @@ pub enum ForeignItemKind<'hir> {
 /// A variable captured by a closure.
 #[derive(Debug, Copy, Clone, Encodable, HashStable_Generic)]
 pub struct Upvar {
-    // First span where it is accessed (there can be multiple).
+    /// First span where it is accessed (there can be multiple).
     pub span: Span,
 }
 
@@ -3453,7 +3473,7 @@ impl<'hir> Node<'hir> {
             | Node::Variant(Variant { ident, .. })
             | Node::Item(Item { ident, .. })
             | Node::PathSegment(PathSegment { ident, .. }) => Some(*ident),
-            Node::Lifetime(lt) => Some(lt.name.ident()),
+            Node::Lifetime(lt) => Some(lt.ident),
             Node::GenericParam(p) => Some(p.name.ident()),
             Node::TypeBinding(b) => Some(b.ident),
             Node::Param(..)

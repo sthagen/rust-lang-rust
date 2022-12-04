@@ -439,7 +439,7 @@ pub fn walk_path<'a, V: Visitor<'a>>(visitor: &mut V, path: &'a Path) {
 pub fn walk_use_tree<'a, V: Visitor<'a>>(visitor: &mut V, use_tree: &'a UseTree, id: NodeId) {
     visitor.visit_path(&use_tree.prefix, id);
     match &use_tree.kind {
-        UseTreeKind::Simple(rename, ..) => {
+        UseTreeKind::Simple(rename) => {
             // The extra IDs are handled during HIR lowering.
             if let &Some(rename) = rename {
                 visitor.visit_ident(rename);
@@ -840,6 +840,7 @@ pub fn walk_expr<'a, V: Visitor<'a>>(visitor: &mut V, expression: &'a Expr) {
             fn_decl,
             body,
             fn_decl_span: _,
+            fn_arg_span: _,
         }) => {
             visitor.visit_fn(FnKind::Closure(binder, fn_decl, body), expression.span, expression.id)
         }
