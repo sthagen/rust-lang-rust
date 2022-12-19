@@ -177,16 +177,6 @@ fn build_drop_shim<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId, ty: Option<Ty<'tcx>>)
     if ty.is_some() {
         // The first argument (index 0), but add 1 for the return value.
         let dropee_ptr = Place::from(Local::new(1 + 0));
-        if tcx.sess.opts.unstable_opts.mir_emit_retag {
-            // Function arguments should be retagged, and we make this one raw.
-            body.basic_blocks_mut()[START_BLOCK].statements.insert(
-                0,
-                Statement {
-                    source_info,
-                    kind: StatementKind::Retag(RetagKind::Raw, Box::new(dropee_ptr)),
-                },
-            );
-        }
         let patch = {
             let param_env = tcx.param_env_reveal_all_normalized(def_id);
             let mut elaborator =
@@ -346,8 +336,7 @@ impl<'tcx> CloneShimBuilder<'tcx> {
         // we must subst the self_ty because it's
         // otherwise going to be TySelf and we can't index
         // or access fields of a Place of type TySelf.
-        let substs = tcx.mk_substs_trait(self_ty, []);
-        let sig = tcx.bound_fn_sig(def_id).subst(tcx, substs);
+        let sig = tcx.bound_fn_sig(def_id).subst(tcx, &[self_ty.into()]);
         let sig = tcx.erase_late_bound_regions(sig);
         let span = tcx.def_span(def_id);
 
@@ -427,10 +416,8 @@ impl<'tcx> CloneShimBuilder<'tcx> {
     ) {
         let tcx = self.tcx;
 
-        let substs = tcx.mk_substs_trait(ty, []);
-
         // `func == Clone::clone(&ty) -> ty`
-        let func_ty = tcx.mk_fn_def(self.def_id, substs);
+        let func_ty = tcx.mk_fn_def(self.def_id, [ty]);
         let func = Operand::Constant(Box::new(Constant {
             span: self.span,
             user_ty: None,
@@ -558,7 +545,6 @@ impl<'tcx> CloneShimBuilder<'tcx> {
                 statements.push(statement);
                 *kind = TerminatorKind::SwitchInt {
                     discr: Operand::Move(temp),
-                    switch_ty: discr_ty,
                     targets: SwitchTargets::new(cases.into_iter(), unreachable),
                 };
             }
@@ -586,9 +572,8 @@ fn build_call_shim<'tcx>(
 
         // Create substitutions for the `Self` and `Args` generic parameters of the shim body.
         let arg_tup = tcx.mk_tup(untuple_args.iter());
-        let sig_substs = tcx.mk_substs_trait(ty, [ty::subst::GenericArg::from(arg_tup)]);
 
-        (Some(sig_substs), Some(untuple_args))
+        (Some([ty.into(), arg_tup.into()]), Some(untuple_args))
     } else {
         (None, None)
     };
@@ -599,7 +584,7 @@ fn build_call_shim<'tcx>(
 
     assert_eq!(sig_substs.is_some(), !instance.has_polymorphic_mir_body());
     let mut sig =
-        if let Some(sig_substs) = sig_substs { sig.subst(tcx, sig_substs) } else { sig.0 };
+        if let Some(sig_substs) = sig_substs { sig.subst(tcx, &sig_substs) } else { sig.0 };
 
     if let CallKind::Indirect(fnty) = call_kind {
         // `sig` determines our local decls, and thus the callee type in the `Call` terminator. This

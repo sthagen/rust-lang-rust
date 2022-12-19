@@ -55,6 +55,10 @@ use self::spec_extend::SpecExtend;
 
 mod spec_extend;
 
+use self::spec_from_iter::SpecFromIter;
+
+mod spec_from_iter;
+
 #[cfg(test)]
 mod tests;
 
@@ -584,6 +588,38 @@ impl<T, A: Allocator> VecDeque<T, A> {
     #[unstable(feature = "allocator_api", issue = "32838")]
     pub fn with_capacity_in(capacity: usize, alloc: A) -> VecDeque<T, A> {
         VecDeque { head: 0, len: 0, buf: RawVec::with_capacity_in(capacity, alloc) }
+    }
+
+    /// Creates a `VecDeque` from a raw allocation, when the initialized
+    /// part of that allocation forms a *contiguous* subslice thereof.
+    ///
+    /// For use by `vec::IntoIter::into_vecdeque`
+    ///
+    /// # Safety
+    ///
+    /// All the usual requirements on the allocated memory like in
+    /// `Vec::from_raw_parts_in`, but takes a *range* of elements that are
+    /// initialized rather than only supporting `0..len`.  Requires that
+    /// `initialized.start` ≤ `initialized.end` ≤ `capacity`.
+    #[inline]
+    pub(crate) unsafe fn from_contiguous_raw_parts_in(
+        ptr: *mut T,
+        initialized: Range<usize>,
+        capacity: usize,
+        alloc: A,
+    ) -> Self {
+        debug_assert!(initialized.start <= initialized.end);
+        debug_assert!(initialized.end <= capacity);
+
+        // SAFETY: Our safety precondition guarantees the range length won't wrap,
+        // and that the allocation is valid for use in `RawVec`.
+        unsafe {
+            VecDeque {
+                head: initialized.start,
+                len: initialized.end.unchecked_sub(initialized.start),
+                buf: RawVec::from_raw_parts_in(ptr, capacity, alloc),
+            }
+        }
     }
 
     /// Provides a reference to the element at the given index.
@@ -2505,7 +2541,7 @@ impl<T, A: Allocator> VecDeque<T, A> {
     /// The deque is assumed to be partitioned according to the given predicate.
     /// This means that all elements for which the predicate returns true are at the start of the deque
     /// and all elements for which the predicate returns false are at the end.
-    /// For example, [7, 15, 3, 5, 4, 12, 6] is a partitioned under the predicate x % 2 != 0
+    /// For example, `[7, 15, 3, 5, 4, 12, 6]` is partitioned under the predicate `x % 2 != 0`
     /// (all odd numbers are at the start, all even at the end).
     ///
     /// If the deque is not partitioned, the returned result is unspecified and meaningless,
@@ -2700,11 +2736,7 @@ impl<T, A: Allocator> IndexMut<usize> for VecDeque<T, A> {
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<T> FromIterator<T> for VecDeque<T> {
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> VecDeque<T> {
-        let iterator = iter.into_iter();
-        let (lower, _) = iterator.size_hint();
-        let mut deq = VecDeque::with_capacity(lower);
-        deq.extend(iterator);
-        deq
+        SpecFromIter::spec_from_iter(iter.into_iter())
     }
 }
 
@@ -2791,6 +2823,7 @@ impl<T, A: Allocator> From<Vec<T, A>> for VecDeque<T, A> {
     /// In its current implementation, this is a very cheap
     /// conversion. This isn't yet a guarantee though, and
     /// shouldn't be relied on.
+    #[inline]
     fn from(other: Vec<T, A>) -> Self {
         let (ptr, len, cap, alloc) = other.into_raw_parts_with_alloc();
         Self { head: 0, len, buf: unsafe { RawVec::from_raw_parts_in(ptr, cap, alloc) } }

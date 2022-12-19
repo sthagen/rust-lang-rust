@@ -1,6 +1,5 @@
 #![cfg_attr(feature = "nightly", feature(step_trait, rustc_attrs, min_specialization))]
 
-use std::convert::{TryFrom, TryInto};
 use std::fmt;
 #[cfg(feature = "nightly")]
 use std::iter::Step;
@@ -9,6 +8,8 @@ use std::ops::{Add, AddAssign, Mul, RangeInclusive, Sub};
 use std::str::FromStr;
 
 use bitflags::bitflags;
+#[cfg(feature = "nightly")]
+use rustc_data_structures::stable_hasher::StableOrd;
 use rustc_index::vec::{Idx, IndexVec};
 #[cfg(feature = "nightly")]
 use rustc_macros::HashStable_Generic;
@@ -403,6 +404,11 @@ pub struct Size {
     raw: u64,
 }
 
+// Safety: Ord is implement as just comparing numerical values and numerical values
+// are not changed by (de-)serialization.
+#[cfg(feature = "nightly")]
+unsafe impl StableOrd for Size {}
+
 // This is debug-printed a lot in larger structs, don't waste too much space there
 impl fmt::Debug for Size {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -768,6 +774,18 @@ impl Integer {
         }
     }
 
+    /// Returns the largest signed value that can be represented by this Integer.
+    #[inline]
+    pub fn signed_max(self) -> i128 {
+        match self {
+            I8 => i8::MAX as i128,
+            I16 => i16::MAX as i128,
+            I32 => i32::MAX as i128,
+            I64 => i64::MAX as i128,
+            I128 => i128::MAX,
+        }
+    }
+
     /// Finds the smallest Integer type which can represent the signed value.
     #[inline]
     pub fn fit_signed(x: i128) -> Integer {
@@ -796,12 +814,9 @@ impl Integer {
     pub fn for_align<C: HasDataLayout>(cx: &C, wanted: Align) -> Option<Integer> {
         let dl = cx.data_layout();
 
-        for candidate in [I8, I16, I32, I64, I128] {
-            if wanted == candidate.align(dl).abi && wanted.bytes() == candidate.size().bytes() {
-                return Some(candidate);
-            }
-        }
-        None
+        [I8, I16, I32, I64, I128].into_iter().find(|&candidate| {
+            wanted == candidate.align(dl).abi && wanted.bytes() == candidate.size().bytes()
+        })
     }
 
     /// Find the largest integer with the given alignment or less.

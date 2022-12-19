@@ -28,7 +28,7 @@ use rustc_middle::ty::adjustment::AllowTwoPhase;
 use rustc_middle::ty::visit::TypeVisitable;
 use rustc_middle::ty::{self, DefIdTree, IsSuggestable, Ty, TypeSuperVisitable, TypeVisitor};
 use rustc_session::Session;
-use rustc_span::symbol::Ident;
+use rustc_span::symbol::{kw, Ident};
 use rustc_span::{self, sym, Span};
 use rustc_trait_selection::traits::{self, ObligationCauseCode, SelectionContext};
 
@@ -1013,7 +1013,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                             } else {
                                 args_span
                             };
-                            labels.push((span, format!("multiple arguments are missing")));
+                            labels.push((span, "multiple arguments are missing".to_string()));
                             suggestion_text = match suggestion_text {
                                 SuggestionText::None | SuggestionText::Provide(_) => {
                                     SuggestionText::Provide(true)
@@ -1141,6 +1141,13 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         "()".to_string()
                     } else if expected_ty.is_suggestable(tcx, false) {
                         format!("/* {} */", expected_ty)
+                    } else if let Some(fn_def_id) = fn_def_id
+                        && self.tcx.def_kind(fn_def_id).is_fn_like()
+                        && let self_implicit = matches!(call_expr.kind, hir::ExprKind::MethodCall(..)) as usize
+                        && let Some(arg) = self.tcx.fn_arg_names(fn_def_id).get(expected_idx.as_usize() + self_implicit)
+                        && arg.name != kw::SelfLower
+                    {
+                        format!("/* {} */", arg.name)
                     } else {
                         "/* value */".to_string()
                     }
@@ -1169,7 +1176,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
         match lit.node {
             ast::LitKind::Str(..) => tcx.mk_static_str(),
-            ast::LitKind::ByteStr(ref v) => {
+            ast::LitKind::ByteStr(ref v, _) => {
                 tcx.mk_imm_ref(tcx.lifetimes.re_static, tcx.mk_array(tcx.types.u8, v.len() as u64))
             }
             ast::LitKind::Byte(_) => tcx.types.u8,
@@ -1393,8 +1400,6 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         blk: &'tcx hir::Block<'tcx>,
         expected: Expectation<'tcx>,
     ) -> Ty<'tcx> {
-        let prev = self.ps.replace(self.ps.get().recurse(blk));
-
         // In some cases, blocks have just one exit, but other blocks
         // can be targeted by multiple breaks. This can happen both
         // with labeled blocks as well as when we desugar
@@ -1558,7 +1563,6 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
         self.write_ty(blk.hir_id, ty);
 
-        self.ps.set(prev);
         ty
     }
 
@@ -1918,15 +1922,11 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         receiver: Option<&'tcx hir::Expr<'tcx>>,
         args: &'tcx [hir::Expr<'tcx>],
     ) -> bool {
-        // Do not call `fn_sig` on non-functions.
-        if !matches!(
-            self.tcx.def_kind(def_id),
-            DefKind::Fn | DefKind::AssocFn | DefKind::Variant | DefKind::Ctor(..)
-        ) {
+        let ty = self.tcx.type_of(def_id);
+        if !ty.is_fn() {
             return false;
         }
-
-        let sig = self.tcx.fn_sig(def_id).skip_binder();
+        let sig = ty.fn_sig(self.tcx).skip_binder();
         let args_referencing_param: Vec<_> = sig
             .inputs()
             .iter()
@@ -2131,7 +2131,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         }
                     }
                 }
-                ty::Opaque(new_def_id, _)
+                ty::Alias(ty::Opaque, ty::AliasTy { def_id: new_def_id, .. })
                 | ty::Closure(new_def_id, _)
                 | ty::FnDef(new_def_id, _) => {
                     def_id = new_def_id;
@@ -2139,19 +2139,15 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 _ => {
                     // Look for a user-provided impl of a `Fn` trait, and point to it.
                     let new_def_id = self.probe(|_| {
-                        let trait_ref = ty::TraitRef::new(
+                        let trait_ref = self.tcx.mk_trait_ref(
                             call_kind.to_def_id(self.tcx),
-                            self.tcx.mk_substs(
-                                [
-                                    ty::GenericArg::from(callee_ty),
-                                    self.next_ty_var(TypeVariableOrigin {
-                                        kind: TypeVariableOriginKind::MiscVariable,
-                                        span: rustc_span::DUMMY_SP,
-                                    })
-                                    .into(),
-                                ]
-                                .into_iter(),
-                            ),
+                            [
+                                callee_ty,
+                                self.next_ty_var(TypeVariableOrigin {
+                                    kind: TypeVariableOriginKind::MiscVariable,
+                                    span: rustc_span::DUMMY_SP,
+                                }),
+                            ],
                         );
                         let obligation = traits::Obligation::new(
                             self.tcx,
@@ -2224,7 +2220,7 @@ fn find_param_in_ty<'tcx>(ty: Ty<'tcx>, param_to_point_at: ty::GenericArg<'tcx>)
         if arg == param_to_point_at {
             return true;
         } else if let ty::GenericArgKind::Type(ty) = arg.unpack()
-            && let ty::Projection(..) = ty.kind()
+            && let ty::Alias(ty::Projection, ..) = ty.kind()
         {
             // This logic may seem a bit strange, but typically when
             // we have a projection type in a function signature, the

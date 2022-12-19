@@ -33,7 +33,7 @@ rustc_queries! {
     }
 
     query resolver_for_lowering(_: ()) -> &'tcx Steal<ty::ResolverAstLowering> {
-        eval_always
+        feedable
         no_hash
         desc { "getting the resolver for lowering" }
     }
@@ -43,6 +43,8 @@ rustc_queries! {
     /// This span is meant for dep-tracking rather than diagnostics. It should not be used outside
     /// of rustc_middle::hir::source_map.
     query source_span(key: LocalDefId) -> Span {
+        // Accesses untracked data
+        eval_always
         desc { "getting the source span" }
     }
 

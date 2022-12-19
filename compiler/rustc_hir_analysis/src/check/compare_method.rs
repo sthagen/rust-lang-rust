@@ -67,6 +67,10 @@ pub(crate) fn compare_impl_method<'tcx>(
         return;
     }
 
+    if let Err(_) = compare_asyncness(tcx, impl_m, impl_m_span, trait_m, trait_item_span) {
+        return;
+    }
+
     if let Err(_) = compare_predicate_entailment(tcx, impl_m, impl_m_span, trait_m, impl_trait_ref)
     {
         return;
@@ -323,6 +327,34 @@ fn compare_predicate_entailment<'tcx>(
     Ok(())
 }
 
+fn compare_asyncness<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    impl_m: &ty::AssocItem,
+    impl_m_span: Span,
+    trait_m: &ty::AssocItem,
+    trait_item_span: Option<Span>,
+) -> Result<(), ErrorGuaranteed> {
+    if tcx.asyncness(trait_m.def_id) == hir::IsAsync::Async {
+        match tcx.fn_sig(impl_m.def_id).skip_binder().output().kind() {
+            ty::Alias(ty::Opaque, ..) => {
+                // allow both `async fn foo()` and `fn foo() -> impl Future`
+            }
+            ty::Error(rustc_errors::ErrorGuaranteed { .. }) => {
+                // We don't know if it's ok, but at least it's already an error.
+            }
+            _ => {
+                return Err(tcx.sess.emit_err(crate::errors::AsyncTraitImplShouldBeAsync {
+                    span: impl_m_span,
+                    method_name: trait_m.name,
+                    trait_item_span,
+                }));
+            }
+        };
+    }
+
+    Ok(())
+}
+
 #[instrument(skip(tcx), level = "debug", ret)]
 pub fn collect_trait_impl_trait_tys<'tcx>(
     tcx: TyCtxt<'tcx>,
@@ -373,6 +405,7 @@ pub fn collect_trait_impl_trait_tys<'tcx>(
             tcx.fn_sig(impl_m.def_id),
         ),
     );
+    impl_sig.error_reported()?;
     let impl_return_ty = impl_sig.output();
 
     // Normalize the trait signature with liberated bound vars, passing it through
@@ -387,6 +420,7 @@ pub fn collect_trait_impl_trait_tys<'tcx>(
         )
         .fold_with(&mut collector);
     let trait_sig = ocx.normalize(&norm_cause, param_env, unnormalized_trait_sig);
+    trait_sig.error_reported()?;
     let trait_return_ty = trait_sig.output();
 
     let wf_tys = FxIndexSet::from_iter(
@@ -571,10 +605,10 @@ impl<'tcx> TypeFolder<'tcx> for ImplTraitInTraitCollector<'_, 'tcx> {
     }
 
     fn fold_ty(&mut self, ty: Ty<'tcx>) -> Ty<'tcx> {
-        if let ty::Projection(proj) = ty.kind()
-            && self.tcx().def_kind(proj.item_def_id) == DefKind::ImplTraitPlaceholder
+        if let ty::Alias(ty::Projection, proj) = ty.kind()
+            && self.tcx().def_kind(proj.def_id) == DefKind::ImplTraitPlaceholder
         {
-            if let Some((ty, _)) = self.types.get(&proj.item_def_id) {
+            if let Some((ty, _)) = self.types.get(&proj.def_id) {
                 return *ty;
             }
             //FIXME(RPITIT): Deny nested RPITIT in substs too
@@ -586,9 +620,9 @@ impl<'tcx> TypeFolder<'tcx> for ImplTraitInTraitCollector<'_, 'tcx> {
                 span: self.span,
                 kind: TypeVariableOriginKind::MiscVariable,
             });
-            self.types.insert(proj.item_def_id, (infer_ty, proj.substs));
+            self.types.insert(proj.def_id, (infer_ty, proj.substs));
             // Recurse into bounds
-            for (pred, pred_span) in self.tcx().bound_explicit_item_bounds(proj.item_def_id).subst_iter_copied(self.tcx(), proj.substs) {
+            for (pred, pred_span) in self.tcx().bound_explicit_item_bounds(proj.def_id).subst_iter_copied(self.tcx(), proj.substs) {
                 let pred = pred.fold_with(self);
                 let pred = self.ocx.normalize(
                     &ObligationCause::misc(self.span, self.body_id),
@@ -601,7 +635,7 @@ impl<'tcx> TypeFolder<'tcx> for ImplTraitInTraitCollector<'_, 'tcx> {
                     ObligationCause::new(
                         self.span,
                         self.body_id,
-                        ObligationCauseCode::BindingObligation(proj.item_def_id, pred_span),
+                        ObligationCauseCode::BindingObligation(proj.def_id, pred_span),
                     ),
                     self.param_env,
                     pred,
@@ -751,17 +785,45 @@ fn check_region_bounds_on_impl_item<'tcx>(
             .get_generics(impl_m.def_id.expect_local())
             .expect("expected impl item to have generics or else we can't compare them")
             .span;
-        let generics_span = if let Some(local_def_id) = trait_m.def_id.as_local() {
-            Some(
-                tcx.hir()
-                    .get_generics(local_def_id)
-                    .expect("expected trait item to have generics or else we can't compare them")
-                    .span,
-            )
-        } else {
-            None
-        };
 
+        let mut generics_span = None;
+        let mut bounds_span = vec![];
+        let mut where_span = None;
+        if let Some(trait_node) = tcx.hir().get_if_local(trait_m.def_id)
+            && let Some(trait_generics) = trait_node.generics()
+        {
+            generics_span = Some(trait_generics.span);
+            // FIXME: we could potentially look at the impl's bounds to not point at bounds that
+            // *are* present in the impl.
+            for p in trait_generics.predicates {
+                if let hir::WherePredicate::BoundPredicate(pred) = p {
+                    for b in pred.bounds {
+                        if let hir::GenericBound::Outlives(lt) = b {
+                            bounds_span.push(lt.ident.span);
+                        }
+                    }
+                }
+            }
+            if let Some(impl_node) = tcx.hir().get_if_local(impl_m.def_id)
+                && let Some(impl_generics) = impl_node.generics()
+            {
+                let mut impl_bounds = 0;
+                for p in impl_generics.predicates {
+                    if let hir::WherePredicate::BoundPredicate(pred) = p {
+                        for b in pred.bounds {
+                            if let hir::GenericBound::Outlives(_) = b {
+                                impl_bounds += 1;
+                            }
+                        }
+                    }
+                }
+                if impl_bounds == bounds_span.len() {
+                    bounds_span = vec![];
+                } else if impl_generics.has_where_clause_predicates {
+                    where_span = Some(impl_generics.where_clause_span);
+                }
+            }
+        }
         let reported = tcx
             .sess
             .create_err(LifetimesOrBoundsMismatchOnTrait {
@@ -769,9 +831,10 @@ fn check_region_bounds_on_impl_item<'tcx>(
                 item_kind: assoc_item_kind_str(impl_m),
                 ident: impl_m.ident(tcx),
                 generics_span,
+                bounds_span,
+                where_span,
             })
             .emit_unless(delay);
-
         return Err(reported);
     }
 
@@ -1705,8 +1768,8 @@ pub fn check_type_bounds<'tcx>(
     let normalize_param_env = {
         let mut predicates = param_env.caller_bounds().iter().collect::<Vec<_>>();
         match impl_ty_value.kind() {
-            ty::Projection(proj)
-                if proj.item_def_id == trait_ty.def_id && proj.substs == rebased_substs =>
+            ty::Alias(ty::Projection, proj)
+                if proj.def_id == trait_ty.def_id && proj.substs == rebased_substs =>
             {
                 // Don't include this predicate if the projected type is
                 // exactly the same as the projection. This can occur in
@@ -1717,10 +1780,7 @@ pub fn check_type_bounds<'tcx>(
             _ => predicates.push(
                 ty::Binder::bind_with_vars(
                     ty::ProjectionPredicate {
-                        projection_ty: ty::ProjectionTy {
-                            item_def_id: trait_ty.def_id,
-                            substs: rebased_substs,
-                        },
+                        projection_ty: tcx.mk_alias_ty(trait_ty.def_id, rebased_substs),
                         term: impl_ty_value.into(),
                     },
                     bound_vars,

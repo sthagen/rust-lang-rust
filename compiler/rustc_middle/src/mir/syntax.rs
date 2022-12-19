@@ -6,6 +6,7 @@
 use super::{BasicBlock, Constant, Field, Local, SwitchTargets, UserTypeProjection};
 
 use crate::mir::coverage::{CodeRegion, CoverageKind};
+use crate::traits::Reveal;
 use crate::ty::adjustment::PointerCast;
 use crate::ty::subst::SubstsRef;
 use crate::ty::{self, List, Ty};
@@ -98,6 +99,13 @@ impl MirPhase {
             MirPhase::Runtime(RuntimePhase::Initial) => "runtime",
             MirPhase::Runtime(RuntimePhase::PostCleanup) => "runtime-post-cleanup",
             MirPhase::Runtime(RuntimePhase::Optimized) => "runtime-optimized",
+        }
+    }
+
+    pub fn reveal(&self) -> Reveal {
+        match *self {
+            MirPhase::Built | MirPhase::Analysis(_) => Reveal::UserFacing,
+            MirPhase::Runtime(_) => Reveal::All,
         }
     }
 }
@@ -400,7 +408,7 @@ impl std::fmt::Display for NonDivergingIntrinsic<'_> {
 #[derive(Copy, Clone, TyEncodable, TyDecodable, Debug, PartialEq, Eq, Hash, HashStable)]
 #[rustc_pass_by_value]
 pub enum RetagKind {
-    /// The initial retag when entering a function.
+    /// The initial retag of arguments when entering a function.
     FnEntry,
     /// Retag preparing for a two-phase borrow.
     TwoPhase,
@@ -518,12 +526,6 @@ pub enum TerminatorKind<'tcx> {
     SwitchInt {
         /// The discriminant value being tested.
         discr: Operand<'tcx>,
-
-        /// The type of value being tested.
-        /// This is always the same as the type of `discr`.
-        /// FIXME: remove this redundant information. Currently, it is relied on by pretty-printing.
-        switch_ty: Ty<'tcx>,
-
         targets: SwitchTargets,
     },
 
@@ -888,11 +890,18 @@ pub struct Place<'tcx> {
     pub projection: &'tcx List<PlaceElem<'tcx>>,
 }
 
+/// The different kinds of projections that can be used in the projection of a `Place`.
+///
+/// `T1` is the generic type for a field projection. For an actual projection on a `Place`
+/// this parameter will always be `Ty`, but the field type can be unavailable when
+/// building (by using `PlaceBuilder`) places that correspond to upvars.
+/// `T2` is the generic type for an `OpaqueCast` (is generic since it's abstracted over
+/// in dataflow analysis, see `AbstractElem`).
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(TyEncodable, TyDecodable, HashStable, TypeFoldable, TypeVisitable)]
-pub enum ProjectionElem<V, T> {
+pub enum ProjectionElem<V, T1, T2> {
     Deref,
-    Field(Field, T),
+    Field(Field, T1),
     /// Index into a slice/array.
     ///
     /// Note that this does not also dereference, and so it does not exactly correspond to slice
@@ -948,12 +957,36 @@ pub enum ProjectionElem<V, T> {
 
     /// Like an explicit cast from an opaque type to a concrete type, but without
     /// requiring an intermediate variable.
-    OpaqueCast(T),
+    OpaqueCast(T2),
 }
 
 /// Alias for projections as they appear in places, where the base is a place
 /// and the index is a local.
-pub type PlaceElem<'tcx> = ProjectionElem<Local, Ty<'tcx>>;
+pub type PlaceElem<'tcx> = ProjectionElem<Local, Ty<'tcx>, Ty<'tcx>>;
+
+/// Alias for projections that appear in `PlaceBuilder::Upvar`, for which
+/// we cannot provide any field types.
+pub type UpvarProjectionElem<'tcx> = ProjectionElem<Local, (), Ty<'tcx>>;
+
+impl<'tcx> From<PlaceElem<'tcx>> for UpvarProjectionElem<'tcx> {
+    fn from(elem: PlaceElem<'tcx>) -> Self {
+        match elem {
+            ProjectionElem::Deref => ProjectionElem::Deref,
+            ProjectionElem::Field(field, _) => ProjectionElem::Field(field, ()),
+            ProjectionElem::Index(v) => ProjectionElem::Index(v),
+            ProjectionElem::ConstantIndex { offset, min_length, from_end } => {
+                ProjectionElem::ConstantIndex { offset, min_length, from_end }
+            }
+            ProjectionElem::Subslice { from, to, from_end } => {
+                ProjectionElem::Subslice { from, to, from_end }
+            }
+            ProjectionElem::Downcast(opt_sym, variant_idx) => {
+                ProjectionElem::Downcast(opt_sym, variant_idx)
+            }
+            ProjectionElem::OpaqueCast(ty) => ProjectionElem::OpaqueCast(ty),
+        }
+    }
+}
 
 ///////////////////////////////////////////////////////////////////////////
 // Operands

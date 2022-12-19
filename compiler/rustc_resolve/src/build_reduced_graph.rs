@@ -576,7 +576,7 @@ impl<'a, 'b> BuildReducedGraphVisitor<'a, 'b> {
                 // Ensure there is at most one `self` in the list
                 let self_spans = items
                     .iter()
-                    .filter_map(|&(ref use_tree, _)| {
+                    .filter_map(|(use_tree, _)| {
                         if let ast::UseTreeKind::Simple(..) = use_tree.kind {
                             if use_tree.ident().name == kw::SelfLower {
                                 return Some(use_tree.span);
@@ -836,12 +836,11 @@ impl<'a, 'b> BuildReducedGraphVisitor<'a, 'b> {
         } else if orig_name == Some(kw::SelfLower) {
             Some(self.r.graph_root)
         } else {
-            self.r.crate_loader.process_extern_crate(item, &self.r.definitions, local_def_id).map(
-                |crate_id| {
-                    self.r.extern_crate_map.insert(local_def_id, crate_id);
-                    self.r.expect_module(crate_id.as_def_id())
-                },
-            )
+            let crate_id = self.r.crate_loader().process_extern_crate(item, local_def_id);
+            crate_id.map(|crate_id| {
+                self.r.extern_crate_map.insert(local_def_id, crate_id);
+                self.r.expect_module(crate_id.as_def_id())
+            })
         }
         .map(|module| {
             let used = self.process_macro_use_imports(item, module);

@@ -162,7 +162,8 @@ early_lint_methods!(
     ]
 );
 
-// FIXME: Make a separate lint type which do not require typeck tables
+// FIXME: Make a separate lint type which does not require typeck tables.
+
 late_lint_methods!(
     declare_combined_late_lint_pass,
     [
@@ -179,8 +180,7 @@ late_lint_methods!(
             // Keeps a global list of foreign declarations.
             ClashingExternDeclarations: ClashingExternDeclarations::new(),
         ]
-    ],
-    ['tcx]
+    ]
 );
 
 late_lint_methods!(
@@ -229,8 +229,7 @@ late_lint_methods!(
             NamedAsmLabels: NamedAsmLabels,
             OpaqueHiddenInferredBound: OpaqueHiddenInferredBound,
         ]
-    ],
-    ['tcx]
+    ]
 );
 
 pub fn new_lint_store(internal_lints: bool) -> LintStore {

@@ -95,7 +95,7 @@ impl FlagComputation {
                 self.add_flags(TypeFlags::STILL_FURTHER_SPECIALIZABLE);
             }
 
-            &ty::Generator(_, ref substs, _) => {
+            ty::Generator(_, substs, _) => {
                 let substs = substs.as_generator();
                 let should_remove_further_specializable =
                     !self.flags.contains(TypeFlags::STILL_FURTHER_SPECIALIZABLE);
@@ -155,12 +155,12 @@ impl FlagComputation {
                 self.add_substs(substs);
             }
 
-            &ty::Projection(data) => {
+            &ty::Alias(ty::Projection, data) => {
                 self.add_flags(TypeFlags::HAS_TY_PROJECTION);
                 self.add_projection_ty(data);
             }
 
-            &ty::Opaque(_, substs) => {
+            &ty::Alias(ty::Opaque, ty::AliasTy { substs, .. }) => {
                 self.add_flags(TypeFlags::HAS_TY_OPAQUE);
                 self.add_substs(substs);
             }
@@ -186,7 +186,7 @@ impl FlagComputation {
 
             &ty::Slice(tt) => self.add_ty(tt),
 
-            &ty::RawPtr(ref m) => {
+            ty::RawPtr(m) => {
                 self.add_ty(m.ty);
             }
 
@@ -345,7 +345,7 @@ impl FlagComputation {
         }
     }
 
-    fn add_projection_ty(&mut self, projection_ty: ty::ProjectionTy<'_>) {
+    fn add_projection_ty(&mut self, projection_ty: ty::AliasTy<'_>) {
         self.add_substs(projection_ty.substs);
     }
 

@@ -49,6 +49,7 @@ const EXCEPTIONS: &[(&str, &str)] = &[
     ("dunce", "CC0-1.0"),            // cargo (dev dependency)
     ("similar", "Apache-2.0"),       // cargo (dev dependency)
     ("normalize-line-endings", "Apache-2.0"), // cargo (dev dependency)
+    ("dissimilar", "Apache-2.0"),    // rustdoc, rustc_lexer (few tests) via expect-test, (dev deps)
 ];
 
 const EXCEPTIONS_CRANELIFT: &[(&str, &str)] = &[
@@ -56,6 +57,7 @@ const EXCEPTIONS_CRANELIFT: &[(&str, &str)] = &[
     ("cranelift-codegen", "Apache-2.0 WITH LLVM-exception"),
     ("cranelift-codegen-meta", "Apache-2.0 WITH LLVM-exception"),
     ("cranelift-codegen-shared", "Apache-2.0 WITH LLVM-exception"),
+    ("cranelift-egraph", "Apache-2.0 WITH LLVM-exception"),
     ("cranelift-entity", "Apache-2.0 WITH LLVM-exception"),
     ("cranelift-frontend", "Apache-2.0 WITH LLVM-exception"),
     ("cranelift-isle", "Apache-2.0 WITH LLVM-exception"),
@@ -66,6 +68,7 @@ const EXCEPTIONS_CRANELIFT: &[(&str, &str)] = &[
     ("mach", "BSD-2-Clause"),
     ("regalloc2", "Apache-2.0 WITH LLVM-exception"),
     ("target-lexicon", "Apache-2.0 WITH LLVM-exception"),
+    ("wasmtime-jit-icache-coherence", "Apache-2.0 WITH LLVM-exception"),
 ];
 
 const EXCEPTIONS_BOOTSTRAP: &[(&str, &str)] = &[
@@ -112,9 +115,9 @@ const PERMITTED_RUSTC_DEPENDENCIES: &[&str] = &[
     "cstr",
     "datafrog",
     "derive_more",
-    "difference",
     "digest",
     "displaydoc",
+    "dissimilar",
     "dlmalloc",
     "either",
     "ena",
@@ -218,6 +221,7 @@ const PERMITTED_RUSTC_DEPENDENCIES: &[&str] = &[
     "snap",
     "stable_deref_trait",
     "stacker",
+    "static_assertions",
     "syn",
     "synstructure",
     "tempfile",
@@ -238,6 +242,7 @@ const PERMITTED_RUSTC_DEPENDENCIES: &[&str] = &[
     "tracing-log",
     "tracing-subscriber",
     "tracing-tree",
+    "twox-hash",
     "type-map",
     "typenum",
     "unic-char-property",
@@ -288,6 +293,7 @@ const PERMITTED_CRANELIFT_DEPENDENCIES: &[&str] = &[
     "cranelift-codegen",
     "cranelift-codegen-meta",
     "cranelift-codegen-shared",
+    "cranelift-egraph",
     "cranelift-entity",
     "cranelift-frontend",
     "cranelift-isle",
@@ -296,6 +302,7 @@ const PERMITTED_CRANELIFT_DEPENDENCIES: &[&str] = &[
     "cranelift-native",
     "cranelift-object",
     "crc32fast",
+    "fallible-iterator",
     "fxhash",
     "getrandom",
     "gimli",
@@ -312,9 +319,11 @@ const PERMITTED_CRANELIFT_DEPENDENCIES: &[&str] = &[
     "region",
     "slice-group-by",
     "smallvec",
+    "stable_deref_trait",
     "target-lexicon",
     "version_check",
     "wasi",
+    "wasmtime-jit-icache-coherence",
     "winapi",
     "winapi-i686-pc-windows-gnu",
     "winapi-x86_64-pc-windows-gnu",

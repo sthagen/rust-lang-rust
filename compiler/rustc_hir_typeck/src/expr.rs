@@ -528,6 +528,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             self.resolve_ty_and_res_fully_qualified_call(qpath, expr.hir_id, expr.span);
         let ty = match res {
             Res::Err => {
+                self.suggest_assoc_method_call(segs);
                 let e =
                     self.tcx.sess.delay_span_bug(qpath.span(), "`Res::Err` but no error emitted");
                 self.set_tainted_by_errors(e);
@@ -1646,6 +1647,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         // the fields with the base_expr. This could cause us to hit errors later
         // when certain fields are assumed to exist that in fact do not.
         if error_happened {
+            if let Some(base_expr) = base_expr {
+                self.check_expr(base_expr);
+            }
             return;
         }
 
@@ -1870,7 +1874,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         // I don't use 'is_range_literal' because only double-sided, half-open ranges count.
         if let ExprKind::Struct(
                 QPath::LangItem(LangItem::Range, ..),
-                &[ref range_start, ref range_end],
+                [range_start, range_end],
                 _,
             ) = last_expr_field.expr.kind
             && let variant_field =
@@ -2387,7 +2391,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             ty::Param(param_ty) => {
                 self.point_at_param_definition(&mut err, param_ty);
             }
-            ty::Opaque(_, _) => {
+            ty::Alias(ty::Opaque, _) => {
                 self.suggest_await_on_field_access(&mut err, ident, base, base_ty.peel_refs());
             }
             _ => {}

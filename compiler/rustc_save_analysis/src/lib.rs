@@ -36,7 +36,6 @@ use rustc_span::symbol::Ident;
 use rustc_span::*;
 
 use std::cell::Cell;
-use std::default::Default;
 use std::env;
 use std::fs::File;
 use std::io::BufWriter;
@@ -95,7 +94,7 @@ impl<'tcx> SaveContext<'tcx> {
     }
 
     /// Returns path to the compilation output (e.g., libfoo-12345678.rmeta)
-    pub fn compilation_output(&self, crate_name: &str) -> PathBuf {
+    pub fn compilation_output(&self, crate_name: Symbol) -> PathBuf {
         let sess = &self.tcx.sess;
         // Save-analysis is emitted per whole session, not per each crate type
         let crate_type = sess.crate_types()[0];
@@ -894,8 +893,8 @@ pub struct DumpHandler<'a> {
 }
 
 impl<'a> DumpHandler<'a> {
-    pub fn new(odir: Option<&'a Path>, cratename: &str) -> DumpHandler<'a> {
-        DumpHandler { odir, cratename: cratename.to_owned() }
+    pub fn new(odir: Option<&'a Path>, cratename: Symbol) -> DumpHandler<'a> {
+        DumpHandler { odir, cratename: cratename.to_string() }
     }
 
     fn output_file(&self, ctx: &SaveContext<'_>) -> (BufWriter<File>, PathBuf) {
@@ -960,7 +959,7 @@ impl SaveHandler for CallbackHandler<'_> {
 
 pub fn process_crate<'l, 'tcx, H: SaveHandler>(
     tcx: TyCtxt<'tcx>,
-    cratename: &str,
+    cratename: Symbol,
     input: &'l Input,
     config: Option<Config>,
     mut handler: H,

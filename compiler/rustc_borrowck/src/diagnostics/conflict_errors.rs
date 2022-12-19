@@ -265,7 +265,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                 DescribePlaceOpt { including_downcast: true, including_tuple_field: true },
             );
             let note_msg = match opt_name {
-                Some(ref name) => format!("`{}`", name),
+                Some(name) => format!("`{}`", name),
                 None => "value".to_owned(),
             };
             if self.suggest_borrow_fn_like(&mut err, ty, &move_site_vec, &note_msg) {
@@ -649,7 +649,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         if !assign_value.is_empty() {
             err.span_suggestion_verbose(
                 sugg_span.shrink_to_hi(),
-                format!("consider assigning a value"),
+                "consider assigning a value",
                 format!(" = {}", assign_value),
                 Applicability::MaybeIncorrect,
             );
@@ -697,8 +697,8 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                     .map_bound(|p| p.predicates),
                 None,
             ),
-            ty::Opaque(did, substs) => {
-                find_fn_kind_from_did(tcx.bound_explicit_item_bounds(*did), Some(*substs))
+            ty::Alias(ty::Opaque, ty::AliasTy { def_id, substs, .. }) => {
+                find_fn_kind_from_did(tcx.bound_explicit_item_bounds(*def_id), Some(*substs))
             }
             ty::Closure(_, substs) => match substs.as_closure().kind() {
                 ty::ClosureKind::Fn => Some(hir::Mutability::Not),
@@ -745,7 +745,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
             err.span_suggestion_verbose(
                 span.shrink_to_hi(),
                 "consider cloning the value if the performance cost is acceptable",
-                ".clone()".to_string(),
+                ".clone()",
                 Applicability::MachineApplicable,
             );
         }
@@ -1417,7 +1417,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
             // then just use the normal error. The closure isn't escaping
             // and `move` will not help here.
             (
-                Some(ref name),
+                Some(name),
                 BorrowExplanation::MustBeValidFor {
                     category:
                         category @ (ConstraintCategory::Return(_)
@@ -1438,7 +1438,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                     &format!("`{}`", name),
                 ),
             (
-                ref name,
+                name,
                 BorrowExplanation::MustBeValidFor {
                     category: ConstraintCategory::Assignment,
                     from_closure: false,
@@ -1450,7 +1450,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                     span,
                     ..
                 },
-            ) => self.report_escaping_data(borrow_span, name, upvar_span, upvar_name, span),
+            ) => self.report_escaping_data(borrow_span, &name, upvar_span, upvar_name, span),
             (Some(name), explanation) => self.report_local_value_does_not_live_long_enough(
                 location,
                 &name,
@@ -2452,7 +2452,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         // and it'll make sense.
         let location = borrow.reserve_location;
         debug!("annotate_argument_and_return_for_borrow: location={:?}", location);
-        if let Some(&Statement { kind: StatementKind::Assign(box (ref reservation, _)), .. }) =
+        if let Some(Statement { kind: StatementKind::Assign(box (reservation, _)), .. }) =
             &self.body[location.block].statements.get(location.statement_index)
         {
             debug!("annotate_argument_and_return_for_borrow: reservation={:?}", reservation);
@@ -2480,8 +2480,8 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                         // Check if our `target` was captured by a closure.
                         if let Rvalue::Aggregate(
                             box AggregateKind::Closure(def_id, substs),
-                            ref operands,
-                        ) = *rvalue
+                            operands,
+                        ) = rvalue
                         {
                             for operand in operands {
                                 let (Operand::Copy(assigned_from) | Operand::Move(assigned_from)) = operand else {
@@ -2505,7 +2505,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                                 // into a place then we should annotate the closure in
                                 // case it ends up being assigned into the return place.
                                 annotated_closure =
-                                    self.annotate_fn_sig(def_id, substs.as_closure().sig());
+                                    self.annotate_fn_sig(*def_id, substs.as_closure().sig());
                                 debug!(
                                     "annotate_argument_and_return_for_borrow: \
                                      annotated_closure={:?} assigned_from_local={:?} \

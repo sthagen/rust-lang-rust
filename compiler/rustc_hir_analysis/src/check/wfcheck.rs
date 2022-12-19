@@ -31,7 +31,6 @@ use rustc_trait_selection::traits::{
 };
 
 use std::cell::LazyCell;
-use std::convert::TryInto;
 use std::iter;
 use std::ops::{ControlFlow, Deref};
 
@@ -760,7 +759,7 @@ impl<'tcx> TypeVisitor<'tcx> for GATSubstCollector<'tcx> {
 
     fn visit_ty(&mut self, t: Ty<'tcx>) -> ControlFlow<Self::BreakTy> {
         match t.kind() {
-            ty::Projection(p) if p.item_def_id == self.gat => {
+            ty::Alias(ty::Projection, p) if p.def_id == self.gat => {
                 for (idx, subst) in p.substs.iter().enumerate() {
                     match subst.unpack() {
                         GenericArgKind::Lifetime(lt) if !lt.is_late_bound() => {
@@ -1544,7 +1543,7 @@ fn check_fn_or_method<'tcx>(
     check_where_clauses(wfcx, span, def_id);
 
     check_return_position_impl_trait_in_trait_bounds(
-        tcx,
+        wfcx,
         def_id,
         sig.output(),
         hir_decl.output.span(),
@@ -1580,38 +1579,37 @@ fn check_fn_or_method<'tcx>(
 
 /// Basically `check_associated_type_bounds`, but separated for now and should be
 /// deduplicated when RPITITs get lowered into real associated items.
-#[tracing::instrument(level = "trace", skip(tcx))]
+#[tracing::instrument(level = "trace", skip(wfcx))]
 fn check_return_position_impl_trait_in_trait_bounds<'tcx>(
-    tcx: TyCtxt<'tcx>,
+    wfcx: &WfCheckingCtxt<'_, 'tcx>,
     fn_def_id: LocalDefId,
     fn_output: Ty<'tcx>,
     span: Span,
 ) {
+    let tcx = wfcx.tcx();
     if let Some(assoc_item) = tcx.opt_associated_item(fn_def_id.to_def_id())
         && assoc_item.container == ty::AssocItemContainer::TraitContainer
     {
         for arg in fn_output.walk() {
             if let ty::GenericArgKind::Type(ty) = arg.unpack()
-                && let ty::Projection(proj) = ty.kind()
-                && tcx.def_kind(proj.item_def_id) == DefKind::ImplTraitPlaceholder
-                && tcx.impl_trait_in_trait_parent(proj.item_def_id) == fn_def_id.to_def_id()
+                && let ty::Alias(ty::Projection, proj) = ty.kind()
+                && tcx.def_kind(proj.def_id) == DefKind::ImplTraitPlaceholder
+                && tcx.impl_trait_in_trait_parent(proj.def_id) == fn_def_id.to_def_id()
             {
-                // Create a new context, since we want the opaque's ParamEnv and not the parent's.
-                let span = tcx.def_span(proj.item_def_id);
-                enter_wf_checking_ctxt(tcx, span, proj.item_def_id.expect_local(), |wfcx| {
-                    let bounds = wfcx.tcx().explicit_item_bounds(proj.item_def_id);
-                    let wf_obligations = bounds.iter().flat_map(|&(bound, bound_span)| {
-                        let normalized_bound = wfcx.normalize(span, None, bound);
-                        traits::wf::predicate_obligations(
-                            wfcx.infcx,
-                            wfcx.param_env,
-                            wfcx.body_id,
-                            normalized_bound,
-                            bound_span,
-                        )
-                    });
-                    wfcx.register_obligations(wf_obligations);
+                let span = tcx.def_span(proj.def_id);
+                let bounds = wfcx.tcx().explicit_item_bounds(proj.def_id);
+                let wf_obligations = bounds.iter().flat_map(|&(bound, bound_span)| {
+                    let bound = ty::EarlyBinder(bound).subst(tcx, proj.substs);
+                    let normalized_bound = wfcx.normalize(span, None, bound);
+                    traits::wf::predicate_obligations(
+                        wfcx.infcx,
+                        wfcx.param_env,
+                        wfcx.body_id,
+                        normalized_bound,
+                        bound_span,
+                    )
                 });
+                wfcx.register_obligations(wf_obligations);
             }
         }
     }

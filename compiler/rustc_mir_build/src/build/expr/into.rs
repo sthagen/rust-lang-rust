@@ -183,7 +183,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                     LogicalOp::And => (else_block, shortcircuit_block),
                     LogicalOp::Or => (shortcircuit_block, else_block),
                 };
-                let term = TerminatorKind::if_(this.tcx, lhs, blocks.0, blocks.1);
+                let term = TerminatorKind::if_(lhs, blocks.0, blocks.1);
                 this.cfg.terminate(block, source_info, term);
 
                 this.cfg.push_assign_constant(
@@ -355,11 +355,13 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                     // base-supplied field, generate an operand that
                     // reads it from the base.
                     iter::zip(field_names, &**field_types)
-                        .map(|(n, ty)| match fields_map.get(&n) {
+                        .map(|(n, _ty)| match fields_map.get(&n) {
                             Some(v) => v.clone(),
                             None => {
-                                let place = place_builder.clone_project(PlaceElem::Field(n, *ty));
-                                this.consume_by_copy_or_move(place.to_place(this))
+                                let place_builder = place_builder.clone();
+                                this.consume_by_copy_or_move(
+                                    place_builder.field(this, n).to_place(this),
+                                )
                             }
                         })
                         .collect()

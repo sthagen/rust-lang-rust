@@ -69,7 +69,7 @@ fn invalid_type_err(
         Ok(ast::LitKind::Int(_, _)) => {
             cx.span_err(span, "numeric literal is not a `u8`");
         }
-        Ok(ast::LitKind::ByteStr(_) | ast::LitKind::Byte(_)) => unreachable!(),
+        Ok(ast::LitKind::ByteStr(..) | ast::LitKind::Byte(_)) => unreachable!(),
         Err(err) => {
             report_lit_error(&cx.sess.parse_sess, err, token_lit, span);
         }
@@ -97,7 +97,7 @@ fn handle_array_element(
             )) if val <= u8::MAX.into() => Some(val as u8),
 
             Ok(ast::LitKind::Byte(val)) => Some(val),
-            Ok(ast::LitKind::ByteStr(_)) => {
+            Ok(ast::LitKind::ByteStr(..)) => {
                 if !*has_errors {
                     cx.struct_span_err(expr.span, "cannot concatenate doubly nested array")
                         .note("byte strings are treated as arrays of bytes")
@@ -137,15 +137,15 @@ pub fn expand_concat_bytes(
     sp: rustc_span::Span,
     tts: TokenStream,
 ) -> Box<dyn base::MacResult + 'static> {
-    let Some(es) = base::get_exprs_from_tts(cx, sp, tts) else {
+    let Some(es) = base::get_exprs_from_tts(cx, tts) else {
         return DummyResult::any(sp);
     };
     let mut accumulator = Vec::new();
     let mut missing_literals = vec![];
     let mut has_errors = false;
     for e in es {
-        match e.kind {
-            ast::ExprKind::Array(ref exprs) => {
+        match &e.kind {
+            ast::ExprKind::Array(exprs) => {
                 for expr in exprs {
                     if let Some(elem) =
                         handle_array_element(cx, &mut has_errors, &mut missing_literals, expr)
@@ -154,7 +154,7 @@ pub fn expand_concat_bytes(
                     }
                 }
             }
-            ast::ExprKind::Repeat(ref expr, ref count) => {
+            ast::ExprKind::Repeat(expr, count) => {
                 if let ast::ExprKind::Lit(token_lit) = count.value.kind
                 && let Ok(ast::LitKind::Int(count_val, _)) =
                     ast::LitKind::from_token_lit(token_lit)
@@ -170,11 +170,11 @@ pub fn expand_concat_bytes(
                     cx.span_err(count.value.span, "repeat count is not a positive number");
                 }
             }
-            ast::ExprKind::Lit(token_lit) => match ast::LitKind::from_token_lit(token_lit) {
+            &ast::ExprKind::Lit(token_lit) => match ast::LitKind::from_token_lit(token_lit) {
                 Ok(ast::LitKind::Byte(val)) => {
                     accumulator.push(val);
                 }
-                Ok(ast::LitKind::ByteStr(ref bytes)) => {
+                Ok(ast::LitKind::ByteStr(ref bytes, _)) => {
                     accumulator.extend_from_slice(&bytes);
                 }
                 _ => {
@@ -184,7 +184,7 @@ pub fn expand_concat_bytes(
                     has_errors = true;
                 }
             },
-            ast::ExprKind::IncludedBytes(ref bytes) => {
+            ast::ExprKind::IncludedBytes(bytes) => {
                 accumulator.extend_from_slice(bytes);
             }
             ast::ExprKind::Err => {
@@ -196,7 +196,7 @@ pub fn expand_concat_bytes(
         }
     }
     if !missing_literals.is_empty() {
-        let mut err = cx.struct_span_err(missing_literals.clone(), "expected a byte literal");
+        let mut err = cx.struct_span_err(missing_literals, "expected a byte literal");
         err.note("only byte literals (like `b\"foo\"`, `b's'`, and `[3, 4, 5]`) can be passed to `concat_bytes!()`");
         err.emit();
         return base::MacEager::expr(DummyResult::raw_expr(sp, true));

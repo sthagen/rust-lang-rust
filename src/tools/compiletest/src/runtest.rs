@@ -1924,7 +1924,15 @@ impl<'test> TestCx<'test> {
                     rustc.args(&["--json", "future-incompat"]);
                 }
                 rustc.arg("-Ccodegen-units=1");
+                // Hide line numbers to reduce churn
                 rustc.arg("-Zui-testing");
+                // Hide libstd sources from ui tests to make sure we generate the stderr
+                // output that users will see.
+                // Without this, we may be producing good diagnostics in-tree but users
+                // will not see half the information.
+                rustc.arg("-Zsimulate-remapped-rust-src-base=/rustc/FAKE_PREFIX");
+                rustc.arg("-Ztranslate-remapped-path-to-local-path=no");
+
                 rustc.arg("-Zdeduplicate-diagnostics=no");
                 // FIXME: use this for other modes too, for perf?
                 rustc.arg("-Cstrip=debuginfo");
@@ -3542,6 +3550,8 @@ impl<'test> TestCx<'test> {
             option_env!("CFG_VIRTUAL_RUST_SOURCE_BASE_DIR").map(PathBuf::from),
             // Virtual `/rustc/$sha` coming from download-rustc:
             std::env::var_os("FAKE_DOWNLOAD_RUSTC_PREFIX").map(PathBuf::from),
+            // Tests using -Zsimulate-remapped-rust-src-base should use this fake path
+            Some("/rustc/FAKE_PREFIX".into()),
         ];
         for base_dir in source_bases {
             if let Some(base_dir) = base_dir {

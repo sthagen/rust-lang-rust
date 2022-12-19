@@ -43,8 +43,23 @@ pub struct LifetimesOrBoundsMismatchOnTrait {
     pub span: Span,
     #[label(generics_label)]
     pub generics_span: Option<Span>,
+    #[label(where_label)]
+    pub where_span: Option<Span>,
+    #[label(bounds_label)]
+    pub bounds_span: Vec<Span>,
     pub item_kind: &'static str,
     pub ident: Ident,
+}
+
+#[derive(Diagnostic)]
+#[diag(hir_analysis_async_trait_impl_should_be_async)]
+pub struct AsyncTraitImplShouldBeAsync {
+    #[primary_span]
+    // #[label]
+    pub span: Span,
+    #[label(trait_item_label)]
+    pub trait_item_span: Option<Span>,
+    pub method_name: Symbol,
 }
 
 #[derive(Diagnostic)]
@@ -250,13 +265,6 @@ pub struct ExternCrateNotIdiomatic {
 }
 
 #[derive(Diagnostic)]
-#[diag(hir_analysis_expected_used_symbol)]
-pub struct ExpectedUsedSymbol {
-    #[primary_span]
-    pub span: Span,
-}
-
-#[derive(Diagnostic)]
 #[diag(hir_analysis_const_impl_for_non_const_trait)]
 pub struct ConstImplForNonConstTrait {
     #[primary_span]
@@ -284,4 +292,11 @@ pub struct SelfInImplSelf {
     pub span: MultiSpan,
     #[note]
     pub note: (),
+}
+
+#[derive(Diagnostic)]
+#[diag(hir_analysis_linkage_type, code = "E0791")]
+pub(crate) struct LinkageType {
+    #[primary_span]
+    pub span: Span,
 }

@@ -490,7 +490,7 @@ fn locals_live_across_suspend_points<'tcx>(
 
     // Calculate when MIR locals have live storage. This gives us an upper bound of their
     // lifetimes.
-    let mut storage_live = MaybeStorageLive::new(always_live_locals.clone())
+    let mut storage_live = MaybeStorageLive::new(std::borrow::Cow::Borrowed(always_live_locals))
         .into_engine(tcx, body_ref)
         .iterate_to_fixpoint()
         .into_results_cursor(body_ref);
@@ -877,11 +877,7 @@ fn insert_switch<'tcx>(
     let (assign, discr) = transform.get_discr(body);
     let switch_targets =
         SwitchTargets::new(cases.iter().map(|(i, bb)| ((*i) as u128, *bb)), default_block);
-    let switch = TerminatorKind::SwitchInt {
-        discr: Operand::Move(discr),
-        switch_ty: transform.discr_ty,
-        targets: switch_targets,
-    };
+    let switch = TerminatorKind::SwitchInt { discr: Operand::Move(discr), targets: switch_targets };
 
     let source_info = SourceInfo::outermost(body.span);
     body.basic_blocks_mut().raw.insert(
@@ -985,16 +981,6 @@ fn create_generator_drop_shim<'tcx>(
         tcx.mk_ptr(ty::TypeAndMut { ty: gen_ty, mutbl: hir::Mutability::Mut }),
         source_info,
     );
-    if tcx.sess.opts.unstable_opts.mir_emit_retag {
-        // Alias tracking must know we changed the type
-        body.basic_blocks_mut()[START_BLOCK].statements.insert(
-            0,
-            Statement {
-                source_info,
-                kind: StatementKind::Retag(RetagKind::Raw, Box::new(Place::from(SELF_ARG))),
-            },
-        )
-    }
 
     // Make sure we remove dead blocks to remove
     // unrelated code from the resume part of the function

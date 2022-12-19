@@ -101,6 +101,20 @@ impl GenericParamDef {
             _ => None,
         }
     }
+
+    pub fn to_error<'tcx>(
+        &self,
+        tcx: TyCtxt<'tcx>,
+        preceding_substs: &[ty::GenericArg<'tcx>],
+    ) -> ty::GenericArg<'tcx> {
+        match &self.kind {
+            ty::GenericParamDefKind::Lifetime => tcx.lifetimes.re_static.into(),
+            ty::GenericParamDefKind::Type { .. } => tcx.ty_error().into(),
+            ty::GenericParamDefKind::Const { .. } => {
+                tcx.const_error(tcx.bound_type_of(self.def_id).subst(tcx, preceding_substs)).into()
+            }
+        }
+    }
 }
 
 #[derive(Default)]
@@ -217,6 +231,15 @@ impl<'tcx> Generics {
         } else {
             tcx.generics_of(self.parent.expect("parent_count > 0 but no parent?"))
                 .param_at(param_index, tcx)
+        }
+    }
+
+    pub fn params_to(&'tcx self, param_index: usize, tcx: TyCtxt<'tcx>) -> &'tcx [GenericParamDef] {
+        if let Some(index) = param_index.checked_sub(self.parent_count) {
+            &self.params[..index]
+        } else {
+            tcx.generics_of(self.parent.expect("parent_count > 0 but no parent?"))
+                .params_to(param_index, tcx)
         }
     }
 

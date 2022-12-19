@@ -45,9 +45,7 @@ use rustc_span::symbol::{sym, Symbol};
 use serde_json::Value;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
-use std::convert::TryFrom;
 use std::hash::{Hash, Hasher};
-use std::iter::FromIterator;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -804,7 +802,7 @@ impl ToJson for StackProbeType {
 
 bitflags::bitflags! {
     #[derive(Default, Encodable, Decodable)]
-    pub struct SanitizerSet: u8 {
+    pub struct SanitizerSet: u16 {
         const ADDRESS = 1 << 0;
         const LEAK    = 1 << 1;
         const MEMORY  = 1 << 2;
@@ -813,6 +811,7 @@ bitflags::bitflags! {
         const CFI     = 1 << 5;
         const MEMTAG  = 1 << 6;
         const SHADOWCALLSTACK = 1 << 7;
+        const KCFI    = 1 << 8;
     }
 }
 
@@ -824,6 +823,7 @@ impl SanitizerSet {
         Some(match self {
             SanitizerSet::ADDRESS => "address",
             SanitizerSet::CFI => "cfi",
+            SanitizerSet::KCFI => "kcfi",
             SanitizerSet::LEAK => "leak",
             SanitizerSet::MEMORY => "memory",
             SanitizerSet::MEMTAG => "memtag",
@@ -859,6 +859,7 @@ impl IntoIterator for SanitizerSet {
         [
             SanitizerSet::ADDRESS,
             SanitizerSet::CFI,
+            SanitizerSet::KCFI,
             SanitizerSet::LEAK,
             SanitizerSet::MEMORY,
             SanitizerSet::MEMTAG,
@@ -2327,6 +2328,7 @@ impl Target {
                             base.$key_name |= match s.as_str() {
                                 Some("address") => SanitizerSet::ADDRESS,
                                 Some("cfi") => SanitizerSet::CFI,
+                                Some("kcfi") => SanitizerSet::KCFI,
                                 Some("leak") => SanitizerSet::LEAK,
                                 Some("memory") => SanitizerSet::MEMORY,
                                 Some("memtag") => SanitizerSet::MEMTAG,

@@ -472,7 +472,7 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, 'tcx> {
         for extra in extra_info {
             match extra {
                 ExtraConstraintInfo::PlaceholderFromPredicate(span) => {
-                    diag.span_note(span, format!("due to current limitations in the borrow checker, this implies a `'static` lifetime"));
+                    diag.span_note(span, "due to current limitations in the borrow checker, this implies a `'static` lifetime");
                 }
             }
         }
@@ -504,7 +504,7 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, 'tcx> {
         let ErrorConstraintInfo { outlived_fr, span, .. } = errci;
 
         let mut output_ty = self.regioncx.universal_regions().unnormalized_output_ty;
-        if let ty::Opaque(def_id, _) = *output_ty.kind() {
+        if let ty::Alias(ty::Opaque, ty::AliasTy { def_id, .. }) = *output_ty.kind() {
             output_ty = self.infcx.tcx.type_of(def_id)
         };
 
@@ -921,7 +921,7 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, 'tcx> {
                 }
             }
             hir::ExprKind::Block(blk, _) => {
-                if let Some(ref expr) = blk.expr {
+                if let Some(expr) = blk.expr {
                     // only when the block is a closure
                     if let hir::ExprKind::Closure(hir::Closure {
                         capture_clause: hir::CaptureBy::Ref,

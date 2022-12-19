@@ -36,7 +36,6 @@ use rustc_span::{Span, DUMMY_SP};
 use either::Either;
 
 use std::borrow::Cow;
-use std::convert::TryInto;
 use std::fmt::{self, Debug, Display, Formatter, Write};
 use std::ops::{ControlFlow, Index, IndexMut};
 use std::{iter, mem};
@@ -533,6 +532,11 @@ impl<'tcx> Body<'tcx> {
             return false;
         };
         injection_phase > self.phase
+    }
+
+    #[inline]
+    pub fn is_custom_mir(&self) -> bool {
+        self.injection_phase.is_some()
     }
 }
 
@@ -1484,7 +1488,7 @@ impl<'tcx> StatementKind<'tcx> {
 ///////////////////////////////////////////////////////////////////////////
 // Places
 
-impl<V, T> ProjectionElem<V, T> {
+impl<V, T, U> ProjectionElem<V, T, U> {
     /// Returns `true` if the target of this projection may refer to a different region of memory
     /// than the base.
     fn is_indirect(&self) -> bool {
@@ -1513,7 +1517,7 @@ impl<V, T> ProjectionElem<V, T> {
 
 /// Alias for projections as they appear in `UserTypeProjection`, where we
 /// need neither the `V` parameter for `Index` nor the `T` for `Field`.
-pub type ProjectionKind = ProjectionElem<(), ()>;
+pub type ProjectionKind = ProjectionElem<(), (), ()>;
 
 rustc_index::newtype_index! {
     /// A [newtype'd][wrapper] index type in the MIR [control-flow graph][CFG]
@@ -1848,7 +1852,7 @@ impl<'tcx> Operand<'tcx> {
     pub fn function_handle(
         tcx: TyCtxt<'tcx>,
         def_id: DefId,
-        substs: SubstsRef<'tcx>,
+        substs: impl IntoIterator<Item = GenericArg<'tcx>>,
         span: Span,
     ) -> Self {
         let ty = tcx.mk_fn_def(def_id, substs);

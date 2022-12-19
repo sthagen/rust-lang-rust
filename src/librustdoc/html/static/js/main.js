@@ -184,7 +184,6 @@ function browserSupportsHistoryApi() {
 function loadCss(cssUrl) {
     const link = document.createElement("link");
     link.href = cssUrl;
-    link.type = "text/css";
     link.rel = "stylesheet";
     document.getElementsByTagName("head")[0].appendChild(link);
 }
@@ -622,7 +621,7 @@ function loadCss(cssUrl) {
         const innerToggle = document.getElementById(toggleAllDocsId);
         removeClass(innerToggle, "will-expand");
         onEachLazy(document.getElementsByClassName("rustdoc-toggle"), e => {
-            if (!hasClass(e, "type-contents-toggle")) {
+            if (!hasClass(e, "type-contents-toggle") && !hasClass(e, "more-examples-toggle")) {
                 e.open = true;
             }
         });

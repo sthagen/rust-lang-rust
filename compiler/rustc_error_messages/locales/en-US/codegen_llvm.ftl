@@ -17,14 +17,8 @@ codegen_llvm_instrument_coverage_requires_llvm_12 =
 codegen_llvm_symbol_already_defined =
     symbol `{$symbol_name}` is already defined
 
-codegen_llvm_branch_protection_requires_aarch64 =
-    -Zbranch-protection is only supported on aarch64
-
 codegen_llvm_invalid_minimum_alignment =
     invalid minimum global alignment: {$err}
-
-codegen_llvm_linkage_const_or_mut_type =
-    must have type `*const T` or `*mut T` due to `#[linkage]` attribute
 
 codegen_llvm_sanitizer_memtag_requires_mte =
     `-Zsanitizer=memtag` requires `-Ctarget-feature=+mte`

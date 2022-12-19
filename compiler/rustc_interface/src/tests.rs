@@ -25,7 +25,6 @@ use rustc_target::spec::{CodeModel, LinkerFlavorCli, MergeFunctions, PanicStrate
 use rustc_target::spec::{RelroLevel, SanitizerSet, SplitDebuginfo, StackProtector, TlsModel};
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::iter::FromIterator;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
@@ -747,6 +746,7 @@ fn test_unstable_options_tracking_hash() {
     tracked!(link_only, true);
     tracked!(llvm_plugins, vec![String::from("plugin_name")]);
     tracked!(location_detail, LocationDetail { file: true, line: false, column: false });
+    tracked!(maximal_hir_to_mir_coverage, true);
     tracked!(merge_functions, Some(MergeFunctions::Disabled));
     tracked!(mir_emit_retag, true);
     tracked!(mir_enable_passes, vec![("DestProp".to_string(), false)]);

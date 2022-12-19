@@ -42,7 +42,6 @@ extern crate tracing;
 
 use crate::errors::{AssocTyParentheses, AssocTyParenthesesSub, MisplacedImplTrait, TraitFnAsync};
 
-use rustc_arena::declare_arena;
 use rustc_ast::ptr::P;
 use rustc_ast::visit;
 use rustc_ast::{self as ast, *};
@@ -94,13 +93,6 @@ struct LoweringContext<'a, 'hir> {
     /// Used to allocate HIR nodes.
     arena: &'hir hir::Arena<'hir>,
 
-    /// Used to allocate temporary AST nodes for use during lowering.
-    /// This allows us to create "fake" AST -- these nodes can sometimes
-    /// be allocated on the stack, but other times we need them to live longer
-    /// than the current stack frame, so they can be collected into vectors
-    /// and things like that.
-    ast_arena: &'a Arena<'static>,
-
     /// Bodies inside the owner being lowered.
     bodies: Vec<(hir::ItemLocalId, &'hir hir::Body<'hir>)>,
     /// Attributes inside the owner being lowered.
@@ -145,15 +137,6 @@ struct LoweringContext<'a, 'hir> {
     /// field from the original parameter 'a to the new parameter 'a1.
     generics_def_id_map: Vec<FxHashMap<LocalDefId, LocalDefId>>,
 }
-
-declare_arena!([
-    [] tys: rustc_ast::Ty,
-    [] aba: rustc_ast::AngleBracketedArgs,
-    [] ptr: rustc_ast::PolyTraitRef,
-    // This _marker field is needed because `declare_arena` creates `Arena<'tcx>` and we need to
-    // use `'tcx`. If we don't have this we get a compile error.
-    [] _marker: std::marker::PhantomData<&'tcx ()>,
-]);
 
 trait ResolverAstLoweringExt {
     fn legacy_const_generic_args(&self, expr: &Expr) -> Option<Vec<usize>>;
@@ -259,6 +242,8 @@ enum ImplTraitContext {
     },
     /// Impl trait in type aliases.
     TypeAliasesOpaqueTy,
+    /// `impl Trait` is unstably accepted in this position.
+    FeatureGated(ImplTraitPosition, Symbol),
     /// `impl Trait` is not accepted in this position.
     Disallowed(ImplTraitPosition),
 }
@@ -440,13 +425,10 @@ pub fn lower_to_hir<'hir>(tcx: TyCtxt<'hir>, (): ()) -> hir::Crate<'hir> {
         tcx.definitions_untracked().def_index_count(),
     );
 
-    let ast_arena = Arena::default();
-
     for def_id in ast_index.indices() {
         item::ItemLowerer {
             tcx,
             resolver: &mut resolver,
-            ast_arena: &ast_arena,
             ast_index: &ast_index,
             owners: &mut owners,
         }
@@ -454,8 +436,8 @@ pub fn lower_to_hir<'hir>(tcx: TyCtxt<'hir>, (): ()) -> hir::Crate<'hir> {
     }
 
     // Drop AST to free memory
-    std::mem::drop(ast_index);
-    sess.time("drop_ast", || std::mem::drop(krate));
+    drop(ast_index);
+    sess.time("drop_ast", || drop(krate));
 
     // Discard hygiene data, which isn't required after lowering to HIR.
     if !sess.opts.unstable_opts.keep_hygiene_data {
@@ -956,7 +938,8 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                     lit
                 } else {
                     MetaItemLit {
-                        token_lit: token::Lit::new(token::LitKind::Err, kw::Empty, None),
+                        symbol: kw::Empty,
+                        suffix: None,
                         kind: LitKind::Err,
                         span: DUMMY_SP,
                     }
@@ -998,8 +981,12 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                 }
                 GenericArgs::Parenthesized(data) => {
                     self.emit_bad_parenthesized_trait_in_assoc_ty(data);
-                    let aba = self.ast_arena.aba.alloc(data.as_angle_bracketed_args());
-                    self.lower_angle_bracketed_parameter_data(aba, ParamMode::Explicit, itctx).0
+                    self.lower_angle_bracketed_parameter_data(
+                        &data.as_angle_bracketed_args(),
+                        ParamMode::Explicit,
+                        itctx,
+                    )
+                    .0
                 }
             };
             gen_args_ctor.into_generic_args(self)
@@ -1064,13 +1051,15 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
 
                     self.with_dyn_type_scope(false, |this| {
                         let node_id = this.next_node_id();
-                        let ty = this.ast_arena.tys.alloc(Ty {
-                            id: node_id,
-                            kind: TyKind::ImplTrait(impl_trait_node_id, bounds.clone()),
-                            span: this.lower_span(constraint.span),
-                            tokens: None,
-                        });
-                        let ty = this.lower_ty(ty, itctx);
+                        let ty = this.lower_ty(
+                            &Ty {
+                                id: node_id,
+                                kind: TyKind::ImplTrait(impl_trait_node_id, bounds.clone()),
+                                span: this.lower_span(constraint.span),
+                                tokens: None,
+                            },
+                            itctx,
+                        );
 
                         hir::TypeBindingKind::Equality { term: ty.into() }
                     })
@@ -1214,13 +1203,12 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
             && let Some(Res::Def(DefKind::Trait | DefKind::TraitAlias, _)) = partial_res.full_res()
         {
             let (bounds, lifetime_bound) = self.with_dyn_type_scope(true, |this| {
-                let poly_trait_ref = this.ast_arena.ptr.alloc(PolyTraitRef {
-                    bound_generic_params: vec![],
-                    trait_ref: TraitRef { path: path.clone(), ref_id: t.id },
-                    span: t.span
-                });
                 let bound = this.lower_poly_trait_ref(
-                    poly_trait_ref,
+                    &PolyTraitRef {
+                        bound_generic_params: vec![],
+                        trait_ref: TraitRef { path: path.clone(), ref_id: t.id },
+                        span: t.span
+                    },
                     itctx,
                 );
                 let bounds = this.arena.alloc_from_iter([bound]);
@@ -1372,17 +1360,15 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                         }
                         path
                     }
-                    ImplTraitContext::Disallowed(
-                        position @ (ImplTraitPosition::TraitReturn | ImplTraitPosition::ImplReturn),
-                    ) => {
+                    ImplTraitContext::FeatureGated(position, feature) => {
                         self.tcx
                             .sess
                             .create_feature_err(
                                 MisplacedImplTrait {
                                     span: t.span,
-                                    position: DiagnosticArgFromDisplay(&position),
+                                    position: DiagnosticArgFromDisplay(position),
                                 },
-                                sym::return_position_impl_trait_in_trait,
+                                *feature,
                             )
                             .emit();
                         hir::TyKind::Err
@@ -1390,7 +1376,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                     ImplTraitContext::Disallowed(position) => {
                         self.tcx.sess.emit_err(MisplacedImplTrait {
                             span: t.span,
-                            position: DiagnosticArgFromDisplay(&position),
+                            position: DiagnosticArgFromDisplay(position),
                         });
                         hir::TyKind::Err
                     }
@@ -1739,14 +1725,14 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         } else {
             match &decl.output {
                 FnRetTy::Ty(ty) => {
-                    let mut context = if kind.return_impl_trait_allowed(self.tcx) {
+                    let context = if kind.return_impl_trait_allowed(self.tcx) {
                         let fn_def_id = self.local_def_id(fn_node_id);
                         ImplTraitContext::ReturnPositionOpaqueTy {
                             origin: hir::OpaqueTyOrigin::FnReturn(fn_def_id),
                             in_trait: matches!(kind, FnDeclKind::Trait),
                         }
                     } else {
-                        ImplTraitContext::Disallowed(match kind {
+                        let position = match kind {
                             FnDeclKind::Fn | FnDeclKind::Inherent => {
                                 unreachable!("fn should allow in-band lifetimes")
                             }
@@ -1755,9 +1741,16 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                             FnDeclKind::Pointer => ImplTraitPosition::PointerReturn,
                             FnDeclKind::Trait => ImplTraitPosition::TraitReturn,
                             FnDeclKind::Impl => ImplTraitPosition::ImplReturn,
-                        })
+                        };
+                        match kind {
+                            FnDeclKind::Trait | FnDeclKind::Impl => ImplTraitContext::FeatureGated(
+                                position,
+                                sym::return_position_impl_trait_in_trait,
+                            ),
+                            _ => ImplTraitContext::Disallowed(position),
+                        }
                     };
-                    hir::FnRetTy::Return(self.lower_ty(ty, &mut context))
+                    hir::FnRetTy::Return(self.lower_ty(ty, &context))
                 }
                 FnRetTy::Default(span) => hir::FnRetTy::DefaultReturn(self.lower_span(*span)),
             }
@@ -1938,7 +1931,10 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                     output,
                     span,
                     if in_trait && !this.tcx.features().return_position_impl_trait_in_trait {
-                        ImplTraitContext::Disallowed(ImplTraitPosition::TraitReturn)
+                        ImplTraitContext::FeatureGated(
+                            ImplTraitPosition::TraitReturn,
+                            sym::return_position_impl_trait_in_trait,
+                        )
                     } else {
                         ImplTraitContext::ReturnPositionOpaqueTy {
                             origin: hir::OpaqueTyOrigin::FnReturn(fn_def_id),
@@ -2291,7 +2287,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
     /// has no attributes and is not targeted by a `break`.
     fn lower_block_expr(&mut self, b: &Block) -> hir::Expr<'hir> {
         let block = self.lower_block(b, false);
-        self.expr_block(block, AttrVec::new())
+        self.expr_block(block)
     }
 
     fn lower_array_length(&mut self, c: &AnonConst) -> hir::ArrayLen {

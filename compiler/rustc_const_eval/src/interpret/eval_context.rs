@@ -17,7 +17,7 @@ use rustc_middle::ty::{
 };
 use rustc_mir_dataflow::storage::always_storage_live_locals;
 use rustc_session::Limit;
-use rustc_span::{Pos, Span};
+use rustc_span::Span;
 use rustc_target::abi::{call::FnAbi, Align, HasDataLayout, Size, TargetDataLayout};
 
 use super::{
@@ -248,6 +248,15 @@ impl<'mir, 'tcx, Prov: Provenance, Extra> Frame<'mir, 'tcx, Prov, Extra> {
             Right(span) => span,
         }
     }
+
+    pub fn lint_root(&self) -> Option<hir::HirId> {
+        self.current_source_info().and_then(|source_info| {
+            match &self.body.source_scopes[source_info.scope].local_data {
+                mir::ClearCrossCrate::Set(data) => Some(data.lint_root),
+                mir::ClearCrossCrate::Clear => None,
+            }
+        })
+    }
 }
 
 impl<'tcx> fmt::Display for FrameInfo<'tcx> {
@@ -256,25 +265,13 @@ impl<'tcx> fmt::Display for FrameInfo<'tcx> {
             if tcx.def_key(self.instance.def_id()).disambiguated_data.data
                 == DefPathData::ClosureExpr
             {
-                write!(f, "inside closure")?;
+                write!(f, "inside closure")
             } else {
                 // Note: this triggers a `good_path_bug` state, which means that if we ever get here
                 // we must emit a diagnostic. We should never display a `FrameInfo` unless we
                 // actually want to emit a warning or error to the user.
-                write!(f, "inside `{}`", self.instance)?;
+                write!(f, "inside `{}`", self.instance)
             }
-            if !self.span.is_dummy() {
-                let sm = tcx.sess.source_map();
-                let lo = sm.lookup_char_pos(self.span.lo());
-                write!(
-                    f,
-                    " at {}:{}:{}",
-                    sm.filename_for_diagnostics(&lo.file.name),
-                    lo.line,
-                    lo.col.to_usize() + 1
-                )?;
-            }
-            Ok(())
         })
     }
 }
@@ -676,6 +673,10 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         return_to_block: StackPopCleanup,
     ) -> InterpResult<'tcx> {
         trace!("body: {:#?}", body);
+        // Clobber previous return place contents, nobody is supposed to be able to see them any more
+        // This also checks dereferenceable, but not align. We rely on all constructed places being
+        // sufficiently aligned (in particular we rely on `deref_operand` checking alignment).
+        self.write_uninit(return_place)?;
         // first push a stack frame so we have access to the local substs
         let pre_frame = Frame {
             body,
@@ -962,12 +963,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         // This deliberately does *not* honor `requires_caller_location` since it is used for much
         // more than just panics.
         for frame in stack.iter().rev() {
-            let lint_root = frame.current_source_info().and_then(|source_info| {
-                match &frame.body.source_scopes[source_info.scope].local_data {
-                    mir::ClearCrossCrate::Set(data) => Some(data.lint_root),
-                    mir::ClearCrossCrate::Clear => None,
-                }
-            });
+            let lint_root = frame.lint_root();
             let span = frame.current_span();
 
             frames.push(FrameInfo { span, instance: frame.instance, lint_root });

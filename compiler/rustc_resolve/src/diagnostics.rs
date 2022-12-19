@@ -153,7 +153,7 @@ impl<'a> Resolver<'a> {
             if !candidates.is_empty() {
                 show_candidates(
                     &self.session,
-                    &self.source_span,
+                    &self.untracked.source_span,
                     &mut err,
                     span,
                     &candidates,
@@ -682,7 +682,7 @@ impl<'a> Resolver<'a> {
                     }
                     show_candidates(
                         &self.session,
-                        &self.source_span,
+                        &self.untracked.source_span,
                         &mut err,
                         Some(span),
                         &import_suggestions,
@@ -1298,7 +1298,8 @@ impl<'a> Resolver<'a> {
                     // otherwise cause duplicate suggestions.
                     continue;
                 }
-                if let Some(crate_id) = self.crate_loader.maybe_process_path_extern(ident.name) {
+                let crate_id = self.crate_loader().maybe_process_path_extern(ident.name);
+                if let Some(crate_id) = crate_id {
                     let crate_root = self.expect_module(crate_id.as_def_id());
                     suggestions.extend(self.lookup_import_candidates_from_module(
                         lookup_ident,
@@ -1335,7 +1336,7 @@ impl<'a> Resolver<'a> {
             self.lookup_import_candidates(ident, Namespace::MacroNS, parent_scope, is_expected);
         show_candidates(
             &self.session,
-            &self.source_span,
+            &self.untracked.source_span,
             err,
             None,
             &import_suggestions,
@@ -1840,13 +1841,16 @@ impl<'a> Resolver<'a> {
 
             (format!("use of undeclared type `{}`", ident), suggestion)
         } else {
-            let suggestion = if ident.name == sym::alloc {
-                Some((
+            let mut suggestion = None;
+            if ident.name == sym::alloc {
+                suggestion = Some((
                     vec![],
                     String::from("add `extern crate alloc` to use the `alloc` crate"),
                     Applicability::MaybeIncorrect,
                 ))
-            } else {
+            }
+
+            suggestion = suggestion.or_else(|| {
                 self.find_similarly_named_module_or_crate(ident.name, &parent_scope.module).map(
                     |sugg| {
                         (
@@ -1856,7 +1860,7 @@ impl<'a> Resolver<'a> {
                         )
                     },
                 )
-            };
+            });
             (format!("use of undeclared crate or module `{}`", ident), suggestion)
         }
     }

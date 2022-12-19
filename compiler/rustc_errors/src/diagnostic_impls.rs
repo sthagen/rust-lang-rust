@@ -59,7 +59,7 @@ into_diagnostic_arg_using_display!(
     i128,
     u128,
     std::io::Error,
-    std::boxed::Box<dyn std::error::Error>,
+    Box<dyn std::error::Error>,
     std::num::NonZeroU32,
     hir::Target,
     Edition,
@@ -149,6 +149,12 @@ impl IntoDiagnosticArg for hir::ConstContext {
 impl IntoDiagnosticArg for ast::Path {
     fn into_diagnostic_arg(self) -> DiagnosticArgValue<'static> {
         DiagnosticArgValue::Str(Cow::Owned(pprust::path_to_string(&self)))
+    }
+}
+
+impl IntoDiagnosticArg for &ast::Path {
+    fn into_diagnostic_arg(self) -> DiagnosticArgValue<'static> {
+        DiagnosticArgValue::Str(Cow::Owned(pprust::path_to_string(self)))
     }
 }
 

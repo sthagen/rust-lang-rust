@@ -141,7 +141,7 @@ impl<Prov: Provenance> MemPlace<Prov> {
         match self.meta {
             MemPlaceMeta::None => Immediate::from(Scalar::from_maybe_pointer(self.ptr, cx)),
             MemPlaceMeta::Meta(meta) => {
-                Immediate::ScalarPair(Scalar::from_maybe_pointer(self.ptr, cx).into(), meta.into())
+                Immediate::ScalarPair(Scalar::from_maybe_pointer(self.ptr, cx), meta)
             }
         }
     }
@@ -364,13 +364,8 @@ where
             .size_and_align_of_mplace(&mplace)?
             .unwrap_or((mplace.layout.size, mplace.layout.align.abi));
         assert!(mplace.align <= align, "dynamic alignment less strict than static one?");
-        let align = M::enforce_alignment(self).then_some(align);
-        self.check_ptr_access_align(
-            mplace.ptr,
-            size,
-            align.unwrap_or(Align::ONE),
-            CheckInAllocMsg::DerefTest,
-        )?;
+        let align = if M::enforce_alignment(self).should_check() { align } else { Align::ONE };
+        self.check_ptr_access_align(mplace.ptr, size, align, CheckInAllocMsg::DerefTest)?;
         Ok(())
     }
 

@@ -7,7 +7,7 @@ use crate::infer::canonical::OriginalQueryValues;
 use crate::infer::{InferCtxt, InferOk};
 use crate::traits::error_reporting::TypeErrCtxtExt;
 use crate::traits::project::{needs_normalization, BoundVarReplacer, PlaceholderReplacer};
-use crate::traits::{Obligation, ObligationCause, PredicateObligation, Reveal};
+use crate::traits::{ObligationCause, PredicateObligation, Reveal};
 use rustc_data_structures::sso::SsoHashMap;
 use rustc_data_structures::stack::ensure_sufficient_stack;
 use rustc_infer::traits::Normalized;
@@ -205,7 +205,9 @@ impl<'cx, 'tcx> FallibleTypeFolder<'tcx> for QueryNormalizer<'cx, 'tcx> {
             // This is really important. While we *can* handle this, this has
             // severe performance implications for large opaque types with
             // late-bound regions. See `issue-88862` benchmark.
-            ty::Opaque(def_id, substs) if !substs.has_escaping_bound_vars() => {
+            ty::Alias(ty::Opaque, ty::AliasTy { def_id, substs, .. })
+                if !substs.has_escaping_bound_vars() =>
+            {
                 // Only normalize `impl Trait` outside of type inference, usually in codegen.
                 match self.param_env.reveal() {
                     Reveal::UserFacing => ty.try_super_fold_with(self),
@@ -214,14 +216,12 @@ impl<'cx, 'tcx> FallibleTypeFolder<'tcx> for QueryNormalizer<'cx, 'tcx> {
                         let substs = substs.try_fold_with(self)?;
                         let recursion_limit = self.tcx().recursion_limit();
                         if !recursion_limit.value_within_limit(self.anon_depth) {
-                            let obligation = Obligation::with_depth(
-                                self.tcx(),
-                                self.cause.clone(),
-                                recursion_limit.0,
-                                self.param_env,
-                                ty,
+                            self.infcx.err_ctxt().report_overflow_error(
+                                &ty,
+                                self.cause.span,
+                                true,
+                                |_| {},
                             );
-                            self.infcx.err_ctxt().report_overflow_error(&obligation, true);
                         }
 
                         let generic_ty = self.tcx().bound_type_of(def_id);
@@ -244,7 +244,7 @@ impl<'cx, 'tcx> FallibleTypeFolder<'tcx> for QueryNormalizer<'cx, 'tcx> {
                 }
             }
 
-            ty::Projection(data) if !data.has_escaping_bound_vars() => {
+            ty::Alias(ty::Projection, data) if !data.has_escaping_bound_vars() => {
                 // This branch is just an optimization: when we don't have escaping bound vars,
                 // we don't need to replace them with placeholders (see branch below).
 
@@ -293,7 +293,7 @@ impl<'cx, 'tcx> FallibleTypeFolder<'tcx> for QueryNormalizer<'cx, 'tcx> {
                 }
             }
 
-            ty::Projection(data) => {
+            ty::Alias(ty::Projection, data) => {
                 // See note in `rustc_trait_selection::traits::project`
 
                 let tcx = self.infcx.tcx;

@@ -96,7 +96,7 @@ impl<'tcx> LateLintPass<'tcx> for UnusedResults {
 
         if let hir::ExprKind::Match(await_expr, _arms, hir::MatchSource::AwaitDesugar) = expr.kind
             && let ty = cx.typeck_results().expr_ty(&await_expr)
-            && let ty::Opaque(future_def_id, _) = ty.kind()
+            && let ty::Alias(ty::Opaque, ty::AliasTy { def_id: future_def_id, .. }) = ty.kind()
             && cx.tcx.ty_is_opaque_future(ty)
             // FIXME: This also includes non-async fns that return `impl Future`.
             && let async_fn_def_id = cx.tcx.parent(*future_def_id)
@@ -251,7 +251,7 @@ impl<'tcx> LateLintPass<'tcx> for UnusedResults {
                         .map(|inner| MustUsePath::Boxed(Box::new(inner)))
                 }
                 ty::Adt(def, _) => is_def_must_use(cx, def.did(), span),
-                ty::Opaque(def, _) => {
+                ty::Alias(ty::Opaque, ty::AliasTy { def_id: def, .. }) => {
                     elaborate_predicates_with_span(
                         cx.tcx,
                         cx.tcx.explicit_item_bounds(def).iter().cloned(),
@@ -617,7 +617,10 @@ trait UnusedDelimLint {
         lhs_needs_parens
             || (followed_by_block
                 && match &inner.kind {
-                    ExprKind::Ret(_) | ExprKind::Break(..) | ExprKind::Yield(..) => true,
+                    ExprKind::Ret(_)
+                    | ExprKind::Break(..)
+                    | ExprKind::Yield(..)
+                    | ExprKind::Yeet(..) => true,
                     ExprKind::Range(_lhs, Some(rhs), _limits) => {
                         matches!(rhs.kind, ExprKind::Block(..))
                     }
@@ -633,13 +636,34 @@ trait UnusedDelimLint {
         left_pos: Option<BytePos>,
         right_pos: Option<BytePos>,
     ) {
+        // If `value` has `ExprKind::Err`, unused delim lint can be broken.
+        // For example, the following code caused ICE.
+        // This is because the `ExprKind::Call` in `value` has `ExprKind::Err` as its argument
+        // and this leads to wrong spans. #104897
+        //
+        // ```
+        // fn f(){(print!(á
+        // ```
+        use rustc_ast::visit::{walk_expr, Visitor};
+        struct ErrExprVisitor {
+            has_error: bool,
+        }
+        impl<'ast> Visitor<'ast> for ErrExprVisitor {
+            fn visit_expr(&mut self, expr: &'ast ast::Expr) {
+                if let ExprKind::Err = expr.kind {
+                    self.has_error = true;
+                    return;
+                }
+                walk_expr(self, expr)
+            }
+        }
+        let mut visitor = ErrExprVisitor { has_error: false };
+        visitor.visit_expr(value);
+        if visitor.has_error {
+            return;
+        }
         let spans = match value.kind {
             ast::ExprKind::Block(ref block, None) if block.stmts.len() == 1 => {
-                if let StmtKind::Expr(expr) = &block.stmts[0].kind
-                    && let ExprKind::Err = expr.kind
-                {
-                    return
-                }
                 if let Some(span) = block.stmts[0].span.find_ancestor_inside(value.span) {
                     Some((value.span.with_hi(span.lo()), value.span.with_lo(span.hi())))
                 } else {
@@ -925,6 +949,7 @@ impl UnusedParens {
 }
 
 impl EarlyLintPass for UnusedParens {
+    #[inline]
     fn check_expr(&mut self, cx: &EarlyContext<'_>, e: &ast::Expr) {
         match e.kind {
             ExprKind::Let(ref pat, _, _) | ExprKind::ForLoop(ref pat, ..) => {
@@ -1143,6 +1168,7 @@ impl EarlyLintPass for UnusedBraces {
         <Self as UnusedDelimLint>::check_stmt(self, cx, s)
     }
 
+    #[inline]
     fn check_expr(&mut self, cx: &EarlyContext<'_>, e: &ast::Expr) {
         <Self as UnusedDelimLint>::check_expr(self, cx, e);
 
@@ -1253,7 +1279,7 @@ impl UnusedImportBraces {
     fn check_use_tree(&self, cx: &EarlyContext<'_>, use_tree: &ast::UseTree, item: &ast::Item) {
         if let ast::UseTreeKind::Nested(ref items) = use_tree.kind {
             // Recursively check nested UseTrees
-            for &(ref tree, _) in items {
+            for (tree, _) in items {
                 self.check_use_tree(cx, tree, item);
             }
 

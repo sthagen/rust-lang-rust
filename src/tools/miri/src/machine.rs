@@ -22,8 +22,9 @@ use rustc_middle::{
 };
 use rustc_span::def_id::{CrateNum, DefId};
 use rustc_span::Symbol;
-use rustc_target::abi::Size;
+use rustc_target::abi::{Size, Align};
 use rustc_target::spec::abi::Abi;
+use rustc_const_eval::const_eval::CheckAlignment;
 
 use crate::{
     concurrency::{data_race, weak_memory},
@@ -752,13 +753,26 @@ impl<'mir, 'tcx> Machine<'mir, 'tcx> for MiriMachine<'mir, 'tcx> {
     const PANIC_ON_ALLOC_FAIL: bool = false;
 
     #[inline(always)]
-    fn enforce_alignment(ecx: &MiriInterpCx<'mir, 'tcx>) -> bool {
-        ecx.machine.check_alignment != AlignmentCheck::None
+    fn enforce_alignment(ecx: &MiriInterpCx<'mir, 'tcx>) -> CheckAlignment {
+        if ecx.machine.check_alignment == AlignmentCheck::None {
+            CheckAlignment::No
+        } else {
+            CheckAlignment::Error
+        }
     }
 
     #[inline(always)]
     fn use_addr_for_alignment_check(ecx: &MiriInterpCx<'mir, 'tcx>) -> bool {
         ecx.machine.check_alignment == AlignmentCheck::Int
+    }
+
+    fn alignment_check_failed(
+        _ecx: &InterpCx<'mir, 'tcx, Self>,
+        has: Align,
+        required: Align,
+        _check: CheckAlignment,
+    ) -> InterpResult<'tcx, ()> {
+        throw_ub!(AlignmentCheckFailed { has, required })
     }
 
     #[inline(always)]
@@ -967,8 +981,9 @@ impl<'mir, 'tcx> Machine<'mir, 'tcx> for MiriMachine<'mir, 'tcx> {
         ptr: Pointer<Self::Provenance>,
     ) -> InterpResult<'tcx> {
         match ptr.provenance {
-            Provenance::Concrete { alloc_id, tag } =>
-                intptrcast::GlobalStateInner::expose_ptr(ecx, alloc_id, tag),
+            Provenance::Concrete { alloc_id, tag } => {
+                intptrcast::GlobalStateInner::expose_ptr(ecx, alloc_id, tag)
+            }
             Provenance::Wildcard => {
                 // No need to do anything for wildcard pointers as
                 // their provenances have already been previously exposed.
@@ -1055,13 +1070,26 @@ impl<'mir, 'tcx> Machine<'mir, 'tcx> for MiriMachine<'mir, 'tcx> {
     }
 
     #[inline(always)]
-    fn retag(
+    fn retag_ptr_value(
+        ecx: &mut InterpCx<'mir, 'tcx, Self>,
+        kind: mir::RetagKind,
+        val: &ImmTy<'tcx, Provenance>,
+    ) -> InterpResult<'tcx, ImmTy<'tcx, Provenance>> {
+        if ecx.machine.borrow_tracker.is_some() {
+            ecx.retag_ptr_value(kind, val)
+        } else {
+            Ok(val.clone())
+        }
+    }
+
+    #[inline(always)]
+    fn retag_place_contents(
         ecx: &mut InterpCx<'mir, 'tcx, Self>,
         kind: mir::RetagKind,
         place: &PlaceTy<'tcx, Provenance>,
     ) -> InterpResult<'tcx> {
         if ecx.machine.borrow_tracker.is_some() {
-            ecx.retag(kind, place)?;
+            ecx.retag_place_contents(kind, place)?;
         }
         Ok(())
     }

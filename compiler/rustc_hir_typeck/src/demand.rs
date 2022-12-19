@@ -163,7 +163,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let expr = expr.peel_drop_temps();
         let cause = self.misc(expr.span);
         let expr_ty = self.resolve_vars_with_obligations(checked_ty);
-        let mut err = self.err_ctxt().report_mismatched_types(&cause, expected, expr_ty, e.clone());
+        let mut err = self.err_ctxt().report_mismatched_types(&cause, expected, expr_ty, e);
 
         let is_insufficiently_polymorphic =
             matches!(e, TypeError::RegionsInsufficientlyPolymorphic(..));
@@ -189,7 +189,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         &self,
         err: &mut Diagnostic,
         expr: &hir::Expr<'_>,
-        error: Option<TypeError<'_>>,
+        error: Option<TypeError<'tcx>>,
     ) {
         let parent = self.tcx.hir().get_parent_node(expr.hir_id);
         match (self.tcx.hir().find(parent), error) {
@@ -285,6 +285,16 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     // silence this.
                     err.downgrade_to_delayed_bug();
                 }
+            }
+            (
+                Some(hir::Node::Expr(hir::Expr {
+                    kind: hir::ExprKind::Binary(_, lhs, rhs), ..
+                })),
+                Some(TypeError::Sorts(ExpectedFound { expected, .. })),
+            ) if rhs.hir_id == expr.hir_id
+                && self.typeck_results.borrow().expr_ty_adjusted_opt(lhs) == Some(expected) =>
+            {
+                err.span_label(lhs.span, &format!("expected because this is `{expected}`"));
             }
             _ => {}
         }
@@ -396,7 +406,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     }
 
                     let note_about_variant_field_privacy = (field_is_local && !field_is_accessible)
-                        .then(|| format!(" (its field is private, but it's local to this crate and its privacy can be changed)"));
+                        .then(|| " (its field is private, but it's local to this crate and its privacy can be changed)".to_string());
 
                     let sole_field_ty = sole_field.ty(self.tcx, substs);
                     if self.can_coerce(expr_ty, sole_field_ty) {
@@ -1265,7 +1275,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             };
 
         match (&expected_ty.kind(), &checked_ty.kind()) {
-            (&ty::Int(ref exp), &ty::Int(ref found)) => {
+            (ty::Int(exp), ty::Int(found)) => {
                 let (f2e_is_fallible, e2f_is_fallible) = match (exp.bit_width(), found.bit_width())
                 {
                     (Some(exp), Some(found)) if exp < found => (true, false),
@@ -1278,7 +1288,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 suggest_to_change_suffix_or_into(err, f2e_is_fallible, e2f_is_fallible);
                 true
             }
-            (&ty::Uint(ref exp), &ty::Uint(ref found)) => {
+            (ty::Uint(exp), ty::Uint(found)) => {
                 let (f2e_is_fallible, e2f_is_fallible) = match (exp.bit_width(), found.bit_width())
                 {
                     (Some(exp), Some(found)) if exp < found => (true, false),
@@ -1311,7 +1321,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 suggest_to_change_suffix_or_into(err, f2e_is_fallible, e2f_is_fallible);
                 true
             }
-            (&ty::Float(ref exp), &ty::Float(ref found)) => {
+            (ty::Float(exp), ty::Float(found)) => {
                 if found.bit_width() < exp.bit_width() {
                     suggest_to_change_suffix_or_into(err, false, true);
                 } else if literal_is_ty_suffixed(expr) {
@@ -1347,7 +1357,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 }
                 true
             }
-            (&ty::Float(ref exp), &ty::Uint(ref found)) => {
+            (ty::Float(exp), ty::Uint(found)) => {
                 // if `found` is `None` (meaning found is `usize`), don't suggest `.into()`
                 if exp.bit_width() > found.bit_width().unwrap_or(256) {
                     err.multipart_suggestion_verbose(
@@ -1376,7 +1386,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 }
                 true
             }
-            (&ty::Float(ref exp), &ty::Int(ref found)) => {
+            (ty::Float(exp), ty::Int(found)) => {
                 // if `found` is `None` (meaning found is `isize`), don't suggest `.into()`
                 if exp.bit_width() > found.bit_width().unwrap_or(256) {
                     err.multipart_suggestion_verbose(

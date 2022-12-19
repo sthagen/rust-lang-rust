@@ -76,6 +76,7 @@ impl AsRef<str> for Foo {
 ///
 /// # title!
 #[doc(alias = "ThisIsAnAlias")]
+#[non_exhaustive]
 pub enum WhoLetTheDogOut {
     /// Woof!
     Woof,
@@ -152,6 +153,11 @@ pub mod huge_amount_of_consts {
 
 /// Very long code text `hereIgoWithLongTextBecauseWhyNotAndWhyWouldntI`.
 pub mod long_code_block {}
+
+/// Very long code text [`hereIgoWithLongTextBecauseWhyNotAndWhyWouldntI`][lnk].
+///
+/// [lnk]: crate::long_code_block_link
+pub mod long_code_block_link {}
 
 #[macro_export]
 macro_rules! repro {
@@ -342,6 +348,9 @@ pub mod doc_block_table {
     /// | header1                  | header2                  |
     /// |--------------------------|--------------------------|
     /// | Lorem Ipsum, Lorem Ipsum | Lorem Ipsum, Lorem Ipsum |
+    /// | Lorem Ipsum, Lorem Ipsum | Lorem Ipsum, Lorem Ipsum |
+    /// | Lorem Ipsum, Lorem Ipsum | Lorem Ipsum, Lorem Ipsum |
+    /// | Lorem Ipsum, Lorem Ipsum | Lorem Ipsum, Lorem Ipsum |
     pub struct DocBlockTable {}
 
     impl DocBlockTableTrait for DocBlockTable {
@@ -437,4 +446,12 @@ pub mod trait_members {
         fn function() {}
         fn function2() {}
     }
+}
+
+pub struct TypeWithImplDoc;
+
+/// impl doc
+impl TypeWithImplDoc {
+    /// fn doc
+    pub fn test_fn() {}
 }

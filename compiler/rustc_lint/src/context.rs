@@ -438,18 +438,18 @@ impl LintStore {
                         return CheckLintNameResult::Tool(Ok(&lint_ids));
                     }
                 },
-                Some(&Id(ref id)) => return CheckLintNameResult::Tool(Ok(slice::from_ref(id))),
+                Some(Id(id)) => return CheckLintNameResult::Tool(Ok(slice::from_ref(id))),
                 // If the lint was registered as removed or renamed by the lint tool, we don't need
                 // to treat tool_lints and rustc lints different and can use the code below.
                 _ => {}
             }
         }
         match self.by_name.get(&complete_name) {
-            Some(&Renamed(ref new_name, _)) => CheckLintNameResult::Warning(
+            Some(Renamed(new_name, _)) => CheckLintNameResult::Warning(
                 format!("lint `{}` has been renamed to `{}`", complete_name, new_name),
                 Some(new_name.to_owned()),
             ),
-            Some(&Removed(ref reason)) => CheckLintNameResult::Warning(
+            Some(Removed(reason)) => CheckLintNameResult::Warning(
                 format!("lint `{}` has been removed: {}", complete_name, reason),
                 None,
             ),
@@ -470,7 +470,7 @@ impl LintStore {
                     CheckLintNameResult::Ok(&lint_ids)
                 }
             },
-            Some(&Id(ref id)) => CheckLintNameResult::Ok(slice::from_ref(id)),
+            Some(Id(id)) => CheckLintNameResult::Ok(slice::from_ref(id)),
             Some(&Ignored) => CheckLintNameResult::Ok(&[]),
         }
     }
@@ -513,7 +513,7 @@ impl LintStore {
                     CheckLintNameResult::Tool(Err((Some(&lint_ids), complete_name)))
                 }
             },
-            Some(&Id(ref id)) => {
+            Some(Id(id)) => {
                 CheckLintNameResult::Tool(Err((Some(slice::from_ref(id)), complete_name)))
             }
             Some(other) => {
@@ -1258,7 +1258,7 @@ impl<'tcx> LateContext<'tcx> {
         tcx.associated_items(trait_id)
             .find_by_name_and_kind(tcx, Ident::from_str(name), ty::AssocKind::Type, trait_id)
             .and_then(|assoc| {
-                let proj = tcx.mk_projection(assoc.def_id, tcx.mk_substs_trait(self_ty, []));
+                let proj = tcx.mk_projection(assoc.def_id, [self_ty]);
                 tcx.try_normalize_erasing_regions(self.param_env, proj).ok()
             })
     }

@@ -2,6 +2,7 @@
 
 use rustc_data_structures::fx::FxHashSet;
 use rustc_index::bit_set::BitSet;
+use rustc_infer::traits::Reveal;
 use rustc_middle::mir::interpret::Scalar;
 use rustc_middle::mir::visit::NonUseContext::VarDebugInfo;
 use rustc_middle::mir::visit::{PlaceContext, Visitor};
@@ -44,11 +45,14 @@ impl<'tcx> MirPass<'tcx> for Validator {
             return;
         }
         let def_id = body.source.def_id();
-        let param_env = tcx.param_env(def_id);
         let mir_phase = self.mir_phase;
+        let param_env = match mir_phase.reveal() {
+            Reveal::UserFacing => tcx.param_env(def_id),
+            Reveal::All => tcx.param_env_reveal_all_normalized(def_id),
+        };
 
         let always_live_locals = always_storage_live_locals(body);
-        let storage_liveness = MaybeStorageLive::new(always_live_locals)
+        let storage_liveness = MaybeStorageLive::new(std::borrow::Cow::Owned(always_live_locals))
             .into_engine(tcx, body)
             .iterate_to_fixpoint()
             .into_results_cursor(body);
@@ -75,7 +79,7 @@ struct TypeChecker<'a, 'tcx> {
     param_env: ParamEnv<'tcx>,
     mir_phase: MirPhase,
     reachable_blocks: BitSet<BasicBlock>,
-    storage_liveness: ResultsCursor<'a, 'tcx, MaybeStorageLive>,
+    storage_liveness: ResultsCursor<'a, 'tcx, MaybeStorageLive<'static>>,
     place_cache: Vec<PlaceRef<'tcx>>,
     value_cache: Vec<u128>,
 }
@@ -237,7 +241,7 @@ impl<'a, 'tcx> Visitor<'tcx> for TypeChecker<'a, 'tcx> {
                 };
 
                 let kind = match parent_ty.ty.kind() {
-                    &ty::Opaque(def_id, substs) => {
+                    &ty::Alias(ty::Opaque, ty::AliasTy { def_id, substs, .. }) => {
                         self.tcx.bound_type_of(def_id).subst(self.tcx, substs).kind()
                     }
                     kind => kind,
@@ -648,7 +652,7 @@ impl<'a, 'tcx> Visitor<'tcx> for TypeChecker<'a, 'tcx> {
                     self.fail(location, "`SetDiscriminant`is not allowed until deaggregation");
                 }
                 let pty = place.ty(&self.body.local_decls, self.tcx).ty.kind();
-                if !matches!(pty, ty::Adt(..) | ty::Generator(..) | ty::Opaque(..)) {
+                if !matches!(pty, ty::Adt(..) | ty::Generator(..) | ty::Alias(ty::Opaque, ..)) {
                     self.fail(
                         location,
                         format!(
@@ -682,17 +686,8 @@ impl<'a, 'tcx> Visitor<'tcx> for TypeChecker<'a, 'tcx> {
             TerminatorKind::Goto { target } => {
                 self.check_edge(location, *target, EdgeKind::Normal);
             }
-            TerminatorKind::SwitchInt { targets, switch_ty, discr } => {
-                let ty = discr.ty(&self.body.local_decls, self.tcx);
-                if ty != *switch_ty {
-                    self.fail(
-                        location,
-                        format!(
-                            "encountered `SwitchInt` terminator with type mismatch: {:?} != {:?}",
-                            ty, switch_ty,
-                        ),
-                    );
-                }
+            TerminatorKind::SwitchInt { targets, discr } => {
+                let switch_ty = discr.ty(&self.body.local_decls, self.tcx);
 
                 let target_width = self.tcx.sess.target.pointer_width;
 

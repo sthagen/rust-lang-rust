@@ -108,6 +108,7 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs::{self, File};
 use std::io;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str;
@@ -119,7 +120,9 @@ use once_cell::sync::OnceCell;
 
 use crate::builder::Kind;
 use crate::config::{LlvmLibunwind, TargetSelection};
-use crate::util::{exe, libdir, mtime, output, run, run_suppressed, try_run_suppressed, CiEnv};
+use crate::util::{
+    exe, libdir, mtime, output, run, run_suppressed, symlink_dir, try_run_suppressed, CiEnv,
+};
 
 mod bolt;
 mod builder;
@@ -542,16 +545,6 @@ impl Build {
             metrics: metrics::BuildMetrics::init(),
         };
 
-        build.verbose("finding compilers");
-        cc_detect::find(&mut build);
-        // When running `setup`, the profile is about to change, so any requirements we have now may
-        // be different on the next invocation. Don't check for them until the next time x.py is
-        // run. This is ok because `setup` never runs any build commands, so it won't fail if commands are missing.
-        if !matches!(build.config.cmd, Subcommand::Setup { .. }) {
-            build.verbose("running sanity check");
-            sanity::check(&mut build);
-        }
-
         // If local-rust is the same major.minor as the current version, then force a
         // local-rebuild
         let local_version_verbose =
@@ -567,16 +560,48 @@ impl Build {
             build.local_rebuild = true;
         }
 
-        // Make sure we update these before gathering metadata so we don't get an error about missing
-        // Cargo.toml files.
-        let rust_submodules =
-            ["src/tools/rust-installer", "src/tools/cargo", "library/backtrace", "library/stdarch"];
-        for s in rust_submodules {
-            build.update_submodule(Path::new(s));
+        build.verbose("finding compilers");
+        cc_detect::find(&mut build);
+        // When running `setup`, the profile is about to change, so any requirements we have now may
+        // be different on the next invocation. Don't check for them until the next time x.py is
+        // run. This is ok because `setup` never runs any build commands, so it won't fail if commands are missing.
+        //
+        // Similarly, for `setup` we don't actually need submodules or cargo metadata.
+        if !matches!(build.config.cmd, Subcommand::Setup { .. }) {
+            build.verbose("running sanity check");
+            sanity::check(&mut build);
+
+            // Make sure we update these before gathering metadata so we don't get an error about missing
+            // Cargo.toml files.
+            let rust_submodules = [
+                "src/tools/rust-installer",
+                "src/tools/cargo",
+                "library/backtrace",
+                "library/stdarch",
+            ];
+            for s in rust_submodules {
+                build.update_submodule(Path::new(s));
+            }
+            // Now, update all existing submodules.
+            build.update_existing_submodules();
+
+            build.verbose("learning about cargo");
+            metadata::build(&mut build);
         }
 
-        build.verbose("learning about cargo");
-        metadata::build(&mut build);
+        // Make a symbolic link so we can use a consistent directory in the documentation.
+        let build_triple = build.out.join(&build.build.triple);
+        let host = build.out.join("host");
+        if let Err(e) = symlink_dir(&build.config, &build_triple, &host) {
+            if e.kind() != ErrorKind::AlreadyExists {
+                panic!(
+                    "symlink_dir({} => {}) failed with {}",
+                    host.display(),
+                    build_triple.display(),
+                    e
+                );
+            }
+        }
 
         build
     }
@@ -668,7 +693,7 @@ impl Build {
 
     /// If any submodule has been initialized already, sync it unconditionally.
     /// This avoids contributors checking in a submodule change by accident.
-    pub fn maybe_update_submodules(&self) {
+    pub fn update_existing_submodules(&self) {
         // Avoid running git when there isn't a git checkout.
         if !self.config.submodules(&self.rust_info()) {
             return;
@@ -697,18 +722,12 @@ impl Build {
             job::setup(self);
         }
 
-        self.maybe_update_submodules();
-
         if let Subcommand::Format { check, paths } = &self.config.cmd {
             return format::format(&builder::Builder::new(&self), *check, &paths);
         }
 
         if let Subcommand::Clean { all } = self.config.cmd {
             return clean::clean(self, all);
-        }
-
-        if let Subcommand::Setup { profile } = &self.config.cmd {
-            return setup::setup(&self.config, *profile);
         }
 
         // Download rustfmt early so that it can be used in rust-analyzer configs.
@@ -1633,10 +1652,10 @@ fn chmod(_path: &Path, _perms: u32) {}
 /// If the test is running and code is an error code, it will cause a panic.
 fn detail_exit(code: i32) -> ! {
     // if in test and code is an error code, panic with status code provided
-    if cfg!(test) && code != 0 {
+    if cfg!(test) {
         panic!("status code: {}", code);
     } else {
-        //otherwise,exit with provided status code
+        // otherwise,exit with provided status code
         std::process::exit(code);
     }
 }

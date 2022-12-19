@@ -566,6 +566,9 @@ struct LateResolutionVisitor<'a, 'b, 'ast> {
     /// FIXME #4948: Reuse ribs to avoid allocation.
     ribs: PerNS<Vec<Rib<'a>>>,
 
+    /// Previous poped `rib`, only used for diagnostic.
+    last_block_rib: Option<Rib<'a>>,
+
     /// The current set of local scopes, for labels.
     label_ribs: Vec<Rib<'a, NodeId>>,
 
@@ -873,6 +876,8 @@ impl<'a: 'ast, 'ast> Visitor<'ast> for LateResolutionVisitor<'a, '_, 'ast> {
                             // Ignore errors in function bodies if this is rustdoc
                             // Be sure not to set this until the function signature has been resolved.
                             let previous_state = replace(&mut this.in_func_body, true);
+                            // We only care block in the same function
+                            this.last_block_rib = None;
                             // Resolve the function body, potentially inside the body of an async closure
                             this.with_lifetime_rib(
                                 LifetimeRibKind::Elided(LifetimeRes::Infer),
@@ -1168,6 +1173,7 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
                 type_ns: vec![Rib::new(start_rib_kind)],
                 macro_ns: vec![Rib::new(start_rib_kind)],
             },
+            last_block_rib: None,
             label_ribs: Vec::new(),
             lifetime_ribs: Vec::new(),
             lifetime_elision_candidates: None,
@@ -1927,7 +1933,7 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
                                 // We have a single lifetime => success.
                                 elision_lifetime = Elision::Param(res)
                             } else {
-                                // We have have multiple lifetimes => error.
+                                // We have multiple lifetimes => error.
                                 elision_lifetime = Elision::Err;
                             }
                         }
@@ -2360,8 +2366,8 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
                     if let GenericParamKind::Lifetime = param.kind {
                         // Record lifetime res, so lowering knows there is something fishy.
                         self.record_lifetime_param(param.id, LifetimeRes::Error);
-                        continue;
                     }
+                    continue;
                 }
                 Entry::Vacant(entry) => {
                     entry.insert(param.ident.span);
@@ -3365,13 +3371,13 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
             // Before we start looking for candidates, we have to get our hands
             // on the type user is trying to perform invocation on; basically:
             // we're transforming `HashMap::new` into just `HashMap`.
-            let path = match path.split_last() {
+            let prefix_path = match path.split_last() {
                 Some((_, path)) if !path.is_empty() => path,
                 _ => return Some(parent_err),
             };
 
             let (mut err, candidates) =
-                this.smart_resolve_report_errors(path, path_span, PathSource::Type, None);
+                this.smart_resolve_report_errors(prefix_path, path_span, PathSource::Type, None);
 
             // There are two different error messages user might receive at
             // this point:
@@ -3415,11 +3421,23 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
 
             if this.should_report_errs() {
                 if candidates.is_empty() {
-                    // When there is no suggested imports, we can just emit the error
-                    // and suggestions immediately. Note that we bypass the usually error
-                    // reporting routine (ie via `self.r.report_error`) because we need
-                    // to post-process the `ResolutionError` above.
-                    err.emit();
+                    if path.len() == 2 && prefix_path.len() == 1 {
+                        // Delay to check whether methond name is an associated function or not
+                        // ```
+                        // let foo = Foo {};
+                        // foo::bar(); // possibly suggest to foo.bar();
+                        //```
+                        err.stash(
+                            prefix_path[0].ident.span,
+                            rustc_errors::StashKey::CallAssocMethod,
+                        );
+                    } else {
+                        // When there is no suggested imports, we can just emit the error
+                        // and suggestions immediately. Note that we bypass the usually error
+                        // reporting routine (ie via `self.r.report_error`) because we need
+                        // to post-process the `ResolutionError` above.
+                        err.emit();
+                    }
                 } else {
                     // If there are suggested imports, the error reporting is delayed
                     this.r.use_injections.push(UseError {
@@ -3428,7 +3446,7 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
                         def_id,
                         instead: false,
                         suggestion: None,
-                        path: path.into(),
+                        path: prefix_path.into(),
                         is_call: source.is_call(),
                     });
                 }
@@ -3757,7 +3775,7 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
             self.ribs[ValueNS].pop();
             self.label_ribs.pop();
         }
-        self.ribs[ValueNS].pop();
+        self.last_block_rib = self.ribs[ValueNS].pop();
         if anonymous_module.is_some() {
             self.ribs[TypeNS].pop();
         }

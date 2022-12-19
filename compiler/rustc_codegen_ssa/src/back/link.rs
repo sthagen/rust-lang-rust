@@ -102,7 +102,7 @@ pub fn link_binary<'a>(
                 sess,
                 crate_type,
                 outputs,
-                codegen_results.crate_info.local_crate_name.as_str(),
+                codegen_results.crate_info.local_crate_name,
             );
             match crate_type {
                 CrateType::Rlib => {
@@ -253,7 +253,7 @@ pub fn each_linked_rlib(
     };
     for &cnum in crates {
         match fmts.get(cnum.as_usize() - 1) {
-            Some(&Linkage::NotLinked | &Linkage::IncludedFromDylib) => continue,
+            Some(&Linkage::NotLinked | &Linkage::Dynamic | &Linkage::IncludedFromDylib) => continue,
             Some(_) => {}
             None => return Err(errors::LinkRlibError::MissingFormat),
         }
@@ -722,7 +722,7 @@ fn link_natively<'a>(
 
     linker::disable_localization(&mut cmd);
 
-    for &(ref k, ref v) in sess.target.link_env.as_ref() {
+    for (k, v) in sess.target.link_env.as_ref() {
         cmd.env(k.as_ref(), v.as_ref());
     }
     for k in sess.target.link_env_remove.as_ref() {
@@ -2352,15 +2352,6 @@ fn add_native_libs_from_crate(
                                 &search_paths.get_or_init(|| archive_search_paths(sess)),
                             );
                         } else {
-                            // HACK/FIXME: Fixup a circular dependency between libgcc and libc
-                            // with glibc. This logic should be moved to the libc crate.
-                            if cnum != LOCAL_CRATE
-                                && sess.target.os == "linux"
-                                && sess.target.env == "gnu"
-                                && name == "c"
-                            {
-                                cmd.link_staticlib("gcc", false);
-                            }
                             cmd.link_staticlib(name, verbatim)
                         }
                     }
