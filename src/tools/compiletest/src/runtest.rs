@@ -117,8 +117,12 @@ pub fn run(config: Config, testpaths: &TestPaths, revision: Option<&str>) {
     }
     debug!("running {:?}", testpaths.file.display());
     let mut props = TestProps::from_file(&testpaths.file, revision, &config);
+
+    // For non-incremental (i.e. regular UI) tests, the incremental directory
+    // takes into account the revision name, since the revisions are independent
+    // of each other and can race.
     if props.incremental {
-        props.incremental_dir = Some(incremental_dir(&config, testpaths));
+        props.incremental_dir = Some(incremental_dir(&config, testpaths, revision));
     }
 
     let cx = TestCx { config: &config, props: &props, testpaths, revision };
@@ -2299,6 +2303,8 @@ impl<'test> TestCx<'test> {
         } else {
             filecheck.args(&["--check-prefixes", &prefixes]);
         }
+        // Provide more context on failures.
+        filecheck.args(&["--dump-input-context", "100"]);
         self.compose_and_run(filecheck, "", None, None)
     }
 

@@ -45,6 +45,7 @@ Original by Dempfi (https://github.com/dempfi/ayu)
 	--search-color: #fff;
 	--search-results-alias-color: #c5c5c5;
 	--search-results-grey-color: #999;
+	--search-tab-title-count-color: #888;
 	--stab-background-color: #314559;
 	--stab-code-color: #e6e1cf;
 	--code-highlight-kw-color: #ff7733;
@@ -61,7 +62,6 @@ Original by Dempfi (https://github.com/dempfi/ayu)
 	--code-highlight-question-mark-color: #ff9011;
 	--code-highlight-comment-color: #788797;
 	--code-highlight-doc-comment-color: #a1ac88;
-	--example-line-numbers-border-color: none;
 	--src-line-numbers-span-color: #5c6773;
 	--src-line-number-highlighted-background-color: rgba(255, 236, 164, 0.06);
 	--test-arrow-color: #788797;
@@ -89,6 +89,8 @@ Original by Dempfi (https://github.com/dempfi/ayu)
 	--source-sidebar-background-hover: #14191f;
 	--table-alt-row-background-color: #191f26;
 	--codeblock-link-background: #333;
+	--scrape-example-toggle-line-background: #999;
+	--scrape-example-toggle-line-hover-background: #c5c5c5;
 }
 
 h1, h2, h3, h4 {
@@ -131,7 +133,7 @@ pre, .rustdoc.source .example-wrap {
 
 .src-line-numbers .line-highlighted {
 	color: #708090;
-	padding-right: 4px;
+	padding-right: 7px;
 	border-right: 1px solid #ffb44c;
 }
 
@@ -175,10 +177,6 @@ pre, .rustdoc.source .example-wrap {
 	border-bottom: 1px solid rgba(242, 151, 24, 0.3);
 }
 
-#titles > button > div.count {
-	color: #888;
-}
-
 /* rules that this theme does not need to set, here to satisfy the rule checker */
 /* note that a lot of these are partially set in some way (meaning they are set
 individually rather than as a group) */
@@ -218,15 +216,9 @@ pre.rust .kw-2, pre.rust .prelude-ty {}
 .scraped-example .example-wrap .rust span.highlight.focus {
 	background: rgb(124, 75, 15);
 }
-.scraped-example:not(.expanded) .code-wrapper:before {
+.scraped-example:not(.expanded) .code-wrapper::before {
 	background: linear-gradient(to bottom, rgba(15, 20, 25, 1), rgba(15, 20, 25, 0));
 }
-.scraped-example:not(.expanded) .code-wrapper:after {
+.scraped-example:not(.expanded) .code-wrapper::after {
 	background: linear-gradient(to top, rgba(15, 20, 25, 1), rgba(15, 20, 25, 0));
-}
-.toggle-line-inner {
-	background: #999;
-}
-.toggle-line:hover .toggle-line-inner {
-	background: #c5c5c5;
 }

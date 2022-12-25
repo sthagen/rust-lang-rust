@@ -76,7 +76,7 @@ pub(super) struct EncodeContext<'a, 'tcx> {
     symbol_table: FxHashMap<Symbol, usize>,
 }
 
-/// If the current crate is a proc-macro, returns early with `Lazy:empty()`.
+/// If the current crate is a proc-macro, returns early with `LazyArray::empty()`.
 /// This is useful for skipping the encoding of things that aren't needed
 /// for proc-macro crates.
 macro_rules! empty_proc_macro {
@@ -1093,7 +1093,7 @@ fn should_encode_const(def_kind: DefKind) -> bool {
     }
 }
 
-fn should_encode_trait_impl_trait_tys<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> bool {
+fn should_encode_trait_impl_trait_tys(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
     if tcx.def_kind(def_id) != DefKind::AssocFn {
         return false;
     }
