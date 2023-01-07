@@ -27,6 +27,7 @@
     clippy::single_element_loop,
     clippy::needless_return,
     clippy::bool_to_int_with_if,
+    clippy::box_default,
     // We are not implementing queries here so it's fine
     rustc::potential_query_instability
 )]
@@ -52,6 +53,11 @@ extern crate rustc_index;
 extern crate rustc_session;
 extern crate rustc_span;
 extern crate rustc_target;
+
+// Necessary to pull in object code as the rest of the rustc crates are shipped only as rmeta
+// files.
+#[allow(unused_extern_crates)]
+extern crate rustc_driver;
 
 mod borrow_tracker;
 mod clock;
@@ -107,7 +113,7 @@ pub use crate::helpers::EvalContextExt as _;
 pub use crate::intptrcast::ProvenanceMode;
 pub use crate::machine::{
     AllocExtra, FrameExtra, MiriInterpCx, MiriInterpCxExt, MiriMachine, MiriMemoryKind,
-    PrimitiveLayouts, Provenance, ProvenanceExtra, PAGE_SIZE, STACK_ADDR, STACK_SIZE,
+    PrimitiveLayouts, Provenance, ProvenanceExtra,
 };
 pub use crate::mono_hash_map::MonoHashMap;
 pub use crate::operator::EvalContextExt as _;

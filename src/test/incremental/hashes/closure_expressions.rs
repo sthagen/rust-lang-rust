@@ -11,9 +11,6 @@
 // [cfail1]compile-flags: -Zincremental-ignore-spans
 // [cfail2]compile-flags: -Zincremental-ignore-spans
 // [cfail3]compile-flags: -Zincremental-ignore-spans
-// [cfail4]compile-flags: -Zincremental-relative-spans
-// [cfail5]compile-flags: -Zincremental-relative-spans
-// [cfail6]compile-flags: -Zincremental-relative-spans
 
 #![allow(warnings)]
 #![feature(rustc_attrs)]
@@ -45,9 +42,9 @@ pub fn add_parameter() {
 }
 
 #[cfg(not(any(cfail1,cfail4)))]
-#[rustc_clean(cfg="cfail2", except="hir_owner_nodes, optimized_mir, typeck")]
+#[rustc_clean(cfg="cfail2", except="hir_owner_nodes, typeck")]
 #[rustc_clean(cfg="cfail3")]
-#[rustc_clean(cfg="cfail5", except="hir_owner_nodes, optimized_mir, typeck")]
+#[rustc_clean(cfg="cfail5", except="hir_owner_nodes, typeck")]
 #[rustc_clean(cfg="cfail6")]
 pub fn add_parameter() {
     let x = 0u32;

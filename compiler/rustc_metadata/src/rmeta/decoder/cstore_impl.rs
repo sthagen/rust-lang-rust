@@ -223,14 +223,14 @@ provide! { tcx, def_id, other, cdata,
     generator_kind => { table }
     trait_def => { table }
     deduced_param_attrs => { table }
-    collect_trait_impl_trait_tys => {
+    collect_return_position_impl_trait_in_trait_tys => {
         Ok(cdata
             .root
             .tables
             .trait_impl_trait_tys
             .get(cdata, def_id.index)
             .map(|lazy| lazy.decode((cdata, tcx)))
-            .process_decoded(tcx, || panic!("{:?} does not have trait_impl_trait_tys", def_id)))
+            .process_decoded(tcx, || panic!("{def_id:?} does not have trait_impl_trait_tys")))
      }
 
     visibility => { cdata.get_visibility(def_id.index) }

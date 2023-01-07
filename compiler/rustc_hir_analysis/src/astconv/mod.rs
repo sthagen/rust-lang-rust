@@ -1199,17 +1199,26 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                     (_, _) => {
                         let got = if let Some(_) = term.ty() { "type" } else { "constant" };
                         let expected = def_kind.descr(assoc_item_def_id);
-                        let reported = tcx
-                            .sess
-                            .struct_span_err(
+                        let mut err = tcx.sess.struct_span_err(
+                            binding.span,
+                            &format!("expected {expected} bound, found {got}"),
+                        );
+                        err.span_note(
+                            tcx.def_span(assoc_item_def_id),
+                            &format!("{expected} defined here"),
+                        );
+
+                        if let hir::def::DefKind::AssocConst = def_kind
+                          && let Some(t) = term.ty() && (t.is_enum() || t.references_error())
+                          && tcx.features().associated_const_equality {
+                            err.span_suggestion(
                                 binding.span,
-                                &format!("expected {expected} bound, found {got}"),
-                            )
-                            .span_note(
-                                tcx.def_span(assoc_item_def_id),
-                                &format!("{expected} defined here"),
-                            )
-                            .emit();
+                                "if equating a const, try wrapping with braces",
+                                format!("{} = {{ const }}", binding.item_name),
+                                Applicability::HasPlaceholders,
+                            );
+                        }
+                        let reported = err.emit();
                         term = match def_kind {
                             hir::def::DefKind::AssocTy => {
                                 tcx.ty_error_with_guaranteed(reported).into()
@@ -2657,7 +2666,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
             hir::TyKind::Ptr(ref mt) => {
                 tcx.mk_ptr(ty::TypeAndMut { ty: self.ast_ty_to_ty(mt.ty), mutbl: mt.mutbl })
             }
-            hir::TyKind::Rptr(ref region, ref mt) => {
+            hir::TyKind::Ref(ref region, ref mt) => {
                 let r = self.ast_region_to_region(region, None);
                 debug!(?r);
                 let t = self.ast_ty_to_ty_inner(mt.ty, true, false);
@@ -2936,7 +2945,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         let hir::Node::ImplItem(hir::ImplItem { kind: hir::ImplItemKind::Fn(..), ident, .. }) =
             hir.get(fn_hir_id) else { return None };
         let hir::Node::Item(hir::Item { kind: hir::ItemKind::Impl(i), .. }) =
-                hir.get(hir.get_parent_node(fn_hir_id)) else { bug!("ImplItem should have Impl parent") };
+                hir.get_parent(fn_hir_id) else { bug!("ImplItem should have Impl parent") };
 
         let trait_ref = self.instantiate_mono_trait_ref(
             i.of_trait.as_ref()?,

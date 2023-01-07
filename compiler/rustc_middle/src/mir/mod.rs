@@ -2506,7 +2506,7 @@ impl<'tcx> ConstantKind<'tcx> {
         }
 
         let hir_id = tcx.hir().local_def_id_to_hir_id(def.did);
-        let parent_substs = if let Some(parent_hir_id) = tcx.hir().find_parent_node(hir_id) {
+        let parent_substs = if let Some(parent_hir_id) = tcx.hir().opt_parent_id(hir_id) {
             if let Some(parent_did) = tcx.hir().opt_local_def_id(parent_hir_id) {
                 InternalSubsts::identity_for_item(tcx, parent_did.to_def_id())
             } else {
@@ -2894,7 +2894,7 @@ fn pretty_print_const_value<'tcx>(
                 if let Some(contents) = tcx.try_destructure_mir_constant(
                     ty::ParamEnv::reveal_all().and(ConstantKind::Val(ct, ty)),
                 ) {
-                    let fields = contents.fields.iter().copied().collect::<Vec<_>>();
+                    let fields = contents.fields.to_vec();
                     match *ty.kind() {
                         ty::Array(..) => {
                             fmt.write_str("[")?;

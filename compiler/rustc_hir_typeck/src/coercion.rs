@@ -171,6 +171,10 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
 
         // Just ignore error types.
         if a.references_error() || b.references_error() {
+            // Best-effort try to unify these types -- we're already on the error path,
+            // so this will have the side-effect of making sure we have no ambiguities
+            // due to `[type error]` and `_` not coercing together.
+            let _ = self.commit_if_ok(|_| self.at(&self.cause, self.param_env).eq(a, b));
             return success(vec![], self.fcx.tcx.ty_error(), vec![]);
         }
 
@@ -1543,7 +1547,7 @@ impl<'tcx, 'exprs, E: AsCoercionSite> CoerceMany<'tcx, 'exprs, E> {
                         err.span_label(cause.span, "return type is not `()`");
                     }
                     ObligationCauseCode::BlockTailExpression(blk_id) => {
-                        let parent_id = fcx.tcx.hir().get_parent_node(blk_id);
+                        let parent_id = fcx.tcx.hir().parent_id(blk_id);
                         err = self.report_return_mismatched_types(
                             cause,
                             expected,
@@ -1574,7 +1578,7 @@ impl<'tcx, 'exprs, E: AsCoercionSite> CoerceMany<'tcx, 'exprs, E> {
                             None,
                         );
                         if !fcx.tcx.features().unsized_locals {
-                            let id = fcx.tcx.hir().get_parent_node(id);
+                            let id = fcx.tcx.hir().parent_id(id);
                             unsized_return = self.is_return_ty_unsized(fcx, id);
                         }
                     }
@@ -1664,7 +1668,7 @@ impl<'tcx, 'exprs, E: AsCoercionSite> CoerceMany<'tcx, 'exprs, E> {
         let mut pointing_at_return_type = false;
         let mut fn_output = None;
 
-        let parent_id = fcx.tcx.hir().get_parent_node(id);
+        let parent_id = fcx.tcx.hir().parent_id(id);
         let parent = fcx.tcx.hir().get(parent_id);
         if let Some(expr) = expression
             && let hir::Node::Expr(hir::Expr { kind: hir::ExprKind::Closure(&hir::Closure { body, .. }), .. }) = parent

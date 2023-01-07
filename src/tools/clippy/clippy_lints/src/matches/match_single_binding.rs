@@ -31,19 +31,11 @@ pub(crate) fn check<'a>(cx: &LateContext<'a>, ex: &Expr<'a>, arms: &[Arm<'_>], e
     };
 
     // Do we need to add ';' to suggestion ?
-    match match_body.kind {
-        ExprKind::Block(block, _) => {
-            // macro + expr_ty(body) == ()
-            if block.span.from_expansion() && cx.typeck_results().expr_ty(match_body).is_unit() {
-                snippet_body.push(';');
-            }
-        },
-        _ => {
-            // expr_ty(body) == ()
-            if cx.typeck_results().expr_ty(match_body).is_unit() {
-                snippet_body.push(';');
-            }
-        },
+    if let ExprKind::Block(block, _) = match_body.kind {
+        // macro + expr_ty(body) == ()
+        if block.span.from_expansion() && cx.typeck_results().expr_ty(match_body).is_unit() {
+            snippet_body.push(';');
+        }
     }
 
     let mut applicability = Applicability::MaybeIncorrect;
@@ -148,8 +140,8 @@ pub(crate) fn check<'a>(cx: &LateContext<'a>, ex: &Expr<'a>, arms: &[Arm<'_>], e
 fn opt_parent_assign_span<'a>(cx: &LateContext<'a>, ex: &Expr<'a>) -> Option<AssignmentExpr> {
     let map = &cx.tcx.hir();
 
-    if let Some(Node::Expr(parent_arm_expr)) = map.find(map.get_parent_node(ex.hir_id)) {
-        return match map.find(map.get_parent_node(parent_arm_expr.hir_id)) {
+    if let Some(Node::Expr(parent_arm_expr)) = map.find_parent(ex.hir_id) {
+        return match map.find_parent(parent_arm_expr.hir_id) {
             Some(Node::Local(parent_let_expr)) => Some(AssignmentExpr::Local {
                 span: parent_let_expr.span,
                 pat_span: parent_let_expr.pat.span(),
@@ -191,8 +183,7 @@ fn sugg_with_curlies<'a>(
 
     // If the parent is already an arm, and the body is another match statement,
     // we need curly braces around suggestion
-    let parent_node_id = cx.tcx.hir().get_parent_node(match_expr.hir_id);
-    if let Node::Arm(arm) = &cx.tcx.hir().get(parent_node_id) {
+    if let Node::Arm(arm) = &cx.tcx.hir().get_parent(match_expr.hir_id) {
         if let ExprKind::Match(..) = arm.body.kind {
             cbrace_end = format!("\n{indent}}}");
             // Fix body indent due to the match

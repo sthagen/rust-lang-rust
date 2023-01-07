@@ -113,6 +113,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str;
 
+use build_helper::ci::CiEnv;
 use channel::GitInfo;
 use config::{DryRun, Target};
 use filetime::FileTime;
@@ -121,7 +122,7 @@ use once_cell::sync::OnceCell;
 use crate::builder::Kind;
 use crate::config::{LlvmLibunwind, TargetSelection};
 use crate::util::{
-    exe, libdir, mtime, output, run, run_suppressed, symlink_dir, try_run_suppressed, CiEnv,
+    exe, libdir, mtime, output, run, run_suppressed, symlink_dir, try_run_suppressed,
 };
 
 mod bolt;
@@ -725,10 +726,6 @@ impl Build {
 
         if let Subcommand::Format { check, paths } = &self.config.cmd {
             return format::format(&builder::Builder::new(&self), *check, &paths);
-        }
-
-        if let Subcommand::Clean { all } = self.config.cmd {
-            return clean::clean(self, all);
         }
 
         // Download rustfmt early so that it can be used in rust-analyzer configs.
@@ -1400,7 +1397,10 @@ impl Build {
         let mut list = vec![INTERNER.intern_str(root)];
         let mut visited = HashSet::new();
         while let Some(krate) = list.pop() {
-            let krate = &self.crates[&krate];
+            let krate = self
+                .crates
+                .get(&krate)
+                .unwrap_or_else(|| panic!("metadata missing for {krate}: {:?}", self.crates));
             ret.push(krate);
             for dep in &krate.deps {
                 if !self.crates.contains_key(dep) {

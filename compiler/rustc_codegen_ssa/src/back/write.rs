@@ -1002,7 +1002,7 @@ fn start_executing_work<B: ExtraBackendMethods>(
     let sess = tcx.sess;
 
     let mut each_linked_rlib_for_lto = Vec::new();
-    drop(link::each_linked_rlib(sess, crate_info, &mut |cnum, path| {
+    drop(link::each_linked_rlib(crate_info, None, &mut |cnum, path| {
         if link::ignored_for_lto(sess, crate_info, cnum) {
             return;
         }
@@ -1899,7 +1899,7 @@ impl<B: ExtraBackendMethods> OngoingCodegen<B> {
 
         // FIXME: time_llvm_passes support - does this use a global context or
         // something?
-        if sess.codegen_units() == 1 && sess.time_llvm_passes() {
+        if sess.codegen_units() == 1 && sess.opts.unstable_opts.time_llvm_passes {
             self.backend.print_pass_timings()
         }
 

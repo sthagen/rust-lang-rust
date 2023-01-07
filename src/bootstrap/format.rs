@@ -1,7 +1,8 @@
 //! Runs rustfmt on the repository.
 
 use crate::builder::Builder;
-use crate::util::{output, t};
+use crate::util::{output, output_result, program_out_of_date, t};
+use build_helper::git::updated_master_branch;
 use ignore::WalkBuilder;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -44,6 +45,60 @@ fn rustfmt(src: &Path, rustfmt: &Path, paths: &[PathBuf], check: bool) -> impl F
     }
 }
 
+fn get_rustfmt_version(build: &Builder<'_>) -> Option<(String, PathBuf)> {
+    let stamp_file = build.out.join("rustfmt.stamp");
+
+    let mut cmd = Command::new(match build.initial_rustfmt() {
+        Some(p) => p,
+        None => return None,
+    });
+    cmd.arg("--version");
+    let output = match cmd.output() {
+        Ok(status) => status,
+        Err(_) => return None,
+    };
+    if !output.status.success() {
+        return None;
+    }
+    Some((String::from_utf8(output.stdout).unwrap(), stamp_file))
+}
+
+/// Return whether the format cache can be reused.
+fn verify_rustfmt_version(build: &Builder<'_>) -> bool {
+    let Some((version, stamp_file)) = get_rustfmt_version(build) else {return false;};
+    !program_out_of_date(&stamp_file, &version)
+}
+
+/// Updates the last rustfmt version used
+fn update_rustfmt_version(build: &Builder<'_>) {
+    let Some((version, stamp_file)) = get_rustfmt_version(build) else {return;};
+    t!(std::fs::write(stamp_file, version))
+}
+
+/// Returns the Rust files modified between the `merge-base` of HEAD and
+/// rust-lang/master and what is now on the disk.
+///
+/// Returns `None` if all files should be formatted.
+fn get_modified_rs_files(build: &Builder<'_>) -> Result<Option<Vec<String>>, String> {
+    let Ok(updated_master) = updated_master_branch(Some(&build.config.src)) else { return Ok(None); };
+
+    if !verify_rustfmt_version(build) {
+        return Ok(None);
+    }
+
+    let merge_base =
+        output_result(build.config.git().arg("merge-base").arg(&updated_master).arg("HEAD"))?;
+    Ok(Some(
+        output_result(
+            build.config.git().arg("diff-index").arg("--name-only").arg(merge_base.trim()),
+        )?
+        .lines()
+        .map(|s| s.trim().to_owned())
+        .filter(|f| Path::new(f).extension().map_or(false, |ext| ext == "rs"))
+        .collect(),
+    ))
+}
+
 #[derive(serde::Deserialize)]
 struct RustfmtConfig {
     ignore: Vec<String>,
@@ -78,6 +133,9 @@ pub fn format(build: &Builder<'_>, check: bool, paths: &[PathBuf]) {
         Ok(status) => status.success(),
         Err(_) => false,
     };
+
+    let mut paths = paths.to_vec();
+
     if git_available {
         let in_working_tree = match build
             .config
@@ -110,12 +168,32 @@ pub fn format(build: &Builder<'_>, check: bool, paths: &[PathBuf]) {
                 // preventing the latter from being formatted.
                 ignore_fmt.add(&format!("!/{}", untracked_path)).expect(&untracked_path);
             }
+            if !check && paths.is_empty() {
+                match get_modified_rs_files(build) {
+                    Ok(Some(files)) => {
+                        for file in files {
+                            println!("formatting modified file {file}");
+                            ignore_fmt.add(&format!("/{file}")).expect(&file);
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(err) => {
+                        println!(
+                            "WARN: Something went wrong when running git commands:\n{err}\n\
+                            Falling back to formatting all files."
+                        );
+                        // Something went wrong when getting the version. Just format all the files.
+                        paths.push(".".into());
+                    }
+                }
+            }
         } else {
             println!("Not in git tree. Skipping git-aware format checks");
         }
     } else {
         println!("Could not find usable git. Skipping git-aware format checks");
     }
+
     let ignore_fmt = ignore_fmt.build().unwrap();
 
     let rustfmt_path = build.initial_rustfmt().unwrap_or_else(|| {
@@ -187,4 +265,7 @@ pub fn format(build: &Builder<'_>, check: bool, paths: &[PathBuf]) {
     drop(tx);
 
     thread.join().unwrap();
+    if !check {
+        update_rustfmt_version(build);
+    }
 }

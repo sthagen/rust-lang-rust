@@ -132,7 +132,10 @@ impl<'a, 'tcx> DocFolder for Stripper<'a, 'tcx> {
             // implementations of traits are always public.
             clean::ImplItem(ref imp) if imp.trait_.is_some() => true,
             // Variant fields have inherited visibility
-            clean::VariantItem(clean::Variant::Struct(..) | clean::Variant::Tuple(..)) => true,
+            clean::VariantItem(clean::Variant {
+                kind: clean::VariantKind::Struct(..) | clean::VariantKind::Tuple(..),
+                ..
+            }) => true,
             _ => false,
         };
 
@@ -245,6 +248,7 @@ pub(crate) struct ImportStripper<'tcx> {
 impl<'tcx> DocFolder for ImportStripper<'tcx> {
     fn fold_item(&mut self, i: Item) -> Option<Item> {
         match *i.kind {
+            clean::ImportItem(imp) if imp.imported_item_is_doc_hidden(self.tcx) => None,
             clean::ExternCrateItem { .. } | clean::ImportItem(..)
                 if i.visibility(self.tcx) != Some(Visibility::Public) =>
             {

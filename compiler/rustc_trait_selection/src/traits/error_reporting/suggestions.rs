@@ -1,6 +1,9 @@
 // ignore-tidy-filelength
 
-use super::{DefIdOrName, Obligation, ObligationCause, ObligationCauseCode, PredicateObligation};
+use super::{
+    DefIdOrName, FindExprBySpan, Obligation, ObligationCause, ObligationCauseCode,
+    PredicateObligation,
+};
 
 use crate::autoderef::Autoderef;
 use crate::infer::InferCtxt;
@@ -196,6 +199,13 @@ pub trait TypeErrCtxtExt<'tcx> {
         trait_pred: ty::PolyTraitPredicate<'tcx>,
     ) -> bool;
 
+    fn check_for_binding_assigned_block_without_tail_expression(
+        &self,
+        obligation: &PredicateObligation<'tcx>,
+        err: &mut Diagnostic,
+        trait_pred: ty::PolyTraitPredicate<'tcx>,
+    );
+
     fn suggest_add_reference_to_arg(
         &self,
         obligation: &PredicateObligation<'tcx>,
@@ -248,7 +258,7 @@ pub trait TypeErrCtxtExt<'tcx> {
 
     fn point_at_returns_when_relevant(
         &self,
-        err: &mut Diagnostic,
+        err: &mut DiagnosticBuilder<'tcx, ErrorGuaranteed>,
         obligation: &PredicateObligation<'tcx>,
     );
 
@@ -838,8 +848,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
 
         let hir = self.tcx.hir();
         let hir_id = hir.local_def_id_to_hir_id(def_id.as_local()?);
-        let parent_node = hir.get_parent_node(hir_id);
-        match hir.find(parent_node) {
+        match hir.find_parent(hir_id) {
             Some(hir::Node::Stmt(hir::Stmt { kind: hir::StmtKind::Local(local), .. })) => {
                 get_name(err, &local.pat.kind)
             }
@@ -1031,6 +1040,66 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             err.help(&format!("{msg}: `{name}({args})`"));
         }
         true
+    }
+
+    fn check_for_binding_assigned_block_without_tail_expression(
+        &self,
+        obligation: &PredicateObligation<'tcx>,
+        err: &mut Diagnostic,
+        trait_pred: ty::PolyTraitPredicate<'tcx>,
+    ) {
+        let mut span = obligation.cause.span;
+        while span.from_expansion() {
+            // Remove all the desugaring and macro contexts.
+            span.remove_mark();
+        }
+        let mut expr_finder = FindExprBySpan::new(span);
+        let Some(hir::Node::Expr(body)) = self.tcx.hir().find(obligation.cause.body_id) else { return; };
+        expr_finder.visit_expr(&body);
+        let Some(expr) = expr_finder.result else { return; };
+        let Some(typeck) = &self.typeck_results else { return; };
+        let Some(ty) = typeck.expr_ty_adjusted_opt(expr) else { return; };
+        if !ty.is_unit() {
+            return;
+        };
+        let hir::ExprKind::Path(hir::QPath::Resolved(None, path)) = expr.kind else { return; };
+        let hir::def::Res::Local(hir_id) = path.res else { return; };
+        let Some(hir::Node::Pat(pat)) = self.tcx.hir().find(hir_id) else {
+            return;
+        };
+        let Some(hir::Node::Local(hir::Local {
+            ty: None,
+            init: Some(init),
+            ..
+        })) = self.tcx.hir().find_parent(pat.hir_id) else { return; };
+        let hir::ExprKind::Block(block, None) = init.kind else { return; };
+        if block.expr.is_some() {
+            return;
+        }
+        let [.., stmt] = block.stmts else {
+            err.span_label(block.span, "this empty block is missing a tail expression");
+            return;
+        };
+        let hir::StmtKind::Semi(tail_expr) = stmt.kind else { return; };
+        let Some(ty) = typeck.expr_ty_opt(tail_expr) else {
+            err.span_label(block.span, "this block is missing a tail expression");
+            return;
+        };
+        let ty = self.resolve_numeric_literals_with_default(self.resolve_vars_if_possible(ty));
+        let trait_pred_and_self = trait_pred.map_bound(|trait_pred| (trait_pred, ty));
+
+        let new_obligation =
+            self.mk_trait_obligation_with_new_self_ty(obligation.param_env, trait_pred_and_self);
+        if self.predicate_must_hold_modulo_regions(&new_obligation) {
+            err.span_suggestion_short(
+                stmt.span.with_lo(tail_expr.span.hi()),
+                "remove this semicolon",
+                "",
+                Applicability::MachineApplicable,
+            );
+        } else {
+            err.span_label(block.span, "this block is missing a tail expression");
+        }
     }
 
     fn suggest_add_reference_to_arg(
@@ -1291,29 +1360,25 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
 
         if let ObligationCauseCode::AwaitableExpr(hir_id) = obligation.cause.code().peel_derives() {
             let hir = self.tcx.hir();
-            if let Some(node) = hir_id.and_then(|hir_id| hir.find(hir_id)) {
-                if let hir::Node::Expr(expr) = node {
-                    // FIXME: use `obligation.predicate.kind()...trait_ref.self_ty()` to see if we have `()`
-                    // and if not maybe suggest doing something else? If we kept the expression around we
-                    // could also check if it is an fn call (very likely) and suggest changing *that*, if
-                    // it is from the local crate.
-                    err.span_suggestion(
-                        span,
-                        "remove the `.await`",
-                        "",
-                        Applicability::MachineApplicable,
-                    );
-                    // FIXME: account for associated `async fn`s.
-                    if let hir::Expr { span, kind: hir::ExprKind::Call(base, _), .. } = expr {
-                        if let ty::PredicateKind::Clause(ty::Clause::Trait(pred)) =
-                            obligation.predicate.kind().skip_binder()
-                        {
-                            err.span_label(
-                                *span,
-                                &format!("this call returns `{}`", pred.self_ty()),
-                            );
-                        }
-                        if let Some(typeck_results) = &self.typeck_results
+            if let Some(hir::Node::Expr(expr)) = hir_id.and_then(|hir_id| hir.find(hir_id)) {
+                // FIXME: use `obligation.predicate.kind()...trait_ref.self_ty()` to see if we have `()`
+                // and if not maybe suggest doing something else? If we kept the expression around we
+                // could also check if it is an fn call (very likely) and suggest changing *that*, if
+                // it is from the local crate.
+                err.span_suggestion(
+                    span,
+                    "remove the `.await`",
+                    "",
+                    Applicability::MachineApplicable,
+                );
+                // FIXME: account for associated `async fn`s.
+                if let hir::Expr { span, kind: hir::ExprKind::Call(base, _), .. } = expr {
+                    if let ty::PredicateKind::Clause(ty::Clause::Trait(pred)) =
+                        obligation.predicate.kind().skip_binder()
+                    {
+                        err.span_label(*span, &format!("this call returns `{}`", pred.self_ty()));
+                    }
+                    if let Some(typeck_results) = &self.typeck_results
                             && let ty = typeck_results.expr_ty_adjusted(base)
                             && let ty::FnDef(def_id, _substs) = ty.kind()
                             && let Some(hir::Node::Item(hir::Item { ident, span, vis_span, .. })) =
@@ -1339,7 +1404,6 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                                 );
                             }
                         }
-                    }
                 }
             }
         }
@@ -1426,7 +1490,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
         trait_pred: ty::PolyTraitPredicate<'tcx>,
     ) -> bool {
         let hir = self.tcx.hir();
-        let parent_node = hir.get_parent_node(obligation.cause.body_id);
+        let parent_node = hir.parent_id(obligation.cause.body_id);
         let node = hir.find(parent_node);
         if let Some(hir::Node::Item(hir::Item { kind: hir::ItemKind::Fn(sig, _, body_id), .. })) = node
             && let hir::ExprKind::Block(blk, _) = &hir.body(*body_id).value.kind
@@ -1463,7 +1527,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
 
     fn return_type_span(&self, obligation: &PredicateObligation<'tcx>) -> Option<Span> {
         let hir = self.tcx.hir();
-        let parent_node = hir.get_parent_node(obligation.cause.body_id);
+        let parent_node = hir.parent_id(obligation.cause.body_id);
         let Some(hir::Node::Item(hir::Item { kind: hir::ItemKind::Fn(sig, ..), .. })) = hir.find(parent_node) else {
             return None;
         };
@@ -1488,7 +1552,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
         }
 
         let hir = self.tcx.hir();
-        let fn_hir_id = hir.get_parent_node(obligation.cause.body_id);
+        let fn_hir_id = hir.parent_id(obligation.cause.body_id);
         let node = hir.find(fn_hir_id);
         let Some(hir::Node::Item(hir::Item {
             kind: hir::ItemKind::Fn(sig, _, body_id),
@@ -1691,7 +1755,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
 
     fn point_at_returns_when_relevant(
         &self,
-        err: &mut Diagnostic,
+        err: &mut DiagnosticBuilder<'tcx, ErrorGuaranteed>,
         obligation: &PredicateObligation<'tcx>,
     ) {
         match obligation.cause.code().peel_derives() {
@@ -1700,7 +1764,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
         }
 
         let hir = self.tcx.hir();
-        let parent_node = hir.get_parent_node(obligation.cause.body_id);
+        let parent_node = hir.parent_id(obligation.cause.body_id);
         let node = hir.find(parent_node);
         if let Some(hir::Node::Item(hir::Item { kind: hir::ItemKind::Fn(_, _, body_id), .. })) =
             node
@@ -1713,7 +1777,15 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             for expr in &visitor.returns {
                 if let Some(returned_ty) = typeck_results.node_type_opt(expr.hir_id) {
                     let ty = self.resolve_vars_if_possible(returned_ty);
-                    err.span_label(expr.span, &format!("this returned value is of type `{}`", ty));
+                    if ty.references_error() {
+                        // don't print out the [type error] here
+                        err.delay_as_bug();
+                    } else {
+                        err.span_label(
+                            expr.span,
+                            &format!("this returned value is of type `{}`", ty),
+                        );
+                    }
                 }
             }
         }
@@ -2296,7 +2368,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                         let expr = hir.expect_expr(expr_id);
                         debug!("target_ty evaluated from {:?}", expr);
 
-                        let parent = hir.get_parent_node(expr_id);
+                        let parent = hir.parent_id(expr_id);
                         if let Some(hir::Node::Expr(e)) = hir.find(parent) {
                             let parent_span = hir.span(parent);
                             let parent_did = parent.owner.to_def_id();
@@ -2517,8 +2589,17 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                 }
             }
             ObligationCauseCode::VariableType(hir_id) => {
-                let parent_node = self.tcx.hir().get_parent_node(hir_id);
+                let parent_node = self.tcx.hir().parent_id(hir_id);
                 match self.tcx.hir().find(parent_node) {
+                    Some(Node::Local(hir::Local { ty: Some(ty), .. })) => {
+                        err.span_suggestion_verbose(
+                            ty.span.shrink_to_lo(),
+                            "consider borrowing here",
+                            "&",
+                            Applicability::MachineApplicable,
+                        );
+                        err.note("all local variables must have a statically known size");
+                    }
                     Some(Node::Local(hir::Local {
                         init: Some(hir::Expr { kind: hir::ExprKind::Index(_, _), span, .. }),
                         ..
@@ -2688,7 +2769,9 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                 // Don't print the tuple of capture types
                 'print: {
                     if !is_upvar_tys_infer_tuple {
-                        let msg = format!("required because it appears within the type `{}`", ty);
+                        let msg = with_forced_trimmed_paths!(format!(
+                            "required because it appears within the type `{ty}`",
+                        ));
                         match ty.kind() {
                             ty::Adt(def, _) => match self.tcx.opt_item_ident(def.did()) {
                                 Some(ident) => err.span_note(ident.span, &msg),
@@ -2729,7 +2812,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                                 let mut msg =
                                     "required because it captures the following types: ".to_owned();
                                 for ty in bound_tys.skip_binder() {
-                                    write!(msg, "`{}`, ", ty).unwrap();
+                                    with_forced_trimmed_paths!(write!(msg, "`{}`, ", ty).unwrap());
                                 }
                                 err.note(msg.trim_end_matches(", "))
                             }
@@ -2740,7 +2823,9 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                                 let kind = tcx.generator_kind(def_id).unwrap().descr();
                                 err.span_note(
                                     sp,
-                                    &format!("required because it's used within this {}", kind),
+                                    with_forced_trimmed_paths!(&format!(
+                                        "required because it's used within this {kind}",
+                                    )),
                                 )
                             }
                             ty::Closure(def_id, _) => err.span_note(
@@ -2964,7 +3049,9 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                     let expr_ty = with_forced_trimmed_paths!(self.ty_to_string(expr_ty));
                     err.span_label(
                         expr_span,
-                        format!("return type was inferred to be `{expr_ty}` here"),
+                        with_forced_trimmed_paths!(format!(
+                            "return type was inferred to be `{expr_ty}` here",
+                        )),
                     );
                 }
             }
@@ -2982,7 +3069,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
         span: Span,
     ) {
         let body_hir_id = obligation.cause.body_id;
-        let item_id = self.tcx.hir().get_parent_node(body_hir_id);
+        let item_id = self.tcx.hir().parent_id(body_hir_id);
 
         if let Some(body_id) =
             self.tcx.hir().maybe_body_owned_by(self.tcx.hir().local_def_id(item_id))
@@ -3209,7 +3296,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             if let hir::ExprKind::Path(hir::QPath::Resolved(None, path)) = expr.kind
                 && let hir::Path { res: hir::def::Res::Local(hir_id), .. } = path
                 && let Some(hir::Node::Pat(binding)) = self.tcx.hir().find(*hir_id)
-                && let parent_hir_id = self.tcx.hir().get_parent_node(binding.hir_id)
+                && let parent_hir_id = self.tcx.hir().parent_id(binding.hir_id)
                 && let Some(hir::Node::Local(local)) = self.tcx.hir().find(parent_hir_id)
                 && let Some(binding_expr) = local.init
             {
@@ -3227,7 +3314,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
         })) = call_node
         {
             if Some(rcvr.span) == err.span.primary_span() {
-                err.replace_span_with(path.ident.span);
+                err.replace_span_with(path.ident.span, true);
             }
         }
         if let Some(Node::Expr(hir::Expr {
@@ -3277,8 +3364,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             if let hir::ExprKind::Path(hir::QPath::Resolved(None, path)) = expr.kind
                 && let hir::Path { res: hir::def::Res::Local(hir_id), .. } = path
                 && let Some(hir::Node::Pat(binding)) = self.tcx.hir().find(*hir_id)
-                && let parent_hir_id = self.tcx.hir().get_parent_node(binding.hir_id)
-                && let Some(parent) = self.tcx.hir().find(parent_hir_id)
+                && let Some(parent) = self.tcx.hir().find_parent(binding.hir_id)
             {
                 // We've reached the root of the method call chain...
                 if let hir::Node::Local(local) = parent

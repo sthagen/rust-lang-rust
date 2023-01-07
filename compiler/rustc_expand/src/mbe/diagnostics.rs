@@ -43,7 +43,7 @@ pub(super) fn failed_to_match_macro<'cx>(
         return result;
     }
 
-    let Some((token, label, remaining_matcher)) = tracker.best_failure else {
+    let Some(BestFailure { token, msg: label, remaining_matcher, .. }) = tracker.best_failure else {
         return DummyResult::any(sp);
     };
 
@@ -95,12 +95,31 @@ struct CollectTrackerAndEmitter<'a, 'cx, 'matcher> {
     cx: &'a mut ExtCtxt<'cx>,
     remaining_matcher: Option<&'matcher MatcherLoc>,
     /// Which arm's failure should we report? (the one furthest along)
-    best_failure: Option<(Token, &'static str, MatcherLoc)>,
+    best_failure: Option<BestFailure>,
     root_span: Span,
     result: Option<Box<dyn MacResult + 'cx>>,
 }
 
+struct BestFailure {
+    token: Token,
+    position_in_tokenstream: usize,
+    msg: &'static str,
+    remaining_matcher: MatcherLoc,
+}
+
+impl BestFailure {
+    fn is_better_position(&self, position: usize) -> bool {
+        position > self.position_in_tokenstream
+    }
+}
+
 impl<'a, 'cx, 'matcher> Tracker<'matcher> for CollectTrackerAndEmitter<'a, 'cx, 'matcher> {
+    type Failure = (Token, usize, &'static str);
+
+    fn build_failure(tok: Token, position: usize, msg: &'static str) -> Self::Failure {
+        (tok, position, msg)
+    }
+
     fn before_match_loc(&mut self, parser: &TtParser, matcher: &'matcher MatcherLoc) {
         if self.remaining_matcher.is_none()
             || (parser.has_no_remaining_items_for_step() && *matcher != MatcherLoc::Eof)
@@ -109,7 +128,7 @@ impl<'a, 'cx, 'matcher> Tracker<'matcher> for CollectTrackerAndEmitter<'a, 'cx, 
         }
     }
 
-    fn after_arm(&mut self, result: &NamedParseResult) {
+    fn after_arm(&mut self, result: &NamedParseResult<Self::Failure>) {
         match result {
             Success(_) => {
                 // Nonterminal parser recovery might turn failed matches into successful ones,
@@ -119,18 +138,25 @@ impl<'a, 'cx, 'matcher> Tracker<'matcher> for CollectTrackerAndEmitter<'a, 'cx, 
                     "should not collect detailed info for successful macro match",
                 );
             }
-            Failure(token, msg) => match self.best_failure {
-                Some((ref best_token, _, _)) if best_token.span.lo() >= token.span.lo() => {}
-                _ => {
-                    self.best_failure = Some((
-                        token.clone(),
+            Failure((token, approx_position, msg)) => {
+                debug!(?token, ?msg, "a new failure of an arm");
+
+                if self
+                    .best_failure
+                    .as_ref()
+                    .map_or(true, |failure| failure.is_better_position(*approx_position))
+                {
+                    self.best_failure = Some(BestFailure {
+                        token: token.clone(),
+                        position_in_tokenstream: *approx_position,
                         msg,
-                        self.remaining_matcher
+                        remaining_matcher: self
+                            .remaining_matcher
                             .expect("must have collected matcher already")
                             .clone(),
-                    ))
+                    })
                 }
-            },
+            }
             Error(err_sp, msg) => {
                 let span = err_sp.substitute_dummy(self.root_span);
                 self.cx.struct_span_err(span, msg).emit();
@@ -152,6 +178,21 @@ impl<'a, 'cx, 'matcher> Tracker<'matcher> for CollectTrackerAndEmitter<'a, 'cx, 
 impl<'a, 'cx> CollectTrackerAndEmitter<'a, 'cx, '_> {
     fn new(cx: &'a mut ExtCtxt<'cx>, root_span: Span) -> Self {
         Self { cx, remaining_matcher: None, best_failure: None, root_span, result: None }
+    }
+}
+
+/// Currently used by macro_rules! compilation to extract a little information from the `Failure` case.
+pub struct FailureForwarder;
+
+impl<'matcher> Tracker<'matcher> for FailureForwarder {
+    type Failure = (Token, usize, &'static str);
+
+    fn build_failure(tok: Token, position: usize, msg: &'static str) -> Self::Failure {
+        (tok, position, msg)
+    }
+
+    fn description() -> &'static str {
+        "failure-forwarder"
     }
 }
 
@@ -178,12 +219,12 @@ pub(super) fn emit_frag_parse_err(
         );
         if !e.span.is_dummy() {
             // early end of macro arm (#52866)
-            e.replace_span_with(parser.token.span.shrink_to_hi());
+            e.replace_span_with(parser.token.span.shrink_to_hi(), true);
         }
     }
     if e.span.is_dummy() {
         // Get around lack of span in error (#30128)
-        e.replace_span_with(site_span);
+        e.replace_span_with(site_span, true);
         if !parser.sess.source_map().is_imported(arm_span) {
             e.span_label(arm_span, "in this macro arm");
         }

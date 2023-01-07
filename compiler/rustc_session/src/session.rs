@@ -590,7 +590,19 @@ impl Session {
     pub fn warn(&self, msg: impl Into<DiagnosticMessage>) {
         self.diagnostic().warn(msg)
     }
-    /// Delay a span_bug() call until abort_if_errors()
+
+    /// Ensures that compilation cannot succeed.
+    ///
+    /// If this function has been called but no errors have been emitted and
+    /// compilation succeeds, it will cause an internal compiler error (ICE).
+    ///
+    /// This can be used in code paths that should never run on successful compilations.
+    /// For example, it can be used to create an [`ErrorGuaranteed`]
+    /// (but you should prefer threading through the [`ErrorGuaranteed`] from an error emission directly).
+    ///
+    /// If no span is available, use [`DUMMY_SP`].
+    ///
+    /// [`DUMMY_SP`]: rustc_span::DUMMY_SP
     #[track_caller]
     pub fn delay_span_bug<S: Into<MultiSpan>>(
         &self,
@@ -976,32 +988,8 @@ impl Session {
         self.opts.unstable_opts.verbose
     }
 
-    pub fn instrument_mcount(&self) -> bool {
-        self.opts.unstable_opts.instrument_mcount
-    }
-
-    pub fn time_passes(&self) -> bool {
-        self.opts.unstable_opts.time_passes
-    }
-
-    pub fn time_llvm_passes(&self) -> bool {
-        self.opts.unstable_opts.time_llvm_passes
-    }
-
-    pub fn meta_stats(&self) -> bool {
-        self.opts.unstable_opts.meta_stats
-    }
-
-    pub fn asm_comments(&self) -> bool {
-        self.opts.unstable_opts.asm_comments
-    }
-
     pub fn verify_llvm_ir(&self) -> bool {
         self.opts.unstable_opts.verify_llvm_ir || option_env!("RUSTC_VERIFY_LLVM_IR").is_some()
-    }
-
-    pub fn print_llvm_passes(&self) -> bool {
-        self.opts.unstable_opts.print_llvm_passes
     }
 
     pub fn binary_dep_depinfo(&self) -> bool {

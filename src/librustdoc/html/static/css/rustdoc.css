@@ -76,8 +76,6 @@
 }
 
 * {
-	-webkit-box-sizing: border-box;
-	-moz-box-sizing: border-box;
 	box-sizing: border-box;
 }
 
@@ -110,11 +108,7 @@ body {
 	/* Then override it with `anywhere`, which is required to make non-Safari browsers break
 	   more aggressively when we want them to. */
 	overflow-wrap: anywhere;
-
-	-webkit-font-feature-settings: "kern", "liga";
-	-moz-font-feature-settings: "kern", "liga";
 	font-feature-settings: "kern", "liga";
-
 	background-color: var(--main-background-color);
 	color: var(--main-color);
 }
@@ -355,13 +349,14 @@ img {
 	max-width: 100%;
 }
 
-.source .content {
-	overflow: visible;
-}
-
 .sub-logo-container, .logo-container {
 	/* zero text boxes so that computed line height = image height exactly */
 	line-height: 0;
+	display: block;
+}
+
+.sub-logo-container {
+	margin-right: 32px;
 }
 
 .sub-logo-container > img {
@@ -372,10 +367,6 @@ img {
 
 .rust-logo {
 	filter: var(--rust-logo-filter);
-}
-
-.sidebar, .mobile-topbar, .sidebar-menu-toggle {
-	background-color: var(--sidebar-background-color);
 }
 
 .sidebar {
@@ -396,7 +387,8 @@ img {
 	overflow-y: hidden;
 }
 
-.source .sidebar, #src-sidebar-toggle, #source-sidebar {
+.sidebar, .mobile-topbar, .sidebar-menu-toggle,
+#src-sidebar-toggle, #source-sidebar {
 	background-color: var(--sidebar-background-color);
 }
 
@@ -504,7 +496,7 @@ ul.block, .block li {
 	color: var(--sidebar-link-color);
 }
 .sidebar .current,
-.sidebar a:hover {
+.sidebar a:hover:not(.logo-container) {
 	background-color: var(--sidebar-current-link-background-color);
 }
 
@@ -546,8 +538,6 @@ ul.block, .block li {
 	overflow: initial;
 	text-align: right;
 	-webkit-user-select: none;
-	-moz-user-select: none;
-	-ms-user-select: none;
 	user-select: none;
 	padding: 14px 8px;
 	color: var(--src-line-numbers-span-color);
@@ -670,9 +660,6 @@ nav.sub {
 }
 .source nav.sub {
 	margin: 0 0 15px 0;
-}
-.source .search-form {
-	margin-left: 32px;
 }
 
 a {
@@ -1108,7 +1095,6 @@ pre.rust .doccomment {
 }
 
 .example-wrap .tooltip:hover::after {
-	text-align: center;
 	padding: 5px 3px 3px 3px;
 	border-radius: 6px;
 	margin-left: 5px;
@@ -1320,15 +1306,11 @@ a.test-arrow:hover {
 	-webkit-appearance: none;
 	opacity: 1;
 }
+
 #settings-menu, #help-button {
 	margin-left: 4px;
 	display: flex;
 }
-
-#settings-menu > a, #help-button > a, #copy-path {
-	width: 33px;
-}
-
 #settings-menu > a, #help-button > a {
 	display: flex;
 	align-items: center;
@@ -1340,6 +1322,7 @@ a.test-arrow:hover {
 	/* Rare exception to specifying font sizes in rem. Since this is acting
 	   as an icon, it's okay to specify their sizes in pixels. */
 	font-size: 20px;
+	width: 33px;
 }
 
 #settings-menu > a:hover, #settings-menu > a:focus,
@@ -1355,6 +1338,7 @@ a.test-arrow:hover {
 	padding: 0;
 	padding-left: 2px;
 	border: 0;
+	width: 33px;
 }
 #copy-path > img {
 	filter: var(--copy-path-img-filter);
@@ -1383,7 +1367,7 @@ kbd {
 	vertical-align: middle;
 	border: solid 1px var(--border-color);
 	border-radius: 3px;
-	color: var(--kbd--color);
+	color: var(--kbd-color);
 	background-color: var(--kbd-background);
 	box-shadow: inset 0 -1px 0 var(--kbd-box-shadow-color);
 }
@@ -1396,31 +1380,10 @@ details.dir-entry {
 	padding-left: 4px;
 }
 
-details.dir-entry > summary::after {
-	content: " ►";
-	position: absolute;
-	left: -15px;
-	top: 0px;
-	font-size: 80%;
-	padding: 2px 0px;
-	/* set width to cover gap between arrow and text */
-	width: 25px;
-}
-
-details[open].dir-entry > summary::after {
-	content: " ▼";
-}
-
-details.dir-entry > summary::-webkit-details-marker,
-details.dir-entry > summary::marker {
-	display: none;
-}
-
 details.dir-entry > summary {
-	margin: 0 0 0 13px;
-	list-style: none;
+	margin: 0 0 0 -4px;
+	padding: 0 0 0 4px;
 	cursor: pointer;
-	position: relative;
 }
 
 details.dir-entry div.folders, details.dir-entry div.files {
@@ -1606,7 +1569,7 @@ in storage.js
 
 	/* Hide the logo and item name from the sidebar. Those are displayed
 	   in the mobile-topbar instead. */
-	.sidebar .sidebar-logo,
+	.sidebar .logo-container,
 	.sidebar .location {
 		display: none;
 	}
@@ -1635,12 +1598,8 @@ in storage.js
 
 	.sidebar.shown,
 	.source-sidebar-expanded .source .sidebar,
-	.sidebar:focus-within {
+	.rustdoc:not(.source) .sidebar:focus-within {
 		left: 0;
-	}
-
-	.rustdoc.source > .sidebar {
-		width: 0;
 	}
 
 	.mobile-topbar h2 {
@@ -1833,13 +1792,6 @@ in storage.js
 		height: 35px;
 		width: 35px;
 	}
-
-	#src-sidebar-toggle {
-		top: 10px;
-	}
-	.source-sidebar-expanded #src-sidebar-toggle {
-		top: unset;
-	}
 }
 
 .variant,
@@ -1877,9 +1829,13 @@ in storage.js
 	font-size: 12px;
 	position: relative;
 	bottom: 1px;
-	border-width: 1px;
-	border-style: solid;
+	border: 1px solid var(--scrape-example-help-border-color);
 	border-radius: 50px;
+	color: var(--scrape-example-help-color);
+}
+.scraped-example-list .scrape-help:hover {
+	border-color: var(--scrape-example-help-hover-border-color);
+	color: var(--scrape-example-help-hover-color);
 }
 
 .scraped-example {
@@ -1963,6 +1919,13 @@ in storage.js
 
 .scraped-example:not(.expanded) .code-wrapper .example-wrap {
 	overflow-x: hidden;
+}
+
+.scraped-example .example-wrap .rust span.highlight {
+	background: var(--scrape-example-code-line-highlight);
+}
+.scraped-example .example-wrap .rust span.highlight.focus {
+	background: var(--scrape-example-code-line-highlight-focus);
 }
 
 .more-examples-toggle {

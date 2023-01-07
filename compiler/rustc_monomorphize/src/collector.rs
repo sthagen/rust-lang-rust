@@ -526,7 +526,7 @@ fn collect_items_rec<'tcx>(
         let formatted_item = with_no_trimmed_paths!(starting_point.node.to_string());
         tcx.sess.span_note_without_error(
             starting_point.span,
-            &format!("the above error was encountered while instantiating `{}`", formatted_item),
+            &format!("the above error was encountered while instantiating `{formatted_item}`"),
         );
     }
     inlining_map.lock_mut().record_accesses(starting_point.node, &neighbors.items);
@@ -843,7 +843,7 @@ impl<'a, 'tcx> MirVisitor<'tcx> for MirNeighborCollector<'a, 'tcx> {
             mir::TerminatorKind::Abort { .. } => {
                 let instance = Instance::mono(
                     tcx,
-                    tcx.require_lang_item(LangItem::PanicNoUnwind, Some(source)),
+                    tcx.require_lang_item(LangItem::PanicCannotUnwind, Some(source)),
                 );
                 if should_codegen_locally(tcx, &instance) {
                     self.output.push(create_fn_mono_item(tcx, instance, source));

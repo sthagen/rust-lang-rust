@@ -558,8 +558,8 @@ impl fmt::Display for ClippyConfiguration {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             f,
-            "* `{}`: `{}`: {} (defaults to `{}`)",
-            self.name, self.config_type, self.doc, self.default
+            "* `{}`: `{}`(defaults to `{}`): {}",
+            self.name, self.config_type, self.default, self.doc
         )
     }
 }
@@ -1058,7 +1058,7 @@ fn get_parent_local<'hir>(cx: &LateContext<'hir>, expr: &'hir hir::Expr<'hir>) -
 fn get_parent_local_hir_id<'hir>(cx: &LateContext<'hir>, hir_id: hir::HirId) -> Option<&'hir hir::Local<'hir>> {
     let map = cx.tcx.hir();
 
-    match map.find(map.get_parent_node(hir_id)) {
+    match map.find_parent((hir_id)) {
         Some(hir::Node::Local(local)) => Some(local),
         Some(hir::Node::Pat(pattern)) => get_parent_local_hir_id(cx, pattern.hir_id),
         _ => None,

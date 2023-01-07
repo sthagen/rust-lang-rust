@@ -17,6 +17,7 @@
 use crate::astconv::AstConv;
 use crate::check::intrinsic::intrinsic_operation_unsafety;
 use crate::errors;
+use hir::def::DefKind;
 use rustc_data_structures::captures::Captures;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_errors::{struct_span_err, Applicability, DiagnosticBuilder, ErrorGuaranteed, StashKey};
@@ -24,6 +25,8 @@ use rustc_hir as hir;
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_hir::intravisit::{self, Visitor};
 use rustc_hir::{GenericParamKind, Node};
+use rustc_infer::infer::TyCtxtInferExt;
+use rustc_infer::traits::ObligationCause;
 use rustc_middle::hir::nested_filter;
 use rustc_middle::ty::query::Providers;
 use rustc_middle::ty::util::{Discr, IntTypeExt};
@@ -31,7 +34,9 @@ use rustc_middle::ty::{self, AdtKind, Const, IsSuggestable, ToPredicate, Ty, TyC
 use rustc_span::symbol::{kw, sym, Ident, Symbol};
 use rustc_span::Span;
 use rustc_target::spec::abi;
+use rustc_trait_selection::infer::InferCtxtExt;
 use rustc_trait_selection::traits::error_reporting::suggestions::NextTypeParamName;
+use rustc_trait_selection::traits::ObligationCtxt;
 use std::iter;
 
 mod generics_of;
@@ -208,7 +213,7 @@ pub(crate) fn placeholder_type_error_diag<'tcx>(
             is_fn = true;
 
             // Check if parent is const or static
-            let parent_id = tcx.hir().get_parent_node(hir_ty.hir_id);
+            let parent_id = tcx.hir().parent_id(hir_ty.hir_id);
             let parent_node = tcx.hir().get(parent_id);
 
             is_const_or_static = matches!(
@@ -1059,7 +1064,7 @@ fn is_suggestable_infer_ty(ty: &hir::Ty<'_>) -> bool {
             is_suggestable_infer_ty(ty) || matches!(length, hir::ArrayLen::Infer(_, _))
         }
         Tup(tys) => tys.iter().any(is_suggestable_infer_ty),
-        Ptr(mut_ty) | Rptr(_, mut_ty) => is_suggestable_infer_ty(mut_ty.ty),
+        Ptr(mut_ty) | Ref(_, mut_ty) => is_suggestable_infer_ty(mut_ty.ty),
         OpaqueDef(_, generic_args, _) => are_suggestable_generic_args(generic_args),
         Path(hir::QPath::TypeRelative(ty, segment)) => {
             is_suggestable_infer_ty(ty) || are_suggestable_generic_args(segment.args().args)
@@ -1104,7 +1109,7 @@ fn fn_sig(tcx: TyCtxt<'_>, def_id: DefId) -> ty::PolyFnSig<'_> {
         ImplItem(hir::ImplItem { kind: ImplItemKind::Fn(sig, _), generics, .. }) => {
             // Do not try to infer the return type for a impl method coming from a trait
             if let Item(hir::Item { kind: ItemKind::Impl(i), .. }) =
-                tcx.hir().get(tcx.hir().get_parent_node(hir_id))
+                tcx.hir().get_parent(hir_id)
                 && i.of_trait.is_some()
             {
                 <dyn AstConv<'_>>::ty_of_fn(
@@ -1191,12 +1196,11 @@ fn infer_return_ty_for_fn_sig<'tcx>(
                 ty::ReErased => tcx.lifetimes.re_static,
                 _ => r,
             });
-            let fn_sig = ty::Binder::dummy(fn_sig);
 
             let mut visitor = HirPlaceholderCollector::default();
             visitor.visit_ty(ty);
             let mut diag = bad_placeholder(tcx, visitor.0, "return type");
-            let ret_ty = fn_sig.skip_binder().output();
+            let ret_ty = fn_sig.output();
             if ret_ty.is_suggestable(tcx, false) {
                 diag.span_suggestion(
                     ty.span,
@@ -1219,16 +1223,26 @@ fn infer_return_ty_for_fn_sig<'tcx>(
                         Applicability::MachineApplicable,
                     );
                 }
+            } else if let Some(sugg) = suggest_impl_trait(tcx, ret_ty, ty.span, hir_id, def_id) {
+                diag.span_suggestion(
+                    ty.span,
+                    "replace with an appropriate return type",
+                    sugg,
+                    Applicability::MachineApplicable,
+                );
             } else if ret_ty.is_closure() {
-                // We're dealing with a closure, so we should suggest using `impl Fn` or trait bounds
-                // to prevent the user from getting a papercut while trying to use the unique closure
-                // syntax (e.g. `[closure@src/lib.rs:2:5: 2:9]`).
                 diag.help("consider using an `Fn`, `FnMut`, or `FnOnce` trait bound");
-                diag.note("for more information on `Fn` traits and closure types, see https://doc.rust-lang.org/book/ch13-01-closures.html");
+            }
+            // Also note how `Fn` traits work just in case!
+            if ret_ty.is_closure() {
+                diag.note(
+                    "for more information on `Fn` traits and closure types, see \
+                     https://doc.rust-lang.org/book/ch13-01-closures.html",
+                );
             }
             diag.emit();
 
-            fn_sig
+            ty::Binder::dummy(fn_sig)
         }
         None => <dyn AstConv<'_>>::ty_of_fn(
             icx,
@@ -1240,6 +1254,98 @@ fn infer_return_ty_for_fn_sig<'tcx>(
             None,
         ),
     }
+}
+
+fn suggest_impl_trait<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ret_ty: Ty<'tcx>,
+    span: Span,
+    hir_id: hir::HirId,
+    def_id: LocalDefId,
+) -> Option<String> {
+    let format_as_assoc: fn(_, _, _, _, _) -> _ =
+        |tcx: TyCtxt<'tcx>,
+         _: ty::SubstsRef<'tcx>,
+         trait_def_id: DefId,
+         assoc_item_def_id: DefId,
+         item_ty: Ty<'tcx>| {
+            let trait_name = tcx.item_name(trait_def_id);
+            let assoc_name = tcx.item_name(assoc_item_def_id);
+            Some(format!("impl {trait_name}<{assoc_name} = {item_ty}>"))
+        };
+    let format_as_parenthesized: fn(_, _, _, _, _) -> _ =
+        |tcx: TyCtxt<'tcx>,
+         substs: ty::SubstsRef<'tcx>,
+         trait_def_id: DefId,
+         _: DefId,
+         item_ty: Ty<'tcx>| {
+            let trait_name = tcx.item_name(trait_def_id);
+            let args_tuple = substs.type_at(1);
+            let ty::Tuple(types) = *args_tuple.kind() else { return None; };
+            if !types.is_suggestable(tcx, false) {
+                return None;
+            }
+            let maybe_ret =
+                if item_ty.is_unit() { String::new() } else { format!(" -> {item_ty}") };
+            Some(format!(
+                "impl {trait_name}({}){maybe_ret}",
+                types.iter().map(|ty| ty.to_string()).collect::<Vec<_>>().join(", ")
+            ))
+        };
+
+    for (trait_def_id, assoc_item_def_id, formatter) in [
+        (
+            tcx.get_diagnostic_item(sym::Iterator),
+            tcx.get_diagnostic_item(sym::IteratorItem),
+            format_as_assoc,
+        ),
+        (
+            tcx.lang_items().future_trait(),
+            tcx.get_diagnostic_item(sym::FutureOutput),
+            format_as_assoc,
+        ),
+        (tcx.lang_items().fn_trait(), tcx.lang_items().fn_once_output(), format_as_parenthesized),
+        (
+            tcx.lang_items().fn_mut_trait(),
+            tcx.lang_items().fn_once_output(),
+            format_as_parenthesized,
+        ),
+        (
+            tcx.lang_items().fn_once_trait(),
+            tcx.lang_items().fn_once_output(),
+            format_as_parenthesized,
+        ),
+    ] {
+        let Some(trait_def_id) = trait_def_id else { continue; };
+        let Some(assoc_item_def_id) = assoc_item_def_id else { continue; };
+        if tcx.def_kind(assoc_item_def_id) != DefKind::AssocTy {
+            continue;
+        }
+        let param_env = tcx.param_env(def_id);
+        let infcx = tcx.infer_ctxt().build();
+        let substs = ty::InternalSubsts::for_item(tcx, trait_def_id, |param, _| {
+            if param.index == 0 { ret_ty.into() } else { infcx.var_for_def(span, param) }
+        });
+        if !infcx.type_implements_trait(trait_def_id, substs, param_env).must_apply_modulo_regions()
+        {
+            continue;
+        }
+        let ocx = ObligationCtxt::new_in_snapshot(&infcx);
+        let item_ty = ocx.normalize(
+            &ObligationCause::misc(span, hir_id),
+            param_env,
+            tcx.mk_projection(assoc_item_def_id, substs),
+        );
+        // FIXME(compiler-errors): We may benefit from resolving regions here.
+        if ocx.select_where_possible().is_empty()
+            && let item_ty = infcx.resolve_vars_if_possible(item_ty)
+            && item_ty.is_suggestable(tcx, false)
+            && let Some(sugg) = formatter(tcx, infcx.resolve_vars_if_possible(substs), trait_def_id, assoc_item_def_id, item_ty)
+        {
+            return Some(sugg);
+        }
+    }
+    None
 }
 
 fn impl_trait_ref(tcx: TyCtxt<'_>, def_id: DefId) -> Option<ty::TraitRef<'_>> {

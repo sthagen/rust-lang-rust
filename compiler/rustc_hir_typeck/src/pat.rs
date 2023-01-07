@@ -553,6 +553,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             (lhs, Some((true, rhs_ty, rhs_sp))) => one_side_err(rhs_sp, rhs_ty, lhs),
             _ => span_bug!(span, "Impossible, verified above."),
         }
+        if (lhs, rhs).references_error() {
+            err.downgrade_to_delayed_bug();
+        }
         if self.tcx.sess.teach(&err.get_code().unwrap()) {
             err.note(
                 "In a match expression, only numbers and characters can be matched \
@@ -692,7 +695,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let tcx = self.tcx;
         if let PatKind::Ref(inner, mutbl) = pat.kind
         && let PatKind::Binding(_, _, binding, ..) = inner.kind {
-            let binding_parent_id = tcx.hir().get_parent_node(pat.hir_id);
+            let binding_parent_id = tcx.hir().parent_id(pat.hir_id);
             let binding_parent = tcx.hir().get(binding_parent_id);
             debug!(?inner, ?pat, ?binding_parent);
 
@@ -936,7 +939,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         res.descr(),
                     ),
                 );
-                match self.tcx.hir().get(self.tcx.hir().get_parent_node(pat.hir_id)) {
+                match self.tcx.hir().get_parent(pat.hir_id) {
                     hir::Node::PatField(..) => {
                         e.span_suggestion_verbose(
                             ident.span.shrink_to_hi(),
@@ -1921,7 +1924,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     ) -> Ty<'tcx> {
         let tcx = self.tcx;
         let expected = self.shallow_resolve(expected);
-        let (rptr_ty, inner_ty) = if self.check_dereferenceable(pat.span, expected, inner) {
+        let (ref_ty, inner_ty) = if self.check_dereferenceable(pat.span, expected, inner) {
             // `demand::subtype` would be good enough, but using `eqtype` turns
             // out to be equally general. See (note_1) for details.
 
@@ -1936,9 +1939,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         kind: TypeVariableOriginKind::TypeInference,
                         span: inner.span,
                     });
-                    let rptr_ty = self.new_ref_ty(pat.span, mutbl, inner_ty);
-                    debug!("check_pat_ref: demanding {:?} = {:?}", expected, rptr_ty);
-                    let err = self.demand_eqtype_pat_diag(pat.span, expected, rptr_ty, ti);
+                    let ref_ty = self.new_ref_ty(pat.span, mutbl, inner_ty);
+                    debug!("check_pat_ref: demanding {:?} = {:?}", expected, ref_ty);
+                    let err = self.demand_eqtype_pat_diag(pat.span, expected, ref_ty, ti);
 
                     // Look for a case like `fn foo(&foo: u32)` and suggest
                     // `fn foo(foo: &u32)`
@@ -1946,7 +1949,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         self.borrow_pat_suggestion(&mut err, pat);
                         err.emit();
                     }
-                    (rptr_ty, inner_ty)
+                    (ref_ty, inner_ty)
                 }
             }
         } else {
@@ -1954,7 +1957,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             (err, err)
         };
         self.check_pat(inner, inner_ty, def_bm, ti);
-        rptr_ty
+        ref_ty
     }
 
     /// Create a reference type with a fresh region variable.

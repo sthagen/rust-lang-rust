@@ -33,13 +33,14 @@ use rustc_infer::infer::error_reporting::TypeErrCtxt;
 use rustc_infer::infer::{InferOk, TypeTrace};
 use rustc_middle::traits::select::OverflowError;
 use rustc_middle::ty::abstract_const::NotConstEvaluatable;
-use rustc_middle::ty::error::ExpectedFound;
+use rustc_middle::ty::error::{ExpectedFound, TypeError};
 use rustc_middle::ty::fold::{TypeFolder, TypeSuperFoldable};
 use rustc_middle::ty::print::{with_forced_trimmed_paths, FmtPrinter, Print};
 use rustc_middle::ty::{
     self, SubtypePredicate, ToPolyTraitRef, ToPredicate, TraitRef, Ty, TyCtxt, TypeFoldable,
     TypeVisitable,
 };
+use rustc_session::config::TraitSolver;
 use rustc_session::Limit;
 use rustc_span::def_id::LOCAL_CRATE;
 use rustc_span::symbol::sym;
@@ -770,7 +771,11 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                                 ),
                             }
                         };
-
+                        self.check_for_binding_assigned_block_without_tail_expression(
+                            &obligation,
+                            &mut err,
+                            trait_predicate,
+                        );
                         if self.suggest_add_reference_to_arg(
                             &obligation,
                             &mut err,
@@ -1167,7 +1172,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                     }
 
                     ty::PredicateKind::WellFormed(ty) => {
-                        if !self.tcx.sess.opts.unstable_opts.chalk {
+                        if self.tcx.sess.opts.unstable_opts.trait_solver == TraitSolver::Classic {
                             // WF predicates cannot themselves make
                             // errors. They can only block due to
                             // ambiguity; otherwise, they always
@@ -1179,7 +1184,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                             // which bounds actually failed to hold.
                             self.tcx.sess.struct_span_err(
                                 span,
-                                &format!("the type `{}` is not well-formed (chalk)", ty),
+                                &format!("the type `{}` is not well-formed", ty),
                             )
                         }
                     }
@@ -1215,6 +1220,25 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                 }
             }
 
+            OutputTypeParameterMismatch(
+                found_trait_ref,
+                expected_trait_ref,
+                terr @ TypeError::CyclicTy(_),
+            ) => {
+                let self_ty = found_trait_ref.self_ty().skip_binder();
+                let (cause, terr) = if let ty::Closure(def_id, _) = self_ty.kind() {
+                    (
+                        ObligationCause::dummy_with_span(tcx.def_span(def_id)),
+                        TypeError::CyclicTy(self_ty),
+                    )
+                } else {
+                    (obligation.cause.clone(), terr)
+                };
+                self.report_and_explain_type_error(
+                    TypeTrace::poly_trait_refs(&cause, true, expected_trait_ref, found_trait_ref),
+                    terr,
+                )
+            }
             OutputTypeParameterMismatch(found_trait_ref, expected_trait_ref, _) => {
                 let found_trait_ref = self.resolve_vars_if_possible(found_trait_ref);
                 let expected_trait_ref = self.resolve_vars_if_possible(expected_trait_ref);
@@ -1387,7 +1411,6 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
 
         self.note_obligation_cause(&mut err, &obligation);
         self.point_at_returns_when_relevant(&mut err, &obligation);
-
         err.emit();
     }
 }
@@ -2247,23 +2270,7 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                 if let (Some(body_id), Some(ty::subst::GenericArgKind::Type(_))) =
                     (body_id, subst.map(|subst| subst.unpack()))
                 {
-                    struct FindExprBySpan<'hir> {
-                        span: Span,
-                        result: Option<&'hir hir::Expr<'hir>>,
-                    }
-
-                    impl<'v> hir::intravisit::Visitor<'v> for FindExprBySpan<'v> {
-                        fn visit_expr(&mut self, ex: &'v hir::Expr<'v>) {
-                            if self.span == ex.span {
-                                self.result = Some(ex);
-                            } else {
-                                hir::intravisit::walk_expr(self, ex);
-                            }
-                        }
-                    }
-
-                    let mut expr_finder = FindExprBySpan { span, result: None };
-
+                    let mut expr_finder = FindExprBySpan::new(span);
                     expr_finder.visit_expr(&self.tcx.hir().body(body_id).value);
 
                     if let Some(hir::Expr {
@@ -2750,6 +2757,36 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
     }
 }
 
+/// Crude way of getting back an `Expr` from a `Span`.
+pub struct FindExprBySpan<'hir> {
+    pub span: Span,
+    pub result: Option<&'hir hir::Expr<'hir>>,
+    pub ty_result: Option<&'hir hir::Ty<'hir>>,
+}
+
+impl<'hir> FindExprBySpan<'hir> {
+    fn new(span: Span) -> Self {
+        Self { span, result: None, ty_result: None }
+    }
+}
+
+impl<'v> Visitor<'v> for FindExprBySpan<'v> {
+    fn visit_expr(&mut self, ex: &'v hir::Expr<'v>) {
+        if self.span == ex.span {
+            self.result = Some(ex);
+        } else {
+            hir::intravisit::walk_expr(self, ex);
+        }
+    }
+    fn visit_ty(&mut self, ty: &'v hir::Ty<'v>) {
+        if self.span == ty.span {
+            self.ty_result = Some(ty);
+        } else {
+            hir::intravisit::walk_ty(self, ty);
+        }
+    }
+}
+
 /// Look for type `param` in an ADT being used only through a reference to confirm that suggesting
 /// `param: ?Sized` would be a valid constraint.
 struct FindTypeParam {
@@ -2771,7 +2808,7 @@ impl<'v> Visitor<'v> for FindTypeParam {
         // and suggest `T: ?Sized` regardless of their obligations. This is fine because the errors
         // in that case should make what happened clear enough.
         match ty.kind {
-            hir::TyKind::Ptr(_) | hir::TyKind::Rptr(..) | hir::TyKind::TraitObject(..) => {}
+            hir::TyKind::Ptr(_) | hir::TyKind::Ref(..) | hir::TyKind::TraitObject(..) => {}
             hir::TyKind::Path(hir::QPath::Resolved(None, path))
                 if path.segments.len() == 1 && path.segments[0].ident.name == self.param =>
             {
