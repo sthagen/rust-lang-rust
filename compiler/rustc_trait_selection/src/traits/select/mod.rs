@@ -755,7 +755,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                     // contain the "'static" lifetime (any other lifetime
                     // would either be late-bound or local), so it is guaranteed
                     // to outlive any other lifetime
-                    if pred.0.is_global() && !pred.0.has_late_bound_regions() {
+                    if pred.0.is_global() && !pred.0.has_late_bound_vars() {
                         Ok(EvaluatedToOk)
                     } else {
                         Ok(EvaluatedToOkModuloRegions)
@@ -1365,15 +1365,18 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                     // const param
                     ParamCandidate(trait_pred) if trait_pred.is_const_if_const() => {}
                     // const projection
-                    ProjectionCandidate(_, ty::BoundConstness::ConstIfConst) => {}
+                    ProjectionCandidate(_, ty::BoundConstness::ConstIfConst)
                     // auto trait impl
-                    AutoImplCandidate => {}
+                    | AutoImplCandidate
                     // generator / future, this will raise error in other places
                     // or ignore error with const_async_blocks feature
-                    GeneratorCandidate => {}
-                    FutureCandidate => {}
+                    | GeneratorCandidate
+                    | FutureCandidate
                     // FnDef where the function is const
-                    FnPointerCandidate { is_const: true } => {}
+                    | FnPointerCandidate { is_const: true }
+                    | ConstDestructCandidate(_)
+                    | ClosureCandidate { is_const: true } => {}
+
                     FnPointerCandidate { is_const: false } => {
                         if let ty::FnDef(def_id, _) = obligation.self_ty().skip_binder().kind() && tcx.trait_of_item(*def_id).is_some() {
                             // Trait methods are not seen as const unless the trait is implemented as const.
@@ -1382,7 +1385,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                             continue
                         }
                     }
-                    ConstDestructCandidate(_) => {}
+
                     _ => {
                         // reject all other types of candidates
                         continue;
@@ -1785,9 +1788,8 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         // Check if a bound would previously have been removed when normalizing
         // the param_env so that it can be given the lowest priority. See
         // #50825 for the motivation for this.
-        let is_global = |cand: &ty::PolyTraitPredicate<'tcx>| {
-            cand.is_global() && !cand.has_late_bound_regions()
-        };
+        let is_global =
+            |cand: &ty::PolyTraitPredicate<'tcx>| cand.is_global() && !cand.has_late_bound_vars();
 
         // (*) Prefer `BuiltinCandidate { has_nested: false }`, `PointeeCandidate`,
         // `DiscriminantKindCandidate`, `ConstDestructCandidate`
@@ -1845,7 +1847,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             (
                 ParamCandidate(ref cand),
                 ImplCandidate(..)
-                | ClosureCandidate
+                | ClosureCandidate { .. }
                 | GeneratorCandidate
                 | FutureCandidate
                 | FnPointerCandidate { .. }
@@ -1864,7 +1866,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             }
             (
                 ImplCandidate(_)
-                | ClosureCandidate
+                | ClosureCandidate { .. }
                 | GeneratorCandidate
                 | FutureCandidate
                 | FnPointerCandidate { .. }
@@ -1895,7 +1897,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             (
                 ObjectCandidate(_) | ProjectionCandidate(..),
                 ImplCandidate(..)
-                | ClosureCandidate
+                | ClosureCandidate { .. }
                 | GeneratorCandidate
                 | FutureCandidate
                 | FnPointerCandidate { .. }
@@ -1908,7 +1910,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
 
             (
                 ImplCandidate(..)
-                | ClosureCandidate
+                | ClosureCandidate { .. }
                 | GeneratorCandidate
                 | FutureCandidate
                 | FnPointerCandidate { .. }
@@ -1990,7 +1992,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             // Everything else is ambiguous
             (
                 ImplCandidate(_)
-                | ClosureCandidate
+                | ClosureCandidate { .. }
                 | GeneratorCandidate
                 | FutureCandidate
                 | FnPointerCandidate { .. }
@@ -2000,7 +2002,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 | BuiltinCandidate { has_nested: true }
                 | TraitAliasCandidate,
                 ImplCandidate(_)
-                | ClosureCandidate
+                | ClosureCandidate { .. }
                 | GeneratorCandidate
                 | FutureCandidate
                 | FnPointerCandidate { .. }
@@ -2378,6 +2380,9 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         let impl_substs = self.infcx.fresh_substs_for_item(obligation.cause.span, impl_def_id);
 
         let impl_trait_ref = impl_trait_ref.subst(self.tcx(), impl_substs);
+        if impl_trait_ref.references_error() {
+            return Err(());
+        }
 
         debug!(?impl_trait_ref);
 

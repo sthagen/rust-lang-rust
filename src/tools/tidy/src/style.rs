@@ -25,6 +25,7 @@ use std::path::Path;
 /// displayed on the console with --example.
 const ERROR_CODE_COLS: usize = 80;
 const COLS: usize = 100;
+const GOML_COLS: usize = 120;
 
 const LINES: usize = 3000;
 
@@ -63,6 +64,8 @@ const PROBLEMATIC_CONSTS: &[u32] = &[
     184594741, 2880289470, 2881141438, 2965027518, 2976579765, 3203381950, 3405691582, 3405697037,
     3735927486, 3735932941, 4027431614, 4276992702,
 ];
+
+const INTERNAL_COMPILER_DOCS_LINE: &str = "#### This error code is internal to the compiler and will not be emitted with normal Rust code.";
 
 /// Parser states for `line_is_url`.
 #[derive(Clone, Copy, PartialEq)]
@@ -132,6 +135,8 @@ fn long_line_is_ok(extension: &str, is_error_code: bool, max_columns: usize, lin
         "ftl" => true,
         // non-error code markdown is allowed to be any length
         "md" if !is_error_code => true,
+        // HACK(Ezrashaw): there is no way to split a markdown header over multiple lines
+        "md" if line == INTERNAL_COMPILER_DOCS_LINE => true,
         _ => line_is_url(is_error_code, max_columns, line) || should_ignore(line),
     }
 }
@@ -230,7 +235,8 @@ pub fn check(path: &Path, bad: &mut bool) {
     walk(path, &mut skip, &mut |entry, contents| {
         let file = entry.path();
         let filename = file.file_name().unwrap().to_string_lossy();
-        let extensions = [".rs", ".py", ".js", ".sh", ".c", ".cpp", ".h", ".md", ".css", ".ftl"];
+        let extensions =
+            [".rs", ".py", ".js", ".sh", ".c", ".cpp", ".h", ".md", ".css", ".ftl", ".goml"];
         if extensions.iter().all(|e| !filename.ends_with(e)) || filename.starts_with(".#") {
             return;
         }
@@ -240,7 +246,7 @@ pub fn check(path: &Path, bad: &mut bool) {
             // This list should ideally be sourced from rustfmt.toml but we don't want to add a toml
             // parser to tidy.
             !file.ancestors().any(|a| {
-                a.ends_with("src/test") ||
+                (a.ends_with("tests") && a.join("COMPILER_TESTS.md").exists()) ||
                     a.ends_with("src/doc/book")
             });
 
@@ -255,8 +261,15 @@ pub fn check(path: &Path, bad: &mut bool) {
 
         let extension = file.extension().unwrap().to_string_lossy();
         let is_error_code = extension == "md" && is_in(file, "src", "error_codes");
+        let is_goml_code = extension == "goml";
 
-        let max_columns = if is_error_code { ERROR_CODE_COLS } else { COLS };
+        let max_columns = if is_error_code {
+            ERROR_CODE_COLS
+        } else if is_goml_code {
+            GOML_COLS
+        } else {
+            COLS
+        };
 
         let can_contain = contents.contains("// ignore-tidy-")
             || contents.contains("# ignore-tidy-")
@@ -311,9 +324,10 @@ pub fn check(path: &Path, bad: &mut bool) {
 
             if trimmed.contains("dbg!")
                 && !trimmed.starts_with("//")
-                && !file
-                    .ancestors()
-                    .any(|a| a.ends_with("src/test") || a.ends_with("library/alloc/tests"))
+                && !file.ancestors().any(|a| {
+                    (a.ends_with("tests") && a.join("COMPILER_TESTS.md").exists())
+                        || a.ends_with("library/alloc/tests")
+                })
                 && filename != "tests.rs"
             {
                 suppressible_tidy_err!(

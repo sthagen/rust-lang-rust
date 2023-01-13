@@ -626,7 +626,7 @@ pub struct CanonicalUserTypeAnnotation<'tcx> {
     pub inferred_ty: Ty<'tcx>,
 }
 
-/// Canonicalized user type annotation.
+/// Canonical user type annotation.
 pub type CanonicalUserType<'tcx> = Canonical<'tcx, UserType<'tcx>>;
 
 impl<'tcx> CanonicalUserType<'tcx> {
@@ -679,7 +679,7 @@ impl<'tcx> CanonicalUserType<'tcx> {
 /// from constants that are named via paths, like `Foo::<A>::new` and
 /// so forth.
 #[derive(Copy, Clone, Debug, PartialEq, TyEncodable, TyDecodable)]
-#[derive(HashStable, TypeFoldable, TypeVisitable, Lift)]
+#[derive(Eq, Hash, HashStable, TypeFoldable, TypeVisitable, Lift)]
 pub enum UserType<'tcx> {
     Ty(Ty<'tcx>),
 

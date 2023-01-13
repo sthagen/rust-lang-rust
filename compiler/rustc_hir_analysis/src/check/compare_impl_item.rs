@@ -270,8 +270,8 @@ fn compare_method_predicate_entailment<'tcx>(
     let unnormalized_impl_fty = tcx.mk_fn_ptr(ty::Binder::dummy(unnormalized_impl_sig));
 
     let norm_cause = ObligationCause::misc(impl_m_span, impl_m_hir_id);
-    let impl_fty = ocx.normalize(&norm_cause, param_env, unnormalized_impl_fty);
-    debug!("compare_impl_method: impl_fty={:?}", impl_fty);
+    let impl_sig = ocx.normalize(&norm_cause, param_env, unnormalized_impl_sig);
+    debug!("compare_impl_method: impl_fty={:?}", impl_sig);
 
     let trait_sig = tcx.bound_fn_sig(trait_m.def_id).subst(tcx, trait_to_placeholder_substs);
     let trait_sig = tcx.liberate_late_bound_regions(impl_m.def_id, trait_sig);
@@ -294,18 +294,17 @@ fn compare_method_predicate_entailment<'tcx>(
     // type would be more appropriate. In other places we have a `Vec<Span>`
     // corresponding to their `Vec<Predicate>`, but we don't have that here.
     // Fixing this would improve the output of test `issue-83765.rs`.
-    let result = ocx.sup(&cause, param_env, trait_fty, impl_fty);
+    let result = ocx.sup(&cause, param_env, trait_sig, impl_sig);
 
     if let Err(terr) = result {
-        debug!(?terr, "sub_types failed: impl ty {:?}, trait ty {:?}", impl_fty, trait_fty);
+        debug!(?impl_sig, ?trait_sig, ?terr, "sub_types failed");
 
         let emitted = report_trait_method_mismatch(
             &infcx,
             cause,
             terr,
-            (trait_m, trait_fty),
-            (impl_m, impl_fty),
-            trait_sig,
+            (trait_m, trait_sig),
+            (impl_m, impl_sig),
             impl_trait_ref,
         );
         return Err(emitted);
@@ -425,7 +424,7 @@ fn compare_asyncness<'tcx>(
             ty::Alias(ty::Opaque, ..) => {
                 // allow both `async fn foo()` and `fn foo() -> impl Future`
             }
-            ty::Error(rustc_errors::ErrorGuaranteed { .. }) => {
+            ty::Error(_) => {
                 // We don't know if it's ok, but at least it's already an error.
             }
             _ => {
@@ -484,7 +483,8 @@ pub(super) fn collect_return_position_impl_trait_in_trait_tys<'tcx>(
     let impl_trait_ref = tcx.impl_trait_ref(impl_m.impl_container(tcx).unwrap()).unwrap();
     let param_env = tcx.param_env(def_id);
 
-    // First, check a few of the same thing as `compare_impl_method`, just so we don't ICE during substitutions later.
+    // First, check a few of the same things as `compare_impl_method`,
+    // just so we don't ICE during substitution later.
     compare_number_of_generics(tcx, impl_m, trait_m, tcx.hir().span_if_local(impl_m.def_id), true)?;
     compare_generic_param_kinds(tcx, impl_m, trait_m, true)?;
     check_region_bounds_on_impl_item(tcx, impl_m, trait_m, true)?;
@@ -577,14 +577,11 @@ pub(super) fn collect_return_position_impl_trait_in_trait_tys<'tcx>(
 
     debug!(?trait_sig, ?impl_sig, "equating function signatures");
 
-    let trait_fty = tcx.mk_fn_ptr(ty::Binder::dummy(trait_sig));
-    let impl_fty = tcx.mk_fn_ptr(ty::Binder::dummy(impl_sig));
-
     // Unify the whole function signature. We need to do this to fully infer
     // the lifetimes of the return type, but do this after unifying just the
     // return types, since we want to avoid duplicating errors from
     // `compare_method_predicate_entailment`.
-    match ocx.eq(&cause, param_env, trait_fty, impl_fty) {
+    match ocx.eq(&cause, param_env, trait_sig, impl_sig) {
         Ok(()) => {}
         Err(terr) => {
             // This function gets called during `compare_method_predicate_entailment` when normalizing a
@@ -595,9 +592,8 @@ pub(super) fn collect_return_position_impl_trait_in_trait_tys<'tcx>(
                 infcx,
                 cause,
                 terr,
-                (trait_m, trait_fty),
-                (impl_m, impl_fty),
-                trait_sig,
+                (trait_m, trait_sig),
+                (impl_m, impl_sig),
                 impl_trait_ref,
             );
             return Err(emitted);
@@ -619,7 +615,7 @@ pub(super) fn collect_return_position_impl_trait_in_trait_tys<'tcx>(
         Some(infcx),
         infcx.implied_bounds_tys(param_env, impl_m_hir_id, wf_tys),
     );
-    infcx.check_region_obligations_and_report_errors(
+    infcx.err_ctxt().check_region_obligations_and_report_errors(
         impl_m.def_id.expect_local(),
         &outlives_environment,
     )?;
@@ -771,9 +767,8 @@ fn report_trait_method_mismatch<'tcx>(
     infcx: &InferCtxt<'tcx>,
     mut cause: ObligationCause<'tcx>,
     terr: TypeError<'tcx>,
-    (trait_m, trait_fty): (&ty::AssocItem, Ty<'tcx>),
-    (impl_m, impl_fty): (&ty::AssocItem, Ty<'tcx>),
-    trait_sig: ty::FnSig<'tcx>,
+    (trait_m, trait_sig): (&ty::AssocItem, ty::FnSig<'tcx>),
+    (impl_m, impl_sig): (&ty::AssocItem, ty::FnSig<'tcx>),
     impl_trait_ref: ty::TraitRef<'tcx>,
 ) -> ErrorGuaranteed {
     let tcx = infcx.tcx;
@@ -858,10 +853,7 @@ fn report_trait_method_mismatch<'tcx>(
         &mut diag,
         &cause,
         trait_err_span.map(|sp| (sp, "type in trait".to_owned())),
-        Some(infer::ValuePairs::Terms(ExpectedFound {
-            expected: trait_fty.into(),
-            found: impl_fty.into(),
-        })),
+        Some(infer::ValuePairs::Sigs(ExpectedFound { expected: trait_sig, found: impl_sig })),
         terr,
         false,
         false,
@@ -1651,8 +1643,9 @@ pub(super) fn compare_impl_const_raw(
     }
 
     let outlives_environment = OutlivesEnvironment::new(param_env);
-    infcx.check_region_obligations_and_report_errors(impl_const_item_def, &outlives_environment)?;
-
+    infcx
+        .err_ctxt()
+        .check_region_obligations_and_report_errors(impl_const_item_def, &outlives_environment)?;
     Ok(())
 }
 
@@ -1760,7 +1753,7 @@ fn compare_type_predicate_entailment<'tcx>(
     // Finally, resolve all regions. This catches wily misuses of
     // lifetime parameters.
     let outlives_environment = OutlivesEnvironment::new(param_env);
-    infcx.check_region_obligations_and_report_errors(
+    infcx.err_ctxt().check_region_obligations_and_report_errors(
         impl_ty.def_id.expect_local(),
         &outlives_environment,
     )?;
@@ -1974,26 +1967,10 @@ pub(super) fn check_type_bounds<'tcx>(
     let outlives_environment =
         OutlivesEnvironment::with_bounds(param_env, Some(&infcx), implied_bounds);
 
-    infcx.check_region_obligations_and_report_errors(
+    infcx.err_ctxt().check_region_obligations_and_report_errors(
         impl_ty.def_id.expect_local(),
         &outlives_environment,
     )?;
-
-    let constraints = infcx.inner.borrow_mut().opaque_type_storage.take_opaque_types();
-    for (key, value) in constraints {
-        infcx
-            .err_ctxt()
-            .report_mismatched_types(
-                &ObligationCause::misc(
-                    value.hidden_type.span,
-                    tcx.hir().local_def_id_to_hir_id(impl_ty.def_id.expect_local()),
-                ),
-                tcx.mk_opaque(key.def_id.to_def_id(), key.substs),
-                value.hidden_type.ty,
-                TypeError::Mismatch,
-            )
-            .emit();
-    }
 
     Ok(())
 }

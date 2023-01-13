@@ -873,6 +873,11 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                             );
                         }
 
+                        if self.suggest_add_clone_to_arg(&obligation, &mut err, trait_predicate) {
+                            err.emit();
+                            return;
+                        }
+
                         if self.suggest_impl_trait(&mut err, span, &obligation, trait_predicate) {
                             err.emit();
                             return;
@@ -1097,15 +1102,19 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                     }
 
                     ty::PredicateKind::Clause(ty::Clause::RegionOutlives(..))
-                    | ty::PredicateKind::Clause(ty::Clause::Projection(..))
                     | ty::PredicateKind::Clause(ty::Clause::TypeOutlives(..)) => {
-                        let predicate = self.resolve_vars_if_possible(obligation.predicate);
-                        struct_span_err!(
-                            self.tcx.sess,
+                        span_bug!(
                             span,
-                            E0280,
-                            "the requirement `{}` is not satisfied",
-                            predicate
+                            "outlives clauses should not error outside borrowck. obligation: `{:?}`",
+                            obligation
+                        )
+                    }
+
+                    ty::PredicateKind::Clause(ty::Clause::Projection(..)) => {
+                        span_bug!(
+                            span,
+                            "projection clauses should be implied from elsewhere. obligation: `{:?}`",
+                            obligation
                         )
                     }
 
@@ -1715,7 +1724,19 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                 .and_then(|(predicate, _, normalized_term, expected_term)| {
                     self.maybe_detailed_projection_msg(predicate, normalized_term, expected_term)
                 })
-                .unwrap_or_else(|| format!("type mismatch resolving `{}`", predicate));
+                .unwrap_or_else(|| {
+                    with_forced_trimmed_paths!(format!(
+                        "type mismatch resolving `{}`",
+                        self.resolve_vars_if_possible(predicate)
+                            .print(FmtPrinter::new_with_limit(
+                                self.tcx,
+                                Namespace::TypeNS,
+                                rustc_session::Limit(10),
+                            ))
+                            .unwrap()
+                            .into_buffer()
+                    ))
+                });
             let mut diag = struct_span_err!(self.tcx.sess, obligation.cause.span, E0271, "{msg}");
 
             let secondary_span = match predicate.kind().skip_binder() {
@@ -1746,7 +1767,20 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                                 kind: hir::ImplItemKind::Type(ty),
                                 ..
                             }),
-                        ) => Some((ty.span, format!("type mismatch resolving `{}`", predicate))),
+                        ) => Some((
+                            ty.span,
+                            with_forced_trimmed_paths!(format!(
+                                "type mismatch resolving `{}`",
+                                self.resolve_vars_if_possible(predicate)
+                                    .print(FmtPrinter::new_with_limit(
+                                        self.tcx,
+                                        Namespace::TypeNS,
+                                        rustc_session::Limit(5),
+                                    ))
+                                    .unwrap()
+                                    .into_buffer()
+                            )),
+                        )),
                         _ => None,
                     }),
                 _ => None,
@@ -2218,8 +2252,11 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                     Ok(None) => {
                         let ambiguities =
                             ambiguity::recompute_applicable_impls(self.infcx, &obligation);
-                        let has_non_region_infer =
-                            trait_ref.skip_binder().substs.types().any(|t| !t.is_ty_infer());
+                        let has_non_region_infer = trait_ref
+                            .skip_binder()
+                            .substs
+                            .types()
+                            .any(|t| !t.is_ty_or_numeric_infer());
                         // It doesn't make sense to talk about applicable impls if there are more
                         // than a handful of them.
                         if ambiguities.len() > 1 && ambiguities.len() < 10 && has_non_region_infer {

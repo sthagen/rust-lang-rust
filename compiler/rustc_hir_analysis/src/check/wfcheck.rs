@@ -1,4 +1,6 @@
+use crate::autoderef::Autoderef;
 use crate::constrained_generic_params::{identify_constrained_generic_params, Parameter};
+
 use hir::def::DefKind;
 use rustc_ast as ast;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet, FxIndexSet};
@@ -22,7 +24,6 @@ use rustc_session::parse::feature_err;
 use rustc_span::symbol::{sym, Ident, Symbol};
 use rustc_span::{Span, DUMMY_SP};
 use rustc_target::spec::abi::Abi;
-use rustc_trait_selection::autoderef::Autoderef;
 use rustc_trait_selection::traits::error_reporting::TypeErrCtxtExt;
 use rustc_trait_selection::traits::outlives_bounds::InferCtxtExt as _;
 use rustc_trait_selection::traits::query::evaluate_obligation::InferCtxtExt as _;
@@ -97,25 +98,28 @@ pub(super) fn enter_wf_checking_ctxt<'tcx, F>(
     let infcx = &tcx.infer_ctxt().build();
     let ocx = ObligationCtxt::new(infcx);
 
-    let assumed_wf_types = ocx.assumed_wf_types(param_env, span, body_def_id);
-
     let mut wfcx = WfCheckingCtxt { ocx, span, body_id, param_env };
 
     if !tcx.features().trivial_bounds {
         wfcx.check_false_global_bounds()
     }
     f(&mut wfcx);
+
+    let assumed_wf_types = wfcx.ocx.assumed_wf_types(param_env, span, body_def_id);
+    let implied_bounds = infcx.implied_bounds_tys(param_env, body_id, assumed_wf_types);
+
     let errors = wfcx.select_all_or_error();
     if !errors.is_empty() {
         infcx.err_ctxt().report_fulfillment_errors(&errors, None);
         return;
     }
 
-    let implied_bounds = infcx.implied_bounds_tys(param_env, body_id, assumed_wf_types);
     let outlives_environment =
         OutlivesEnvironment::with_bounds(param_env, Some(infcx), implied_bounds);
 
-    let _ = infcx.check_region_obligations_and_report_errors(body_def_id, &outlives_environment);
+    let _ = infcx
+        .err_ctxt()
+        .check_region_obligations_and_report_errors(body_def_id, &outlives_environment);
 }
 
 fn check_well_formed(tcx: TyCtxt<'_>, def_id: hir::OwnerId) {
@@ -1250,7 +1254,11 @@ fn check_impl<'tcx>(
                 // therefore don't need to be WF (the trait's `Self: Trait` predicate
                 // won't hold).
                 let trait_ref = tcx.impl_trait_ref(item.owner_id).unwrap();
-                let trait_ref = wfcx.normalize(ast_trait_ref.path.span, None, trait_ref);
+                let trait_ref = wfcx.normalize(
+                    ast_trait_ref.path.span,
+                    Some(WellFormedLoc::Ty(item.hir_id().expect_owner().def_id)),
+                    trait_ref,
+                );
                 let trait_pred = ty::TraitPredicate {
                     trait_ref,
                     constness: match constness {
@@ -1259,7 +1267,7 @@ fn check_impl<'tcx>(
                     },
                     polarity: ty::ImplPolarity::Positive,
                 };
-                let obligations = traits::wf::trait_obligations(
+                let mut obligations = traits::wf::trait_obligations(
                     wfcx.infcx,
                     wfcx.param_env,
                     wfcx.body_id,
@@ -1267,6 +1275,13 @@ fn check_impl<'tcx>(
                     ast_trait_ref.path.span,
                     item,
                 );
+                for obligation in &mut obligations {
+                    if let Some(pred) = obligation.predicate.to_opt_poly_trait_pred()
+                        && pred.self_ty().skip_binder() == trait_ref.self_ty()
+                    {
+                        obligation.cause.span = ast_self_ty.span;
+                    }
+                }
                 debug!(?obligations);
                 wfcx.register_obligations(obligations);
             }
@@ -1489,53 +1504,37 @@ fn check_fn_or_method<'tcx>(
     def_id: LocalDefId,
 ) {
     let tcx = wfcx.tcx();
-    let sig = tcx.liberate_late_bound_regions(def_id.to_def_id(), sig);
+    let mut sig = tcx.liberate_late_bound_regions(def_id.to_def_id(), sig);
 
     // Normalize the input and output types one at a time, using a different
     // `WellFormedLoc` for each. We cannot call `normalize_associated_types`
     // on the entire `FnSig`, since this would use the same `WellFormedLoc`
     // for each type, preventing the HIR wf check from generating
     // a nice error message.
-    let ty::FnSig { mut inputs_and_output, c_variadic, unsafety, abi } = sig;
-    inputs_and_output = tcx.mk_type_list(inputs_and_output.iter().enumerate().map(|(i, ty)| {
-        wfcx.normalize(
-            span,
-            Some(WellFormedLoc::Param {
-                function: def_id,
-                // Note that the `param_idx` of the output type is
-                // one greater than the index of the last input type.
-                param_idx: i.try_into().unwrap(),
-            }),
-            ty,
-        )
-    }));
-    // Manually call `normalize_associated_types_in` on the other types
-    // in `FnSig`. This ensures that if the types of these fields
-    // ever change to include projections, we will start normalizing
-    // them automatically.
-    let sig = ty::FnSig {
-        inputs_and_output,
-        c_variadic: wfcx.normalize(span, None, c_variadic),
-        unsafety: wfcx.normalize(span, None, unsafety),
-        abi: wfcx.normalize(span, None, abi),
-    };
+    let arg_span =
+        |idx| hir_decl.inputs.get(idx).map_or(hir_decl.output.span(), |arg: &hir::Ty<'_>| arg.span);
 
-    for (i, (&input_ty, ty)) in iter::zip(sig.inputs(), hir_decl.inputs).enumerate() {
+    sig.inputs_and_output =
+        tcx.mk_type_list(sig.inputs_and_output.iter().enumerate().map(|(idx, ty)| {
+            wfcx.normalize(
+                arg_span(idx),
+                Some(WellFormedLoc::Param {
+                    function: def_id,
+                    // Note that the `param_idx` of the output type is
+                    // one greater than the index of the last input type.
+                    param_idx: idx.try_into().unwrap(),
+                }),
+                ty,
+            )
+        }));
+
+    for (idx, ty) in sig.inputs_and_output.iter().enumerate() {
         wfcx.register_wf_obligation(
-            ty.span,
-            Some(WellFormedLoc::Param { function: def_id, param_idx: i.try_into().unwrap() }),
-            input_ty.into(),
+            arg_span(idx),
+            Some(WellFormedLoc::Param { function: def_id, param_idx: idx.try_into().unwrap() }),
+            ty.into(),
         );
     }
-
-    wfcx.register_wf_obligation(
-        hir_decl.output.span(),
-        Some(WellFormedLoc::Param {
-            function: def_id,
-            param_idx: sig.inputs().len().try_into().unwrap(),
-        }),
-        sig.output().into(),
-    );
 
     check_where_clauses(wfcx, span, def_id);
 
@@ -1912,7 +1911,7 @@ impl<'tcx> WfCheckingCtxt<'_, 'tcx> {
             }
             let pred = obligation.predicate;
             // Match the existing behavior.
-            if pred.is_global() && !pred.has_late_bound_regions() {
+            if pred.is_global() && !pred.has_late_bound_vars() {
                 let pred = self.normalize(span, None, pred);
                 let hir_node = tcx.hir().find(self.body_id);
 

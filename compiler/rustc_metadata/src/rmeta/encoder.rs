@@ -1429,7 +1429,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
             let instance =
                 ty::InstanceDef::Item(ty::WithOptConstParam::unknown(def_id.to_def_id()));
             let unused = tcx.unused_generic_params(instance);
-            if !unused.is_empty() {
+            if !unused.all_used() {
                 record!(self.tables.unused_generic_params[def_id.to_def_id()] <- unused);
             }
         }
@@ -1686,6 +1686,8 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
             }
 
             ty::Closure(_, substs) => {
+                let constness = self.tcx.constness(def_id.to_def_id());
+                self.tables.constness.set(def_id.to_def_id().index, constness);
                 record!(self.tables.fn_sig[def_id.to_def_id()] <- substs.as_closure().sig());
             }
 

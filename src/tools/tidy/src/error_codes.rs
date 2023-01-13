@@ -8,15 +8,13 @@
 //!   - The explanation is expected to contain a `doctest` that fails with the correct error code. (`EXEMPT_FROM_DOCTEST` *currently* bypasses this check)
 //!   - Note that other stylistic conventions for markdown files are checked in the `style.rs` tidy check.
 //!
-//! 3. We check that the error code has a UI test in `src/test/ui/error-codes/`.
+//! 3. We check that the error code has a UI test in `tests/ui/error-codes/`.
 //!   - We ensure that there is both a `Exxxx.rs` file and a corresponding `Exxxx.stderr` file.
 //!   - We also ensure that the error code is used in the tests.
 //!   - *Currently*, it is possible to opt-out of this check with the `EXEMPTED_FROM_TEST` constant.
 //!
 //! 4. We check that the error code is actually emitted by the compiler.
 //!   - This is done by searching `compiler/` with a regex.
-//!
-//! This tidy check was merged and refactored from two others. See #PR_NUM for information about linting changes that occurred during this refactor.
 
 use std::{ffi::OsStr, fs, path::Path};
 
@@ -26,16 +24,15 @@ use crate::walk::{filter_dirs, walk, walk_many};
 
 const ERROR_CODES_PATH: &str = "compiler/rustc_error_codes/src/error_codes.rs";
 const ERROR_DOCS_PATH: &str = "compiler/rustc_error_codes/src/error_codes/";
-const ERROR_TESTS_PATH: &str = "src/test/ui/error-codes/";
+const ERROR_TESTS_PATH: &str = "tests/ui/error-codes/";
 
 // Error codes that (for some reason) can't have a doctest in their explanation. Error codes are still expected to provide a code example, even if untested.
-const IGNORE_DOCTEST_CHECK: &[&str] = &["E0464", "E0570", "E0601", "E0602"];
+const IGNORE_DOCTEST_CHECK: &[&str] =
+    &["E0208", "E0464", "E0570", "E0601", "E0602", "E0640", "E0717"];
 
 // Error codes that don't yet have a UI test. This list will eventually be removed.
-const IGNORE_UI_TEST_CHECK: &[&str] = &[
-    "E0313", "E0461", "E0465", "E0476", "E0490", "E0514", "E0523", "E0554", "E0640", "E0717",
-    "E0729", "E0789",
-];
+const IGNORE_UI_TEST_CHECK: &[&str] =
+    &["E0461", "E0465", "E0476", "E0514", "E0523", "E0554", "E0640", "E0717", "E0729", "E0789"];
 
 macro_rules! verbose_print {
     ($verbose:expr, $($fmt:tt)*) => {
@@ -57,7 +54,7 @@ pub fn check(root_path: &Path, search_paths: &[&Path], verbose: bool, bad: &mut 
     let no_longer_emitted = check_error_codes_docs(root_path, &error_codes, &mut errors, verbose);
 
     // Stage 3: check list has UI tests
-    check_error_codes_tests(root_path, &error_codes, &mut errors, verbose);
+    check_error_codes_tests(root_path, &error_codes, &mut errors, verbose, &no_longer_emitted);
 
     // Stage 4: check list is emitted by compiler
     check_error_codes_used(search_paths, &error_codes, &mut errors, &no_longer_emitted, verbose);
@@ -174,8 +171,9 @@ fn check_error_codes_docs(
             return;
         }
 
-        let (found_code_example, found_proper_doctest, emit_ignore_warning, emit_no_longer_warning) =
+        let (found_code_example, found_proper_doctest, emit_ignore_warning, no_longer_emitted) =
             check_explanation_has_doctest(&contents, &err_code);
+
         if emit_ignore_warning {
             verbose_print!(
                 verbose,
@@ -183,19 +181,18 @@ fn check_error_codes_docs(
                 `IGNORE_DOCTEST_CHECK` constant instead."
             );
         }
-        if emit_no_longer_warning {
+
+        if no_longer_emitted {
             no_longer_emitted_codes.push(err_code.to_owned());
-            verbose_print!(
-                verbose,
-                "warning: Error code `{err_code}` is no longer emitted and should be removed entirely."
-            );
         }
+
         if !found_code_example {
             verbose_print!(
                 verbose,
                 "warning: Error code `{err_code}` doesn't have a code example, all error codes are expected to have one \
                 (even if untested)."
             );
+            return;
         }
 
         let test_ignored = IGNORE_DOCTEST_CHECK.contains(&&err_code);
@@ -226,7 +223,7 @@ fn check_explanation_has_doctest(explanation: &str, err_code: &str) -> (bool, bo
     let mut found_proper_doctest = false;
 
     let mut emit_ignore_warning = false;
-    let mut emit_no_longer_warning = false;
+    let mut no_longer_emitted = false;
 
     for line in explanation.lines() {
         let line = line.trim();
@@ -246,13 +243,13 @@ fn check_explanation_has_doctest(explanation: &str, err_code: &str) -> (bool, bo
         } else if line
             .starts_with("#### Note: this error code is no longer emitted by the compiler")
         {
-            emit_no_longer_warning = true;
+            no_longer_emitted = true;
             found_code_example = true;
             found_proper_doctest = true;
         }
     }
 
-    (found_code_example, found_proper_doctest, emit_ignore_warning, emit_no_longer_warning)
+    (found_code_example, found_proper_doctest, emit_ignore_warning, no_longer_emitted)
 }
 
 // Stage 3: Checks that each error code has a UI test in the correct directory
@@ -261,6 +258,7 @@ fn check_error_codes_tests(
     error_codes: &[String],
     errors: &mut Vec<String>,
     verbose: bool,
+    no_longer_emitted: &[String],
 ) {
     let tests_path = root_path.join(Path::new(ERROR_TESTS_PATH));
 
@@ -270,14 +268,14 @@ fn check_error_codes_tests(
         if !test_path.exists() && !IGNORE_UI_TEST_CHECK.contains(&code.as_str()) {
             verbose_print!(
                 verbose,
-                "warning: Error code `{code}` needs to have at least one UI test in the `src/test/ui/error-codes/` directory`!"
+                "warning: Error code `{code}` needs to have at least one UI test in the `tests/error-codes/` directory`!"
             );
             continue;
         }
         if IGNORE_UI_TEST_CHECK.contains(&code.as_str()) {
             if test_path.exists() {
                 errors.push(format!(
-                    "Error code `{code}` has a UI test in `src/test/ui/error-codes/{code}.rs`, it shouldn't be listed in `EXEMPTED_FROM_TEST`!"
+                    "Error code `{code}` has a UI test in `tests/ui/error-codes/{code}.rs`, it shouldn't be listed in `EXEMPTED_FROM_TEST`!"
                 ));
             }
             continue;
@@ -294,6 +292,11 @@ fn check_error_codes_tests(
                 continue;
             }
         };
+
+        if no_longer_emitted.contains(code) {
+            // UI tests *can't* contain error codes that are no longer emitted.
+            continue;
+        }
 
         let mut found_code = false;
 

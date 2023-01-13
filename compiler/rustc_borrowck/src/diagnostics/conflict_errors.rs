@@ -156,7 +156,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                 err.span_note(
                     MultiSpan::from_spans(reinit_spans),
                     &if reinits <= 3 {
-                        format!("these {} reinitializations might get skipped", reinits)
+                        format!("these {reinits} reinitializations might get skipped")
                     } else {
                         format!(
                             "these 3 reinitializations and {} other{} might get skipped",
@@ -225,9 +225,8 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                 err.span_label(
                     span,
                     format!(
-                        "value {} here after {}move",
+                        "value {} here after {partial_str}move",
                         desired_action.as_verb_in_past_tense(),
-                        partial_str
                     ),
                 );
             }
@@ -257,7 +256,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                         &format!(
                             "consider creating a fresh reborrow of {} here",
                             self.describe_place(moved_place)
-                                .map(|n| format!("`{}`", n))
+                                .map(|n| format!("`{n}`"))
                                 .unwrap_or_else(|| "the mutable reference".to_string()),
                         ),
                         "&mut *",
@@ -271,7 +270,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                 DescribePlaceOpt { including_downcast: true, including_tuple_field: true },
             );
             let note_msg = match opt_name {
-                Some(name) => format!("`{}`", name),
+                Some(name) => format!("`{name}`"),
                 None => "value".to_owned(),
             };
             if self.suggest_borrow_fn_like(&mut err, ty, &move_site_vec, &note_msg) {
@@ -297,9 +296,8 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
             } = use_spans
             {
                 err.note(&format!(
-                    "{} occurs due to deref coercion to `{}`",
+                    "{} occurs due to deref coercion to `{deref_target_ty}`",
                     desired_action.as_noun(),
-                    deref_target_ty
                 ));
 
                 // Check first whether the source is accessible (issue #87060)
@@ -1425,6 +1423,21 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
             // and `move` will not help here.
             (
                 Some(name),
+                BorrowExplanation::UsedLater(LaterUseKind::ClosureCapture, var_or_use_span, _),
+            ) => self.report_escaping_closure_capture(
+                borrow_spans,
+                borrow_span,
+                &RegionName {
+                    name: self.synthesize_region_name(),
+                    source: RegionNameSource::Static,
+                },
+                ConstraintCategory::CallArgument(None),
+                var_or_use_span,
+                &format!("`{}`", name),
+                "block",
+            ),
+            (
+                Some(name),
                 BorrowExplanation::MustBeValidFor {
                     category:
                         category @ (ConstraintCategory::Return(_)
@@ -1443,6 +1456,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                     category,
                     span,
                     &format!("`{}`", name),
+                    "function",
                 ),
             (
                 name,
@@ -1723,7 +1737,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
 
                 /// We check that there's a single level of block nesting to ensure always correct
                 /// suggestions. If we don't, then we only provide a free-form message to avoid
-                /// misleading users in cases like `src/test/ui/nll/borrowed-temporary-error.rs`.
+                /// misleading users in cases like `tests/ui/nll/borrowed-temporary-error.rs`.
                 /// We could expand the analysis to suggest hoising all of the relevant parts of
                 /// the users' code to make the code compile, but that could be too much.
                 struct NestedStatementVisitor {
@@ -1895,6 +1909,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         Some(err)
     }
 
+    #[instrument(level = "debug", skip(self))]
     fn report_escaping_closure_capture(
         &mut self,
         use_span: UseSpans<'tcx>,
@@ -1903,6 +1918,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         category: ConstraintCategory<'tcx>,
         constraint_span: Span,
         captured_var: &str,
+        scope: &str,
     ) -> DiagnosticBuilder<'cx, ErrorGuaranteed> {
         let tcx = self.infcx.tcx;
         let args_span = use_span.args_or_use();
@@ -1933,8 +1949,13 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
             None => "closure",
         };
 
-        let mut err =
-            self.cannot_capture_in_long_lived_closure(args_span, kind, captured_var, var_span);
+        let mut err = self.cannot_capture_in_long_lived_closure(
+            args_span,
+            kind,
+            captured_var,
+            var_span,
+            scope,
+        );
         err.span_suggestion_verbose(
             sugg_span,
             &format!(
@@ -1956,10 +1977,10 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                 if matches!(use_span.generator_kind(), Some(GeneratorKind::Async(_))) {
                     err.note(
                         "async blocks are not executed immediately and must either take a \
-                    reference or ownership of outside variables they use",
+                         reference or ownership of outside variables they use",
                     );
                 } else {
-                    let msg = format!("function requires argument type to outlive `{}`", fr_name);
+                    let msg = format!("{scope} requires argument type to outlive `{fr_name}`");
                     err.span_note(constraint_span, &msg);
                 }
             }

@@ -1451,6 +1451,17 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
                         .collect();
 
                     if non_visible_spans.len() > 0 {
+                        if let Some(fields) = self.r.field_visibility_spans.get(&def_id) {
+                            err.multipart_suggestion_verbose(
+                                &format!(
+                                    "consider making the field{} publicly accessible",
+                                    pluralize!(fields.len())
+                                ),
+                                fields.iter().map(|span| (*span, "pub ".to_string())).collect(),
+                                Applicability::MaybeIncorrect,
+                            );
+                        }
+
                         let mut m: MultiSpan = non_visible_spans.clone().into();
                         non_visible_spans
                             .into_iter()
@@ -2054,7 +2065,11 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
         path: &[Segment],
     ) -> Option<(Span, &'static str, String, Applicability)> {
         let (ident, span) = match path {
-            [segment] if !segment.has_generic_args && segment.ident.name != kw::SelfUpper => {
+            [segment]
+                if !segment.has_generic_args
+                    && segment.ident.name != kw::SelfUpper
+                    && segment.ident.name != kw::Dyn =>
+            {
                 (segment.ident.to_string(), segment.ident.span)
             }
             _ => return None,

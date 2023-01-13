@@ -25,28 +25,9 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
             infer::Reborrow(span) => {
                 RegionOriginNote::Plain { span, msg: fluent::infer_reborrow }.add_to_diagnostic(err)
             }
-            infer::ReborrowUpvar(span, ref upvar_id) => {
-                let var_name = self.tcx.hir().name(upvar_id.var_path.hir_id);
-                RegionOriginNote::WithName {
-                    span,
-                    msg: fluent::infer_reborrow,
-                    name: &var_name.to_string(),
-                    continues: false,
-                }
-                .add_to_diagnostic(err);
-            }
             infer::RelateObjectBound(span) => {
                 RegionOriginNote::Plain { span, msg: fluent::infer_relate_object_bound }
                     .add_to_diagnostic(err);
-            }
-            infer::DataBorrowed(ty, span) => {
-                RegionOriginNote::WithName {
-                    span,
-                    msg: fluent::infer_data_borrowed,
-                    name: &self.ty_to_string(ty),
-                    continues: false,
-                }
-                .add_to_diagnostic(err);
             }
             infer::ReferenceOutlivesReferent(ty, span) => {
                 RegionOriginNote::WithName {
@@ -162,33 +143,6 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                 );
                 err
             }
-            infer::ReborrowUpvar(span, ref upvar_id) => {
-                let var_name = self.tcx.hir().name(upvar_id.var_path.hir_id);
-                let mut err = struct_span_err!(
-                    self.tcx.sess,
-                    span,
-                    E0313,
-                    "lifetime of borrowed pointer outlives lifetime of captured variable `{}`...",
-                    var_name
-                );
-                note_and_explain_region(
-                    self.tcx,
-                    &mut err,
-                    "...the borrowed pointer is valid for ",
-                    sub,
-                    "...",
-                    None,
-                );
-                note_and_explain_region(
-                    self.tcx,
-                    &mut err,
-                    &format!("...but `{}` is only valid for ", var_name),
-                    sup,
-                    "",
-                    None,
-                );
-                err
-            }
             infer::RelateObjectBound(span) => {
                 let mut err = struct_span_err!(
                     self.tcx.sess,
@@ -259,32 +213,6 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                     &mut err,
                     "but lifetime parameter must outlive ",
                     sub,
-                    "",
-                    None,
-                );
-                err
-            }
-            infer::DataBorrowed(ty, span) => {
-                let mut err = struct_span_err!(
-                    self.tcx.sess,
-                    span,
-                    E0490,
-                    "a value of type `{}` is borrowed for too long",
-                    self.ty_to_string(ty)
-                );
-                note_and_explain_region(
-                    self.tcx,
-                    &mut err,
-                    "the type is valid for ",
-                    sub,
-                    "",
-                    None,
-                );
-                note_and_explain_region(
-                    self.tcx,
-                    &mut err,
-                    "but the borrow lasts for ",
-                    sup,
                     "",
                     None,
                 );
