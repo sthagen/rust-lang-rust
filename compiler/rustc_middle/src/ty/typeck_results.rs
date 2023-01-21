@@ -193,7 +193,7 @@ pub struct TypeckResults<'tcx> {
     pub generator_interior_types: ty::Binder<'tcx, Vec<GeneratorInteriorTypeCause<'tcx>>>,
 
     /// We sometimes treat byte string literals (which are of type `&[u8; N]`)
-    /// as `&[u8]`, depending on the pattern  in which they are used.
+    /// as `&[u8]`, depending on the pattern in which they are used.
     /// This hashset records all instances where we behave
     /// like this to allow `const_to_pat` to reliably handle this situation.
     pub treat_byte_string_as_slice: ItemLocalSet,
@@ -397,10 +397,10 @@ impl<'tcx> TypeckResults<'tcx> {
 
     /// Returns the type of an expression as a monotype.
     ///
-    /// NB (1): This is the PRE-ADJUSTMENT TYPE for the expression.  That is, in
+    /// NB (1): This is the PRE-ADJUSTMENT TYPE for the expression. That is, in
     /// some cases, we insert `Adjustment` annotations such as auto-deref or
-    /// auto-ref.  The type returned by this function does not consider such
-    /// adjustments.  See `expr_ty_adjusted()` instead.
+    /// auto-ref. The type returned by this function does not consider such
+    /// adjustments. See `expr_ty_adjusted()` instead.
     ///
     /// NB (2): This type doesn't provide type parameter substitutions; e.g., if you
     /// ask for the type of `id` in `id(3)`, it will return `fn(&isize) -> isize`

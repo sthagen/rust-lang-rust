@@ -83,7 +83,7 @@ macro_rules! maybe_whole_expr {
 pub(super) enum LhsExpr {
     NotYetParsed,
     AttributesParsed(AttrWrapper),
-    AlreadyParsed(P<Expr>, bool), // (expr, starts_statement)
+    AlreadyParsed { expr: P<Expr>, starts_statement: bool },
 }
 
 impl From<Option<AttrWrapper>> for LhsExpr {
@@ -97,11 +97,11 @@ impl From<Option<AttrWrapper>> for LhsExpr {
 }
 
 impl From<P<Expr>> for LhsExpr {
-    /// Converts the `expr: P<Expr>` into `LhsExpr::AlreadyParsed(expr)`.
+    /// Converts the `expr: P<Expr>` into `LhsExpr::AlreadyParsed { expr, starts_statement: false }`.
     ///
     /// This conversion does not allocate.
     fn from(expr: P<Expr>) -> Self {
-        LhsExpr::AlreadyParsed(expr, false)
+        LhsExpr::AlreadyParsed { expr, starts_statement: false }
     }
 }
 
@@ -174,7 +174,7 @@ impl<'a> Parser<'a> {
         lhs: LhsExpr,
     ) -> PResult<'a, P<Expr>> {
         let mut starts_stmt = false;
-        let mut lhs = if let LhsExpr::AlreadyParsed(expr, starts_statement) = lhs {
+        let mut lhs = if let LhsExpr::AlreadyParsed { expr, starts_statement } = lhs {
             starts_stmt = starts_statement;
             expr
         } else {
@@ -562,17 +562,23 @@ impl<'a> Parser<'a> {
 
         // Note: when adding new unary operators, don't forget to adjust TokenKind::can_begin_expr()
         match this.token.uninterpolate().kind {
-            token::Not => make_it!(this, attrs, |this, _| this.parse_unary_expr(lo, UnOp::Not)), // `!expr`
-            token::Tilde => make_it!(this, attrs, |this, _| this.recover_tilde_expr(lo)), // `~expr`
+            // `!expr`
+            token::Not => make_it!(this, attrs, |this, _| this.parse_unary_expr(lo, UnOp::Not)),
+            // `~expr`
+            token::Tilde => make_it!(this, attrs, |this, _| this.recover_tilde_expr(lo)),
+            // `-expr`
             token::BinOp(token::Minus) => {
                 make_it!(this, attrs, |this, _| this.parse_unary_expr(lo, UnOp::Neg))
-            } // `-expr`
+            }
+            // `*expr`
             token::BinOp(token::Star) => {
                 make_it!(this, attrs, |this, _| this.parse_unary_expr(lo, UnOp::Deref))
-            } // `*expr`
+            }
+            // `&expr` and `&&expr`
             token::BinOp(token::And) | token::AndAnd => {
                 make_it!(this, attrs, |this, _| this.parse_borrow_expr(lo))
             }
+            // `+lit`
             token::BinOp(token::Plus) if this.look_ahead(1, |tok| tok.is_numeric_lit()) => {
                 let mut err =
                     LeadingPlusNotSupported { span: lo, remove_plus: None, add_parentheses: None };
@@ -587,7 +593,7 @@ impl<'a> Parser<'a> {
 
                 this.bump();
                 this.parse_prefix_expr(None)
-            } // `+expr`
+            }
             // Recover from `++x`:
             token::BinOp(token::Plus)
                 if this.look_ahead(1, |t| *t == token::BinOp(token::Plus)) =>
@@ -624,7 +630,7 @@ impl<'a> Parser<'a> {
         Ok((span, self.mk_unary(op, expr)))
     }
 
-    // Recover on `!` suggesting for bitwise negation instead.
+    /// Recover on `~expr` in favor of `!expr`.
     fn recover_tilde_expr(&mut self, lo: Span) -> PResult<'a, (Span, ExprKind)> {
         self.sess.emit_err(TildeAsUnaryOperator(lo));
 
@@ -651,7 +657,6 @@ impl<'a> Parser<'a> {
 
     /// Recover on `not expr` in favor of `!expr`.
     fn recover_not_expr(&mut self, lo: Span) -> PResult<'a, (Span, ExprKind)> {
-        // Emit the error...
         let negated_token = self.look_ahead(1, |t| t.clone());
 
         let sub_diag = if negated_token.is_numeric_lit() {
@@ -672,7 +677,6 @@ impl<'a> Parser<'a> {
             ),
         });
 
-        // ...and recover!
         self.parse_unary_expr(lo, UnOp::Not)
     }
 
@@ -1349,9 +1353,6 @@ impl<'a> Parser<'a> {
                 err.span_label(sp, "while parsing this `loop` expression");
                 err
             })
-        } else if self.eat_keyword(kw::Continue) {
-            let kind = ExprKind::Continue(self.eat_label());
-            Ok(self.mk_expr(lo.to(self.prev_token.span), kind))
         } else if self.eat_keyword(kw::Match) {
             let match_sp = self.prev_token.span;
             self.parse_match_expr().map_err(|mut err| {
@@ -1375,6 +1376,8 @@ impl<'a> Parser<'a> {
             self.parse_try_block(lo)
         } else if self.eat_keyword(kw::Return) {
             self.parse_return_expr()
+        } else if self.eat_keyword(kw::Continue) {
+            self.parse_continue_expr(lo)
         } else if self.eat_keyword(kw::Break) {
             self.parse_break_expr()
         } else if self.eat_keyword(kw::Yield) {
@@ -1471,9 +1474,8 @@ impl<'a> Parser<'a> {
             } else if self.eat(&token::Comma) {
                 // Vector with two or more elements.
                 let sep = SeqSep::trailing_allowed(token::Comma);
-                let (remaining_exprs, _) = self.parse_seq_to_end(close, sep, |p| p.parse_expr())?;
-                let mut exprs = vec![first_expr];
-                exprs.extend(remaining_exprs);
+                let (mut exprs, _) = self.parse_seq_to_end(close, sep, |p| p.parse_expr())?;
+                exprs.insert(0, first_expr);
                 ExprKind::Array(exprs)
             } else {
                 // Vector with one element
@@ -1593,7 +1595,7 @@ impl<'a> Parser<'a> {
                     vis.0
                 };
 
-                // Suggestion involves adding a (as of time of writing this, unstable) labeled block.
+                // Suggestion involves adding a labeled block.
                 //
                 // If there are no breaks that may use this label, suggest removing the label and
                 // recover to the unmodified expression.
@@ -1712,10 +1714,10 @@ impl<'a> Parser<'a> {
     fn parse_break_expr(&mut self) -> PResult<'a, P<Expr>> {
         let lo = self.prev_token.span;
         let mut label = self.eat_label();
-        let kind = if label.is_some() && self.token == token::Colon {
+        let kind = if self.token == token::Colon && let Some(label) = label.take() {
             // The value expression can be a labeled loop, see issue #86948, e.g.:
             // `loop { break 'label: loop { break 'label 42; }; }`
-            let lexpr = self.parse_labeled_expr(label.take().unwrap(), true)?;
+            let lexpr = self.parse_labeled_expr(label, true)?;
             self.sess.emit_err(LabeledLoopInBreak {
                 span: lexpr.span,
                 sub: WrapExpressionInParentheses {
@@ -1727,8 +1729,8 @@ impl<'a> Parser<'a> {
         } else if self.token != token::OpenDelim(Delimiter::Brace)
             || !self.restrictions.contains(Restrictions::NO_STRUCT_LITERAL)
         {
-            let expr = self.parse_expr_opt()?;
-            if let Some(expr) = &expr {
+            let mut expr = self.parse_expr_opt()?;
+            if let Some(expr) = &mut expr {
                 if label.is_some()
                     && matches!(
                         expr.kind,
@@ -1746,13 +1748,42 @@ impl<'a> Parser<'a> {
                         BuiltinLintDiagnostics::BreakWithLabelAndLoop(expr.span),
                     );
                 }
+
+                // Recover `break label aaaaa`
+                if self.may_recover()
+                    && let ExprKind::Path(None, p) = &expr.kind
+                    && let [segment] = &*p.segments
+                    && let &ast::PathSegment { ident, args: None, .. } = segment
+                    && let Some(next) = self.parse_expr_opt()?
+                {
+                    label = Some(self.recover_ident_into_label(ident));
+                    *expr = next;
+                }
             }
+
             expr
         } else {
             None
         };
         let expr = self.mk_expr(lo.to(self.prev_token.span), ExprKind::Break(label, kind));
         self.maybe_recover_from_bad_qpath(expr)
+    }
+
+    /// Parse `"continue" label?`.
+    fn parse_continue_expr(&mut self, lo: Span) -> PResult<'a, P<Expr>> {
+        let mut label = self.eat_label();
+
+        // Recover `continue label` -> `continue 'label`
+        if self.may_recover()
+            && label.is_none()
+            && let Some((ident, _)) = self.token.ident()
+        {
+            self.bump();
+            label = Some(self.recover_ident_into_label(ident));
+        }
+
+        let kind = ExprKind::Continue(label);
+        Ok(self.mk_expr(lo.to(self.prev_token.span), kind))
     }
 
     /// Parse `"yield" expr?`.
@@ -3041,6 +3072,25 @@ impl<'a> Parser<'a> {
             return true;
         }
         false
+    }
+
+    /// Converts an ident into 'label and emits an "expected a label, found an identifier" error.
+    fn recover_ident_into_label(&mut self, ident: Ident) -> Label {
+        // Convert `label` -> `'label`,
+        // so that nameres doesn't complain about non-existing label
+        let label = format!("'{}", ident.name);
+        let ident = Ident { name: Symbol::intern(&label), span: ident.span };
+
+        self.struct_span_err(ident.span, "expected a label, found an identifier")
+            .span_suggestion(
+                ident.span,
+                "labels start with a tick",
+                label,
+                Applicability::MachineApplicable,
+            )
+            .emit();
+
+        Label { ident }
     }
 
     /// Parses `ident (COLON expr)?`.

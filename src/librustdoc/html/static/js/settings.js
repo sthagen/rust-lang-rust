@@ -135,7 +135,7 @@
                 // This is a select setting.
                 output += `\
 <div class="radio-line" id="${js_data_name}">
-    <span class="setting-name">${setting_name}</span>
+    <div class="setting-name">${setting_name}</div>
 <div class="choices">`;
                 onEach(setting["options"], option => {
                     const checked = option === setting["default"] ? " checked" : "";
@@ -150,10 +150,10 @@
                 });
                 output += "</div></div>";
             } else {
-                // This is a toggle.
+                // This is a checkbox toggle.
                 const checked = setting["default"] === true ? " checked" : "";
                 output += `\
-<label class="toggle">\
+<label class="settings-toggle">\
     <input type="checkbox" id="${js_data_name}"${checked}>\
     <span class="label">${setting_name}</span>\
 </label>`;

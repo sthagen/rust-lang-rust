@@ -112,7 +112,7 @@ impl<'tcx> InferCtxt<'tcx> {
                     DefiningAnchor::Bind(_) => {
                         // Check that this is `impl Trait` type is
                         // declared by `parent_def_id` -- i.e., one whose
-                        // value we are inferring.  At present, this is
+                        // value we are inferring. At present, this is
                         // always true during the first phase of
                         // type-check, but not always true later on during
                         // NLL. Once we support named opaque types more fully,
@@ -380,7 +380,7 @@ impl<'tcx> InferCtxt<'tcx> {
         };
         let item_kind = &self.tcx.hir().expect_item(def_id).kind;
 
-        let hir::ItemKind::OpaqueTy(hir::OpaqueTy { origin, ..  }) = item_kind else {
+        let hir::ItemKind::OpaqueTy(hir::OpaqueTy { origin, .. }) = item_kind else {
             span_bug!(
                 span,
                 "weird opaque type: {:#?}, {:#?}",
@@ -440,16 +440,16 @@ where
         t: &ty::Binder<'tcx, T>,
     ) -> ControlFlow<Self::BreakTy> {
         t.super_visit_with(self);
-        ControlFlow::CONTINUE
+        ControlFlow::Continue(())
     }
 
     fn visit_region(&mut self, r: ty::Region<'tcx>) -> ControlFlow<Self::BreakTy> {
         match *r {
             // ignore bound regions, keep visiting
-            ty::ReLateBound(_, _) => ControlFlow::CONTINUE,
+            ty::ReLateBound(_, _) => ControlFlow::Continue(()),
             _ => {
                 (self.op)(r);
-                ControlFlow::CONTINUE
+                ControlFlow::Continue(())
             }
         }
     }
@@ -457,7 +457,7 @@ where
     fn visit_ty(&mut self, ty: Ty<'tcx>) -> ControlFlow<Self::BreakTy> {
         // We're only interested in types involving regions
         if !ty.flags().intersects(ty::TypeFlags::HAS_FREE_REGIONS) {
-            return ControlFlow::CONTINUE;
+            return ControlFlow::Continue(());
         }
 
         match ty.kind() {
@@ -479,7 +479,7 @@ where
             }
 
             ty::Alias(ty::Opaque, ty::AliasTy { def_id, ref substs, .. }) => {
-                // Skip lifetime paramters that are not captures.
+                // Skip lifetime parameters that are not captures.
                 let variances = self.tcx.variances_of(*def_id);
 
                 for (v, s) in std::iter::zip(variances, substs.iter()) {
@@ -492,7 +492,7 @@ where
             ty::Alias(ty::Projection, proj)
                 if self.tcx.def_kind(proj.def_id) == DefKind::ImplTraitPlaceholder =>
             {
-                // Skip lifetime paramters that are not captures.
+                // Skip lifetime parameters that are not captures.
                 let variances = self.tcx.variances_of(proj.def_id);
 
                 for (v, s) in std::iter::zip(variances, proj.substs.iter()) {
@@ -507,7 +507,7 @@ where
             }
         }
 
-        ControlFlow::CONTINUE
+        ControlFlow::Continue(())
     }
 }
 

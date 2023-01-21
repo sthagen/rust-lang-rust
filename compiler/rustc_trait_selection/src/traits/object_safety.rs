@@ -783,16 +783,16 @@ fn contains_illegal_self_type_reference<'tcx, T: TypeVisitable<'tcx>>(
             match t.kind() {
                 ty::Param(_) => {
                     if t == self.tcx.types.self_param {
-                        ControlFlow::BREAK
+                        ControlFlow::Break(())
                     } else {
-                        ControlFlow::CONTINUE
+                        ControlFlow::Continue(())
                     }
                 }
                 ty::Alias(ty::Projection, ref data)
                     if self.tcx.def_kind(data.def_id) == DefKind::ImplTraitPlaceholder =>
                 {
                     // We'll deny these later in their own pass
-                    ControlFlow::CONTINUE
+                    ControlFlow::Continue(())
                 }
                 ty::Alias(ty::Projection, ref data) => {
                     // This is a projected type `<Foo as SomeTrait>::X`.
@@ -809,7 +809,7 @@ fn contains_illegal_self_type_reference<'tcx, T: TypeVisitable<'tcx>>(
                     // SomeTrait` is in fact a supertrait of the
                     // current trait. In that case, this type is
                     // legal, because the type `X` will be specified
-                    // in the object type.  Note that we can just use
+                    // in the object type. Note that we can just use
                     // direct equality here because all of these types
                     // are part of the formal parameter listing, and
                     // hence there should be no inference variables.
@@ -820,7 +820,7 @@ fn contains_illegal_self_type_reference<'tcx, T: TypeVisitable<'tcx>>(
                         .contains(&data.trait_ref(self.tcx).def_id);
 
                     if is_supertrait_of_current_trait {
-                        ControlFlow::CONTINUE // do not walk contained types, do not report error, do collect $200
+                        ControlFlow::Continue(()) // do not walk contained types, do not report error, do collect $200
                     } else {
                         t.super_visit_with(self) // DO walk contained types, POSSIBLY reporting an error
                     }

@@ -527,6 +527,14 @@ impl<'tcx> RegionInferenceContext<'tcx> {
         self.scc_values.region_value_str(scc)
     }
 
+    pub(crate) fn placeholders_contained_in<'a>(
+        &'a self,
+        r: RegionVid,
+    ) -> impl Iterator<Item = ty::PlaceholderRegion> + 'a {
+        let scc = self.constraint_sccs.scc(r.to_region_vid());
+        self.scc_values.placeholders_contained_in(scc)
+    }
+
     /// Returns access to the value of `r` for debugging purposes.
     pub(crate) fn region_universe(&self, r: RegionVid) -> ty::UniverseIndex {
         let scc = self.constraint_sccs.scc(r.to_region_vid());
@@ -680,7 +688,7 @@ impl<'tcx> RegionInferenceContext<'tcx> {
     /// enforce the constraint).
     ///
     /// The current value of `scc` at the time the method is invoked
-    /// is considered a *lower bound*.  If possible, we will modify
+    /// is considered a *lower bound*. If possible, we will modify
     /// the constraint to set it equal to one of the option regions.
     /// If we make any changes, returns true, else false.
     #[instrument(skip(self, member_constraint_index), level = "debug")]
@@ -959,7 +967,7 @@ impl<'tcx> RegionInferenceContext<'tcx> {
             //
             // This is needed because -- particularly in the case
             // where `ur` is a local bound -- we are sometimes in a
-            // position to prove things that our caller cannot.  See
+            // position to prove things that our caller cannot. See
             // #53570 for an example.
             if self.eval_verify_bound(infcx, param_env, generic_ty, ur, &type_test.verify_bound) {
                 continue;
@@ -2035,7 +2043,7 @@ impl<'tcx> RegionInferenceContext<'tcx> {
         //    '5: '6 ('6 is the target)
         //
         // Some of those regions are unified with `'6` (in the same
-        // SCC).  We want to screen those out. After that point, the
+        // SCC). We want to screen those out. After that point, the
         // "closest" constraint we have to the end is going to be the
         // most likely to be the point where the value escapes -- but
         // we still want to screen for an "interesting" point to

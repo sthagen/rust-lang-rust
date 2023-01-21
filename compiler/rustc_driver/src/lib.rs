@@ -219,7 +219,6 @@ fn run_compiler(
         crate_cfg: cfg,
         crate_check_cfg: check_cfg,
         input: Input::File(PathBuf::new()),
-        input_path: None,
         output_file: ofile,
         output_dir: odir,
         file_loader,
@@ -231,11 +230,14 @@ fn run_compiler(
         registry: diagnostics_registry(),
     };
 
+    if !tracing::dispatcher::has_been_set() {
+        init_rustc_env_logger_with_backtrace_option(&config.opts.unstable_opts.log_backtrace);
+    }
+
     match make_input(config.opts.error_format, &matches.free) {
         Err(reported) => return Err(reported),
-        Ok(Some((input, input_file_path))) => {
+        Ok(Some(input)) => {
             config.input = input;
-            config.input_path = input_file_path;
 
             callbacks.config(&mut config);
         }
@@ -257,14 +259,8 @@ fn run_compiler(
                         describe_lints(compiler.session(), &lint_store, registered_lints);
                         return;
                     }
-                    let should_stop = print_crate_info(
-                        &***compiler.codegen_backend(),
-                        compiler.session(),
-                        None,
-                        compiler.output_dir(),
-                        compiler.output_file(),
-                        compiler.temps_dir(),
-                    );
+                    let should_stop =
+                        print_crate_info(&***compiler.codegen_backend(), compiler.session(), false);
 
                     if should_stop == Compilation::Stop {
                         return;
@@ -286,18 +282,9 @@ fn run_compiler(
 
     interface::run_compiler(config, |compiler| {
         let sess = compiler.session();
-        let should_stop = print_crate_info(
-            &***compiler.codegen_backend(),
-            sess,
-            Some(compiler.input()),
-            compiler.output_dir(),
-            compiler.output_file(),
-            compiler.temps_dir(),
-        )
-        .and_then(|| {
-            list_metadata(sess, &*compiler.codegen_backend().metadata_loader(), compiler.input())
-        })
-        .and_then(|| try_process_rlink(sess, compiler));
+        let should_stop = print_crate_info(&***compiler.codegen_backend(), sess, true)
+            .and_then(|| list_metadata(sess, &*compiler.codegen_backend().metadata_loader()))
+            .and_then(|| try_process_rlink(sess, compiler));
 
         if should_stop == Compilation::Stop {
             return sess.compile_status();
@@ -311,24 +298,12 @@ fn run_compiler(
                 if ppm.needs_ast_map() {
                     let expanded_crate = queries.expansion()?.borrow().0.clone();
                     queries.global_ctxt()?.enter(|tcx| {
-                        pretty::print_after_hir_lowering(
-                            tcx,
-                            compiler.input(),
-                            &*expanded_crate,
-                            *ppm,
-                            compiler.output_file().as_deref(),
-                        );
+                        pretty::print_after_hir_lowering(tcx, &*expanded_crate, *ppm);
                         Ok(())
                     })?;
                 } else {
                     let krate = queries.parse()?.steal();
-                    pretty::print_after_parsing(
-                        sess,
-                        compiler.input(),
-                        &krate,
-                        *ppm,
-                        compiler.output_file().as_deref(),
-                    );
+                    pretty::print_after_parsing(sess, &krate, *ppm);
                 }
                 trace!("finished pretty-printing");
                 return early_exit();
@@ -353,20 +328,16 @@ fn run_compiler(
                 }
             }
 
-            queries.expansion()?;
+            queries.global_ctxt()?;
             if callbacks.after_expansion(compiler, queries) == Compilation::Stop {
                 return early_exit();
             }
-
-            queries.prepare_outputs()?;
 
             if sess.opts.output_types.contains_key(&OutputType::DepInfo)
                 && sess.opts.output_types.len() == 1
             {
                 return early_exit();
             }
-
-            queries.global_ctxt()?;
 
             if sess.opts.unstable_opts.no_analysis {
                 return early_exit();
@@ -380,9 +351,9 @@ fn run_compiler(
                         save::process_crate(
                             tcx,
                             crate_name,
-                            compiler.input(),
+                            &sess.io.input,
                             None,
-                            DumpHandler::new(compiler.output_dir().as_deref(), crate_name),
+                            DumpHandler::new(sess.io.output_dir.as_deref(), crate_name),
                         )
                     });
                 }
@@ -435,7 +406,7 @@ fn make_output(matches: &getopts::Matches) -> (Option<PathBuf>, Option<PathBuf>)
 fn make_input(
     error_format: ErrorOutputType,
     free_matches: &[String],
-) -> Result<Option<(Input, Option<PathBuf>)>, ErrorGuaranteed> {
+) -> Result<Option<Input>, ErrorGuaranteed> {
     if free_matches.len() == 1 {
         let ifile = &free_matches[0];
         if ifile == "-" {
@@ -457,12 +428,12 @@ fn make_input(
                 let line = isize::from_str_radix(&line, 10)
                     .expect("UNSTABLE_RUSTDOC_TEST_LINE needs to be an number");
                 let file_name = FileName::doc_test_source_code(PathBuf::from(path), line);
-                Ok(Some((Input::Str { name: file_name, input: src }, None)))
+                Ok(Some(Input::Str { name: file_name, input: src }))
             } else {
-                Ok(Some((Input::Str { name: FileName::anon_source_code(&src), input: src }, None)))
+                Ok(Some(Input::Str { name: FileName::anon_source_code(&src), input: src }))
             }
         } else {
-            Ok(Some((Input::File(PathBuf::from(ifile)), Some(PathBuf::from(ifile)))))
+            Ok(Some(Input::File(PathBuf::from(ifile))))
         }
     } else {
         Ok(None)
@@ -556,7 +527,7 @@ fn show_content_with_pager(content: &str) {
 
 pub fn try_process_rlink(sess: &Session, compiler: &interface::Compiler) -> Compilation {
     if sess.opts.unstable_opts.link_only {
-        if let Input::File(file) = compiler.input() {
+        if let Input::File(file) = &sess.io.input {
             // FIXME: #![crate_type] and #![crate_name] support not implemented yet
             sess.init_crate_types(collect_crate_types(sess, &[]));
             let outputs = compiler.build_output_filenames(sess, &[]);
@@ -597,13 +568,9 @@ pub fn try_process_rlink(sess: &Session, compiler: &interface::Compiler) -> Comp
     }
 }
 
-pub fn list_metadata(
-    sess: &Session,
-    metadata_loader: &dyn MetadataLoader,
-    input: &Input,
-) -> Compilation {
+pub fn list_metadata(sess: &Session, metadata_loader: &dyn MetadataLoader) -> Compilation {
     if sess.opts.unstable_opts.ls {
-        match *input {
+        match sess.io.input {
             Input::File(ref ifile) => {
                 let path = &(*ifile);
                 let mut v = Vec::new();
@@ -623,10 +590,7 @@ pub fn list_metadata(
 fn print_crate_info(
     codegen_backend: &dyn CodegenBackend,
     sess: &Session,
-    input: Option<&Input>,
-    odir: &Option<PathBuf>,
-    ofile: &Option<PathBuf>,
-    temps_dir: &Option<PathBuf>,
+    parse_attrs: bool,
 ) -> Compilation {
     use rustc_session::config::PrintRequest::*;
     // NativeStaticLibs and LinkArgs are special - printed during linking
@@ -635,18 +599,17 @@ fn print_crate_info(
         return Compilation::Continue;
     }
 
-    let attrs = match input {
-        None => None,
-        Some(input) => {
-            let result = parse_crate_attrs(sess, input);
-            match result {
-                Ok(attrs) => Some(attrs),
-                Err(mut parse_error) => {
-                    parse_error.emit();
-                    return Compilation::Stop;
-                }
+    let attrs = if parse_attrs {
+        let result = parse_crate_attrs(sess);
+        match result {
+            Ok(attrs) => Some(attrs),
+            Err(mut parse_error) => {
+                parse_error.emit();
+                return Compilation::Stop;
             }
         }
+    } else {
+        None
     };
     for req in &sess.opts.prints {
         match *req {
@@ -661,14 +624,9 @@ fn print_crate_info(
                 println!("{}", serde_json::to_string_pretty(&sess.target.to_json()).unwrap());
             }
             FileNames | CrateName => {
-                let input = input.unwrap_or_else(|| {
-                    early_error(ErrorOutputType::default(), "no input file provided")
-                });
                 let attrs = attrs.as_ref().unwrap();
-                let t_outputs = rustc_interface::util::build_output_filenames(
-                    input, odir, ofile, temps_dir, attrs, sess,
-                );
-                let id = rustc_session::output::find_crate_name(sess, attrs, input);
+                let t_outputs = rustc_interface::util::build_output_filenames(attrs, sess);
+                let id = rustc_session::output::find_crate_name(sess, attrs);
                 if *req == PrintRequest::CrateName {
                     println!("{id}");
                     continue;
@@ -1104,8 +1062,8 @@ pub fn handle_options(args: &[String]) -> Option<getopts::Matches> {
     Some(matches)
 }
 
-fn parse_crate_attrs<'a>(sess: &'a Session, input: &Input) -> PResult<'a, ast::AttrVec> {
-    match input {
+fn parse_crate_attrs<'a>(sess: &'a Session) -> PResult<'a, ast::AttrVec> {
+    match &sess.io.input {
         Input::File(ifile) => rustc_parse::parse_crate_attrs_from_file(ifile, &sess.parse_sess),
         Input::Str { name, input } => rustc_parse::parse_crate_attrs_from_source_str(
             name.clone(),
@@ -1300,7 +1258,14 @@ pub fn install_ice_hook() {
 /// This allows tools to enable rust logging without having to magically match rustc's
 /// tracing crate version.
 pub fn init_rustc_env_logger() {
-    if let Err(error) = rustc_log::init_rustc_env_logger() {
+    init_rustc_env_logger_with_backtrace_option(&None);
+}
+
+/// This allows tools to enable rust logging without having to magically match rustc's
+/// tracing crate version. In contrast to `init_rustc_env_logger` it allows you to
+/// choose a target module you wish to show backtraces along with its logging.
+pub fn init_rustc_env_logger_with_backtrace_option(backtrace_target: &Option<String>) {
+    if let Err(error) = rustc_log::init_rustc_env_logger_with_backtrace_option(backtrace_target) {
         early_error(ErrorOutputType::default(), &error.to_string());
     }
 }
@@ -1366,7 +1331,6 @@ mod signal_handler {
 pub fn main() -> ! {
     let start_time = Instant::now();
     let start_rss = get_resident_set_size();
-    init_rustc_env_logger();
     signal_handler::install();
     let mut callbacks = TimePassesCallbacks::default();
     install_ice_hook();

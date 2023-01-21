@@ -138,7 +138,7 @@ pub(super) fn write_shared(
         Ok((ret, krates))
     }
 
-    /// Read a file and return all lines that match the <code>"{crate}":{data},\ </code> format,
+    /// Read a file and return all lines that match the <code>"{crate}":{data},\</code> format,
     /// and return a tuple `(Vec<DataString>, Vec<CrateNameString>)`.
     ///
     /// This forms the payload of files that look like this:
@@ -345,7 +345,7 @@ if (typeof exports !== 'undefined') {exports.searchIndex = searchIndex};
             };
 
             let content = format!(
-                "<h1 class=\"fqn\">List of all crates</h1><ul class=\"all-items\">{}</ul>",
+                "<h1>List of all crates</h1><ul class=\"all-items\">{}</ul>",
                 krates
                     .iter()
                     .map(|s| {

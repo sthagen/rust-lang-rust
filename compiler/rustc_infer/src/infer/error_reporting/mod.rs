@@ -1923,6 +1923,22 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                         (ty::Tuple(fields), _) => {
                             self.emit_tuple_wrap_err(&mut err, span, found, fields)
                         }
+                        // If a byte was expected and the found expression is a char literal
+                        // containing a single ASCII character, perhaps the user meant to write `b'c'` to
+                        // specify a byte literal
+                        (ty::Uint(ty::UintTy::U8), ty::Char) => {
+                            if let Ok(code) = self.tcx.sess().source_map().span_to_snippet(span)
+                                && let Some(code) = code.strip_prefix('\'').and_then(|s| s.strip_suffix('\''))
+                                && code.chars().next().map_or(false, |c| c.is_ascii())
+                            {
+                                err.span_suggestion(
+                                    span,
+                                    "if you meant to write a byte literal, prefix with `b`",
+                                    format!("b'{}'", escape_literal(code)),
+                                    Applicability::MachineApplicable,
+                                );
+                            }
+                        }
                         // If a character was expected and the found expression is a string literal
                         // containing a single character, perhaps the user meant to write `'c'` to
                         // specify a character literal (issue #92479)
@@ -2256,10 +2272,10 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
 
         let labeled_user_string = match bound_kind {
             GenericKind::Param(ref p) => format!("the parameter type `{}`", p),
-            GenericKind::Projection(ref p) => format!("the associated type `{}`", p),
-            GenericKind::Opaque(def_id, substs) => {
-                format!("the opaque type `{}`", self.tcx.def_path_str_with_substs(def_id, substs))
-            }
+            GenericKind::Alias(ref p) => match p.kind(self.tcx) {
+                ty::AliasKind::Projection => format!("the associated type `{}`", p),
+                ty::AliasKind::Opaque => format!("the opaque type `{}`", p),
+            },
         };
 
         if let Some(SubregionOrigin::CompareImplItemObligation {

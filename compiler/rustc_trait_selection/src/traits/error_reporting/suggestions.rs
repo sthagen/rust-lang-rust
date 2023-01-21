@@ -212,6 +212,13 @@ pub trait TypeErrCtxtExt<'tcx> {
         trait_pred: ty::PolyTraitPredicate<'tcx>,
     ) -> bool;
 
+    fn extract_callable_info(
+        &self,
+        hir_id: HirId,
+        param_env: ty::ParamEnv<'tcx>,
+        found: Ty<'tcx>,
+    ) -> Option<(DefIdOrName, Ty<'tcx>, Vec<Ty<'tcx>>)>;
+
     fn suggest_add_reference_to_arg(
         &self,
         obligation: &PredicateObligation<'tcx>,
@@ -276,6 +283,7 @@ pub trait TypeErrCtxtExt<'tcx> {
         expected: ty::PolyTraitRef<'tcx>,
         cause: &ObligationCauseCode<'tcx>,
         found_node: Option<Node<'_>>,
+        param_env: ty::ParamEnv<'tcx>,
     ) -> DiagnosticBuilder<'tcx, ErrorGuaranteed>;
 
     fn note_conflicting_closure_bounds(
@@ -878,6 +886,12 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
         err: &mut Diagnostic,
         trait_pred: ty::PolyTraitPredicate<'tcx>,
     ) -> bool {
+        // It doesn't make sense to make this suggestion outside of typeck...
+        // (also autoderef will ICE...)
+        if self.typeck_results.is_none() {
+            return false;
+        }
+
         if let ty::PredicateKind::Clause(ty::Clause::Trait(trait_pred)) = obligation.predicate.kind().skip_binder()
             && Some(trait_pred.def_id()) == self.tcx.lang_items().sized_trait()
         {
@@ -885,92 +899,17 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             return false;
         }
 
-        // This is duplicated from `extract_callable_info` in typeck, which
-        // relies on autoderef, so we can't use it here.
-        let found = trait_pred.self_ty().skip_binder().peel_refs();
-        let Some((def_id_or_name, output, inputs)) = (match *found.kind()
-        {
-            ty::FnPtr(fn_sig) => {
-                Some((DefIdOrName::Name("function pointer"), fn_sig.output(), fn_sig.inputs()))
-            }
-            ty::FnDef(def_id, _) => {
-                let fn_sig = found.fn_sig(self.tcx);
-                Some((DefIdOrName::DefId(def_id), fn_sig.output(), fn_sig.inputs()))
-            }
-            ty::Closure(def_id, substs) => {
-                let fn_sig = substs.as_closure().sig();
-                Some((
-                    DefIdOrName::DefId(def_id),
-                    fn_sig.output(),
-                    fn_sig.inputs().map_bound(|inputs| &inputs[1..]),
-                ))
-            }
-            ty::Alias(ty::Opaque, ty::AliasTy { def_id, substs, .. }) => {
-                self.tcx.bound_item_bounds(def_id).subst(self.tcx, substs).iter().find_map(|pred| {
-                    if let ty::PredicateKind::Clause(ty::Clause::Projection(proj)) = pred.kind().skip_binder()
-                    && Some(proj.projection_ty.def_id) == self.tcx.lang_items().fn_once_output()
-                    // args tuple will always be substs[1]
-                    && let ty::Tuple(args) = proj.projection_ty.substs.type_at(1).kind()
-                    {
-                        Some((
-                            DefIdOrName::DefId(def_id),
-                            pred.kind().rebind(proj.term.ty().unwrap()),
-                            pred.kind().rebind(args.as_slice()),
-                        ))
-                    } else {
-                        None
-                    }
-                })
-            }
-            ty::Dynamic(data, _, ty::Dyn) => {
-                data.iter().find_map(|pred| {
-                    if let ty::ExistentialPredicate::Projection(proj) = pred.skip_binder()
-                    && Some(proj.def_id) == self.tcx.lang_items().fn_once_output()
-                    // for existential projection, substs are shifted over by 1
-                    && let ty::Tuple(args) = proj.substs.type_at(0).kind()
-                    {
-                        Some((
-                            DefIdOrName::Name("trait object"),
-                            pred.rebind(proj.term.ty().unwrap()),
-                            pred.rebind(args.as_slice()),
-                        ))
-                    } else {
-                        None
-                    }
-                })
-            }
-            ty::Param(_) => {
-                obligation.param_env.caller_bounds().iter().find_map(|pred| {
-                    if let ty::PredicateKind::Clause(ty::Clause::Projection(proj)) = pred.kind().skip_binder()
-                    && Some(proj.projection_ty.def_id) == self.tcx.lang_items().fn_once_output()
-                    && proj.projection_ty.self_ty() == found
-                    // args tuple will always be substs[1]
-                    && let ty::Tuple(args) = proj.projection_ty.substs.type_at(1).kind()
-                    {
-                        Some((
-                            DefIdOrName::Name("type parameter"),
-                            pred.kind().rebind(proj.term.ty().unwrap()),
-                            pred.kind().rebind(args.as_slice()),
-                        ))
-                    } else {
-                        None
-                    }
-                })
-            }
-            _ => None,
-        }) else { return false; };
-        let output = self.replace_bound_vars_with_fresh_vars(
-            obligation.cause.span,
+        let self_ty = self.replace_bound_vars_with_fresh_vars(
+            DUMMY_SP,
             LateBoundRegionConversionTime::FnCall,
-            output,
+            trait_pred.self_ty(),
         );
-        let inputs = inputs.skip_binder().iter().map(|ty| {
-            self.replace_bound_vars_with_fresh_vars(
-                obligation.cause.span,
-                LateBoundRegionConversionTime::FnCall,
-                inputs.rebind(*ty),
-            )
-        });
+
+        let Some((def_id_or_name, output, inputs)) = self.extract_callable_info(
+            obligation.cause.body_id,
+            obligation.param_env,
+            self_ty,
+        ) else { return false; };
 
         // Remapping bound vars here
         let trait_pred_and_self = trait_pred.map_bound(|trait_pred| (trait_pred, output));
@@ -998,6 +937,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
         };
 
         let args = inputs
+            .into_iter()
             .map(|ty| {
                 if ty.is_suggestable(self.tcx, false) {
                     format!("/* {ty} */")
@@ -1159,6 +1099,120 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             return true;
         }
         false
+    }
+
+    /// Extracts information about a callable type for diagnostics. This is a
+    /// heuristic -- it doesn't necessarily mean that a type is always callable,
+    /// because the callable type must also be well-formed to be called.
+    fn extract_callable_info(
+        &self,
+        hir_id: HirId,
+        param_env: ty::ParamEnv<'tcx>,
+        found: Ty<'tcx>,
+    ) -> Option<(DefIdOrName, Ty<'tcx>, Vec<Ty<'tcx>>)> {
+        // Autoderef is useful here because sometimes we box callables, etc.
+        let Some((def_id_or_name, output, inputs)) = (self.autoderef_steps)(found).into_iter().find_map(|(found, _)| {
+            match *found.kind() {
+                ty::FnPtr(fn_sig) =>
+                    Some((DefIdOrName::Name("function pointer"), fn_sig.output(), fn_sig.inputs())),
+                ty::FnDef(def_id, _) => {
+                    let fn_sig = found.fn_sig(self.tcx);
+                    Some((DefIdOrName::DefId(def_id), fn_sig.output(), fn_sig.inputs()))
+                }
+                ty::Closure(def_id, substs) => {
+                    let fn_sig = substs.as_closure().sig();
+                    Some((DefIdOrName::DefId(def_id), fn_sig.output(), fn_sig.inputs().map_bound(|inputs| &inputs[1..])))
+                }
+                ty::Alias(ty::Opaque, ty::AliasTy { def_id, substs, .. }) => {
+                    self.tcx.item_bounds(def_id).subst(self.tcx, substs).iter().find_map(|pred| {
+                        if let ty::PredicateKind::Clause(ty::Clause::Projection(proj)) = pred.kind().skip_binder()
+                        && Some(proj.projection_ty.def_id) == self.tcx.lang_items().fn_once_output()
+                        // args tuple will always be substs[1]
+                        && let ty::Tuple(args) = proj.projection_ty.substs.type_at(1).kind()
+                        {
+                            Some((
+                                DefIdOrName::DefId(def_id),
+                                pred.kind().rebind(proj.term.ty().unwrap()),
+                                pred.kind().rebind(args.as_slice()),
+                            ))
+                        } else {
+                            None
+                        }
+                    })
+                }
+                ty::Dynamic(data, _, ty::Dyn) => {
+                    data.iter().find_map(|pred| {
+                        if let ty::ExistentialPredicate::Projection(proj) = pred.skip_binder()
+                        && Some(proj.def_id) == self.tcx.lang_items().fn_once_output()
+                        // for existential projection, substs are shifted over by 1
+                        && let ty::Tuple(args) = proj.substs.type_at(0).kind()
+                        {
+                            Some((
+                                DefIdOrName::Name("trait object"),
+                                pred.rebind(proj.term.ty().unwrap()),
+                                pred.rebind(args.as_slice()),
+                            ))
+                        } else {
+                            None
+                        }
+                    })
+                }
+                ty::Param(param) => {
+                    let generics = self.tcx.generics_of(hir_id.owner.to_def_id());
+                    let name = if generics.count() > param.index as usize
+                        && let def = generics.param_at(param.index as usize, self.tcx)
+                        && matches!(def.kind, ty::GenericParamDefKind::Type { .. })
+                        && def.name == param.name
+                    {
+                        DefIdOrName::DefId(def.def_id)
+                    } else {
+                        DefIdOrName::Name("type parameter")
+                    };
+                    param_env.caller_bounds().iter().find_map(|pred| {
+                        if let ty::PredicateKind::Clause(ty::Clause::Projection(proj)) = pred.kind().skip_binder()
+                        && Some(proj.projection_ty.def_id) == self.tcx.lang_items().fn_once_output()
+                        && proj.projection_ty.self_ty() == found
+                        // args tuple will always be substs[1]
+                        && let ty::Tuple(args) = proj.projection_ty.substs.type_at(1).kind()
+                        {
+                            Some((
+                                name,
+                                pred.kind().rebind(proj.term.ty().unwrap()),
+                                pred.kind().rebind(args.as_slice()),
+                            ))
+                        } else {
+                            None
+                        }
+                    })
+                }
+                _ => None,
+            }
+        }) else { return None; };
+
+        let output = self.replace_bound_vars_with_fresh_vars(
+            DUMMY_SP,
+            LateBoundRegionConversionTime::FnCall,
+            output,
+        );
+        let inputs = inputs
+            .skip_binder()
+            .iter()
+            .map(|ty| {
+                self.replace_bound_vars_with_fresh_vars(
+                    DUMMY_SP,
+                    LateBoundRegionConversionTime::FnCall,
+                    inputs.rebind(*ty),
+                )
+            })
+            .collect();
+
+        // We don't want to register any extra obligations, which should be
+        // implied by wf, but also because that would possibly result in
+        // erroneous errors later on.
+        let InferOk { value: output, obligations: _ } =
+            self.at(&ObligationCause::dummy(), param_env).normalize(output);
+
+        if output.is_ty_var() { None } else { Some((def_id_or_name, output, inputs)) }
     }
 
     fn suggest_add_reference_to_arg(
@@ -1925,6 +1979,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
         expected: ty::PolyTraitRef<'tcx>,
         cause: &ObligationCauseCode<'tcx>,
         found_node: Option<Node<'_>>,
+        param_env: ty::ParamEnv<'tcx>,
     ) -> DiagnosticBuilder<'tcx, ErrorGuaranteed> {
         pub(crate) fn build_fn_sig_ty<'tcx>(
             infcx: &InferCtxt<'tcx>,
@@ -1987,7 +2042,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
         self.note_conflicting_closure_bounds(cause, &mut err);
 
         if let Some(found_node) = found_node {
-            hint_missing_borrow(span, found, expected, found_node, &mut err);
+            hint_missing_borrow(self, param_env, span, found, expected, found_node, &mut err);
         }
 
         err
@@ -2017,7 +2072,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
 
             // Find another predicate whose self-type is equal to the expected self type,
             // but whose substs don't match.
-            let other_pred = std::iter::zip(&predicates.predicates, &predicates.spans)
+            let other_pred = predicates.into_iter()
                 .enumerate()
                 .find(|(other_idx, (pred, _))| match pred.kind().skip_binder() {
                     ty::PredicateKind::Clause(ty::Clause::Trait(trait_pred))
@@ -2042,7 +2097,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             // If we found one, then it's very likely the cause of the error.
             if let Some((_, (_, other_pred_span))) = other_pred {
                 err.span_note(
-                    *other_pred_span,
+                    other_pred_span,
                     "closure inferred to have a different signature due to this bound",
                 );
             }
@@ -2259,7 +2314,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             // generator interior are not generally known, so we
             // want to erase them when comparing (and anyway,
             // `Send` and other bounds are generally unaffected by
-            // the choice of region).  When erasing regions, we
+            // the choice of region). When erasing regions, we
             // also have to erase late-bound regions. This is
             // because the types that appear in the generator
             // interior generally contain "bound regions" to
@@ -2275,7 +2330,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
         };
 
         // Get the typeck results from the infcx if the generator is the function we are currently
-        // type-checking; otherwise, get them by performing a query.  This is needed to avoid
+        // type-checking; otherwise, get them by performing a query. This is needed to avoid
         // cycles. If we can't use resolved types because the generator comes from another crate,
         // we still provide a targeted error but without all the relevant spans.
         let generator_data = match &self.typeck_results {
@@ -3694,6 +3749,8 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
 
 /// Add a hint to add a missing borrow or remove an unnecessary one.
 fn hint_missing_borrow<'tcx>(
+    infcx: &InferCtxt<'tcx>,
+    param_env: ty::ParamEnv<'tcx>,
     span: Span,
     found: Ty<'tcx>,
     expected: Ty<'tcx>,
@@ -3716,7 +3773,7 @@ fn hint_missing_borrow<'tcx>(
     // This could be a variant constructor, for example.
     let Some(fn_decl) = found_node.fn_decl() else { return; };
 
-    let arg_spans = fn_decl.inputs.iter().map(|ty| ty.span);
+    let args = fn_decl.inputs.iter().map(|ty| ty);
 
     fn get_deref_type_and_refs(mut ty: Ty<'_>) -> (Ty<'_>, usize) {
         let mut refs = 0;
@@ -3732,21 +3789,34 @@ fn hint_missing_borrow<'tcx>(
     let mut to_borrow = Vec::new();
     let mut remove_borrow = Vec::new();
 
-    for ((found_arg, expected_arg), arg_span) in found_args.zip(expected_args).zip(arg_spans) {
+    for ((found_arg, expected_arg), arg) in found_args.zip(expected_args).zip(args) {
         let (found_ty, found_refs) = get_deref_type_and_refs(*found_arg);
         let (expected_ty, expected_refs) = get_deref_type_and_refs(*expected_arg);
 
-        if found_ty == expected_ty {
+        if infcx.can_eq(param_env, found_ty, expected_ty).is_ok() {
             if found_refs < expected_refs {
-                to_borrow.push((arg_span, expected_arg.to_string()));
+                to_borrow.push((arg.span.shrink_to_lo(), "&".repeat(expected_refs - found_refs)));
             } else if found_refs > expected_refs {
-                remove_borrow.push((arg_span, expected_arg.to_string()));
+                let mut span = arg.span.shrink_to_lo();
+                let mut left = found_refs - expected_refs;
+                let mut ty = arg;
+                while let hir::TyKind::Ref(_, mut_ty) = &ty.kind && left > 0 {
+                    span = span.with_hi(mut_ty.ty.span.lo());
+                    ty = mut_ty.ty;
+                    left -= 1;
+                }
+                let sugg = if left == 0 {
+                    (span, String::new())
+                } else {
+                    (arg.span, expected_arg.to_string())
+                };
+                remove_borrow.push(sugg);
             }
         }
     }
 
     if !to_borrow.is_empty() {
-        err.multipart_suggestion(
+        err.multipart_suggestion_verbose(
             "consider borrowing the argument",
             to_borrow,
             Applicability::MaybeIncorrect,
@@ -3754,7 +3824,7 @@ fn hint_missing_borrow<'tcx>(
     }
 
     if !remove_borrow.is_empty() {
-        err.multipart_suggestion(
+        err.multipart_suggestion_verbose(
             "do not borrow the argument",
             remove_borrow,
             Applicability::MaybeIncorrect,

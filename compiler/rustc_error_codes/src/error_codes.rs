@@ -1,5 +1,5 @@
-// Error messages for EXXXX errors.  Each message should start and end with a
-// new line, and be wrapped to 80 characters.  In vim you can `:set tw=80` and
+// Error messages for EXXXX errors. Each message should start and end with a
+// new line, and be wrapped to 80 characters. In vim you can `:set tw=80` and
 // use `gq` to wrap paragraphs. Use `:set tw=0` to disable.
 //
 // /!\ IMPORTANT /!\
@@ -508,6 +508,7 @@ E0787: include_str!("./error_codes/E0787.md"),
 E0788: include_str!("./error_codes/E0788.md"),
 E0790: include_str!("./error_codes/E0790.md"),
 E0791: include_str!("./error_codes/E0791.md"),
+E0792: include_str!("./error_codes/E0792.md"),
 ;
 //  E0006, // merged with E0005
 //  E0008, // cannot bind by-move into a pattern guard

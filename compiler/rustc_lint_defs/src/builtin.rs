@@ -708,7 +708,7 @@ declare_lint! {
     ///
     /// ### Example
     ///
-    /// ```rust
+    /// ```rust,compile_fail
     /// pub enum Enum {
     ///     Foo,
     ///     Bar,
@@ -743,7 +743,7 @@ declare_lint! {
     /// [identifier pattern]: https://doc.rust-lang.org/reference/patterns.html#identifier-patterns
     /// [path pattern]: https://doc.rust-lang.org/reference/patterns.html#path-patterns
     pub BINDINGS_WITH_VARIANT_NAME,
-    Warn,
+    Deny,
     "detects pattern bindings with the same name as one of the matched variants"
 }
 
@@ -4033,10 +4033,10 @@ declare_lint! {
     ///
     /// This can be used to implement an unsound API if used incorrectly.
     pub IMPLIED_BOUNDS_ENTAILMENT,
-    Warn,
+    Deny,
     "impl method assumes more implied bounds than its corresponding trait method",
     @future_incompatible = FutureIncompatibleInfo {
         reference: "issue #105572 <https://github.com/rust-lang/rust/issues/105572>",
-        reason: FutureIncompatibilityReason::FutureReleaseError,
+        reason: FutureIncompatibilityReason::FutureReleaseErrorReportNow,
     };
 }

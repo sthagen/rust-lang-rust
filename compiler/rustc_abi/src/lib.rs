@@ -1100,7 +1100,7 @@ pub enum FieldsShape {
         /// named `inverse_memory_index`.
         ///
         // FIXME(eddyb) build a better abstraction for permutations, if possible.
-        // FIXME(camlorn) also consider small vector  optimization here.
+        // FIXME(camlorn) also consider small vector optimization here.
         memory_index: Vec<u32>,
     },
 }
@@ -1263,8 +1263,8 @@ pub enum Variants<V: Idx> {
 
     /// Enum-likes with more than one inhabited variant: each variant comes with
     /// a *discriminant* (usually the same as the variant index but the user can
-    /// assign explicit discriminant values).  That discriminant is encoded
-    /// as a *tag* on the machine.  The layout of each variant is
+    /// assign explicit discriminant values). That discriminant is encoded
+    /// as a *tag* on the machine. The layout of each variant is
     /// a struct, and they all have space reserved for the tag.
     /// For enums, the tag is the sole field of the layout.
     Multiple {

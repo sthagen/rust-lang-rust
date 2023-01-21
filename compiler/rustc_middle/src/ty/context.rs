@@ -874,7 +874,7 @@ impl<'tcx> TyCtxt<'tcx> {
         self.dep_graph.read_index(DepNodeIndex::FOREVER_RED_NODE);
 
         // Leak a read lock once we start iterating on definitions, to prevent adding new ones
-        // while iterating.  If some query needs to add definitions, it should be `ensure`d above.
+        // while iterating. If some query needs to add definitions, it should be `ensure`d above.
         let definitions = self.untracked.definitions.leak();
         definitions.def_path_table()
     }
@@ -886,7 +886,7 @@ impl<'tcx> TyCtxt<'tcx> {
         // definitions change.
         self.ensure().hir_crate(());
         // Leak a read lock once we start iterating on definitions, to prevent adding new ones
-        // while iterating.  If some query needs to add definitions, it should be `ensure`d above.
+        // while iterating. If some query needs to add definitions, it should be `ensure`d above.
         let definitions = self.untracked.definitions.leak();
         definitions.def_path_hash_to_def_index_map()
     }
@@ -1950,6 +1950,15 @@ impl<'tcx> TyCtxt<'tcx> {
     #[inline]
     pub fn mk_generator_witness(self, types: ty::Binder<'tcx, &'tcx List<Ty<'tcx>>>) -> Ty<'tcx> {
         self.mk_ty(GeneratorWitness(types))
+    }
+
+    /// Creates a `&mut Context<'_>` [`Ty`] with erased lifetimes.
+    pub fn mk_task_context(self) -> Ty<'tcx> {
+        let context_did = self.require_lang_item(LangItem::Context, None);
+        let context_adt_ref = self.adt_def(context_did);
+        let context_substs = self.intern_substs(&[self.lifetimes.re_erased.into()]);
+        let context_ty = self.mk_adt(context_adt_ref, context_substs);
+        self.mk_mut_ref(self.lifetimes.re_erased, context_ty)
     }
 
     #[inline]

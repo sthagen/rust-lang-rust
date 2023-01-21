@@ -28,8 +28,8 @@ pub fn solve_constraints<'tcx>(
     let ConstraintContext { terms_cx, constraints, .. } = constraints_cx;
 
     let mut solutions = vec![ty::Bivariant; terms_cx.inferred_terms.len()];
-    for &(id, ref variances) in &terms_cx.lang_items {
-        let InferredIndex(start) = terms_cx.inferred_starts[&id];
+    for (id, variances) in &terms_cx.lang_items {
+        let InferredIndex(start) = terms_cx.inferred_starts[id];
         for (i, &variance) in variances.iter().enumerate() {
             solutions[start + i] = variance;
         }
@@ -44,7 +44,7 @@ pub fn solve_constraints<'tcx>(
 
 impl<'a, 'tcx> SolveContext<'a, 'tcx> {
     fn solve(&mut self) {
-        // Propagate constraints until a fixed point is reached.  Note
+        // Propagate constraints until a fixed point is reached. Note
         // that the maximum number of iterations is 2C where C is the
         // number of constraints (each variable can change values at most
         // twice). Since number of constraints is linear in size of the

@@ -94,7 +94,7 @@ pub enum LifetimeName {
     /// Implicit lifetime in a context like `dyn Foo`. This is
     /// distinguished from implicit lifetimes elsewhere because the
     /// lifetime that they default to must appear elsewhere within the
-    /// enclosing type.  This means that, in an `impl Trait` context, we
+    /// enclosing type. This means that, in an `impl Trait` context, we
     /// don't have to create a parameter for them. That is, `impl
     /// Trait<Item = &u32>` expands to an opaque type like `type
     /// Foo<'a> = impl Trait<Item = &'a u32>`, but `impl Trait<item =
@@ -826,7 +826,7 @@ pub struct OwnerNodes<'tcx> {
     pub hash_without_bodies: Fingerprint,
     /// Full HIR for the current owner.
     // The zeroth node's parent should never be accessed: the owner's parent is computed by the
-    // hir_owner_parent query.  It is set to `ItemLocalId::INVALID` to force an ICE if accidentally
+    // hir_owner_parent query. It is set to `ItemLocalId::INVALID` to force an ICE if accidentally
     // used.
     pub nodes: IndexVec<ItemLocalId, Option<ParentedNode<'tcx>>>,
     /// Content of local bodies.
@@ -1782,6 +1782,14 @@ impl Expr<'_> {
     pub fn peel_blocks(&self) -> &Self {
         let mut expr = self;
         while let ExprKind::Block(Block { expr: Some(inner), .. }, _) = &expr.kind {
+            expr = inner;
+        }
+        expr
+    }
+
+    pub fn peel_borrows(&self) -> &Self {
+        let mut expr = self;
+        while let ExprKind::AddrOf(.., inner) = &expr.kind {
             expr = inner;
         }
         expr
