@@ -14,7 +14,7 @@ use rustc_hir::{ItemKind, Node, PathSegment};
 use rustc_infer::infer::opaque_types::ConstrainOpaqueTypeRegionVisitor;
 use rustc_infer::infer::outlives::env::OutlivesEnvironment;
 use rustc_infer::infer::{DefiningAnchor, RegionVariableOrigin, TyCtxtInferExt};
-use rustc_infer::traits::Obligation;
+use rustc_infer::traits::{Obligation, TraitEngineExt as _};
 use rustc_lint::builtin::REPR_TRANSPARENT_EXTERNAL_PRIVATE_FIELDS;
 use rustc_middle::hir::nested_filter;
 use rustc_middle::middle::stability::EvalResult;
@@ -28,7 +28,7 @@ use rustc_span::{self, Span};
 use rustc_target::spec::abi::Abi;
 use rustc_trait_selection::traits::error_reporting::on_unimplemented::OnUnimplementedDirective;
 use rustc_trait_selection::traits::error_reporting::TypeErrCtxtExt as _;
-use rustc_trait_selection::traits::{self, ObligationCtxt};
+use rustc_trait_selection::traits::{self, ObligationCtxt, TraitEngine, TraitEngineExt as _};
 
 use std::ops::ControlFlow;
 
@@ -412,7 +412,6 @@ fn check_opaque_meets_bounds<'tcx>(
     span: Span,
     origin: &hir::OpaqueTyOrigin,
 ) {
-    let hir_id = tcx.hir().local_def_id_to_hir_id(def_id);
     let defining_use_anchor = match *origin {
         hir::OpaqueTyOrigin::FnReturn(did) | hir::OpaqueTyOrigin::AsyncFn(did) => did,
         hir::OpaqueTyOrigin::TyAlias => def_id,
@@ -438,7 +437,7 @@ fn check_opaque_meets_bounds<'tcx>(
         _ => re,
     });
 
-    let misc_cause = traits::ObligationCause::misc(span, hir_id);
+    let misc_cause = traits::ObligationCause::misc(span, def_id);
 
     match ocx.eq(&misc_cause, param_env, opaque_ty, hidden_ty) {
         Ok(()) => {}
@@ -1391,11 +1390,15 @@ fn async_opaque_type_cycle_error(tcx: TyCtxt<'_>, span: Span) -> ErrorGuaranteed
 ///
 /// If all the return expressions evaluate to `!`, then we explain that the error will go away
 /// after changing it. This can happen when a user uses `panic!()` or similar as a placeholder.
-fn opaque_type_cycle_error(tcx: TyCtxt<'_>, def_id: LocalDefId, span: Span) -> ErrorGuaranteed {
+fn opaque_type_cycle_error(
+    tcx: TyCtxt<'_>,
+    opaque_def_id: LocalDefId,
+    span: Span,
+) -> ErrorGuaranteed {
     let mut err = struct_span_err!(tcx.sess, span, E0720, "cannot resolve opaque type");
 
     let mut label = false;
-    if let Some((def_id, visitor)) = get_owner_return_paths(tcx, def_id) {
+    if let Some((def_id, visitor)) = get_owner_return_paths(tcx, opaque_def_id) {
         let typeck_results = tcx.typeck(def_id);
         if visitor
             .returns
@@ -1431,27 +1434,71 @@ fn opaque_type_cycle_error(tcx: TyCtxt<'_>, def_id: LocalDefId, span: Span) -> E
                 .filter_map(|e| typeck_results.node_type_opt(e.hir_id).map(|t| (e.span, t)))
                 .filter(|(_, ty)| !matches!(ty.kind(), ty::Never))
             {
-                struct OpaqueTypeCollector(Vec<DefId>);
+                #[derive(Default)]
+                struct OpaqueTypeCollector {
+                    opaques: Vec<DefId>,
+                    closures: Vec<DefId>,
+                }
                 impl<'tcx> ty::visit::TypeVisitor<'tcx> for OpaqueTypeCollector {
                     fn visit_ty(&mut self, t: Ty<'tcx>) -> ControlFlow<Self::BreakTy> {
                         match *t.kind() {
                             ty::Alias(ty::Opaque, ty::AliasTy { def_id: def, .. }) => {
-                                self.0.push(def);
+                                self.opaques.push(def);
                                 ControlFlow::Continue(())
+                            }
+                            ty::Closure(def_id, ..) | ty::Generator(def_id, ..) => {
+                                self.closures.push(def_id);
+                                t.super_visit_with(self)
                             }
                             _ => t.super_visit_with(self),
                         }
                     }
                 }
-                let mut visitor = OpaqueTypeCollector(vec![]);
+
+                let mut visitor = OpaqueTypeCollector::default();
                 ty.visit_with(&mut visitor);
-                for def_id in visitor.0 {
+                for def_id in visitor.opaques {
                     let ty_span = tcx.def_span(def_id);
                     if !seen.contains(&ty_span) {
-                        err.span_label(ty_span, &format!("returning this opaque type `{ty}`"));
+                        let descr = if ty.is_impl_trait() { "opaque " } else { "" };
+                        err.span_label(ty_span, &format!("returning this {descr}type `{ty}`"));
                         seen.insert(ty_span);
                     }
                     err.span_label(sp, &format!("returning here with type `{ty}`"));
+                }
+
+                for closure_def_id in visitor.closures {
+                    let Some(closure_local_did) = closure_def_id.as_local() else { continue; };
+                    let typeck_results = tcx.typeck(closure_local_did);
+
+                    let mut label_match = |ty: Ty<'_>, span| {
+                        for arg in ty.walk() {
+                            if let ty::GenericArgKind::Type(ty) = arg.unpack()
+                                && let ty::Alias(ty::Opaque, ty::AliasTy { def_id: captured_def_id, .. }) = *ty.kind()
+                                && captured_def_id == opaque_def_id.to_def_id()
+                            {
+                                err.span_label(
+                                    span,
+                                    format!(
+                                        "{} captures itself here",
+                                        tcx.def_kind(closure_def_id).descr(closure_def_id)
+                                    ),
+                                );
+                            }
+                        }
+                    };
+
+                    // Label any closure upvars that capture the opaque
+                    for capture in typeck_results.closure_min_captures_flattened(closure_local_did)
+                    {
+                        label_match(capture.place.ty(), capture.get_path_span(tcx));
+                    }
+                    // Label any generator locals that capture the opaque
+                    for interior_ty in
+                        typeck_results.generator_interior_types.as_ref().skip_binder()
+                    {
+                        label_match(interior_ty.ty, interior_ty.span);
+                    }
                 }
             }
         }
@@ -1460,4 +1507,35 @@ fn opaque_type_cycle_error(tcx: TyCtxt<'_>, def_id: LocalDefId, span: Span) -> E
         err.span_label(span, "cannot resolve opaque type");
     }
     err.emit()
+}
+
+pub(super) fn check_generator_obligations(tcx: TyCtxt<'_>, def_id: LocalDefId) {
+    debug_assert!(tcx.sess.opts.unstable_opts.drop_tracking_mir);
+    debug_assert!(matches!(tcx.def_kind(def_id), DefKind::Generator));
+
+    let typeck = tcx.typeck(def_id);
+    let param_env = tcx.param_env(def_id);
+
+    let generator_interior_predicates = &typeck.generator_interior_predicates[&def_id];
+    debug!(?generator_interior_predicates);
+
+    let infcx = tcx
+        .infer_ctxt()
+        // typeck writeback gives us predicates with their regions erased.
+        // As borrowck already has checked lifetimes, we do not need to do it again.
+        .ignoring_regions()
+        // Bind opaque types to `def_id` as they should have been checked by borrowck.
+        .with_opaque_type_inference(DefiningAnchor::Bind(def_id))
+        .build();
+
+    let mut fulfillment_cx = <dyn TraitEngine<'_>>::new(infcx.tcx);
+    for (predicate, cause) in generator_interior_predicates {
+        let obligation = Obligation::new(tcx, cause.clone(), param_env, *predicate);
+        fulfillment_cx.register_predicate_obligation(&infcx, obligation);
+    }
+    let errors = fulfillment_cx.select_all_or_error(&infcx);
+    debug!(?errors);
+    if !errors.is_empty() {
+        infcx.err_ctxt().report_fulfillment_errors(&errors, None);
+    }
 }

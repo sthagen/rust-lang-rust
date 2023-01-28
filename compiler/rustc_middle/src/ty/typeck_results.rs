@@ -1,12 +1,18 @@
 use crate::{
     hir::place::Place as HirPlace,
     infer::canonical::Canonical,
+    traits::ObligationCause,
     ty::{
         self, tls, BindingMode, BoundVar, CanonicalPolyFnSig, ClosureSizeProfileData,
         GenericArgKind, InternalSubsts, SubstsRef, Ty, UserSubsts,
     },
 };
-use rustc_data_structures::{fx::FxHashMap, sync::Lrc, unord::UnordSet, vec_map::VecMap};
+use rustc_data_structures::{
+    fx::FxHashMap,
+    sync::Lrc,
+    unord::{UnordItems, UnordSet},
+    vec_map::VecMap,
+};
 use rustc_errors::ErrorGuaranteed;
 use rustc_hir as hir;
 use rustc_hir::{
@@ -20,11 +26,7 @@ use rustc_macros::HashStable;
 use rustc_middle::mir::FakeReadCause;
 use rustc_session::Session;
 use rustc_span::Span;
-use std::{
-    collections::hash_map::{self, Entry},
-    hash::Hash,
-    iter,
-};
+use std::{collections::hash_map::Entry, hash::Hash, iter};
 
 use super::RvalueScopes;
 
@@ -192,6 +194,11 @@ pub struct TypeckResults<'tcx> {
     /// that are live across the yield of this generator (if a generator).
     pub generator_interior_types: ty::Binder<'tcx, Vec<GeneratorInteriorTypeCause<'tcx>>>,
 
+    /// Stores the predicates that apply on generator witness types.
+    /// formatting modified file tests/ui/generator/retain-resume-ref.rs
+    pub generator_interior_predicates:
+        FxHashMap<LocalDefId, Vec<(ty::Predicate<'tcx>, ObligationCause<'tcx>)>>,
+
     /// We sometimes treat byte string literals (which are of type `&[u8; N]`)
     /// as `&[u8]`, depending on the pattern in which they are used.
     /// This hashset records all instances where we behave
@@ -270,6 +277,7 @@ impl<'tcx> TypeckResults<'tcx> {
             closure_fake_reads: Default::default(),
             rvalue_scopes: Default::default(),
             generator_interior_types: ty::Binder::dummy(Default::default()),
+            generator_interior_predicates: Default::default(),
             treat_byte_string_as_slice: Default::default(),
             closure_size_eval: Default::default(),
         }
@@ -567,8 +575,15 @@ impl<'a, V> LocalTableInContext<'a, V> {
         self.data.get(&id.local_id)
     }
 
-    pub fn iter(&self) -> hash_map::Iter<'_, hir::ItemLocalId, V> {
-        self.data.iter()
+    pub fn items(
+        &'a self,
+    ) -> UnordItems<(hir::ItemLocalId, &'a V), impl Iterator<Item = (hir::ItemLocalId, &'a V)>>
+    {
+        self.data.items().map(|(id, value)| (*id, value))
+    }
+
+    pub fn items_in_stable_order(&self) -> Vec<(ItemLocalId, &'a V)> {
+        self.data.to_sorted_stable_ord()
     }
 }
 
@@ -604,6 +619,16 @@ impl<'a, V> LocalTableInContextMut<'a, V> {
     pub fn remove(&mut self, id: hir::HirId) -> Option<V> {
         validate_hir_id_for_typeck_results(self.hir_owner, id);
         self.data.remove(&id.local_id)
+    }
+
+    pub fn extend(
+        &mut self,
+        items: UnordItems<(hir::HirId, V), impl Iterator<Item = (hir::HirId, V)>>,
+    ) {
+        self.data.extend(items.map(|(id, value)| {
+            validate_hir_id_for_typeck_results(self.hir_owner, id);
+            (id.local_id, value)
+        }))
     }
 }
 

@@ -3102,7 +3102,7 @@ declare_clippy_lint! {
     ///     Ok(())
     /// }
     /// ```
-    #[clippy::version = "1.66.0"]
+    #[clippy::version = "1.67.0"]
     pub SEEK_FROM_CURRENT,
     complexity,
     "use dedicated method for seek from current position"
@@ -3133,7 +3133,7 @@ declare_clippy_lint! {
     ///     t.rewind();
     /// }
     /// ```
-    #[clippy::version = "1.66.0"]
+    #[clippy::version = "1.67.0"]
     pub SEEK_TO_START_INSTEAD_OF_REWIND,
     complexity,
     "jumping to the start of stream using `seek` method"
@@ -3352,7 +3352,7 @@ impl<'tcx> LateLintPass<'tcx> for Methods {
 
         let implements_trait = matches!(item.kind, hir::ItemKind::Impl(hir::Impl { of_trait: Some(_), .. }));
         if let hir::ImplItemKind::Fn(ref sig, id) = impl_item.kind {
-            let method_sig = cx.tcx.fn_sig(impl_item.owner_id);
+            let method_sig = cx.tcx.fn_sig(impl_item.owner_id).subst_identity();
             let method_sig = cx.tcx.erase_late_bound_regions(method_sig);
             let first_arg_ty_opt = method_sig.inputs().iter().next().copied();
             // if this impl block implements a trait, lint in trait definition instead

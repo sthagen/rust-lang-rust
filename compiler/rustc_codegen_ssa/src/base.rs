@@ -436,7 +436,7 @@ pub fn maybe_create_entry_wrapper<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
             cx.type_func(&[], cx.type_int())
         };
 
-        let main_ret_ty = cx.tcx().fn_sig(rust_main_def_id).output();
+        let main_ret_ty = cx.tcx().fn_sig(rust_main_def_id).no_bound_vars().unwrap().output();
         // Given that `main()` has no arguments,
         // then its return type cannot have
         // late-bound regions, since late-bound
@@ -964,16 +964,19 @@ pub fn provide(providers: &mut Providers) {
         };
 
         let (defids, _) = tcx.collect_and_partition_mono_items(cratenum);
-        for id in &*defids {
+
+        let any_for_speed = defids.items().any(|id| {
             let CodegenFnAttrs { optimize, .. } = tcx.codegen_fn_attrs(*id);
             match optimize {
-                attr::OptimizeAttr::None => continue,
-                attr::OptimizeAttr::Size => continue,
-                attr::OptimizeAttr::Speed => {
-                    return for_speed;
-                }
+                attr::OptimizeAttr::None | attr::OptimizeAttr::Size => false,
+                attr::OptimizeAttr::Speed => true,
             }
+        });
+
+        if any_for_speed {
+            return for_speed;
         }
+
         tcx.sess.opts.optimize
     };
 }

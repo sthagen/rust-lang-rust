@@ -533,7 +533,7 @@ ul.block, .block li {
 .rustdoc .example-wrap > pre {
 	margin: 0;
 	flex-grow: 1;
-	overflow-x: auto;
+	overflow: auto hidden;
 }
 
 .rustdoc .example-wrap > pre.example-line-numbers,
@@ -977,8 +977,7 @@ so that we can apply CSS-filters to change the arrow color in themes */
 		0 -1px 0 black;
 }
 
-.module-item.unstable,
-.import-item.unstable {
+.item-left.unstable {
 	opacity: 0.65;
 }
 
@@ -1897,19 +1896,25 @@ in storage.js
 	right: 0.25em;
 }
 
-.scraped-example:not(.expanded) .code-wrapper:before,
-.scraped-example:not(.expanded) .code-wrapper:after {
+.scraped-example:not(.expanded) .code-wrapper::before,
+.scraped-example:not(.expanded) .code-wrapper::after {
 	content: " ";
 	width: 100%;
 	height: 5px;
 	position: absolute;
 	z-index: 1;
 }
-.scraped-example:not(.expanded) .code-wrapper:before {
+.scraped-example:not(.expanded) .code-wrapper::before {
 	top: 0;
+	background: linear-gradient(to bottom,
+		var(--scrape-example-code-wrapper-background-start),
+		var(--scrape-example-code-wrapper-background-end));
 }
-.scraped-example:not(.expanded) .code-wrapper:after {
+.scraped-example:not(.expanded) .code-wrapper::after {
 	bottom: 0;
+	background: linear-gradient(to top,
+		var(--scrape-example-code-wrapper-background-start),
+		var(--scrape-example-code-wrapper-background-end));
 }
 
 .scraped-example .code-wrapper .example-wrap {

@@ -143,7 +143,7 @@ impl<'tcx> PassByRefOrValue {
             return;
         }
 
-        let fn_sig = cx.tcx.fn_sig(def_id);
+        let fn_sig = cx.tcx.fn_sig(def_id).subst_identity();
         let fn_body = cx.enclosing_body.map(|id| cx.tcx.hir().body(id));
 
         // Gather all the lifetimes found in the output type which may affect whether
@@ -190,10 +190,10 @@ impl<'tcx> PassByRefOrValue {
                             // Don't lint if an unsafe pointer is created.
                             // TODO: Limit the check only to unsafe pointers to the argument (or part of the argument)
                             //       which escape the current function.
-                            if typeck.node_types().iter().any(|(_, &ty)| ty.is_unsafe_ptr())
+                            if typeck.node_types().items().any(|(_, &ty)| ty.is_unsafe_ptr())
                                 || typeck
                                     .adjustments()
-                                    .iter()
+                                    .items()
                                     .flat_map(|(_, a)| a)
                                     .any(|a| matches!(a.kind, Adjust::Pointer(PointerCast::UnsafeFnPointer)))
                             {

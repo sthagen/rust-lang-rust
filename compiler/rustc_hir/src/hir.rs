@@ -2106,8 +2106,8 @@ pub enum LocalSource {
 }
 
 /// Hints at the original code for a `match _ { .. }`.
-#[derive(Copy, Clone, PartialEq, Eq, Encodable, Hash, Debug)]
-#[derive(HashStable_Generic)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(HashStable_Generic, Encodable, Decodable)]
 pub enum MatchSource {
     /// A `match _ { .. }`.
     Normal,
@@ -2117,6 +2117,8 @@ pub enum MatchSource {
     TryDesugar,
     /// A desugared `<expr>.await`.
     AwaitDesugar,
+    /// A desugared `format_args!()`.
+    FormatArgs,
 }
 
 impl MatchSource {
@@ -2128,6 +2130,7 @@ impl MatchSource {
             ForLoopDesugar => "for",
             TryDesugar => "?",
             AwaitDesugar => ".await",
+            FormatArgs => "format_args!()",
         }
     }
 }
@@ -3520,6 +3523,13 @@ impl<'hir> Node<'hir> {
             Node::TraitItem(TraitItem { kind: TraitItemKind::Fn(fn_sig, _), .. })
             | Node::ImplItem(ImplItem { kind: ImplItemKind::Fn(fn_sig, _), .. })
             | Node::Item(Item { kind: ItemKind::Fn(fn_sig, _, _), .. }) => Some(fn_sig),
+            _ => None,
+        }
+    }
+
+    pub fn alias_ty(self) -> Option<&'hir Ty<'hir>> {
+        match self {
+            Node::Item(Item { kind: ItemKind::TyAlias(ty, ..), .. }) => Some(ty),
             _ => None,
         }
     }

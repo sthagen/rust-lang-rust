@@ -4,7 +4,7 @@ use std::iter;
 
 use super::assembly::{self, Candidate, CandidateSource};
 use super::infcx_ext::InferCtxtExt;
-use super::{Certainty, EvalCtxt, Goal, MaybeCause, QueryResult};
+use super::{Certainty, EvalCtxt, Goal, QueryResult};
 use rustc_hir::def_id::DefId;
 use rustc_infer::infer::InferCtxt;
 use rustc_infer::traits::query::NoSolution;
@@ -65,7 +65,9 @@ impl<'tcx> assembly::GoalKind<'tcx> for TraitPredicate<'tcx> {
         goal: Goal<'tcx, Self>,
         assumption: ty::Predicate<'tcx>,
     ) -> QueryResult<'tcx> {
-        if let Some(poly_trait_pred) = assumption.to_opt_poly_trait_pred() {
+        if let Some(poly_trait_pred) = assumption.to_opt_poly_trait_pred()
+            && poly_trait_pred.def_id() == goal.predicate.def_id()
+        {
             // FIXME: Constness and polarity
             ecx.infcx.probe(|_| {
                 let assumption_trait_pred =
@@ -133,7 +135,7 @@ impl<'tcx> assembly::GoalKind<'tcx> for TraitPredicate<'tcx> {
         goal: Goal<'tcx, Self>,
     ) -> QueryResult<'tcx> {
         if goal.predicate.self_ty().has_non_region_infer() {
-            return ecx.make_canonical_response(Certainty::Maybe(MaybeCause::Ambiguity));
+            return ecx.make_canonical_response(Certainty::AMBIGUOUS);
         }
 
         let tcx = ecx.tcx();
@@ -171,7 +173,7 @@ impl<'tcx> assembly::GoalKind<'tcx> for TraitPredicate<'tcx> {
                 .to_predicate(ecx.tcx());
             Self::consider_assumption(ecx, goal, pred)
         } else {
-            ecx.make_canonical_response(Certainty::Maybe(MaybeCause::Ambiguity))
+            ecx.make_canonical_response(Certainty::AMBIGUOUS)
         }
     }
 
@@ -184,6 +186,57 @@ impl<'tcx> assembly::GoalKind<'tcx> for TraitPredicate<'tcx> {
         } else {
             Err(NoSolution)
         }
+    }
+
+    fn consider_builtin_pointee_candidate(
+        ecx: &mut EvalCtxt<'_, 'tcx>,
+        _goal: Goal<'tcx, Self>,
+    ) -> QueryResult<'tcx> {
+        ecx.make_canonical_response(Certainty::Yes)
+    }
+
+    fn consider_builtin_future_candidate(
+        ecx: &mut EvalCtxt<'_, 'tcx>,
+        goal: Goal<'tcx, Self>,
+    ) -> QueryResult<'tcx> {
+        let ty::Generator(def_id, _, _) = *goal.predicate.self_ty().kind() else {
+            return Err(NoSolution);
+        };
+
+        // Generators are not futures unless they come from `async` desugaring
+        let tcx = ecx.tcx();
+        if !tcx.generator_is_async(def_id) {
+            return Err(NoSolution);
+        }
+
+        // Async generator unconditionally implement `Future`
+        ecx.make_canonical_response(Certainty::Yes)
+    }
+
+    fn consider_builtin_generator_candidate(
+        ecx: &mut EvalCtxt<'_, 'tcx>,
+        goal: Goal<'tcx, Self>,
+    ) -> QueryResult<'tcx> {
+        let self_ty = goal.predicate.self_ty();
+        let ty::Generator(def_id, substs, _) = *self_ty.kind() else {
+            return Err(NoSolution);
+        };
+
+        // `async`-desugared generators do not implement the generator trait
+        let tcx = ecx.tcx();
+        if tcx.generator_is_async(def_id) {
+            return Err(NoSolution);
+        }
+
+        let generator = substs.as_generator();
+        Self::consider_assumption(
+            ecx,
+            goal,
+            ty::Binder::dummy(
+                tcx.mk_trait_ref(goal.predicate.def_id(), [self_ty, generator.resume_ty()]),
+            )
+            .to_predicate(tcx),
+        )
     }
 }
 

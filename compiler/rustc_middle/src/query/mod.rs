@@ -471,6 +471,17 @@ rustc_queries! {
         }
     }
 
+    query mir_generator_witnesses(key: DefId) -> mir::GeneratorLayout<'tcx> {
+        arena_cache
+        desc { |tcx| "generator witness types for `{}`", tcx.def_path_str(key) }
+        cache_on_disk_if { key.is_local() }
+        separate_provide_extern
+    }
+
+    query check_generator_obligations(key: LocalDefId) {
+        desc { |tcx| "verify auto trait bounds for generator interior type `{}`", tcx.def_path_str(key.to_def_id()) }
+    }
+
     /// MIR after our optimization passes have run. This is MIR that is ready
     /// for codegen. This is also the only query that can fetch non-local MIR, at present.
     query optimized_mir(key: DefId) -> &'tcx mir::Body<'tcx> {
@@ -814,7 +825,7 @@ rustc_queries! {
     }
 
     /// Computes the signature of the function.
-    query fn_sig(key: DefId) -> ty::PolyFnSig<'tcx> {
+    query fn_sig(key: DefId) -> ty::EarlyBinder<ty::PolyFnSig<'tcx>> {
         desc { |tcx| "computing function signature of `{}`", tcx.def_path_str(key) }
         cache_on_disk_if { key.is_local() }
         separate_provide_extern
@@ -1157,6 +1168,7 @@ rustc_queries! {
     /// Determines whether an item is annotated with `doc(hidden)`.
     query is_doc_hidden(def_id: DefId) -> bool {
         desc { |tcx| "checking whether `{}` is `doc(hidden)`", tcx.def_path_str(def_id) }
+        separate_provide_extern
     }
 
     /// Determines whether an item is annotated with `doc(notable_trait)`.
@@ -1862,9 +1874,10 @@ rustc_queries! {
     ///
     /// This query returns an `&Arc` because codegen backends need the value even after the `TyCtxt`
     /// has been destroyed.
-    query output_filenames(_: ()) -> &'tcx Arc<OutputFilenames> {
+    query output_filenames(_: ()) -> Arc<OutputFilenames> {
         feedable
         desc { "getting output filenames" }
+        arena_cache
     }
 
     /// Do not call this query directly: invoke `normalize` instead.
@@ -2115,12 +2128,12 @@ rustc_queries! {
         separate_provide_extern
     }
 
-    query permits_uninit_init(key: TyAndLayout<'tcx>) -> bool {
-        desc { "checking to see if `{}` permits being left uninit", key.ty }
+    query permits_uninit_init(key: ty::ParamEnvAnd<'tcx, TyAndLayout<'tcx>>) -> bool {
+        desc { "checking to see if `{}` permits being left uninit", key.value.ty }
     }
 
-    query permits_zero_init(key: TyAndLayout<'tcx>) -> bool {
-        desc { "checking to see if `{}` permits being left zeroed", key.ty }
+    query permits_zero_init(key: ty::ParamEnvAnd<'tcx, TyAndLayout<'tcx>>) -> bool {
+        desc { "checking to see if `{}` permits being left zeroed", key.value.ty }
     }
 
     query compare_impl_const(

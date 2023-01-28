@@ -19,6 +19,7 @@
 
 use std::mem;
 
+use rustc_hir::def_id::DefId;
 use rustc_infer::infer::canonical::{Canonical, CanonicalVarKind, CanonicalVarValues};
 use rustc_infer::infer::canonical::{OriginalQueryValues, QueryRegionConstraints, QueryResponse};
 use rustc_infer::infer::{InferCtxt, InferOk, TyCtxtInferExt};
@@ -26,7 +27,9 @@ use rustc_infer::traits::query::NoSolution;
 use rustc_infer::traits::Obligation;
 use rustc_middle::infer::canonical::Certainty as OldCertainty;
 use rustc_middle::ty::{self, Ty, TyCtxt};
-use rustc_middle::ty::{RegionOutlivesPredicate, ToPredicate, TypeOutlivesPredicate};
+use rustc_middle::ty::{
+    CoercePredicate, RegionOutlivesPredicate, SubtypePredicate, ToPredicate, TypeOutlivesPredicate,
+};
 use rustc_span::DUMMY_SP;
 
 use crate::traits::ObligationCause;
@@ -87,6 +90,8 @@ pub enum Certainty {
 }
 
 impl Certainty {
+    pub const AMBIGUOUS: Certainty = Certainty::Maybe(MaybeCause::Ambiguity);
+
     /// When proving multiple goals using **AND**, e.g. nested obligations for an impl,
     /// use this function to unify the certainty of these goals
     pub fn unify_and(self, other: Certainty) -> Certainty {
@@ -136,14 +141,33 @@ type CanonicalResponse<'tcx> = Canonical<'tcx, Response<'tcx>>;
 /// solver, merge the two responses again.
 pub type QueryResult<'tcx> = Result<CanonicalResponse<'tcx>, NoSolution>;
 
-pub trait TyCtxtExt<'tcx> {
-    fn evaluate_goal(self, goal: CanonicalGoal<'tcx>) -> QueryResult<'tcx>;
+pub trait InferCtxtEvalExt<'tcx> {
+    /// Evaluates a goal from **outside** of the trait solver.
+    ///
+    /// Using this while inside of the solver is wrong as it uses a new
+    /// search graph which would break cycle detection.
+    fn evaluate_root_goal(
+        &self,
+        goal: Goal<'tcx, ty::Predicate<'tcx>>,
+    ) -> Result<(bool, Certainty), NoSolution>;
 }
 
-impl<'tcx> TyCtxtExt<'tcx> for TyCtxt<'tcx> {
-    fn evaluate_goal(self, goal: CanonicalGoal<'tcx>) -> QueryResult<'tcx> {
-        let mut search_graph = search_graph::SearchGraph::new(self);
-        EvalCtxt::evaluate_canonical_goal(self, &mut search_graph, goal)
+impl<'tcx> InferCtxtEvalExt<'tcx> for InferCtxt<'tcx> {
+    fn evaluate_root_goal(
+        &self,
+        goal: Goal<'tcx, ty::Predicate<'tcx>>,
+    ) -> Result<(bool, Certainty), NoSolution> {
+        let mut search_graph = search_graph::SearchGraph::new(self.tcx);
+
+        let result = EvalCtxt {
+            search_graph: &mut search_graph,
+            infcx: self,
+            var_values: CanonicalVarValues::dummy(),
+        }
+        .evaluate_goal(goal);
+
+        assert!(search_graph.is_empty());
+        result
     }
 }
 
@@ -159,18 +183,15 @@ impl<'a, 'tcx> EvalCtxt<'a, 'tcx> {
         self.infcx.tcx
     }
 
-    /// Creates a new evaluation context outside of the trait solver.
+    /// The entry point of the solver.
     ///
-    /// With this solver making a canonical response doesn't make much sense.
-    /// The `search_graph` for this solver has to be completely empty.
-    fn new_outside_solver(
-        infcx: &'a InferCtxt<'tcx>,
-        search_graph: &'a mut search_graph::SearchGraph<'tcx>,
-    ) -> EvalCtxt<'a, 'tcx> {
-        assert!(search_graph.is_empty());
-        EvalCtxt { infcx, var_values: CanonicalVarValues::dummy(), search_graph }
-    }
-
+    /// This function deals with (coinductive) cycles, overflow, and caching
+    /// and then calls [`EvalCtxt::compute_goal`] which contains the actual
+    /// logic of the solver.
+    ///
+    /// Instead of calling this function directly, use either [EvalCtxt::evaluate_goal]
+    /// if you're inside of the solver or [InferCtxtEvalExt::evaluate_root_goal] if you're
+    /// outside of it.
     #[instrument(level = "debug", skip(tcx, search_graph), ret)]
     fn evaluate_canonical_goal(
         tcx: TyCtxt<'tcx>,
@@ -243,16 +264,31 @@ impl<'a, 'tcx> EvalCtxt<'a, 'tcx> {
                 ty::PredicateKind::Clause(ty::Clause::RegionOutlives(predicate)) => {
                     self.compute_region_outlives_goal(Goal { param_env, predicate })
                 }
+                ty::PredicateKind::Subtype(predicate) => {
+                    self.compute_subtype_goal(Goal { param_env, predicate })
+                }
+                ty::PredicateKind::Coerce(predicate) => {
+                    self.compute_coerce_goal(Goal { param_env, predicate })
+                }
+                ty::PredicateKind::ClosureKind(def_id, substs, kind) => self
+                    .compute_closure_kind_goal(Goal {
+                        param_env,
+                        predicate: (def_id, substs, kind),
+                    }),
+                ty::PredicateKind::ObjectSafe(trait_def_id) => {
+                    self.compute_object_safe_goal(trait_def_id)
+                }
+                ty::PredicateKind::WellFormed(arg) => {
+                    self.compute_well_formed_goal(Goal { param_env, predicate: arg })
+                }
+                ty::PredicateKind::Ambiguous => self.make_canonical_response(Certainty::AMBIGUOUS),
                 // FIXME: implement these predicates :)
-                ty::PredicateKind::WellFormed(_)
-                | ty::PredicateKind::ObjectSafe(_)
-                | ty::PredicateKind::ClosureKind(_, _, _)
-                | ty::PredicateKind::Subtype(_)
-                | ty::PredicateKind::Coerce(_)
-                | ty::PredicateKind::ConstEvaluatable(_)
-                | ty::PredicateKind::ConstEquate(_, _)
-                | ty::PredicateKind::TypeWellFormedFromEnv(_)
-                | ty::PredicateKind::Ambiguous => self.make_canonical_response(Certainty::Yes),
+                ty::PredicateKind::ConstEvaluatable(_) | ty::PredicateKind::ConstEquate(_, _) => {
+                    self.make_canonical_response(Certainty::Yes)
+                }
+                ty::PredicateKind::TypeWellFormedFromEnv(..) => {
+                    bug!("TypeWellFormedFromEnv is only used for Chalk")
+                }
             }
         } else {
             let kind = self.infcx.replace_bound_vars_with_placeholders(kind);
@@ -275,9 +311,85 @@ impl<'a, 'tcx> EvalCtxt<'a, 'tcx> {
     ) -> QueryResult<'tcx> {
         self.make_canonical_response(Certainty::Yes)
     }
+
+    fn compute_coerce_goal(
+        &mut self,
+        goal: Goal<'tcx, CoercePredicate<'tcx>>,
+    ) -> QueryResult<'tcx> {
+        self.compute_subtype_goal(Goal {
+            param_env: goal.param_env,
+            predicate: SubtypePredicate {
+                a_is_expected: false,
+                a: goal.predicate.a,
+                b: goal.predicate.b,
+            },
+        })
+    }
+
+    fn compute_subtype_goal(
+        &mut self,
+        goal: Goal<'tcx, SubtypePredicate<'tcx>>,
+    ) -> QueryResult<'tcx> {
+        if goal.predicate.a.is_ty_var() && goal.predicate.b.is_ty_var() {
+            // FIXME: Do we want to register a subtype relation between these vars?
+            // That won't actually reflect in the query response, so it seems moot.
+            self.make_canonical_response(Certainty::AMBIGUOUS)
+        } else {
+            let InferOk { value: (), obligations } = self
+                .infcx
+                .at(&ObligationCause::dummy(), goal.param_env)
+                .sub(goal.predicate.a, goal.predicate.b)?;
+            self.evaluate_all_and_make_canonical_response(
+                obligations.into_iter().map(|pred| pred.into()).collect(),
+            )
+        }
+    }
+
+    fn compute_closure_kind_goal(
+        &mut self,
+        goal: Goal<'tcx, (DefId, ty::SubstsRef<'tcx>, ty::ClosureKind)>,
+    ) -> QueryResult<'tcx> {
+        let (_, substs, expected_kind) = goal.predicate;
+        let found_kind = substs.as_closure().kind_ty().to_opt_closure_kind();
+
+        let Some(found_kind) = found_kind else {
+            return self.make_canonical_response(Certainty::AMBIGUOUS);
+        };
+        if found_kind.extends(expected_kind) {
+            self.make_canonical_response(Certainty::Yes)
+        } else {
+            Err(NoSolution)
+        }
+    }
+
+    fn compute_object_safe_goal(&mut self, trait_def_id: DefId) -> QueryResult<'tcx> {
+        if self.tcx().is_object_safe(trait_def_id) {
+            self.make_canonical_response(Certainty::Yes)
+        } else {
+            Err(NoSolution)
+        }
+    }
+
+    fn compute_well_formed_goal(
+        &mut self,
+        goal: Goal<'tcx, ty::GenericArg<'tcx>>,
+    ) -> QueryResult<'tcx> {
+        match crate::traits::wf::unnormalized_obligations(
+            self.infcx,
+            goal.param_env,
+            goal.predicate,
+        ) {
+            Some(obligations) => self.evaluate_all_and_make_canonical_response(
+                obligations.into_iter().map(|o| o.into()).collect(),
+            ),
+            None => self.make_canonical_response(Certainty::AMBIGUOUS),
+        }
+    }
 }
 
 impl<'tcx> EvalCtxt<'_, 'tcx> {
+    // Recursively evaluates a list of goals to completion, returning the certainty
+    // of all of the goals.
     fn evaluate_all(
         &mut self,
         mut goals: Vec<Goal<'tcx, ty::Predicate<'tcx>>>,
@@ -314,6 +426,10 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
         })
     }
 
+    // Recursively evaluates a list of goals to completion, making a query response.
+    //
+    // This is just a convenient way of calling [`EvalCtxt::evaluate_all`],
+    // then [`EvalCtxt::make_canonical_response`].
     fn evaluate_all_and_make_canonical_response(
         &mut self,
         goals: Vec<Goal<'tcx, ty::Predicate<'tcx>>>,
