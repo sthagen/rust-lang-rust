@@ -52,7 +52,6 @@
 
 use crate::deref_separator::deref_finder;
 use crate::simplify;
-use crate::util::expand_aggregate;
 use crate::MirPass;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_errors::pluralize;
@@ -272,31 +271,26 @@ impl<'tcx> TransformVisitor<'tcx> {
             assert_eq!(self.state_adt_ref.variant(idx).fields.len(), 0);
 
             // FIXME(swatinem): assert that `val` is indeed unit?
-            statements.extend(expand_aggregate(
-                Place::return_place(),
-                std::iter::empty(),
-                kind,
+            statements.push(Statement {
+                kind: StatementKind::Assign(Box::new((
+                    Place::return_place(),
+                    Rvalue::Aggregate(Box::new(kind), vec![]),
+                ))),
                 source_info,
-                self.tcx,
-            ));
+            });
             return;
         }
 
         // else: `Poll::Ready(x)`, `GeneratorState::Yielded(x)` or `GeneratorState::Complete(x)`
         assert_eq!(self.state_adt_ref.variant(idx).fields.len(), 1);
 
-        let ty = self
-            .tcx
-            .bound_type_of(self.state_adt_ref.variant(idx).fields[0].did)
-            .subst(self.tcx, self.state_substs);
-
-        statements.extend(expand_aggregate(
-            Place::return_place(),
-            std::iter::once((val, ty)),
-            kind,
+        statements.push(Statement {
+            kind: StatementKind::Assign(Box::new((
+                Place::return_place(),
+                Rvalue::Aggregate(Box::new(kind), vec![val]),
+            ))),
             source_info,
-            self.tcx,
-        ));
+        });
     }
 
     // Create a Place referencing a generator struct field
@@ -1390,6 +1384,7 @@ pub(crate) fn mir_generator_witnesses<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: DefId,
 ) -> GeneratorLayout<'tcx> {
+    assert!(tcx.sess.opts.unstable_opts.drop_tracking_mir);
     let def_id = def_id.expect_local();
 
     let (body, _) = tcx.mir_promoted(ty::WithOptConstParam::unknown(def_id));
@@ -1400,15 +1395,8 @@ pub(crate) fn mir_generator_witnesses<'tcx>(
     let gen_ty = body.local_decls[ty::CAPTURE_STRUCT_LOCAL].ty;
 
     // Get the interior types and substs which typeck computed
-    let (upvars, interior, movable) = match *gen_ty.kind() {
-        ty::Generator(_, substs, movability) => {
-            let substs = substs.as_generator();
-            (
-                substs.upvar_tys().collect::<Vec<_>>(),
-                substs.witness(),
-                movability == hir::Movability::Movable,
-            )
-        }
+    let movable = match *gen_ty.kind() {
+        ty::Generator(_, _, movability) => movability == hir::Movability::Movable,
         _ => span_bug!(body.span, "unexpected generator type {}", gen_ty),
     };
 
@@ -1422,11 +1410,7 @@ pub(crate) fn mir_generator_witnesses<'tcx>(
     // `storage_liveness` tells us which locals have live storage at suspension points
     let (_, generator_layout, _) = compute_layout(tcx, liveness_info, body);
 
-    if tcx.sess.opts.unstable_opts.drop_tracking_mir {
-        check_suspend_tys(tcx, &generator_layout, &body);
-    } else {
-        sanitize_witness(tcx, body, interior, upvars, &generator_layout);
-    }
+    check_suspend_tys(tcx, &generator_layout, &body);
 
     generator_layout
 }
@@ -1444,10 +1428,15 @@ impl<'tcx> MirPass<'tcx> for StateTransform {
         let gen_ty = body.local_decls.raw[1].ty;
 
         // Get the discriminant type and substs which typeck computed
-        let (discr_ty, movable) = match *gen_ty.kind() {
+        let (discr_ty, upvars, interior, movable) = match *gen_ty.kind() {
             ty::Generator(_, substs, movability) => {
                 let substs = substs.as_generator();
-                (substs.discr_ty(tcx), movability == hir::Movability::Movable)
+                (
+                    substs.discr_ty(tcx),
+                    substs.upvar_tys().collect::<Vec<_>>(),
+                    substs.witness(),
+                    movability == hir::Movability::Movable,
+                )
             }
             _ => {
                 tcx.sess
@@ -1523,6 +1512,12 @@ impl<'tcx> MirPass<'tcx> for StateTransform {
         // `remap` gives a mapping from local indices onto generator struct indices
         // `storage_liveness` tells us which locals have live storage at suspension points
         let (remap, layout, storage_liveness) = compute_layout(tcx, liveness_info, body);
+
+        if tcx.sess.opts.unstable_opts.validate_mir
+            && !tcx.sess.opts.unstable_opts.drop_tracking_mir
+        {
+            sanitize_witness(tcx, body, interior, upvars, &layout);
+        }
 
         let can_return = can_return(tcx, body, tcx.param_env(body.source.def_id()));
 
@@ -1656,6 +1651,7 @@ impl<'tcx> Visitor<'tcx> for EnsureGeneratorFieldAssignmentsNeverAlias<'_> {
             | StatementKind::AscribeUserType(..)
             | StatementKind::Coverage(..)
             | StatementKind::Intrinsic(..)
+            | StatementKind::ConstEvalCounter
             | StatementKind::Nop => {}
         }
     }

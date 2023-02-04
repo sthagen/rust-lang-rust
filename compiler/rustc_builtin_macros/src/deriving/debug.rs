@@ -23,6 +23,7 @@ pub fn expand_deriving_debug(
         span,
         path: path_std!(fmt::Debug),
         skip_path_as_bound: false,
+        needs_copy_as_bound_if_packed: true,
         additional_bounds: Vec::new(),
         supports_unions: false,
         methods: vec![MethodDef {
@@ -75,6 +76,21 @@ fn show_substructure(cx: &mut ExtCtxt<'_>, span: Span, substr: &Substructure<'_>
     // The number of fields that can be handled without an array.
     const CUTOFF: usize = 5;
 
+    fn expr_for_field(
+        cx: &ExtCtxt<'_>,
+        field: &FieldInfo,
+        index: usize,
+        len: usize,
+    ) -> ast::ptr::P<ast::Expr> {
+        if index < len - 1 {
+            field.self_expr.clone()
+        } else {
+            // Unsized types need an extra indirection, but only the last field
+            // may be unsized.
+            cx.expr_addr_of(field.span, field.self_expr.clone())
+        }
+    }
+
     if fields.is_empty() {
         // Special case for no fields.
         let fn_path_write_str = cx.std_path(&[sym::fmt, sym::Formatter, sym::write_str]);
@@ -97,8 +113,8 @@ fn show_substructure(cx: &mut ExtCtxt<'_>, span: Span, substr: &Substructure<'_>
                 let name = cx.expr_str(field.span, field.name.unwrap().name);
                 args.push(name);
             }
-            // Use an extra indirection to make sure this works for unsized types.
-            let field = cx.expr_addr_of(field.span, field.self_expr.clone());
+
+            let field = expr_for_field(cx, field, i, fields.len());
             args.push(field);
         }
         let expr = cx.expr_call_global(span, fn_path_debug, args);
@@ -108,13 +124,13 @@ fn show_substructure(cx: &mut ExtCtxt<'_>, span: Span, substr: &Substructure<'_>
         let mut name_exprs = Vec::with_capacity(fields.len());
         let mut value_exprs = Vec::with_capacity(fields.len());
 
-        for field in fields {
+        for i in 0..fields.len() {
+            let field = &fields[i];
             if is_struct {
                 name_exprs.push(cx.expr_str(field.span, field.name.unwrap().name));
             }
 
-            // Use an extra indirection to make sure this works for unsized types.
-            let field = cx.expr_addr_of(field.span, field.self_expr.clone());
+            let field = expr_for_field(cx, field, i, fields.len());
             value_exprs.push(field);
         }
 

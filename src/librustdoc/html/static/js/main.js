@@ -180,7 +180,6 @@ function browserSupportsHistoryApi() {
     return window.history && typeof window.history.pushState === "function";
 }
 
-// eslint-disable-next-line no-unused-vars
 function loadCss(cssUrl) {
     const link = document.createElement("link");
     link.href = cssUrl;
@@ -1142,7 +1141,11 @@ function loadCss(cssUrl) {
 (function() {
     let reset_button_timeout = null;
 
-    window.copy_path = but => {
+    const but = document.getElementById("copy-path");
+    if (!but) {
+        return;
+    }
+    but.onclick = () => {
         const parent = but.parentElement;
         const path = [];
 

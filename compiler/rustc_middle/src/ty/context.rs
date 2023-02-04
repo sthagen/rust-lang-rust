@@ -17,6 +17,7 @@ use crate::mir::{
 };
 use crate::thir::Thir;
 use crate::traits;
+use crate::traits::solve::{ExternalConstraints, ExternalConstraintsData};
 use crate::ty::query::{self, TyCtxtAt};
 use crate::ty::{
     self, AdtDef, AdtDefData, AdtKind, Binder, Const, ConstData, DefIdTree, FloatTy, FloatVar,
@@ -76,6 +77,8 @@ use std::hash::{Hash, Hasher};
 use std::iter;
 use std::mem;
 use std::ops::{Bound, Deref};
+
+const TINY_CONST_EVAL_LIMIT: Limit = Limit(20);
 
 pub trait OnDiskCache<'tcx>: rustc_data_structures::sync::Sync {
     /// Creates a new `OnDiskCache` instance from the serialized data in `data`.
@@ -146,6 +149,7 @@ pub struct CtxtInterners<'tcx> {
     bound_variable_kinds: InternedSet<'tcx, List<ty::BoundVariableKind>>,
     layout: InternedSet<'tcx, LayoutS<VariantIdx>>,
     adt_def: InternedSet<'tcx, AdtDefData>,
+    external_constraints: InternedSet<'tcx, ExternalConstraintsData<'tcx>>,
 }
 
 impl<'tcx> CtxtInterners<'tcx> {
@@ -167,6 +171,7 @@ impl<'tcx> CtxtInterners<'tcx> {
             bound_variable_kinds: Default::default(),
             layout: Default::default(),
             adt_def: Default::default(),
+            external_constraints: Default::default(),
         }
     }
 
@@ -1104,7 +1109,11 @@ impl<'tcx> TyCtxt<'tcx> {
     }
 
     pub fn const_eval_limit(self) -> Limit {
-        self.limits(()).const_eval_limit
+        if self.sess.opts.unstable_opts.tiny_const_eval_limit {
+            TINY_CONST_EVAL_LIMIT
+        } else {
+            self.limits(()).const_eval_limit
+        }
     }
 
     pub fn all_traits(self) -> impl Iterator<Item = DefId> + 'tcx {
@@ -1443,6 +1452,7 @@ direct_interners! {
     const_allocation: intern_const_alloc(Allocation): ConstAllocation -> ConstAllocation<'tcx>,
     layout: intern_layout(LayoutS<VariantIdx>): Layout -> Layout<'tcx>,
     adt_def: intern_adt_def(AdtDefData): AdtDef -> AdtDef<'tcx>,
+    external_constraints: intern_external_constraints(ExternalConstraintsData<'tcx>): ExternalConstraints -> ExternalConstraints<'tcx>,
 }
 
 macro_rules! slice_interners {
@@ -2157,10 +2167,7 @@ impl<'tcx> TyCtxt<'tcx> {
     }
 
     pub fn is_late_bound(self, id: HirId) -> bool {
-        self.is_late_bound_map(id.owner.def_id).map_or(false, |set| {
-            let def_id = self.hir().local_def_id(id);
-            set.contains(&def_id)
-        })
+        self.is_late_bound_map(id.owner).map_or(false, |set| set.contains(&id.local_id))
     }
 
     pub fn late_bound_vars(self, id: HirId) -> &'tcx List<ty::BoundVariableKind> {
@@ -2168,7 +2175,7 @@ impl<'tcx> TyCtxt<'tcx> {
             self.late_bound_vars_map(id.owner)
                 .and_then(|map| map.get(&id.local_id).cloned())
                 .unwrap_or_else(|| {
-                    bug!("No bound vars found for {:?} ({:?})", self.hir().node_to_string(id), id)
+                    bug!("No bound vars found for {}", self.hir().node_to_string(id))
                 })
                 .iter(),
         )

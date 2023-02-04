@@ -8,10 +8,10 @@ use rustc_middle::mir::interpret::Scalar;
 use rustc_middle::mir::visit::NonUseContext::VarDebugInfo;
 use rustc_middle::mir::visit::{PlaceContext, Visitor};
 use rustc_middle::mir::{
-    traversal, AggregateKind, BasicBlock, BinOp, Body, BorrowKind, CastKind, CopyNonOverlapping,
-    Local, Location, MirPass, MirPhase, NonDivergingIntrinsic, Operand, Place, PlaceElem, PlaceRef,
-    ProjectionElem, RetagKind, RuntimePhase, Rvalue, SourceScope, Statement, StatementKind,
-    Terminator, TerminatorKind, UnOp, START_BLOCK,
+    traversal, BasicBlock, BinOp, Body, BorrowKind, CastKind, CopyNonOverlapping, Local, Location,
+    MirPass, MirPhase, NonDivergingIntrinsic, Operand, Place, PlaceElem, PlaceRef, ProjectionElem,
+    RetagKind, RuntimePhase, Rvalue, SourceScope, Statement, StatementKind, Terminator,
+    TerminatorKind, UnOp, START_BLOCK,
 };
 use rustc_middle::ty::{self, InstanceDef, ParamEnv, Ty, TyCtxt};
 use rustc_mir_dataflow::impls::MaybeStorageLive;
@@ -423,19 +423,7 @@ impl<'a, 'tcx> Visitor<'tcx> for TypeChecker<'a, 'tcx> {
             };
         }
         match rvalue {
-            Rvalue::Use(_) | Rvalue::CopyForDeref(_) => {}
-            Rvalue::Aggregate(agg_kind, _) => {
-                let disallowed = match **agg_kind {
-                    AggregateKind::Array(..) => false,
-                    _ => self.mir_phase >= MirPhase::Runtime(RuntimePhase::PostCleanup),
-                };
-                if disallowed {
-                    self.fail(
-                        location,
-                        format!("{:?} have been lowered to field assignments", rvalue),
-                    )
-                }
-            }
+            Rvalue::Use(_) | Rvalue::CopyForDeref(_) | Rvalue::Aggregate(..) => {}
             Rvalue::Ref(_, BorrowKind::Shallow, _) => {
                 if self.mir_phase >= MirPhase::Runtime(RuntimePhase::Initial) {
                     self.fail(
@@ -754,13 +742,14 @@ impl<'a, 'tcx> Visitor<'tcx> for TypeChecker<'a, 'tcx> {
                 // FIXME(JakobDegen) The validator should check that `self.mir_phase <
                 // DropsLowered`. However, this causes ICEs with generation of drop shims, which
                 // seem to fail to set their `MirPhase` correctly.
-                if *kind == RetagKind::Raw || *kind == RetagKind::TwoPhase {
+                if matches!(kind, RetagKind::Raw | RetagKind::TwoPhase) {
                     self.fail(location, format!("explicit `{:?}` is forbidden", kind));
                 }
             }
             StatementKind::StorageLive(..)
             | StatementKind::StorageDead(..)
             | StatementKind::Coverage(_)
+            | StatementKind::ConstEvalCounter
             | StatementKind::Nop => {}
         }
 

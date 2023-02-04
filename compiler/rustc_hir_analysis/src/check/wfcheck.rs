@@ -391,7 +391,7 @@ fn check_gat_where_clauses(tcx: TyCtxt<'_>, associated_items: &[hir::TraitItemRe
                         gather_gat_bounds(
                             tcx,
                             param_env,
-                            item_def_id.def_id,
+                            item_def_id,
                             sig.inputs_and_output,
                             // We also assume that all of the function signature's parameter types
                             // are well formed.
@@ -413,7 +413,7 @@ fn check_gat_where_clauses(tcx: TyCtxt<'_>, associated_items: &[hir::TraitItemRe
                         gather_gat_bounds(
                             tcx,
                             param_env,
-                            item_def_id.def_id,
+                            item_def_id,
                             tcx.explicit_item_bounds(item_def_id).to_vec(),
                             &FxIndexSet::default(),
                             gat_def_id.def_id,
@@ -563,7 +563,7 @@ fn augment_param_env<'tcx>(
 fn gather_gat_bounds<'tcx, T: TypeFoldable<'tcx>>(
     tcx: TyCtxt<'tcx>,
     param_env: ty::ParamEnv<'tcx>,
-    item_def_id: LocalDefId,
+    item_def_id: hir::OwnerId,
     to_check: T,
     wf_tys: &FxIndexSet<Ty<'tcx>>,
     gat_def_id: LocalDefId,
@@ -596,7 +596,7 @@ fn gather_gat_bounds<'tcx, T: TypeFoldable<'tcx>>(
         // reflected in a where clause on the GAT itself.
         for (ty, ty_idx) in &types {
             // In our example, requires that `Self: 'a`
-            if ty_known_to_outlive(tcx, item_def_id, param_env, &wf_tys, *ty, *region_a) {
+            if ty_known_to_outlive(tcx, item_def_id.def_id, param_env, &wf_tys, *ty, *region_a) {
                 debug!(?ty_idx, ?region_a_idx);
                 debug!("required clause: {ty} must outlive {region_a}");
                 // Translate into the generic parameters of the GAT. In
@@ -634,7 +634,14 @@ fn gather_gat_bounds<'tcx, T: TypeFoldable<'tcx>>(
             if ty::ReStatic == **region_b || region_a == region_b {
                 continue;
             }
-            if region_known_to_outlive(tcx, item_def_id, param_env, &wf_tys, *region_a, *region_b) {
+            if region_known_to_outlive(
+                tcx,
+                item_def_id.def_id,
+                param_env,
+                &wf_tys,
+                *region_a,
+                *region_b,
+            ) {
                 debug!(?region_a_idx, ?region_b_idx);
                 debug!("required clause: {region_a} must outlive {region_b}");
                 // Translate into the generic parameters of the GAT.
@@ -834,7 +841,7 @@ fn check_object_unsafe_self_trait_by_name(tcx: TyCtxt<'_>, item: &hir::TraitItem
         _ => {}
     }
     if !trait_should_be_self.is_empty() {
-        if tcx.object_safety_violations(trait_def_id).is_empty() {
+        if tcx.check_is_object_safe(trait_def_id) {
             return;
         }
         let sugg = trait_should_be_self.iter().map(|span| (*span, "Self".to_string())).collect();
@@ -1065,8 +1072,8 @@ fn check_type_defn<'tcx>(tcx: TyCtxt<'tcx>, item: &hir::Item<'tcx>, all_sized: b
             // All field types must be well-formed.
             for field in &variant.fields {
                 let field_id = field.did.expect_local();
-                let hir::Node::Field(hir::FieldDef { ty: hir_ty, .. }) = tcx.hir().get_by_def_id(field_id)
-                else { bug!() };
+                let hir::FieldDef { ty: hir_ty, .. } =
+                    tcx.hir().get_by_def_id(field_id).expect_field();
                 let ty = wfcx.normalize(hir_ty.span, None, tcx.type_of(field.did));
                 wfcx.register_wf_obligation(
                     hir_ty.span,
@@ -1099,8 +1106,8 @@ fn check_type_defn<'tcx>(tcx: TyCtxt<'tcx>, item: &hir::Item<'tcx>, all_sized: b
             {
                 let last = idx == variant.fields.len() - 1;
                 let field_id = field.did.expect_local();
-                let hir::Node::Field(hir::FieldDef { ty: hir_ty, .. }) = tcx.hir().get_by_def_id(field_id)
-                else { bug!() };
+                let hir::FieldDef { ty: hir_ty, .. } =
+                    tcx.hir().get_by_def_id(field_id).expect_field();
                 let ty = wfcx.normalize(hir_ty.span, None, tcx.type_of(field.did));
                 wfcx.register_bound(
                     traits::ObligationCause::new(

@@ -78,9 +78,10 @@ pub(super) enum CandidateSource {
     ///     let _y = x.clone();
     /// }
     /// ```
-    AliasBound(usize),
+    AliasBound,
 }
 
+/// Methods used to assemble candidates for either trait or projection goals.
 pub(super) trait GoalKind<'tcx>: TypeFoldable<'tcx> + Copy + Eq {
     fn self_ty(self) -> Ty<'tcx>;
 
@@ -173,6 +174,26 @@ pub(super) trait GoalKind<'tcx>: TypeFoldable<'tcx> + Copy + Eq {
         ecx: &mut EvalCtxt<'_, 'tcx>,
         goal: Goal<'tcx, Self>,
     ) -> QueryResult<'tcx>;
+
+    // The most common forms of unsizing are array to slice, and concrete (Sized)
+    // type into a `dyn Trait`. ADTs and Tuples can also have their final field
+    // unsized if it's generic.
+    fn consider_builtin_unsize_candidate(
+        ecx: &mut EvalCtxt<'_, 'tcx>,
+        goal: Goal<'tcx, Self>,
+    ) -> QueryResult<'tcx>;
+
+    // `dyn Trait1` can be unsized to `dyn Trait2` if they are the same trait, or
+    // if `Trait2` is a (transitive) supertrait of `Trait2`.
+    fn consider_builtin_dyn_upcast_candidates(
+        ecx: &mut EvalCtxt<'_, 'tcx>,
+        goal: Goal<'tcx, Self>,
+    ) -> Vec<CanonicalResponse<'tcx>>;
+
+    fn consider_builtin_discriminant_kind_candidate(
+        ecx: &mut EvalCtxt<'_, 'tcx>,
+        goal: Goal<'tcx, Self>,
+    ) -> QueryResult<'tcx>;
 }
 
 impl<'tcx> EvalCtxt<'_, 'tcx> {
@@ -242,8 +263,6 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
             // NOTE: Alternatively we could call `evaluate_goal` here and only have a `Normalized` candidate.
             // This doesn't work as long as we use `CandidateSource` in winnowing.
             let goal = goal.with(tcx, goal.predicate.with_self_ty(tcx, normalized_ty));
-            // FIXME: This is broken if we care about the `usize` of `AliasBound` because the self type
-            // could be normalized to yet another projection with different item bounds.
             let normalized_candidates = self.assemble_and_evaluate_candidates(goal);
             for mut normalized_candidate in normalized_candidates {
                 normalized_candidate.result =
@@ -305,6 +324,10 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
             G::consider_builtin_future_candidate(self, goal)
         } else if lang_items.gen_trait() == Some(trait_def_id) {
             G::consider_builtin_generator_candidate(self, goal)
+        } else if lang_items.unsize_trait() == Some(trait_def_id) {
+            G::consider_builtin_unsize_candidate(self, goal)
+        } else if lang_items.discriminant_kind_trait() == Some(trait_def_id) {
+            G::consider_builtin_discriminant_kind_candidate(self, goal)
         } else {
             Err(NoSolution)
         };
@@ -314,6 +337,14 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
                 candidates.push(Candidate { source: CandidateSource::BuiltinImpl, result })
             }
             Err(NoSolution) => (),
+        }
+
+        // There may be multiple unsize candidates for a trait with several supertraits:
+        // `trait Foo: Bar<A> + Bar<B>` and `dyn Foo: Unsize<dyn Bar<_>>`
+        if lang_items.unsize_trait() == Some(trait_def_id) {
+            for result in G::consider_builtin_dyn_upcast_candidates(self, goal) {
+                candidates.push(Candidate { source: CandidateSource::BuiltinImpl, result });
+            }
         }
     }
 
@@ -368,15 +399,14 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
             ty::Alias(_, alias_ty) => alias_ty,
         };
 
-        for (i, (assumption, _)) in self
+        for (assumption, _) in self
             .tcx()
             .bound_explicit_item_bounds(alias_ty.def_id)
             .subst_iter_copied(self.tcx(), alias_ty.substs)
-            .enumerate()
         {
             match G::consider_assumption(self, goal, assumption) {
                 Ok(result) => {
-                    candidates.push(Candidate { source: CandidateSource::AliasBound(i), result })
+                    candidates.push(Candidate { source: CandidateSource::AliasBound, result })
                 }
                 Err(NoSolution) => (),
             }

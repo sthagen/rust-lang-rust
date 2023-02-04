@@ -580,7 +580,7 @@ impl<'tcx> chalk_solve::RustIrDatabase<RustInterner<'tcx>> for RustIrDatabase<'t
     }
 
     fn is_object_safe(&self, trait_id: chalk_ir::TraitId<RustInterner<'tcx>>) -> bool {
-        self.interner.tcx.is_object_safe(trait_id.0)
+        self.interner.tcx.check_is_object_safe(trait_id.0)
     }
 
     fn hidden_opaque_type(
@@ -725,7 +725,7 @@ fn bound_vars_for_item(tcx: TyCtxt<'_>, def_id: DefId) -> SubstsRef<'_> {
                 ty::INNERMOST,
                 ty::BoundTy {
                     var: ty::BoundVar::from(param.index),
-                    kind: ty::BoundTyKind::Param(param.name),
+                    kind: ty::BoundTyKind::Param(param.def_id, param.name),
                 },
             ))
             .into(),

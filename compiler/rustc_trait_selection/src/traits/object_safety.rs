@@ -62,6 +62,37 @@ fn object_safety_violations(tcx: TyCtxt<'_>, trait_def_id: DefId) -> &'_ [Object
     )
 }
 
+fn check_is_object_safe(tcx: TyCtxt<'_>, trait_def_id: DefId) -> bool {
+    let violations = tcx.object_safety_violations(trait_def_id);
+
+    if violations.is_empty() {
+        return true;
+    }
+
+    // If the trait contains any other violations, then let the error reporting path
+    // report it instead of emitting a warning here.
+    if violations.iter().all(|violation| {
+        matches!(
+            violation,
+            ObjectSafetyViolation::Method(_, MethodViolationCode::WhereClauseReferencesSelf, _)
+        )
+    }) {
+        for violation in violations {
+            if let ObjectSafetyViolation::Method(
+                _,
+                MethodViolationCode::WhereClauseReferencesSelf,
+                span,
+            ) = violation
+            {
+                lint_object_unsafe_trait(tcx, *span, trait_def_id, &violation);
+            }
+        }
+        return true;
+    }
+
+    false
+}
+
 /// We say a method is *vtable safe* if it can be invoked on a trait
 /// object. Note that object-safe traits can have some
 /// non-vtable-safe methods, so long as they require `Self: Sized` or
@@ -92,19 +123,6 @@ fn object_safety_violations_for_trait(
         .filter_map(|item| {
             object_safety_violation_for_method(tcx, trait_def_id, &item)
                 .map(|(code, span)| ObjectSafetyViolation::Method(item.name, code, span))
-        })
-        .filter(|violation| {
-            if let ObjectSafetyViolation::Method(
-                _,
-                MethodViolationCode::WhereClauseReferencesSelf,
-                span,
-            ) = violation
-            {
-                lint_object_unsafe_trait(tcx, *span, trait_def_id, &violation);
-                false
-            } else {
-                true
-            }
         })
         .collect();
 
@@ -529,16 +547,56 @@ fn virtual_call_violation_for_method<'tcx>(
 
     // NOTE: This check happens last, because it results in a lint, and not a
     // hard error.
-    if tcx
-        .predicates_of(method.def_id)
-        .predicates
-        .iter()
-        // A trait object can't claim to live more than the concrete type,
-        // so outlives predicates will always hold.
-        .cloned()
-        .filter(|(p, _)| p.to_opt_type_outlives().is_none())
-        .any(|pred| contains_illegal_self_type_reference(tcx, trait_def_id, pred))
-    {
+    if tcx.predicates_of(method.def_id).predicates.iter().any(|&(pred, span)| {
+        // dyn Trait is okay:
+        //
+        //     trait Trait {
+        //         fn f(&self) where Self: 'static;
+        //     }
+        //
+        // because a trait object can't claim to live longer than the concrete
+        // type. If the lifetime bound holds on dyn Trait then it's guaranteed
+        // to hold as well on the concrete type.
+        if pred.to_opt_type_outlives().is_some() {
+            return false;
+        }
+
+        // dyn Trait is okay:
+        //
+        //     auto trait AutoTrait {}
+        //
+        //     trait Trait {
+        //         fn f(&self) where Self: AutoTrait;
+        //     }
+        //
+        // because `impl AutoTrait for dyn Trait` is disallowed by coherence.
+        // Traits with a default impl are implemented for a trait object if and
+        // only if the autotrait is one of the trait object's trait bounds, like
+        // in `dyn Trait + AutoTrait`. This guarantees that trait objects only
+        // implement auto traits if the underlying type does as well.
+        if let ty::PredicateKind::Clause(ty::Clause::Trait(ty::TraitPredicate {
+            trait_ref: pred_trait_ref,
+            constness: ty::BoundConstness::NotConst,
+            polarity: ty::ImplPolarity::Positive,
+        })) = pred.kind().skip_binder()
+            && pred_trait_ref.self_ty() == tcx.types.self_param
+            && tcx.trait_is_auto(pred_trait_ref.def_id)
+        {
+            // Consider bounds like `Self: Bound<Self>`. Auto traits are not
+            // allowed to have generic parameters so `auto trait Bound<T> {}`
+            // would already have reported an error at the definition of the
+            // auto trait.
+            if pred_trait_ref.substs.len() != 1 {
+                tcx.sess.diagnostic().delay_span_bug(
+                    span,
+                    "auto traits cannot have generic parameters",
+                );
+            }
+            return false;
+        }
+
+        contains_illegal_self_type_reference(tcx, trait_def_id, pred.clone())
+    }) {
         return Some(MethodViolationCode::WhereClauseReferencesSelf);
     }
 
@@ -866,5 +924,6 @@ pub fn contains_illegal_impl_trait_in_trait<'tcx>(
 }
 
 pub fn provide(providers: &mut ty::query::Providers) {
-    *providers = ty::query::Providers { object_safety_violations, ..*providers };
+    *providers =
+        ty::query::Providers { object_safety_violations, check_is_object_safe, ..*providers };
 }

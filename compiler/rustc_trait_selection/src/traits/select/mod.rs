@@ -797,7 +797,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 }
 
                 ty::PredicateKind::ObjectSafe(trait_def_id) => {
-                    if self.tcx().is_object_safe(trait_def_id) {
+                    if self.tcx().check_is_object_safe(trait_def_id) {
                         Ok(EvaluatedToOk)
                     } else {
                         Ok(EvaluatedToErr)
@@ -2454,7 +2454,9 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             .at(&cause, obligation.param_env)
             .define_opaque_types(false)
             .eq(placeholder_obligation_trait_ref, impl_trait_ref)
-            .map_err(|e| debug!("match_impl: failed eq_trait_refs due to `{e}`"))?;
+            .map_err(|e| {
+                debug!("match_impl: failed eq_trait_refs due to `{}`", e.to_string(self.tcx()))
+            })?;
         nested_obligations.extend(obligations);
 
         if !self.is_intercrate()

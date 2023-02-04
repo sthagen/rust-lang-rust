@@ -125,7 +125,7 @@ impl<'a, 'tcx> Annotator<'a, 'tcx> {
         if let Some((depr, span)) = &depr {
             is_deprecated = true;
 
-            if kind == AnnotationKind::Prohibited || kind == AnnotationKind::DeprecationProhibited {
+            if matches!(kind, AnnotationKind::Prohibited | AnnotationKind::DeprecationProhibited) {
                 let hir_id = self.tcx.hir().local_def_id_to_hir_id(def_id);
                 self.tcx.emit_spanned_lint(
                     USELESS_DEPRECATED,
@@ -855,7 +855,8 @@ impl<'tcx> Visitor<'tcx> for Checker<'tcx> {
 /// See issue #94972 for details on why this is a special case
 fn is_unstable_reexport(tcx: TyCtxt<'_>, id: hir::HirId) -> bool {
     // Get the LocalDefId so we can lookup the item to check the kind.
-    let Some(def_id) = tcx.hir().opt_local_def_id(id) else { return false; };
+    let Some(owner) = id.as_owner() else { return false; };
+    let def_id = owner.def_id;
 
     let Some(stab) = tcx.stability().local_stability(def_id) else {
         return false;

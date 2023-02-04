@@ -675,8 +675,12 @@ pub trait PrettyPrinter<'tcx>:
                 p!(")")
             }
             ty::FnDef(def_id, substs) => {
-                let sig = self.tcx().fn_sig(def_id).subst(self.tcx(), substs);
-                p!(print(sig), " {{", print_value_path(def_id, substs), "}}");
+                if NO_QUERIES.with(|q| q.get()) {
+                    p!(print_def_path(def_id, substs));
+                } else {
+                    let sig = self.tcx().fn_sig(def_id).subst(self.tcx(), substs);
+                    p!(print(sig), " {{", print_value_path(def_id, substs), "}}");
+                }
             }
             ty::FnPtr(ref bare_fn) => p!(print(bare_fn)),
             ty::Infer(infer_ty) => {
@@ -698,8 +702,10 @@ pub trait PrettyPrinter<'tcx>:
             ty::Error(_) => p!("[type error]"),
             ty::Param(ref param_ty) => p!(print(param_ty)),
             ty::Bound(debruijn, bound_ty) => match bound_ty.kind {
-                ty::BoundTyKind::Anon => self.pretty_print_bound_var(debruijn, bound_ty.var)?,
-                ty::BoundTyKind::Param(p) => p!(write("{}", p)),
+                ty::BoundTyKind::Anon(bv) => {
+                    self.pretty_print_bound_var(debruijn, ty::BoundVar::from_u32(bv))?
+                }
+                ty::BoundTyKind::Param(_, s) => p!(write("{}", s)),
             },
             ty::Adt(def, substs) => {
                 p!(print_def_path(def.did(), substs));
@@ -732,13 +738,13 @@ pub trait PrettyPrinter<'tcx>:
             }
             ty::Placeholder(placeholder) => p!(write("Placeholder({:?})", placeholder)),
             ty::Alias(ty::Opaque, ty::AliasTy { def_id, substs, .. }) => {
-                // FIXME(eddyb) print this with `print_def_path`.
                 // We use verbose printing in 'NO_QUERIES' mode, to
                 // avoid needing to call `predicates_of`. This should
                 // only affect certain debug messages (e.g. messages printed
                 // from `rustc_middle::ty` during the computation of `tcx.predicates_of`),
                 // and should have no effect on any compiler output.
-                if self.should_print_verbose() || NO_QUERIES.with(|q| q.get()) {
+                if self.should_print_verbose() {
+                    // FIXME(eddyb) print this with `print_def_path`.
                     p!(write("Opaque({:?}, {:?})", def_id, substs));
                     return Ok(self);
                 }
@@ -746,6 +752,8 @@ pub trait PrettyPrinter<'tcx>:
                 let parent = self.tcx().parent(def_id);
                 match self.tcx().def_kind(parent) {
                     DefKind::TyAlias | DefKind::AssocTy => {
+                        // NOTE: I know we should check for NO_QUERIES here, but it's alright.
+                        // `type_of` on a type alias or assoc type should never cause a cycle.
                         if let ty::Alias(ty::Opaque, ty::AliasTy { def_id: d, .. }) =
                             *self.tcx().type_of(parent).kind()
                         {
@@ -760,7 +768,14 @@ pub trait PrettyPrinter<'tcx>:
                         p!(print_def_path(def_id, substs));
                         return Ok(self);
                     }
-                    _ => return self.pretty_print_opaque_impl_type(def_id, substs),
+                    _ => {
+                        if NO_QUERIES.with(|q| q.get()) {
+                            p!(print_def_path(def_id, &[]));
+                            return Ok(self);
+                        } else {
+                            return self.pretty_print_opaque_impl_type(def_id, substs);
+                        }
+                    }
                 }
             }
             ty::Str => p!("str"),
@@ -1084,9 +1099,11 @@ pub trait PrettyPrinter<'tcx>:
             write!(self, "Sized")?;
         }
 
-        for re in lifetimes {
-            write!(self, " + ")?;
-            self = self.print_region(re)?;
+        if !FORCE_TRIMMED_PATH.with(|flag| flag.get()) {
+            for re in lifetimes {
+                write!(self, " + ")?;
+                self = self.print_region(re)?;
+            }
         }
 
         Ok(self)
@@ -2070,6 +2087,10 @@ impl<'tcx> PrettyPrinter<'tcx> for FmtPrinter<'_, 'tcx> {
             return true;
         }
 
+        if FORCE_TRIMMED_PATH.with(|flag| flag.get()) {
+            return false;
+        }
+
         let identify_regions = self.tcx.sess.opts.unstable_opts.identify_regions;
 
         match *region {
@@ -2346,6 +2367,7 @@ impl<'tcx> FmtPrinter<'_, 'tcx> {
         } else {
             let tcx = self.tcx;
 
+            let trim_path = FORCE_TRIMMED_PATH.with(|flag| flag.get());
             // Closure used in `RegionFolder` to create names for anonymous late-bound
             // regions. We use two `DebruijnIndex`es (one for the currently folded
             // late-bound region and the other for the binder level) to determine
@@ -2400,8 +2422,10 @@ impl<'tcx> FmtPrinter<'_, 'tcx> {
                     }
                 };
 
-                start_or_continue(&mut self, "for<", ", ");
-                do_continue(&mut self, name);
+                if !trim_path {
+                    start_or_continue(&mut self, "for<", ", ");
+                    do_continue(&mut self, name);
+                }
                 tcx.mk_region(ty::ReLateBound(ty::INNERMOST, ty::BoundRegion { var: br.var, kind }))
             };
             let mut folder = RegionFolder {
@@ -2412,7 +2436,9 @@ impl<'tcx> FmtPrinter<'_, 'tcx> {
             };
             let new_value = value.clone().skip_binder().fold_with(&mut folder);
             let region_map = folder.region_map;
-            start_or_continue(&mut self, "", "> ");
+            if !trim_path {
+                start_or_continue(&mut self, "", "> ");
+            }
             (new_value, region_map)
         };
 

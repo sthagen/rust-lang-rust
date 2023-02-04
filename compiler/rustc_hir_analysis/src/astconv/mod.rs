@@ -2945,12 +2945,12 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                     if r.is_erased() { tcx.lifetimes.re_static } else { r }
                 });
                 let span = ast_ty.span;
-                tcx.sess.emit_err(TypeofReservedKeywordUsed {
-                    span,
-                    ty,
-                    opt_sugg: Some((span, Applicability::MachineApplicable))
-                        .filter(|_| ty.is_suggestable(tcx, false)),
-                });
+                let (ty, opt_sugg) = if let Some(ty) = ty.make_suggestable(tcx, false) {
+                    (ty, Some((span, Applicability::MachineApplicable)))
+                } else {
+                    (ty, None)
+                };
+                tcx.sess.emit_err(TypeofReservedKeywordUsed { span, ty, opt_sugg });
 
                 ty
             }
@@ -3140,8 +3140,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
 
         let hir::Node::ImplItem(hir::ImplItem { kind: hir::ImplItemKind::Fn(..), ident, .. }) =
             hir.get(fn_hir_id) else { return None };
-        let hir::Node::Item(hir::Item { kind: hir::ItemKind::Impl(i), .. }) =
-                hir.get_parent(fn_hir_id) else { bug!("ImplItem should have Impl parent") };
+        let i = hir.get_parent(fn_hir_id).expect_item().expect_impl();
 
         let trait_ref = self.instantiate_mono_trait_ref(
             i.of_trait.as_ref()?,

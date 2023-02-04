@@ -1258,6 +1258,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
             | StatementKind::StorageDead(..)
             | StatementKind::Retag { .. }
             | StatementKind::Coverage(..)
+            | StatementKind::ConstEvalCounter
             | StatementKind::Nop => {}
             StatementKind::Deinit(..) | StatementKind::SetDiscriminant { .. } => {
                 bug!("Statement not allowed in this MIR phase")
@@ -1483,7 +1484,10 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                 }
             }
             None => {
-                if !sig.output().is_privately_uninhabited(self.tcx(), self.param_env) {
+                // The signature in this call can reference region variables,
+                // so erase them before calling a query.
+                let output_ty = self.tcx().erase_regions(sig.output());
+                if !output_ty.is_privately_uninhabited(self.tcx(), self.param_env) {
                     span_mirbug!(self, term, "call to converging function {:?} w/o dest", sig);
                 }
             }
@@ -2027,7 +2031,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                             }
                         };
 
-                        if ty_to_mut == Mutability::Mut && ty_mut == Mutability::Not {
+                        if ty_to_mut.is_mut() && ty_mut.is_not() {
                             span_mirbug!(
                                 self,
                                 rvalue,
@@ -2532,7 +2536,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
             // clauses on the struct.
             AggregateKind::Closure(def_id, substs)
             | AggregateKind::Generator(def_id, substs, _) => {
-                (def_id.to_def_id(), self.prove_closure_bounds(tcx, def_id, substs, location))
+                (def_id, self.prove_closure_bounds(tcx, def_id.expect_local(), substs, location))
             }
 
             AggregateKind::Array(_) | AggregateKind::Tuple => {

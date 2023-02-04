@@ -160,6 +160,8 @@ declare_features! (
     (active, intrinsics, "1.0.0", None, None),
     /// Allows using `#[lang = ".."]` attribute for linking items to special compiler logic.
     (active, lang_items, "1.0.0", None, None),
+    /// Allows the `multiple_supertrait_upcastable` lint.
+    (active, multiple_supertrait_upcastable, "CURRENT_RUSTC_VERSION", None, None),
     /// Allows using `#[omit_gdb_pretty_printer_section]`.
     (active, omit_gdb_pretty_printer_section, "1.5.0", None, None),
     /// Allows using `#[prelude_import]` on glob `use` items.
@@ -340,7 +342,7 @@ declare_features! (
     /// Allows `async {}` expressions in const contexts.
     (active, const_async_blocks, "1.53.0", Some(85368), None),
     /// Allows `const || {}` closures in const contexts.
-    (incomplete, const_closures, "CURRENT_RUSTC_VERSION", Some(106003), None),
+    (incomplete, const_closures, "1.68.0", Some(106003), None),
     /// Allows limiting the evaluation steps of const expressions
     (active, const_eval_limit, "1.43.0", Some(67217), None),
     /// Allows the definition of `const extern fn` and `const unsafe extern fn`.

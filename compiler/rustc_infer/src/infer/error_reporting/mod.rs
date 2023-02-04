@@ -60,13 +60,14 @@ use crate::traits::{
 
 use rustc_data_structures::fx::{FxIndexMap, FxIndexSet};
 use rustc_errors::{pluralize, struct_span_err, Diagnostic, ErrorGuaranteed, IntoDiagnosticArg};
-use rustc_errors::{Applicability, DiagnosticBuilder, DiagnosticStyledString, MultiSpan};
+use rustc_errors::{Applicability, DiagnosticBuilder, DiagnosticStyledString};
 use rustc_hir as hir;
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_hir::lang_items::LangItem;
 use rustc_hir::Node;
 use rustc_middle::dep_graph::DepContext;
+use rustc_middle::ty::print::with_forced_trimmed_paths;
 use rustc_middle::ty::relate::{self, RelateResult, TypeRelation};
 use rustc_middle::ty::{
     self, error::TypeError, List, Region, Ty, TyCtxt, TypeFoldable, TypeSuperVisitable,
@@ -1469,51 +1470,17 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                 for (key, values) in types.iter() {
                     let count = values.len();
                     let kind = key.descr();
-                    let mut returned_async_output_error = false;
                     for &sp in values {
-                        if sp.is_desugaring(DesugaringKind::Async) && !returned_async_output_error {
-                            if [sp] != err.span.primary_spans() {
-                                let mut span: MultiSpan = sp.into();
-                                span.push_span_label(
-                                    sp,
-                                    format!(
-                                        "checked the `Output` of this `async fn`, {}{} {}{}",
-                                        if count > 1 { "one of the " } else { "" },
-                                        target,
-                                        kind,
-                                        pluralize!(count),
-                                    ),
-                                );
-                                err.span_note(
-                                    span,
-                                    "while checking the return type of the `async fn`",
-                                );
-                            } else {
-                                err.span_label(
-                                    sp,
-                                    format!(
-                                        "checked the `Output` of this `async fn`, {}{} {}{}",
-                                        if count > 1 { "one of the " } else { "" },
-                                        target,
-                                        kind,
-                                        pluralize!(count),
-                                    ),
-                                );
-                                err.note("while checking the return type of the `async fn`");
-                            }
-                            returned_async_output_error = true;
-                        } else {
-                            err.span_label(
-                                sp,
-                                format!(
-                                    "{}{} {}{}",
-                                    if count == 1 { "the " } else { "one of the " },
-                                    target,
-                                    kind,
-                                    pluralize!(count),
-                                ),
-                            );
-                        }
+                        err.span_label(
+                            sp,
+                            format!(
+                                "{}{} {}{}",
+                                if count == 1 { "the " } else { "one of the " },
+                                target,
+                                kind,
+                                pluralize!(count),
+                            ),
+                        );
                     }
                 }
             }
@@ -1536,7 +1503,11 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                     //    |
                     //    = note: expected unit type `()`
                     //                 found closure `[closure@$DIR/issue-20862.rs:2:5: 2:14 x:_]`
-                    if !self.ignore_span.overlaps(span) {
+                    //
+                    // Also ignore opaque `Future`s that come from async fns.
+                    if !self.ignore_span.overlaps(span)
+                        && !span.is_desugaring(DesugaringKind::Async)
+                    {
                         self.types.entry(kind).or_default().insert(span);
                     }
                 }
@@ -1612,16 +1583,31 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                 {
                     format!("expected this to be `{}`", expected)
                 } else {
-                    terr.to_string()
+                    terr.to_string(self.tcx).to_string()
                 };
                 label_or_note(sp, &terr);
                 label_or_note(span, &msg);
             } else {
-                label_or_note(span, &terr.to_string());
+                label_or_note(span, &terr.to_string(self.tcx));
                 label_or_note(sp, &msg);
             }
         } else {
-            label_or_note(span, &terr.to_string());
+            if let Some(values) = values
+                && let Some((e, f)) = values.ty()
+                && let TypeError::ArgumentSorts(..) | TypeError::Sorts(_) = terr
+            {
+                let e = self.tcx.erase_regions(e);
+                let f = self.tcx.erase_regions(f);
+                let expected = with_forced_trimmed_paths!(e.sort_string(self.tcx));
+                let found = with_forced_trimmed_paths!(f.sort_string(self.tcx));
+                if expected == found {
+                    label_or_note(span, &terr.to_string(self.tcx));
+                } else {
+                    label_or_note(span, &format!("expected {expected}, found {found}"));
+                }
+            } else {
+                label_or_note(span, &terr.to_string(self.tcx));
+            }
         }
 
         if let Some((expected, found, exp_p, found_p)) = expected_found {
@@ -1849,6 +1835,18 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
         self.check_and_note_conflicting_crates(diag, terr);
 
         self.note_and_explain_type_err(diag, terr, cause, span, cause.body_id.to_def_id());
+        if let Some(exp_found) = exp_found
+            && let exp_found = TypeError::Sorts(exp_found)
+            && exp_found != terr
+        {
+            self.note_and_explain_type_err(
+                diag,
+                exp_found,
+                cause,
+                span,
+                cause.body_id.to_def_id(),
+            );
+        }
 
         if let Some(ValuePairs::PolyTraitRefs(exp_found)) = values
             && let ty::Closure(def_id, _) = exp_found.expected.skip_binder().self_ty().kind()

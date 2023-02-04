@@ -183,6 +183,15 @@ rustc_queries! {
         separate_provide_extern
     }
 
+    query unsizing_params_for_adt(key: DefId) -> rustc_index::bit_set::BitSet<u32>
+    {
+        arena_cache
+        desc { |tcx|
+            "determining what parameters of `{}` can participate in unsizing",
+            tcx.def_path_str(key),
+        }
+    }
+
     query analysis(key: ()) -> Result<(), ErrorGuaranteed> {
         eval_always
         desc { "running analysis passes on this crate" }
@@ -359,6 +368,13 @@ rustc_queries! {
         no_hash
         arena_cache
         desc { |tcx| "constructing THIR tree for `{}`", tcx.def_path_str(key.did.to_def_id()) }
+    }
+
+    /// Create a list-like THIR representation for debugging.
+    query thir_flat(key: ty::WithOptConstParam<LocalDefId>) -> String {
+        no_hash
+        arena_cache
+        desc { |tcx| "constructing flat THIR representation for `{}`", tcx.def_path_str(key.did.to_def_id()) }
     }
 
     /// Set of all the `DefId`s in this crate that have MIR associated with
@@ -805,15 +821,6 @@ rustc_queries! {
             |tcx| "unsafety-checking the const argument `{}`",
             tcx.def_path_str(key.0.to_def_id())
         }
-    }
-
-    /// HACK: when evaluated, this reports an "unsafe derive on repr(packed)" error.
-    ///
-    /// Unsafety checking is executed for each method separately, but we only want
-    /// to emit this error once per derive. As there are some impls with multiple
-    /// methods, we use a query for deduplication.
-    query unsafe_derive_on_repr_packed(key: LocalDefId) -> () {
-        desc { |tcx| "processing `{}`", tcx.def_path_str(key.to_def_id()) }
     }
 
     /// Returns the types assumed to be well formed while "inside" of the given item.
@@ -1274,6 +1281,9 @@ rustc_queries! {
     query object_safety_violations(trait_id: DefId) -> &'tcx [traits::ObjectSafetyViolation] {
         desc { |tcx| "determining object safety of trait `{}`", tcx.def_path_str(trait_id) }
     }
+    query check_is_object_safe(trait_id: DefId) -> bool {
+        desc { |tcx| "checking if trait `{}` is object safe", tcx.def_path_str(trait_id) }
+    }
 
     /// Gets the ParameterEnvironment for a given item; this environment
     /// will be in "user-facing" mode, meaning that it is suitable for
@@ -1640,7 +1650,7 @@ rustc_queries! {
         Option<&'tcx FxHashMap<ItemLocalId, Region>> {
         desc { "looking up a named region" }
     }
-    query is_late_bound_map(_: LocalDefId) -> Option<&'tcx FxIndexSet<LocalDefId>> {
+    query is_late_bound_map(_: hir::OwnerId) -> Option<&'tcx FxIndexSet<ItemLocalId>> {
         desc { "testing if a region is late bound" }
     }
     /// For a given item's generic parameter, gets the default lifetimes to be used

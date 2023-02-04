@@ -561,8 +561,8 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for CompileTimeInterpreter<'mir,
         throw_unsup_format!("pointer arithmetic or comparison is not supported at compile-time");
     }
 
-    fn before_terminator(ecx: &mut InterpCx<'mir, 'tcx, Self>) -> InterpResult<'tcx> {
-        // The step limit has already been hit in a previous call to `before_terminator`.
+    fn increment_const_eval_counter(ecx: &mut InterpCx<'mir, 'tcx, Self>) -> InterpResult<'tcx> {
+        // The step limit has already been hit in a previous call to `increment_const_eval_counter`.
         if ecx.machine.steps_remaining == 0 {
             return Ok(());
         }
@@ -622,10 +622,9 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for CompileTimeInterpreter<'mir,
         let alloc = alloc.inner();
         if is_write {
             // Write access. These are never allowed, but we give a targeted error message.
-            if alloc.mutability == Mutability::Not {
-                Err(err_ub!(WriteToReadOnly(alloc_id)).into())
-            } else {
-                Err(ConstEvalErrKind::ModifiedGlobal.into())
+            match alloc.mutability {
+                Mutability::Not => Err(err_ub!(WriteToReadOnly(alloc_id)).into()),
+                Mutability::Mut => Err(ConstEvalErrKind::ModifiedGlobal.into()),
             }
         } else {
             // Read access. These are usually allowed, with some exceptions.

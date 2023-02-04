@@ -13,20 +13,19 @@
 // preserves universes and creates a unique var (in the highest universe) for each
 // appearance of a region.
 
-// FIXME: `CanonicalVarValues` should be interned and `Copy`.
-
 // FIXME: uses of `infcx.at` need to enable deferred projection equality once that's implemented.
 
 use std::mem;
 
 use rustc_hir::def_id::DefId;
-use rustc_infer::infer::canonical::{Canonical, CanonicalVarKind, CanonicalVarValues};
+use rustc_infer::infer::canonical::{Canonical, CanonicalVarValues};
 use rustc_infer::infer::canonical::{OriginalQueryValues, QueryRegionConstraints, QueryResponse};
 use rustc_infer::infer::{InferCtxt, InferOk, TyCtxtInferExt};
 use rustc_infer::traits::query::NoSolution;
 use rustc_infer::traits::Obligation;
 use rustc_middle::infer::canonical::Certainty as OldCertainty;
-use rustc_middle::ty::{self, Ty, TyCtxt};
+use rustc_middle::traits::solve::{ExternalConstraints, ExternalConstraintsData};
+use rustc_middle::ty::{self, TyCtxt};
 use rustc_middle::ty::{
     CoercePredicate, RegionOutlivesPredicate, SubtypePredicate, ToPredicate, TypeOutlivesPredicate,
 };
@@ -74,8 +73,7 @@ impl<'tcx, P> From<Obligation<'tcx, P>> for Goal<'tcx, P> {
         Goal { param_env: obligation.param_env, predicate: obligation.predicate }
     }
 }
-
-#[derive(Debug, PartialEq, Eq, Clone, Hash, TypeFoldable, TypeVisitable)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash, TypeFoldable, TypeVisitable)]
 pub struct Response<'tcx> {
     pub var_values: CanonicalVarValues<'tcx>,
     /// Additional constraints returned by this query.
@@ -123,14 +121,6 @@ pub enum MaybeCause {
     Overflow,
 }
 
-/// Additional constraints returned on success.
-#[derive(Debug, PartialEq, Eq, Clone, Hash, TypeFoldable, TypeVisitable, Default)]
-pub struct ExternalConstraints<'tcx> {
-    // FIXME: implement this.
-    regions: (),
-    opaque_types: Vec<(Ty<'tcx>, Ty<'tcx>)>,
-}
-
 type CanonicalGoal<'tcx, T = ty::Predicate<'tcx>> = Canonical<'tcx, Goal<'tcx, T>>;
 type CanonicalResponse<'tcx> = Canonical<'tcx, Response<'tcx>>;
 /// The result of evaluating a canonical query.
@@ -163,6 +153,7 @@ impl<'tcx> InferCtxtEvalExt<'tcx> for InferCtxt<'tcx> {
             search_graph: &mut search_graph,
             infcx: self,
             var_values: CanonicalVarValues::dummy(),
+            in_projection_eq_hack: false,
         }
         .evaluate_goal(goal);
 
@@ -176,6 +167,10 @@ struct EvalCtxt<'a, 'tcx> {
     var_values: CanonicalVarValues<'tcx>,
 
     search_graph: &'a mut search_graph::SearchGraph<'tcx>,
+
+    /// This field is used by a debug assertion in [`EvalCtxt::evaluate_goal`],
+    /// see the comment in that method for more details.
+    in_projection_eq_hack: bool,
 }
 
 impl<'a, 'tcx> EvalCtxt<'a, 'tcx> {
@@ -211,21 +206,21 @@ impl<'a, 'tcx> EvalCtxt<'a, 'tcx> {
         loop {
             let (ref infcx, goal, var_values) =
                 tcx.infer_ctxt().build_with_canonical(DUMMY_SP, &canonical_goal);
-            let mut ecx = EvalCtxt { infcx, var_values, search_graph };
+            let mut ecx =
+                EvalCtxt { infcx, var_values, search_graph, in_projection_eq_hack: false };
             let result = ecx.compute_goal(goal);
 
-            // FIXME: `Response` should be `Copy`
-            if search_graph.try_finalize_goal(tcx, canonical_goal, result.clone()) {
+            if search_graph.try_finalize_goal(tcx, canonical_goal, result) {
                 return result;
             }
         }
     }
 
     fn make_canonical_response(&self, certainty: Certainty) -> QueryResult<'tcx> {
-        let external_constraints = take_external_constraints(self.infcx)?;
+        let external_constraints = compute_external_query_constraints(self.infcx)?;
 
         Ok(self.infcx.canonicalize_response(Response {
-            var_values: self.var_values.clone(),
+            var_values: self.var_values,
             external_constraints,
             certainty,
         }))
@@ -241,10 +236,28 @@ impl<'a, 'tcx> EvalCtxt<'a, 'tcx> {
         let canonical_goal = self.infcx.canonicalize_query(goal, &mut orig_values);
         let canonical_response =
             EvalCtxt::evaluate_canonical_goal(self.tcx(), self.search_graph, canonical_goal)?;
-        Ok((
-            !canonical_response.value.var_values.is_identity(),
-            instantiate_canonical_query_response(self.infcx, &orig_values, canonical_response),
-        ))
+
+        let has_changed = !canonical_response.value.var_values.is_identity();
+        let certainty =
+            instantiate_canonical_query_response(self.infcx, &orig_values, canonical_response);
+
+        // Check that rerunning this query with its inference constraints applied
+        // doesn't result in new inference constraints and has the same result.
+        //
+        // If we have projection goals like `<T as Trait>::Assoc == u32` we recursively
+        // call `exists<U> <T as Trait>::Assoc == U` to enable better caching. This goal
+        // could constrain `U` to `u32` which would cause this check to result in a
+        // solver cycle.
+        if cfg!(debug_assertions) && has_changed && !self.in_projection_eq_hack {
+            let mut orig_values = OriginalQueryValues::default();
+            let canonical_goal = self.infcx.canonicalize_query(goal, &mut orig_values);
+            let canonical_response =
+                EvalCtxt::evaluate_canonical_goal(self.tcx(), self.search_graph, canonical_goal)?;
+            assert!(canonical_response.value.var_values.is_identity());
+            assert_eq!(certainty, canonical_response.value.certainty);
+        }
+
+        Ok((has_changed, certainty))
     }
 
     fn compute_goal(&mut self, goal: Goal<'tcx, ty::Predicate<'tcx>>) -> QueryResult<'tcx> {
@@ -363,7 +376,7 @@ impl<'a, 'tcx> EvalCtxt<'a, 'tcx> {
     }
 
     fn compute_object_safe_goal(&mut self, trait_def_id: DefId) -> QueryResult<'tcx> {
-        if self.tcx().is_object_safe(trait_def_id) {
+        if self.tcx().check_is_object_safe(trait_def_id) {
             self.make_canonical_response(Certainty::Yes)
         } else {
             Err(NoSolution)
@@ -439,18 +452,18 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
 }
 
 #[instrument(level = "debug", skip(infcx), ret)]
-fn take_external_constraints<'tcx>(
+fn compute_external_query_constraints<'tcx>(
     infcx: &InferCtxt<'tcx>,
 ) -> Result<ExternalConstraints<'tcx>, NoSolution> {
     let region_obligations = infcx.take_registered_region_obligations();
     let opaque_types = infcx.take_opaque_types_for_query_response();
-    Ok(ExternalConstraints {
+    Ok(infcx.tcx.intern_external_constraints(ExternalConstraintsData {
         // FIXME: Now that's definitely wrong :)
         //
         // Should also do the leak check here I think
         regions: drop(region_obligations),
         opaque_types,
-    })
+    }))
 }
 
 fn instantiate_canonical_query_response<'tcx>(
@@ -470,7 +483,10 @@ fn instantiate_canonical_query_response<'tcx>(
                     Certainty::Yes => OldCertainty::Proven,
                     Certainty::Maybe(_) => OldCertainty::Ambiguous,
                 },
-                opaque_types: resp.external_constraints.opaque_types,
+                // FIXME: This to_owned makes me sad, but we should eventually impl
+                // `instantiate_query_response_and_region_obligations` separately
+                // instead of piggybacking off of the old implementation.
+                opaque_types: resp.external_constraints.opaque_types.to_owned(),
                 value: resp.certainty,
             }),
         ) else { bug!(); };
@@ -483,33 +499,15 @@ pub(super) fn response_no_constraints<'tcx>(
     goal: Canonical<'tcx, impl Sized>,
     certainty: Certainty,
 ) -> QueryResult<'tcx> {
-    let var_values = goal
-        .variables
-        .iter()
-        .enumerate()
-        .map(|(i, info)| match info.kind {
-            CanonicalVarKind::Ty(_) | CanonicalVarKind::PlaceholderTy(_) => {
-                tcx.mk_ty(ty::Bound(ty::INNERMOST, ty::BoundVar::from_usize(i).into())).into()
-            }
-            CanonicalVarKind::Region(_) | CanonicalVarKind::PlaceholderRegion(_) => {
-                let br = ty::BoundRegion {
-                    var: ty::BoundVar::from_usize(i),
-                    kind: ty::BrAnon(i as u32, None),
-                };
-                tcx.mk_region(ty::ReLateBound(ty::INNERMOST, br)).into()
-            }
-            CanonicalVarKind::Const(_, ty) | CanonicalVarKind::PlaceholderConst(_, ty) => tcx
-                .mk_const(ty::ConstKind::Bound(ty::INNERMOST, ty::BoundVar::from_usize(i)), ty)
-                .into(),
-        })
-        .collect();
-
     Ok(Canonical {
         max_universe: goal.max_universe,
         variables: goal.variables,
         value: Response {
-            var_values: CanonicalVarValues { var_values },
-            external_constraints: Default::default(),
+            var_values: CanonicalVarValues::make_identity(tcx, goal.variables),
+            // FIXME: maybe we should store the "no response" version in tcx, like
+            // we do for tcx.types and stuff.
+            external_constraints: tcx
+                .intern_external_constraints(ExternalConstraintsData::default()),
             certainty,
         },
     })

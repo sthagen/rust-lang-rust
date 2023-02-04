@@ -8,7 +8,9 @@ use rustc_middle::hir::nested_filter;
 use rustc_middle::ty::print::with_forced_trimmed_paths;
 use rustc_middle::ty::subst::InternalSubsts;
 use rustc_middle::ty::util::IntTypeExt;
-use rustc_middle::ty::{self, DefIdTree, Ty, TyCtxt, TypeFolder, TypeSuperFoldable, TypeVisitable};
+use rustc_middle::ty::{
+    self, DefIdTree, IsSuggestable, Ty, TyCtxt, TypeFolder, TypeSuperFoldable, TypeVisitable,
+};
 use rustc_span::symbol::Ident;
 use rustc_span::{Span, DUMMY_SP};
 
@@ -54,15 +56,14 @@ pub(super) fn opt_const_param_of(tcx: TyCtxt<'_>, def_id: LocalDefId) -> Option<
             // ty which is a fully resolved projection.
             // For the code example above, this would mean converting Self::Assoc<3>
             // into a ty::Alias(ty::Projection, <Self as Foo>::Assoc<3>)
-            let item_hir_id = tcx
+            let item_def_id = tcx
                 .hir()
-                .parent_iter(hir_id)
-                .filter(|(_, node)| matches!(node, Node::Item(_)))
-                .map(|(id, _)| id)
-                .next()
-                .unwrap();
-            let item_did = tcx.hir().local_def_id(item_hir_id).to_def_id();
-            let item_ctxt = &ItemCtxt::new(tcx, item_did) as &dyn crate::astconv::AstConv<'_>;
+                .parent_owner_iter(hir_id)
+                .find(|(_, node)| matches!(node, OwnerNode::Item(_)))
+                .unwrap()
+                .0
+                .to_def_id();
+            let item_ctxt = &ItemCtxt::new(tcx, item_def_id) as &dyn crate::astconv::AstConv<'_>;
             let ty = item_ctxt.ast_ty_to_ty(hir_ty);
 
             // Iterate through the generics of the projection to find the one that corresponds to
@@ -846,14 +847,7 @@ fn infer_placeholder_type<'a>(
 ) -> Ty<'a> {
     // Attempts to make the type nameable by turning FnDefs into FnPtrs.
     struct MakeNameable<'tcx> {
-        success: bool,
         tcx: TyCtxt<'tcx>,
-    }
-
-    impl<'tcx> MakeNameable<'tcx> {
-        fn new(tcx: TyCtxt<'tcx>) -> Self {
-            MakeNameable { success: true, tcx }
-        }
     }
 
     impl<'tcx> TypeFolder<'tcx> for MakeNameable<'tcx> {
@@ -862,21 +856,14 @@ fn infer_placeholder_type<'a>(
         }
 
         fn fold_ty(&mut self, ty: Ty<'tcx>) -> Ty<'tcx> {
-            if !self.success {
-                return ty;
-            }
-
-            match ty.kind() {
+            let ty = match *ty.kind() {
                 ty::FnDef(def_id, substs) => {
-                    self.tcx.mk_fn_ptr(self.tcx.fn_sig(*def_id).subst(self.tcx, substs))
+                    self.tcx.mk_fn_ptr(self.tcx.fn_sig(def_id).subst(self.tcx, substs))
                 }
-                // FIXME: non-capturing closures should also suggest a function pointer
-                ty::Closure(..) | ty::Generator(..) => {
-                    self.success = false;
-                    ty
-                }
-                _ => ty.super_fold_with(self),
-            }
+                _ => ty,
+            };
+
+            ty.super_fold_with(self)
         }
     }
 
@@ -899,15 +886,11 @@ fn infer_placeholder_type<'a>(
                     suggestions.clear();
                 }
 
-                // Suggesting unnameable types won't help.
-                let mut mk_nameable = MakeNameable::new(tcx);
-                let ty = mk_nameable.fold_ty(ty);
-                let sugg_ty = if mk_nameable.success { Some(ty) } else { None };
-                if let Some(sugg_ty) = sugg_ty {
+                if let Some(ty) = ty.make_suggestable(tcx, false) {
                     err.span_suggestion(
                         span,
                         &format!("provide a type for the {item}", item = kind),
-                        format!("{colon} {sugg_ty}"),
+                        format!("{colon} {ty}"),
                         Applicability::MachineApplicable,
                     );
                 } else {
@@ -924,15 +907,12 @@ fn infer_placeholder_type<'a>(
             let mut diag = bad_placeholder(tcx, vec![span], kind);
 
             if !ty.references_error() {
-                let mut mk_nameable = MakeNameable::new(tcx);
-                let ty = mk_nameable.fold_ty(ty);
-                let sugg_ty = if mk_nameable.success { Some(ty) } else { None };
-                if let Some(sugg_ty) = sugg_ty {
+                if let Some(ty) = ty.make_suggestable(tcx, false) {
                     diag.span_suggestion(
                         span,
                         "replace with the correct type",
-                        sugg_ty,
-                        Applicability::MaybeIncorrect,
+                        ty,
+                        Applicability::MachineApplicable,
                     );
                 } else {
                     with_forced_trimmed_paths!(diag.span_note(
