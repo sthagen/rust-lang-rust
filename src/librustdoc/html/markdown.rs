@@ -46,6 +46,7 @@ use crate::html::escape::Escape;
 use crate::html::format::Buffer;
 use crate::html::highlight;
 use crate::html::length_limit::HtmlWithLimit;
+use crate::html::render::small_url_encode;
 use crate::html::toc::TocBuilder;
 
 use pulldown_cmark::{
@@ -102,14 +103,14 @@ pub struct Markdown<'a> {
     /// E.g. if `heading_offset: HeadingOffset::H2`, then `# something` renders an `<h2>`.
     pub heading_offset: HeadingOffset,
 }
-/// A tuple struct like `Markdown` that renders the markdown with a table of contents.
-pub(crate) struct MarkdownWithToc<'a>(
-    pub(crate) &'a str,
-    pub(crate) &'a mut IdMap,
-    pub(crate) ErrorCodes,
-    pub(crate) Edition,
-    pub(crate) &'a Option<Playground>,
-);
+/// A struct like `Markdown` that renders the markdown with a table of contents.
+pub(crate) struct MarkdownWithToc<'a> {
+    pub(crate) content: &'a str,
+    pub(crate) ids: &'a mut IdMap,
+    pub(crate) error_codes: ErrorCodes,
+    pub(crate) edition: Edition,
+    pub(crate) playground: &'a Option<Playground>,
+}
 /// A tuple struct like `Markdown` that renders the markdown escaping HTML tags
 /// and includes no paragraph tags.
 pub(crate) struct MarkdownItemInfo<'a>(pub(crate) &'a str, pub(crate) &'a mut IdMap);
@@ -294,47 +295,7 @@ impl<'a, I: Iterator<Item = Event<'a>>> Iterator for CodeBlocks<'_, 'a, I> {
                 doctest::make_test(&test, krate, false, &Default::default(), edition, None);
             let channel = if test.contains("#![feature(") { "&amp;version=nightly" } else { "" };
 
-            // These characters don't need to be escaped in a URI.
-            // See https://url.spec.whatwg.org/#query-percent-encode-set
-            // and https://url.spec.whatwg.org/#urlencoded-parsing
-            // and https://url.spec.whatwg.org/#url-code-points
-            fn dont_escape(c: u8) -> bool {
-                (b'a' <= c && c <= b'z')
-                    || (b'A' <= c && c <= b'Z')
-                    || (b'0' <= c && c <= b'9')
-                    || c == b'-'
-                    || c == b'_'
-                    || c == b'.'
-                    || c == b','
-                    || c == b'~'
-                    || c == b'!'
-                    || c == b'\''
-                    || c == b'('
-                    || c == b')'
-                    || c == b'*'
-                    || c == b'/'
-                    || c == b';'
-                    || c == b':'
-                    || c == b'?'
-                    // As described in urlencoded-parsing, the
-                    // first `=` is the one that separates key from
-                    // value. Following `=`s are part of the value.
-                    || c == b'='
-            }
-            let mut test_escaped = String::new();
-            for b in test.bytes() {
-                if dont_escape(b) {
-                    test_escaped.push(char::from(b));
-                } else if b == b' ' {
-                    // URL queries are decoded with + replaced with SP
-                    test_escaped.push('+');
-                } else if b == b'%' {
-                    test_escaped.push('%');
-                    test_escaped.push('%');
-                } else {
-                    write!(test_escaped, "%{:02X}", b).unwrap();
-                }
-            }
+            let test_escaped = small_url_encode(test);
             Some(format!(
                 r#"<a class="test-arrow" target="_blank" href="{}?code={}{}&amp;edition={}">Run</a>"#,
                 url, test_escaped, channel, edition,
@@ -1048,7 +1009,7 @@ impl Markdown<'_> {
 
 impl MarkdownWithToc<'_> {
     pub(crate) fn into_string(self) -> String {
-        let MarkdownWithToc(md, ids, codes, edition, playground) = self;
+        let MarkdownWithToc { content: md, ids, error_codes: codes, edition, playground } = self;
 
         let p = Parser::new_ext(md, main_body_opts()).into_offset_iter();
 

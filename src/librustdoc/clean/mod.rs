@@ -242,6 +242,7 @@ pub(crate) fn clean_middle_region<'tcx>(region: ty::Region<'tcx>) -> Option<Life
         ty::ReLateBound(..)
         | ty::ReFree(..)
         | ty::ReVar(..)
+        | ty::ReError(_)
         | ty::RePlaceholder(..)
         | ty::ReErased => {
             debug!("cannot clean region {:?}", region);
@@ -310,10 +311,12 @@ pub(crate) fn clean_predicate<'tcx>(
         ty::PredicateKind::Clause(ty::Clause::Projection(pred)) => {
             Some(clean_projection_predicate(bound_predicate.rebind(pred), cx))
         }
+        // FIXME(generic_const_exprs): should this do something?
         ty::PredicateKind::ConstEvaluatable(..) => None,
         ty::PredicateKind::WellFormed(..) => None,
 
         ty::PredicateKind::Subtype(..)
+        | ty::PredicateKind::AliasEq(..)
         | ty::PredicateKind::Coerce(..)
         | ty::PredicateKind::ObjectSafe(..)
         | ty::PredicateKind::ClosureKind(..)

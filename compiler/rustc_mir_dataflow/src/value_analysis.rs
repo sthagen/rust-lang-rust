@@ -223,13 +223,13 @@ pub trait ValueAnalysis<'tcx> {
         self.super_terminator(terminator, state)
     }
 
-    fn super_terminator(&self, terminator: &Terminator<'tcx>, _state: &mut State<Self::Value>) {
+    fn super_terminator(&self, terminator: &Terminator<'tcx>, state: &mut State<Self::Value>) {
         match &terminator.kind {
             TerminatorKind::Call { .. } | TerminatorKind::InlineAsm { .. } => {
                 // Effect is applied by `handle_call_return`.
             }
-            TerminatorKind::Drop { .. } => {
-                // We don't track dropped places.
+            TerminatorKind::Drop { place, .. } => {
+                state.flood_with(place.as_ref(), self.map(), Self::Value::bottom());
             }
             TerminatorKind::DropAndReplace { .. } | TerminatorKind::Yield { .. } => {
                 // They would have an effect, but are not allowed in this phase.
@@ -790,7 +790,7 @@ impl<V, T> TryFrom<ProjectionElem<V, T>> for TrackElem {
 }
 
 /// Invokes `f` on all direct fields of `ty`.
-fn iter_fields<'tcx>(
+pub fn iter_fields<'tcx>(
     ty: Ty<'tcx>,
     tcx: TyCtxt<'tcx>,
     mut f: impl FnMut(Option<VariantIdx>, Field, Ty<'tcx>),
@@ -824,7 +824,7 @@ fn iter_fields<'tcx>(
 }
 
 /// Returns all locals with projections that have their reference or address taken.
-fn excluded_locals(body: &Body<'_>) -> IndexVec<Local, bool> {
+pub fn excluded_locals(body: &Body<'_>) -> IndexVec<Local, bool> {
     struct Collector {
         result: IndexVec<Local, bool>,
     }

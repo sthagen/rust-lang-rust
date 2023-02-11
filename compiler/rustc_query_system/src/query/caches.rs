@@ -16,17 +16,13 @@ use std::marker::PhantomData;
 pub trait CacheSelector<'tcx, V> {
     type Cache
     where
-        V: Clone;
+        V: Copy;
     type ArenaCache;
 }
 
 pub trait QueryStorage {
     type Value: Debug;
-    type Stored: Clone;
-
-    /// Store a value without putting it in the cache.
-    /// This is meant to be used with cycle errors.
-    fn store_nocache(&self, value: Self::Value) -> Self::Stored;
+    type Stored: Copy;
 }
 
 pub trait QueryCache: QueryStorage + Sized {
@@ -36,14 +32,7 @@ pub trait QueryCache: QueryStorage + Sized {
     /// It returns the shard index and a lock guard to the shard,
     /// which will be used if the query is not in the cache and we need
     /// to compute it.
-    fn lookup<R, OnHit>(
-        &self,
-        key: &Self::Key,
-        // `on_hit` can be called while holding a lock to the query state shard.
-        on_hit: OnHit,
-    ) -> Result<R, ()>
-    where
-        OnHit: FnOnce(&Self::Stored, DepNodeIndex) -> R;
+    fn lookup(&self, key: &Self::Key) -> Option<(Self::Stored, DepNodeIndex)>;
 
     fn complete(&self, key: Self::Key, value: Self::Value, index: DepNodeIndex) -> Self::Stored;
 
@@ -55,7 +44,7 @@ pub struct DefaultCacheSelector<K>(PhantomData<K>);
 impl<'tcx, K: Eq + Hash, V: 'tcx> CacheSelector<'tcx, V> for DefaultCacheSelector<K> {
     type Cache = DefaultCache<K, V>
     where
-        V: Clone;
+        V: Copy;
     type ArenaCache = ArenaCache<'tcx, K, V>;
 }
 
@@ -72,29 +61,20 @@ impl<K, V> Default for DefaultCache<K, V> {
     }
 }
 
-impl<K: Eq + Hash, V: Clone + Debug> QueryStorage for DefaultCache<K, V> {
+impl<K: Eq + Hash, V: Copy + Debug> QueryStorage for DefaultCache<K, V> {
     type Value = V;
     type Stored = V;
-
-    #[inline]
-    fn store_nocache(&self, value: Self::Value) -> Self::Stored {
-        // We have no dedicated storage
-        value
-    }
 }
 
 impl<K, V> QueryCache for DefaultCache<K, V>
 where
     K: Eq + Hash + Clone + Debug,
-    V: Clone + Debug,
+    V: Copy + Debug,
 {
     type Key = K;
 
     #[inline(always)]
-    fn lookup<R, OnHit>(&self, key: &K, on_hit: OnHit) -> Result<R, ()>
-    where
-        OnHit: FnOnce(&V, DepNodeIndex) -> R,
-    {
+    fn lookup(&self, key: &K) -> Option<(V, DepNodeIndex)> {
         let key_hash = sharded::make_hash(key);
         #[cfg(parallel_compiler)]
         let lock = self.cache.get_shard_by_hash(key_hash).lock();
@@ -102,12 +82,7 @@ where
         let lock = self.cache.lock();
         let result = lock.raw_entry().from_key_hashed_nocheck(key_hash, key);
 
-        if let Some((_, value)) = result {
-            let hit_result = on_hit(&value.0, value.1);
-            Ok(hit_result)
-        } else {
-            Err(())
-        }
+        if let Some((_, value)) = result { Some(*value) } else { None }
     }
 
     #[inline]
@@ -159,13 +134,6 @@ impl<'tcx, K, V> Default for ArenaCache<'tcx, K, V> {
 impl<'tcx, K: Eq + Hash, V: Debug + 'tcx> QueryStorage for ArenaCache<'tcx, K, V> {
     type Value = V;
     type Stored = &'tcx V;
-
-    #[inline]
-    fn store_nocache(&self, value: Self::Value) -> Self::Stored {
-        let value = self.arena.alloc((value, DepNodeIndex::INVALID));
-        let value = unsafe { &*(&value.0 as *const _) };
-        &value
-    }
 }
 
 impl<'tcx, K, V: 'tcx> QueryCache for ArenaCache<'tcx, K, V>
@@ -176,10 +144,7 @@ where
     type Key = K;
 
     #[inline(always)]
-    fn lookup<R, OnHit>(&self, key: &K, on_hit: OnHit) -> Result<R, ()>
-    where
-        OnHit: FnOnce(&&'tcx V, DepNodeIndex) -> R,
-    {
+    fn lookup(&self, key: &K) -> Option<(&'tcx V, DepNodeIndex)> {
         let key_hash = sharded::make_hash(key);
         #[cfg(parallel_compiler)]
         let lock = self.cache.get_shard_by_hash(key_hash).lock();
@@ -187,12 +152,7 @@ where
         let lock = self.cache.lock();
         let result = lock.raw_entry().from_key_hashed_nocheck(key_hash, key);
 
-        if let Some((_, value)) = result {
-            let hit_result = on_hit(&&value.0, value.1);
-            Ok(hit_result)
-        } else {
-            Err(())
-        }
+        if let Some((_, value)) = result { Some((&value.0, value.1)) } else { None }
     }
 
     #[inline]
@@ -234,7 +194,7 @@ pub struct VecCacheSelector<K>(PhantomData<K>);
 impl<'tcx, K: Idx, V: 'tcx> CacheSelector<'tcx, V> for VecCacheSelector<K> {
     type Cache = VecCache<K, V>
     where
-        V: Clone;
+        V: Copy;
     type ArenaCache = VecArenaCache<'tcx, K, V>;
 }
 
@@ -251,39 +211,25 @@ impl<K: Idx, V> Default for VecCache<K, V> {
     }
 }
 
-impl<K: Eq + Idx, V: Clone + Debug> QueryStorage for VecCache<K, V> {
+impl<K: Eq + Idx, V: Copy + Debug> QueryStorage for VecCache<K, V> {
     type Value = V;
     type Stored = V;
-
-    #[inline]
-    fn store_nocache(&self, value: Self::Value) -> Self::Stored {
-        // We have no dedicated storage
-        value
-    }
 }
 
 impl<K, V> QueryCache for VecCache<K, V>
 where
     K: Eq + Idx + Clone + Debug,
-    V: Clone + Debug,
+    V: Copy + Debug,
 {
     type Key = K;
 
     #[inline(always)]
-    fn lookup<R, OnHit>(&self, key: &K, on_hit: OnHit) -> Result<R, ()>
-    where
-        OnHit: FnOnce(&V, DepNodeIndex) -> R,
-    {
+    fn lookup(&self, key: &K) -> Option<(V, DepNodeIndex)> {
         #[cfg(parallel_compiler)]
         let lock = self.cache.get_shard_by_hash(key.index() as u64).lock();
         #[cfg(not(parallel_compiler))]
         let lock = self.cache.lock();
-        if let Some(Some(value)) = lock.get(*key) {
-            let hit_result = on_hit(&value.0, value.1);
-            Ok(hit_result)
-        } else {
-            Err(())
-        }
+        if let Some(Some(value)) = lock.get(*key) { Some(*value) } else { None }
     }
 
     #[inline]
@@ -340,13 +286,6 @@ impl<'tcx, K: Idx, V> Default for VecArenaCache<'tcx, K, V> {
 impl<'tcx, K: Eq + Idx, V: Debug + 'tcx> QueryStorage for VecArenaCache<'tcx, K, V> {
     type Value = V;
     type Stored = &'tcx V;
-
-    #[inline]
-    fn store_nocache(&self, value: Self::Value) -> Self::Stored {
-        let value = self.arena.alloc((value, DepNodeIndex::INVALID));
-        let value = unsafe { &*(&value.0 as *const _) };
-        &value
-    }
 }
 
 impl<'tcx, K, V: 'tcx> QueryCache for VecArenaCache<'tcx, K, V>
@@ -357,20 +296,12 @@ where
     type Key = K;
 
     #[inline(always)]
-    fn lookup<R, OnHit>(&self, key: &K, on_hit: OnHit) -> Result<R, ()>
-    where
-        OnHit: FnOnce(&&'tcx V, DepNodeIndex) -> R,
-    {
+    fn lookup(&self, key: &K) -> Option<(&'tcx V, DepNodeIndex)> {
         #[cfg(parallel_compiler)]
         let lock = self.cache.get_shard_by_hash(key.index() as u64).lock();
         #[cfg(not(parallel_compiler))]
         let lock = self.cache.lock();
-        if let Some(Some(value)) = lock.get(*key) {
-            let hit_result = on_hit(&&value.0, value.1);
-            Ok(hit_result)
-        } else {
-            Err(())
-        }
+        if let Some(Some(value)) = lock.get(*key) { Some((&value.0, value.1)) } else { None }
     }
 
     #[inline]

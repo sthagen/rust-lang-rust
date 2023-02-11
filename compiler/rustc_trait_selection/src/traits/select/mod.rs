@@ -991,6 +991,9 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 ty::PredicateKind::TypeWellFormedFromEnv(..) => {
                     bug!("TypeWellFormedFromEnv is only used for chalk")
                 }
+                ty::PredicateKind::AliasEq(..) => {
+                    bug!("AliasEq is only used for new solver")
+                }
                 ty::PredicateKind::Ambiguous => Ok(EvaluatedToAmbig),
             }
         })
@@ -1618,7 +1621,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
     ) -> smallvec::SmallVec<[(usize, ty::BoundConstness); 2]> {
         let poly_trait_predicate = self.infcx.resolve_vars_if_possible(obligation.predicate);
         let placeholder_trait_predicate =
-            self.infcx.replace_bound_vars_with_placeholders(poly_trait_predicate);
+            self.infcx.instantiate_binder_with_placeholders(poly_trait_predicate);
         debug!(?placeholder_trait_predicate);
 
         let tcx = self.infcx.tcx;
@@ -1738,7 +1741,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         potentially_unnormalized_candidates: bool,
     ) -> ProjectionMatchesProjection {
         let mut nested_obligations = Vec::new();
-        let infer_predicate = self.infcx.replace_bound_vars_with_fresh_vars(
+        let infer_predicate = self.infcx.instantiate_binder_with_fresh_vars(
             obligation.cause.span,
             LateBoundRegionConversionTime::HigherRankedType,
             env_predicate,
@@ -2339,7 +2342,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             .flat_map(|ty| {
                 let ty: ty::Binder<'tcx, Ty<'tcx>> = types.rebind(*ty); // <----/
 
-                let placeholder_ty = self.infcx.replace_bound_vars_with_placeholders(ty);
+                let placeholder_ty = self.infcx.instantiate_binder_with_placeholders(ty);
                 let Normalized { value: normalized_ty, mut obligations } =
                     ensure_sufficient_stack(|| {
                         project::normalize_with_depth(
@@ -2418,7 +2421,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         obligation: &TraitObligation<'tcx>,
     ) -> Result<Normalized<'tcx, SubstsRef<'tcx>>, ()> {
         let placeholder_obligation =
-            self.infcx.replace_bound_vars_with_placeholders(obligation.predicate);
+            self.infcx.instantiate_binder_with_placeholders(obligation.predicate);
         let placeholder_obligation_trait_ref = placeholder_obligation.trait_ref;
 
         let impl_substs = self.infcx.fresh_substs_for_item(obligation.cause.span, impl_def_id);
@@ -2608,11 +2611,12 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         assert_eq!(predicates.parent, None);
         let predicates = predicates.instantiate_own(tcx, substs);
         let mut obligations = Vec::with_capacity(predicates.len());
-        for (predicate, span) in predicates {
+        for (index, (predicate, span)) in predicates.into_iter().enumerate() {
             let cause = cause.clone().derived_cause(parent_trait_pred, |derived| {
                 ImplDerivedObligation(Box::new(ImplDerivedObligationCause {
                     derived,
                     impl_def_id: def_id,
+                    impl_def_predicate_index: Some(index),
                     span,
                 }))
             });

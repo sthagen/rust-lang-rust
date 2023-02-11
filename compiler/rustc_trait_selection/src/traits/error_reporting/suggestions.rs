@@ -19,6 +19,7 @@ use rustc_hir as hir;
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::DefId;
 use rustc_hir::intravisit::Visitor;
+use rustc_hir::is_range_literal;
 use rustc_hir::lang_items::LangItem;
 use rustc_hir::{AsyncGeneratorKind, GeneratorKind, Node};
 use rustc_hir::{Expr, HirId};
@@ -98,6 +99,7 @@ impl<'tcx, 'a> GeneratorData<'tcx, 'a> {
     // obligation
     fn get_from_await_ty<F>(
         &self,
+        tcx: TyCtxt<'tcx>,
         visitor: AwaitsVisitor,
         hir: map::Map<'tcx>,
         ty_matches: F,
@@ -134,9 +136,7 @@ impl<'tcx, 'a> GeneratorData<'tcx, 'a> {
                                         .unwrap_or_else(|| {
                                             bug!(
                                                 "node_type: no type for node {}",
-                                                ty::tls::with(|tcx| tcx
-                                                    .hir()
-                                                    .node_to_string(await_expr.hir_id))
+                                                tcx.hir().node_to_string(await_expr.hir_id)
                                             )
                                         })
                                 },
@@ -679,6 +679,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                         &param_name,
                         &constraint,
                         Some(trait_pred.def_id()),
+                        None,
                     ) {
                         return;
                     }
@@ -897,7 +898,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             return false;
         }
 
-        let self_ty = self.replace_bound_vars_with_fresh_vars(
+        let self_ty = self.instantiate_binder_with_fresh_vars(
             DUMMY_SP,
             LateBoundRegionConversionTime::FnCall,
             trait_pred.self_ty(),
@@ -1087,6 +1088,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                     param.name.as_str(),
                     "Clone",
                     Some(clone_trait),
+                    None,
                 );
             }
             err.span_suggestion_verbose(
@@ -1189,7 +1191,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             }
         }) else { return None; };
 
-        let output = self.replace_bound_vars_with_fresh_vars(
+        let output = self.instantiate_binder_with_fresh_vars(
             DUMMY_SP,
             LateBoundRegionConversionTime::FnCall,
             output,
@@ -1198,7 +1200,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             .skip_binder()
             .iter()
             .map(|ty| {
-                self.replace_bound_vars_with_fresh_vars(
+                self.instantiate_binder_with_fresh_vars(
                     DUMMY_SP,
                     LateBoundRegionConversionTime::FnCall,
                     inputs.rebind(*ty),
@@ -1348,14 +1350,41 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                             Applicability::MaybeIncorrect,
                         );
                     } else {
+                        // Issue #104961, we need to add parentheses properly for compond expressions
+                        // for example, `x.starts_with("hi".to_string() + "you")`
+                        // should be `x.starts_with(&("hi".to_string() + "you"))`
+                        let Some(body_id) = self.tcx.hir().maybe_body_owned_by(obligation.cause.body_id) else { return false; };
+                        let body = self.tcx.hir().body(body_id);
+                        let mut expr_finder = FindExprBySpan::new(span);
+                        expr_finder.visit_expr(body.value);
+                        let Some(expr) = expr_finder.result else { return false; };
+                        let needs_parens = match expr.kind {
+                            // parenthesize if needed (Issue #46756)
+                            hir::ExprKind::Cast(_, _) | hir::ExprKind::Binary(_, _, _) => true,
+                            // parenthesize borrows of range literals (Issue #54505)
+                            _ if is_range_literal(expr) => true,
+                            _ => false,
+                        };
+
                         let is_mut = mut_ref_self_ty_satisfies_pred || ref_inner_ty_mut;
-                        err.span_suggestion_verbose(
-                            span.shrink_to_lo(),
-                            &format!(
-                                "consider{} borrowing here",
-                                if is_mut { " mutably" } else { "" }
-                            ),
-                            format!("&{}", if is_mut { "mut " } else { "" }),
+                        let span = if needs_parens { span } else { span.shrink_to_lo() };
+                        let sugg_prefix = format!("&{}", if is_mut { "mut " } else { "" });
+                        let sugg_msg = &format!(
+                            "consider{} borrowing here",
+                            if is_mut { " mutably" } else { "" }
+                        );
+
+                        let suggestions = if !needs_parens {
+                            vec![(span.shrink_to_lo(), format!("{}", sugg_prefix))]
+                        } else {
+                            vec![
+                                (span.shrink_to_lo(), format!("{}(", sugg_prefix)),
+                                (span.shrink_to_hi(), ")".to_string()),
+                            ]
+                        };
+                        err.multipart_suggestion_verbose(
+                            sugg_msg,
+                            suggestions,
                             Applicability::MaybeIncorrect,
                         );
                     }
@@ -2349,7 +2378,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
 
         let mut interior_or_upvar_span = None;
 
-        let from_awaited_ty = generator_data.get_from_await_ty(visitor, hir, ty_matches);
+        let from_awaited_ty = generator_data.get_from_await_ty(self.tcx, visitor, hir, ty_matches);
         debug!(?from_awaited_ty);
 
         // The generator interior types share the same binders
@@ -3804,13 +3833,13 @@ fn hint_missing_borrow<'tcx>(
     err: &mut Diagnostic,
 ) {
     let found_args = match found.kind() {
-        ty::FnPtr(f) => infcx.replace_bound_vars_with_placeholders(*f).inputs().iter(),
+        ty::FnPtr(f) => infcx.instantiate_binder_with_placeholders(*f).inputs().iter(),
         kind => {
             span_bug!(span, "found was converted to a FnPtr above but is now {:?}", kind)
         }
     };
     let expected_args = match expected.kind() {
-        ty::FnPtr(f) => infcx.replace_bound_vars_with_placeholders(*f).inputs().iter(),
+        ty::FnPtr(f) => infcx.instantiate_binder_with_placeholders(*f).inputs().iter(),
         kind => {
             span_bug!(span, "expected was converted to a FnPtr above but is now {:?}", kind)
         }

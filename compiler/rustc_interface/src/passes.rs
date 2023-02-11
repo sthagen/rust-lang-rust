@@ -1,9 +1,4 @@
-use crate::errors::{
-    CantEmitMIR, EmojiIdentifier, ErrorWritingDependencies, FerrisIdentifier,
-    GeneratedFileConflictsWithDirectory, InputFileWouldBeOverWritten, MixedBinCrate,
-    MixedProcMacroCrate, OutDirError, ProcMacroCratePanicAbort, ProcMacroDocWithoutArg,
-    TempsDirError,
-};
+use crate::errors;
 use crate::interface::{Compiler, Result};
 use crate::proc_macro_decls;
 use crate::util;
@@ -374,15 +369,15 @@ pub fn configure_and_expand(
 
     if crate_types.len() > 1 {
         if is_executable_crate {
-            sess.emit_err(MixedBinCrate);
+            sess.emit_err(errors::MixedBinCrate);
         }
         if is_proc_macro_crate {
-            sess.emit_err(MixedProcMacroCrate);
+            sess.emit_err(errors::MixedProcMacroCrate);
         }
     }
 
     if is_proc_macro_crate && sess.panic_strategy() == PanicStrategy::Abort {
-        sess.emit_warning(ProcMacroCratePanicAbort);
+        sess.emit_warning(errors::ProcMacroCratePanicAbort);
     }
 
     // For backwards compatibility, we don't try to run proc macro injection
@@ -392,7 +387,7 @@ pub fn configure_and_expand(
     // However, we do emit a warning, to let such users know that they should
     // start passing '--crate-type proc-macro'
     if has_proc_macro_decls && sess.opts.actually_rustdoc && !is_proc_macro_crate {
-        sess.emit_warning(ProcMacroDocWithoutArg);
+        sess.emit_warning(errors::ProcMacroDocWithoutArg);
     } else {
         krate = sess.time("maybe_create_a_macro_crate", || {
             let is_test_crate = sess.opts.test;
@@ -441,9 +436,9 @@ pub fn configure_and_expand(
             spans.sort();
             if ident == sym::ferris {
                 let first_span = spans[0];
-                sess.emit_err(FerrisIdentifier { spans, first_span });
+                sess.emit_err(errors::FerrisIdentifier { spans, first_span });
             } else {
-                sess.emit_err(EmojiIdentifier { spans, ident });
+                sess.emit_err(errors::EmojiIdentifier { spans, ident });
             }
         }
     });
@@ -655,7 +650,7 @@ fn write_out_deps(
             }
         }
         Err(error) => {
-            sess.emit_fatal(ErrorWritingDependencies { path: &deps_filename, error });
+            sess.emit_fatal(errors::ErrorWritingDependencies { path: &deps_filename, error });
         }
     }
 }
@@ -676,17 +671,20 @@ fn output_filenames(tcx: TyCtxt<'_>, (): ()) -> Arc<OutputFilenames> {
     if let Some(ref input_path) = sess.io.input.opt_path() {
         if sess.opts.will_create_output_file() {
             if output_contains_path(&output_paths, input_path) {
-                sess.emit_fatal(InputFileWouldBeOverWritten { path: input_path });
+                sess.emit_fatal(errors::InputFileWouldBeOverWritten { path: input_path });
             }
             if let Some(ref dir_path) = output_conflicts_with_dir(&output_paths) {
-                sess.emit_fatal(GeneratedFileConflictsWithDirectory { input_path, dir_path });
+                sess.emit_fatal(errors::GeneratedFileConflictsWithDirectory {
+                    input_path,
+                    dir_path,
+                });
             }
         }
     }
 
     if let Some(ref dir) = sess.io.temps_dir {
         if fs::create_dir_all(dir).is_err() {
-            sess.emit_fatal(TempsDirError);
+            sess.emit_fatal(errors::TempsDirError);
         }
     }
 
@@ -698,7 +696,7 @@ fn output_filenames(tcx: TyCtxt<'_>, (): ()) -> Arc<OutputFilenames> {
     if !only_dep_info {
         if let Some(ref dir) = sess.io.output_dir {
             if fs::create_dir_all(dir).is_err() {
-                sess.emit_fatal(OutDirError);
+                sess.emit_fatal(errors::OutDirError);
             }
         }
     }
@@ -740,30 +738,16 @@ pub static DEFAULT_EXTERN_QUERY_PROVIDERS: LazyLock<ExternProviders> = LazyLock:
     extern_providers
 });
 
-pub struct QueryContext<'tcx> {
-    gcx: &'tcx GlobalCtxt<'tcx>,
-}
-
-impl<'tcx> QueryContext<'tcx> {
-    pub fn enter<F, R>(&mut self, f: F) -> R
-    where
-        F: FnOnce(TyCtxt<'tcx>) -> R,
-    {
-        let icx = ty::tls::ImplicitCtxt::new(self.gcx);
-        ty::tls::enter_context(&icx, |_| f(icx.tcx))
-    }
-}
-
 pub fn create_global_ctxt<'tcx>(
     compiler: &'tcx Compiler,
     lint_store: Lrc<LintStore>,
     dep_graph: DepGraph,
     untracked: Untracked,
     queries: &'tcx OnceCell<TcxQueries<'tcx>>,
-    global_ctxt: &'tcx OnceCell<GlobalCtxt<'tcx>>,
+    gcx_cell: &'tcx OnceCell<GlobalCtxt<'tcx>>,
     arena: &'tcx WorkerLocal<Arena<'tcx>>,
     hir_arena: &'tcx WorkerLocal<rustc_hir::Arena<'tcx>>,
-) -> QueryContext<'tcx> {
+) -> &'tcx GlobalCtxt<'tcx> {
     // We're constructing the HIR here; we don't care what we will
     // read, since we haven't even constructed the *input* to
     // incr. comp. yet.
@@ -787,8 +771,8 @@ pub fn create_global_ctxt<'tcx>(
         TcxQueries::new(local_providers, extern_providers, query_result_on_disk_cache)
     });
 
-    let gcx = sess.time("setup_global_ctxt", || {
-        global_ctxt.get_or_init(move || {
+    sess.time("setup_global_ctxt", || {
+        gcx_cell.get_or_init(move || {
             TyCtxt::create_global_ctxt(
                 sess,
                 lint_store,
@@ -801,9 +785,7 @@ pub fn create_global_ctxt<'tcx>(
                 rustc_query_impl::query_callbacks(arena),
             )
         })
-    });
-
-    QueryContext { gcx }
+    })
 }
 
 /// Runs the resolution, type-checking, region checking and other
@@ -977,7 +959,7 @@ pub fn start_codegen<'tcx>(
 
     if tcx.sess.opts.output_types.contains_key(&OutputType::Mir) {
         if let Err(error) = rustc_mir_transform::dump_mir::emit_mir(tcx) {
-            tcx.sess.emit_err(CantEmitMIR { error });
+            tcx.sess.emit_err(errors::CantEmitMIR { error });
             tcx.sess.abort_if_errors();
         }
     }

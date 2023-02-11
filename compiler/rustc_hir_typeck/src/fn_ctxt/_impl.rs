@@ -669,6 +669,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 | ty::PredicateKind::Clause(ty::Clause::TypeOutlives(..))
                 | ty::PredicateKind::WellFormed(..)
                 | ty::PredicateKind::ObjectSafe(..)
+                | ty::PredicateKind::AliasEq(..)
                 | ty::PredicateKind::ConstEvaluatable(..)
                 | ty::PredicateKind::ConstEquate(..)
                 // N.B., this predicate is created by breaking down a
@@ -921,6 +922,22 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 kind: hir::ImplItemKind::Fn(ref sig, ..),
                 ..
             }) => Some((&sig.decl, ident, false)),
+            Node::Expr(&hir::Expr {
+                hir_id,
+                kind: hir::ExprKind::Closure(..),
+                ..
+            }) if let Some(Node::Expr(&hir::Expr {
+                hir_id,
+                kind: hir::ExprKind::Call(..),
+                ..
+            })) = self.tcx.hir().find_parent(hir_id) &&
+            let Some(Node::Item(&hir::Item {
+                ident,
+                kind: hir::ItemKind::Fn(ref sig, ..),
+                ..
+            })) = self.tcx.hir().find_parent(hir_id) => {
+                Some((&sig.decl, ident, ident.name != sym::main))
+            },
             _ => None,
         }
     }

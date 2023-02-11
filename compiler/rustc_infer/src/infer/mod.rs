@@ -4,6 +4,7 @@ pub use self::LateBoundRegionConversionTime::*;
 pub use self::RegionVariableOrigin::*;
 pub use self::SubregionOrigin::*;
 pub use self::ValuePairs::*;
+pub use combine::ObligationEmittingRelation;
 
 use self::opaque_types::OpaqueTypeStorage;
 pub(crate) use self::undo_log::{InferCtxtUndoLogs, Snapshot, UndoLog};
@@ -30,7 +31,7 @@ use rustc_middle::ty::relate::RelateResult;
 use rustc_middle::ty::subst::{GenericArg, GenericArgKind, InternalSubsts, SubstsRef};
 use rustc_middle::ty::visit::TypeVisitable;
 pub use rustc_middle::ty::IntVarValue;
-use rustc_middle::ty::{self, GenericParamDefKind, InferConst, Ty, TyCtxt};
+use rustc_middle::ty::{self, GenericParamDefKind, InferConst, InferTy, Ty, TyCtxt};
 use rustc_middle::ty::{ConstVid, FloatVid, IntVid, TyVid};
 use rustc_span::symbol::Symbol;
 use rustc_span::Span;
@@ -995,7 +996,7 @@ impl<'tcx> InferCtxt<'tcx> {
 
         Ok(self.commit_if_ok(|_snapshot| {
             let ty::SubtypePredicate { a_is_expected, a, b } =
-                self.replace_bound_vars_with_placeholders(predicate);
+                self.instantiate_binder_with_placeholders(predicate);
 
             let ok = self.at(cause, param_env).sub_exp(a_is_expected, a, b)?;
 
@@ -1008,7 +1009,7 @@ impl<'tcx> InferCtxt<'tcx> {
         cause: &traits::ObligationCause<'tcx>,
         predicate: ty::PolyRegionOutlivesPredicate<'tcx>,
     ) {
-        let ty::OutlivesPredicate(r_a, r_b) = self.replace_bound_vars_with_placeholders(predicate);
+        let ty::OutlivesPredicate(r_a, r_b) = self.instantiate_binder_with_placeholders(predicate);
         let origin =
             SubregionOrigin::from_obligation_cause(cause, || RelateRegionParamBound(cause.span));
         self.sub_regions(origin, r_b, r_a); // `b : a` ==> `a <= b`
@@ -1389,8 +1390,8 @@ impl<'tcx> InferCtxt<'tcx> {
     where
         T: TypeFoldable<'tcx>,
     {
-        if !value.needs_infer() {
-            return value; // Avoid duplicated subst-folding.
+        if !value.has_non_region_infer() {
+            return value;
         }
         let mut r = resolve::OpportunisticVarResolver::new(self);
         value.fold_with(&mut r)
@@ -1447,7 +1448,14 @@ impl<'tcx> InferCtxt<'tcx> {
         value
     }
 
-    pub fn replace_bound_vars_with_fresh_vars<T>(
+    // Instantiates the bound variables in a given binder with fresh inference
+    // variables in the current universe.
+    //
+    // Use this method if you'd like to find some substitution of the binder's
+    // variables (e.g. during a method call). If there isn't a [`LateBoundRegionConversionTime`]
+    // that corresponds to your use case, consider whether or not you should
+    // use [`InferCtxt::instantiate_binder_with_placeholders`] instead.
+    pub fn instantiate_binder_with_fresh_vars<T>(
         &self,
         span: Span,
         lbrct: LateBoundRegionConversionTime,
@@ -1870,43 +1878,9 @@ impl<'a, 'tcx> TypeFolder<'tcx> for ShallowResolver<'a, 'tcx> {
     /// If `ty` is a type variable of some kind, resolve it one level
     /// (but do not resolve types found in the result). If `typ` is
     /// not a type variable, just return it unmodified.
+    #[inline]
     fn fold_ty(&mut self, ty: Ty<'tcx>) -> Ty<'tcx> {
-        match *ty.kind() {
-            ty::Infer(ty::TyVar(v)) => {
-                // Not entirely obvious: if `typ` is a type variable,
-                // it can be resolved to an int/float variable, which
-                // can then be recursively resolved, hence the
-                // recursion. Note though that we prevent type
-                // variables from unifying to other type variables
-                // directly (though they may be embedded
-                // structurally), and we prevent cycles in any case,
-                // so this recursion should always be of very limited
-                // depth.
-                //
-                // Note: if these two lines are combined into one we get
-                // dynamic borrow errors on `self.inner`.
-                let known = self.infcx.inner.borrow_mut().type_variables().probe(v).known();
-                known.map_or(ty, |t| self.fold_ty(t))
-            }
-
-            ty::Infer(ty::IntVar(v)) => self
-                .infcx
-                .inner
-                .borrow_mut()
-                .int_unification_table()
-                .probe_value(v)
-                .map_or(ty, |v| v.to_type(self.infcx.tcx)),
-
-            ty::Infer(ty::FloatVar(v)) => self
-                .infcx
-                .inner
-                .borrow_mut()
-                .float_unification_table()
-                .probe_value(v)
-                .map_or(ty, |v| v.to_type(self.infcx.tcx)),
-
-            _ => ty,
-        }
+        if let ty::Infer(v) = ty.kind() { self.fold_infer_ty(*v).unwrap_or(ty) } else { ty }
     }
 
     fn fold_const(&mut self, ct: ty::Const<'tcx>) -> ty::Const<'tcx> {
@@ -1921,6 +1895,49 @@ impl<'a, 'tcx> TypeFolder<'tcx> for ShallowResolver<'a, 'tcx> {
                 .unwrap_or(ct)
         } else {
             ct
+        }
+    }
+}
+
+impl<'a, 'tcx> ShallowResolver<'a, 'tcx> {
+    // This is separate from `fold_ty` to keep that method small and inlinable.
+    #[inline(never)]
+    fn fold_infer_ty(&mut self, v: InferTy) -> Option<Ty<'tcx>> {
+        match v {
+            ty::TyVar(v) => {
+                // Not entirely obvious: if `typ` is a type variable,
+                // it can be resolved to an int/float variable, which
+                // can then be recursively resolved, hence the
+                // recursion. Note though that we prevent type
+                // variables from unifying to other type variables
+                // directly (though they may be embedded
+                // structurally), and we prevent cycles in any case,
+                // so this recursion should always be of very limited
+                // depth.
+                //
+                // Note: if these two lines are combined into one we get
+                // dynamic borrow errors on `self.inner`.
+                let known = self.infcx.inner.borrow_mut().type_variables().probe(v).known();
+                known.map(|t| self.fold_ty(t))
+            }
+
+            ty::IntVar(v) => self
+                .infcx
+                .inner
+                .borrow_mut()
+                .int_unification_table()
+                .probe_value(v)
+                .map(|v| v.to_type(self.infcx.tcx)),
+
+            ty::FloatVar(v) => self
+                .infcx
+                .inner
+                .borrow_mut()
+                .float_unification_table()
+                .probe_value(v)
+                .map(|v| v.to_type(self.infcx.tcx)),
+
+            ty::FreshTy(_) | ty::FreshIntTy(_) | ty::FreshFloatTy(_) => None,
         }
     }
 }

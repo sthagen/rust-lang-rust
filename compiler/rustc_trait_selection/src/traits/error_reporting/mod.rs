@@ -1278,6 +1278,11 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                         span,
                         "TypeWellFormedFromEnv predicate should only exist in the environment"
                     ),
+
+                    ty::PredicateKind::AliasEq(..) => span_bug!(
+                        span,
+                        "AliasEq predicate should never be the predicate cause of a SelectionError"
+                    ),
                 }
             }
 
@@ -1716,7 +1721,7 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             let (values, err) = if let ty::PredicateKind::Clause(ty::Clause::Projection(data)) =
                 bound_predicate.skip_binder()
             {
-                let data = self.replace_bound_vars_with_fresh_vars(
+                let data = self.instantiate_binder_with_fresh_vars(
                     obligation.cause.span,
                     infer::LateBoundRegionConversionTime::HigherRankedType,
                     bound_predicate.rebind(data),

@@ -468,6 +468,18 @@ pub struct GlobalCtxt<'tcx> {
     pub(crate) alloc_map: Lock<interpret::AllocMap<'tcx>>,
 }
 
+impl<'tcx> GlobalCtxt<'tcx> {
+    /// Installs `self` in a `TyCtxt` and `ImplicitCtxt` for the duration of
+    /// `f`.
+    pub fn enter<'a: 'tcx, F, R>(&'a self, f: F) -> R
+    where
+        F: FnOnce(TyCtxt<'tcx>) -> R,
+    {
+        let icx = tls::ImplicitCtxt::new(self);
+        tls::enter_context(&icx, || f(icx.tcx))
+    }
+}
+
 impl<'tcx> TyCtxt<'tcx> {
     /// Expects a body and returns its codegen attributes.
     ///
@@ -647,6 +659,30 @@ impl<'tcx> TyCtxt<'tcx> {
     pub fn ty_error_with_message<S: Into<MultiSpan>>(self, span: S, msg: &str) -> Ty<'tcx> {
         let reported = self.sess.delay_span_bug(span, msg);
         self.mk_ty(Error(reported))
+    }
+
+    /// Constructs a `RegionKind::ReError` lifetime.
+    #[track_caller]
+    pub fn re_error(self, reported: ErrorGuaranteed) -> Region<'tcx> {
+        self.mk_region(ty::ReError(reported))
+    }
+
+    /// Constructs a `RegionKind::ReError` lifetime and registers a `delay_span_bug` to ensure it
+    /// gets used.
+    #[track_caller]
+    pub fn re_error_misc(self) -> Region<'tcx> {
+        self.re_error_with_message(
+            DUMMY_SP,
+            "RegionKind::ReError constructed but no error reported",
+        )
+    }
+
+    /// Constructs a `RegionKind::ReError` lifetime and registers a `delay_span_bug` with the given
+    /// `msg` to ensure it gets used.
+    #[track_caller]
+    pub fn re_error_with_message<S: Into<MultiSpan>>(self, span: S, msg: &str) -> Region<'tcx> {
+        let reported = self.sess.delay_span_bug(span, msg);
+        self.re_error(reported)
     }
 
     /// Like [TyCtxt::ty_error] but for constants, with current `ErrorGuaranteed`
@@ -2217,6 +2253,10 @@ impl<'tcx> TyCtxt<'tcx> {
                 ..
             })
         )
+    }
+
+    pub fn trait_solver_next(self) -> bool {
+        self.sess.opts.unstable_opts.trait_solver == rustc_session::config::TraitSolver::Next
     }
 }
 

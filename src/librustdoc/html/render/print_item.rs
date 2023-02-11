@@ -645,6 +645,10 @@ fn item_trait(w: &mut Buffer, cx: &mut Context<'_>, it: &clean::Item, t: &clean:
             if count_consts != 0 && count_methods != 0 {
                 w.write_str("\n");
             }
+
+            if !required_methods.is_empty() {
+                write!(w, "    // Required method{}\n", pluralize(required_methods.len()));
+            }
             for (pos, m) in required_methods.iter().enumerate() {
                 render_assoc_item(
                     w,
@@ -663,6 +667,10 @@ fn item_trait(w: &mut Buffer, cx: &mut Context<'_>, it: &clean::Item, t: &clean:
             if !required_methods.is_empty() && !provided_methods.is_empty() {
                 w.write_str("\n");
             }
+
+            if !provided_methods.is_empty() {
+                write!(w, "    // Provided method{}\n", pluralize(provided_methods.len()));
+            }
             for (pos, m) in provided_methods.iter().enumerate() {
                 render_assoc_item(
                     w,
@@ -672,16 +680,8 @@ fn item_trait(w: &mut Buffer, cx: &mut Context<'_>, it: &clean::Item, t: &clean:
                     cx,
                     RenderMode::Normal,
                 );
-                match *m.kind {
-                    clean::MethodItem(ref inner, _)
-                        if !inner.generics.where_predicates.is_empty() =>
-                    {
-                        w.write_str(",\n    { ... }\n");
-                    }
-                    _ => {
-                        w.write_str(" { ... }\n");
-                    }
-                }
+
+                w.write_str(" { ... }\n");
 
                 if pos < provided_methods.len() - 1 {
                     w.write_str("<span class=\"item-spacer\"></span>");
@@ -1109,7 +1109,7 @@ fn item_typedef(w: &mut Buffer, cx: &mut Context<'_>, it: &clean::Item, t: &clea
 fn item_union(w: &mut Buffer, cx: &mut Context<'_>, it: &clean::Item, s: &clean::Union) {
     wrap_item(w, |w| {
         render_attributes_in_pre(w, it, "");
-        render_union(w, it, Some(&s.generics), &s.fields, "", cx);
+        render_union(w, it, Some(&s.generics), &s.fields, cx);
     });
 
     document(w, cx, it, None, HeadingOffset::H2);
@@ -1628,7 +1628,6 @@ fn render_union(
     it: &clean::Item,
     g: Option<&clean::Generics>,
     fields: &[clean::Item],
-    tab: &str,
     cx: &Context<'_>,
 ) {
     let tcx = cx.tcx();
@@ -1651,7 +1650,7 @@ fn render_union(
         w.write_str(" ");
     }
 
-    write!(w, "{{\n{}", tab);
+    write!(w, "{{\n");
     let count_fields =
         fields.iter().filter(|f| matches!(*f.kind, clean::StructFieldItem(..))).count();
     let toggle = should_hide_fields(count_fields);
@@ -1663,17 +1662,16 @@ fn render_union(
         if let clean::StructFieldItem(ref ty) = *field.kind {
             write!(
                 w,
-                "    {}{}: {},\n{}",
+                "    {}{}: {},\n",
                 visibility_print_with_space(field.visibility(tcx), field.item_id, cx),
                 field.name.unwrap(),
-                ty.print(cx),
-                tab
+                ty.print(cx)
             );
         }
     }
 
     if it.has_stripped_entries().unwrap() {
-        write!(w, "    /* private fields */\n{}", tab);
+        write!(w, "    /* private fields */\n");
     }
     if toggle {
         toggle_close(w);
