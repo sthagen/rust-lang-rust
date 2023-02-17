@@ -41,8 +41,8 @@ use std::iter;
 
 mod generics_of;
 mod item_bounds;
-mod lifetimes;
 mod predicates_of;
+mod resolve_bound_vars;
 mod type_of;
 
 ///////////////////////////////////////////////////////////////////////////
@@ -53,7 +53,7 @@ fn collect_mod_item_types(tcx: TyCtxt<'_>, module_def_id: LocalDefId) {
 }
 
 pub fn provide(providers: &mut Providers) {
-    lifetimes::provide(providers);
+    resolve_bound_vars::provide(providers);
     *providers = Providers {
         opt_const_param_of: type_of::opt_const_param_of,
         type_of: type_of::type_of,
@@ -458,13 +458,11 @@ impl<'tcx> AstConv<'tcx> for ItemCtxt<'tcx> {
                                         self.tcx.replace_late_bound_regions_uncached(
                                             poly_trait_ref,
                                             |_| {
-                                                self.tcx.mk_region(ty::ReEarlyBound(
-                                                    ty::EarlyBoundRegion {
-                                                        def_id: item_def_id,
-                                                        index: 0,
-                                                        name: Symbol::intern(&lt_name),
-                                                    },
-                                                ))
+                                                self.tcx.mk_re_early_bound(ty::EarlyBoundRegion {
+                                                    def_id: item_def_id,
+                                                    index: 0,
+                                                    name: Symbol::intern(&lt_name),
+                                                })
                                             }
                                         ),
                                     ),
@@ -934,9 +932,10 @@ fn trait_def(tcx: TyCtxt<'_>, def_id: DefId) -> ty::TraitDef {
     }
 
     let is_marker = tcx.has_attr(def_id, sym::marker);
+    let rustc_coinductive = tcx.has_attr(def_id, sym::rustc_coinductive);
     let skip_array_during_method_dispatch =
         tcx.has_attr(def_id, sym::rustc_skip_array_during_method_dispatch);
-    let spec_kind = if tcx.has_attr(def_id, sym::rustc_unsafe_specialization_marker) {
+    let specialization_kind = if tcx.has_attr(def_id, sym::rustc_unsafe_specialization_marker) {
         ty::trait_def::TraitSpecializationKind::Marker
     } else if tcx.has_attr(def_id, sym::rustc_specialization_trait) {
         ty::trait_def::TraitSpecializationKind::AlwaysApplicable
@@ -1036,16 +1035,17 @@ fn trait_def(tcx: TyCtxt<'_>, def_id: DefId) -> ty::TraitDef {
             no_dups.then_some(list)
         });
 
-    ty::TraitDef::new(
+    ty::TraitDef {
         def_id,
         unsafety,
         paren_sugar,
-        is_auto,
+        has_auto_impl: is_auto,
         is_marker,
+        is_coinductive: rustc_coinductive || is_auto,
         skip_array_during_method_dispatch,
-        spec_kind,
+        specialization_kind,
         must_implement_one_of,
-    )
+    }
 }
 
 fn are_suggestable_generic_args(generic_args: &[hir::GenericArg<'_>]) -> bool {

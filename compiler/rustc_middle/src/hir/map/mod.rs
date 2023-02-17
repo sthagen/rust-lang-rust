@@ -203,7 +203,7 @@ impl<'hir> Map<'hir> {
                 ItemKind::Use(..) => DefKind::Use,
                 ItemKind::ForeignMod { .. } => DefKind::ForeignMod,
                 ItemKind::GlobalAsm(..) => DefKind::GlobalAsm,
-                ItemKind::Impl { .. } => DefKind::Impl,
+                ItemKind::Impl(impl_) => DefKind::Impl { of_trait: impl_.of_trait.is_some() },
             },
             Node::ForeignItem(item) => match item.kind {
                 ForeignItemKind::Fn(..) => DefKind::Fn,
@@ -1062,7 +1062,7 @@ impl<'hir> Map<'hir> {
     }
 
     pub fn span_if_local(self, id: DefId) -> Option<Span> {
-        if id.is_local() { Some(self.tcx.def_span(id)) } else { None }
+        id.is_local().then(|| self.tcx.def_span(id))
     }
 
     pub fn res_span(self, res: Res) -> Option<Span> {

@@ -3,7 +3,9 @@ use rustc_hir as hir;
 use rustc_hir::def::Res;
 use rustc_hir::def_id::DefId;
 use rustc_infer::traits::ObligationCauseCode;
-use rustc_middle::ty::{self, DefIdTree, Ty, TypeSuperVisitable, TypeVisitable, TypeVisitor};
+use rustc_middle::ty::{
+    self, ir::TypeVisitor, DefIdTree, Ty, TyCtxt, TypeSuperVisitable, TypeVisitable,
+};
 use rustc_span::{self, Span};
 use rustc_trait_selection::traits;
 
@@ -247,7 +249,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         t: T,
     ) -> Option<ty::GenericArg<'tcx>> {
         struct FindAmbiguousParameter<'a, 'tcx>(&'a FnCtxt<'a, 'tcx>, DefId);
-        impl<'tcx> TypeVisitor<'tcx> for FindAmbiguousParameter<'_, 'tcx> {
+        impl<'tcx> TypeVisitor<TyCtxt<'tcx>> for FindAmbiguousParameter<'_, 'tcx> {
             type BreakTy = ty::GenericArg<'tcx>;
             fn visit_ty(&mut self, ty: Ty<'tcx>) -> std::ops::ControlFlow<Self::BreakTy> {
                 if let Some(origin) = self.0.type_var_origin(ty)
@@ -475,19 +477,24 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         // This is the "trait" (meaning, the predicate "proved" by this `impl`) which provides the `Self` type we care about.
         // For the purposes of this function, we hope that it is a `struct` type, and that our current `expr` is a literal of
         // that struct type.
-        let impl_trait_self_ref: Option<ty::TraitRef<'tcx>> =
-            self.tcx.impl_trait_ref(obligation.impl_def_id).map(|impl_def| impl_def.skip_binder());
-
-        let Some(impl_trait_self_ref) = impl_trait_self_ref else {
-            // It is possible that this is absent. In this case, we make no progress.
-            return Err(expr);
+        let impl_trait_self_ref = if self.tcx.is_trait_alias(obligation.impl_or_alias_def_id) {
+            self.tcx.mk_trait_ref(
+                obligation.impl_or_alias_def_id,
+                ty::InternalSubsts::identity_for_item(self.tcx, obligation.impl_or_alias_def_id),
+            )
+        } else {
+            self.tcx
+                .impl_trait_ref(obligation.impl_or_alias_def_id)
+                .map(|impl_def| impl_def.skip_binder())
+                // It is possible that this is absent. In this case, we make no progress.
+                .ok_or(expr)?
         };
 
         // We only really care about the `Self` type itself, which we extract from the ref.
         let impl_self_ty: Ty<'tcx> = impl_trait_self_ref.self_ty();
 
         let impl_predicates: ty::GenericPredicates<'tcx> =
-            self.tcx.predicates_of(obligation.impl_def_id);
+            self.tcx.predicates_of(obligation.impl_or_alias_def_id);
         let Some(impl_predicate_index) = obligation.impl_def_predicate_index else {
             // We don't have the index, so we can only guess.
             return Err(expr);

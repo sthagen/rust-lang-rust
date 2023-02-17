@@ -4,8 +4,8 @@ use crate::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use crate::mir;
 use crate::ty::layout::IntegerExt;
 use crate::ty::{
-    self, DefIdTree, FallibleTypeFolder, Ty, TyCtxt, TypeFoldable, TypeFolder, TypeSuperFoldable,
-    TypeVisitable,
+    self, ir::TypeFolder, DefIdTree, FallibleTypeFolder, Ty, TyCtxt, TypeFoldable,
+    TypeSuperFoldable,
 };
 use crate::ty::{GenericArgKind, SubstsRef};
 use rustc_apfloat::Float as _;
@@ -167,7 +167,7 @@ impl<'tcx> TyCtxt<'tcx> {
                 | DefKind::Fn
                 | DefKind::AssocFn
                 | DefKind::AssocConst
-                | DefKind::Impl,
+                | DefKind::Impl { .. },
                 def_id,
             ) => Some(def_id),
             Res::Err => None,
@@ -564,14 +564,14 @@ impl<'tcx> TyCtxt<'tcx> {
         self,
         closure_def_id: DefId,
         closure_substs: SubstsRef<'tcx>,
-        env_region: ty::RegionKind<'tcx>,
+        env_region: ty::Region<'tcx>,
     ) -> Option<Ty<'tcx>> {
         let closure_ty = self.mk_closure(closure_def_id, closure_substs);
         let closure_kind_ty = closure_substs.as_closure().kind_ty();
         let closure_kind = closure_kind_ty.to_opt_closure_kind()?;
         let env_ty = match closure_kind {
-            ty::ClosureKind::Fn => self.mk_imm_ref(self.mk_region(env_region), closure_ty),
-            ty::ClosureKind::FnMut => self.mk_mut_ref(self.mk_region(env_region), closure_ty),
+            ty::ClosureKind::Fn => self.mk_imm_ref(env_region, closure_ty),
+            ty::ClosureKind::FnMut => self.mk_mut_ref(env_region, closure_ty),
             ty::ClosureKind::FnOnce => closure_ty,
         };
         Some(env_ty)
@@ -842,8 +842,8 @@ impl<'tcx> OpaqueTypeExpander<'tcx> {
     }
 }
 
-impl<'tcx> TypeFolder<'tcx> for OpaqueTypeExpander<'tcx> {
-    fn tcx(&self) -> TyCtxt<'tcx> {
+impl<'tcx> TypeFolder<TyCtxt<'tcx>> for OpaqueTypeExpander<'tcx> {
+    fn interner(&self) -> TyCtxt<'tcx> {
         self.tcx
     }
 
@@ -1343,7 +1343,7 @@ where
             for t in iter {
                 new_list.push(t.try_fold_with(folder)?)
             }
-            Ok(intern(folder.tcx(), &new_list))
+            Ok(intern(folder.interner(), &new_list))
         }
         Some((_, Err(err))) => {
             return Err(err);

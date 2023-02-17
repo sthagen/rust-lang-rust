@@ -146,7 +146,6 @@
     -Z          sanitizer-memory-track-origins=val -- enable origins tracking in MemorySanitizer
     -Z                       sanitizer-recover=val -- enable recovery for selected sanitizers
     -Z                  saturating-float-casts=val -- make float->int casts UB-free: numbers outside the integer type's range are clipped to the max/min integer respectively, and NaN is mapped to 0 (default: yes)
-    -Z                           save-analysis=val -- write syntax and type analysis (in JSON format) information, in addition to normal output (default: no)
     -Z                            self-profile=val -- run the self profiler and output the raw event data
     -Z                    self-profile-counter=val -- counter used by the self profiler (default: `wall-time`), one of:
         `wall-time` (monotonic clock, i.e. `std::time::Instant`)
@@ -176,6 +175,7 @@
     -Z                 symbol-mangling-version=val -- which mangling version to use for symbol names ('legacy' (default) or 'v0')
     -Z                                   teach=val -- show extended diagnostic help (default: no)
     -Z                               temps-dir=val -- the directory the intermediate files are written to
+    -Z                           terminal-urls=val -- use the OSC 8 hyperlink terminal specification to print hyperlinks in the compiler output
     -Z                                 thinlto=val -- enable ThinLTO when possible
     -Z                           thir-unsafeck=val -- use the THIR unsafety checker (default: no)
     -Z                                 threads=val -- use a thread pool with N threads

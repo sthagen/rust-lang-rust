@@ -215,6 +215,8 @@ declare_features! (
     (active, linkage, "1.0.0", Some(29603), None),
     /// Allows declaring with `#![needs_panic_runtime]` that a panic runtime is needed.
     (active, needs_panic_runtime, "1.10.0", Some(32837), None),
+    /// Allows using `+bundled,+whole-archive` native libs.
+    (active, packed_bundled_libs, "CURRENT_RUSTC_VERSION", Some(108081), None),
     /// Allows using the `#![panic_runtime]` attribute.
     (active, panic_runtime, "1.10.0", Some(32837), None),
     /// Allows using `#[rustc_allow_const_fn_unstable]`.
@@ -471,6 +473,8 @@ declare_features! (
     (active, no_sanitize, "1.42.0", Some(39699), None),
     /// Allows using the `non_exhaustive_omitted_patterns` lint.
     (active, non_exhaustive_omitted_patterns_lint, "1.57.0", Some(89554), None),
+    /// Allows `for<T>` binders in where-clauses
+    (incomplete, non_lifetime_binders, "CURRENT_RUSTC_VERSION", Some(1), None),
     /// Allows making `dyn Trait` well-formed even if `Trait` is not object safe.
     /// In that case, `dyn Trait: Trait` does not hold. Moreover, coercions and
     /// casts in safe Rust to `dyn Trait` for such a `Trait` is also forbidden.

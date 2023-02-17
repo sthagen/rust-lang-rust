@@ -166,7 +166,7 @@ impl TypoCandidate {
     }
 }
 
-impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
+impl<'a: 'ast, 'ast, 'tcx> LateResolutionVisitor<'a, '_, 'ast, 'tcx> {
     fn def_span(&self, def_id: DefId) -> Option<Span> {
         match def_id.krate {
             LOCAL_CRATE => self.r.opt_span(def_id),
@@ -318,7 +318,7 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
         span: Span,
         source: PathSource<'_>,
         res: Option<Res>,
-    ) -> (DiagnosticBuilder<'a, ErrorGuaranteed>, Vec<ImportSuggestion>) {
+    ) -> (DiagnosticBuilder<'tcx, ErrorGuaranteed>, Vec<ImportSuggestion>) {
         debug!(?res, ?source);
         let base_error = self.make_base_error(path, span, source, res);
         let code = source.error_code(res.is_some());
@@ -1700,11 +1700,9 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
                                         let crate_mod =
                                             Res::Def(DefKind::Mod, crate_id.as_def_id());
 
-                                        if filter_fn(crate_mod) {
-                                            Some(TypoSuggestion::typo_from_ident(*ident, crate_mod))
-                                        } else {
-                                            None
-                                        }
+                                        filter_fn(crate_mod).then(|| {
+                                            TypoSuggestion::typo_from_ident(*ident, crate_mod)
+                                        })
                                     })
                             }));
 
@@ -2626,7 +2624,7 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
 }
 
 /// Report lifetime/lifetime shadowing as an error.
-pub fn signal_lifetime_shadowing(sess: &Session, orig: Ident, shadower: Ident) {
+pub(super) fn signal_lifetime_shadowing(sess: &Session, orig: Ident, shadower: Ident) {
     let mut err = struct_span_err!(
         sess,
         shadower.span,
@@ -2641,7 +2639,7 @@ pub fn signal_lifetime_shadowing(sess: &Session, orig: Ident, shadower: Ident) {
 
 /// Shadowing involving a label is only a warning for historical reasons.
 //FIXME: make this a proper lint.
-pub fn signal_label_shadowing(sess: &Session, orig: Span, shadower: Ident) {
+pub(super) fn signal_label_shadowing(sess: &Session, orig: Span, shadower: Ident) {
     let name = shadower.name;
     let shadower = shadower.span;
     let mut err = sess.struct_span_warn(

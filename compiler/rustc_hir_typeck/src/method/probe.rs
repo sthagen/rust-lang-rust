@@ -20,7 +20,7 @@ use rustc_middle::ty::fast_reject::{simplify_type, TreatParams};
 use rustc_middle::ty::AssocItem;
 use rustc_middle::ty::GenericParamDefKind;
 use rustc_middle::ty::ToPredicate;
-use rustc_middle::ty::{self, ParamEnvAnd, Ty, TyCtxt, TypeFoldable, TypeVisitable};
+use rustc_middle::ty::{self, ParamEnvAnd, Ty, TyCtxt, TypeFoldable};
 use rustc_middle::ty::{InternalSubsts, SubstsRef};
 use rustc_session::lint;
 use rustc_span::def_id::DefId;
@@ -517,8 +517,7 @@ fn method_autoderef_steps<'tcx>(
         .by_ref()
         .map(|(ty, d)| {
             let step = CandidateStep {
-                self_ty: infcx
-                    .make_query_response_ignoring_pending_obligations(inference_vars.clone(), ty),
+                self_ty: infcx.make_query_response_ignoring_pending_obligations(inference_vars, ty),
                 autoderefs: d,
                 from_unsafe_deref: reached_raw_pointer,
                 unsize: false,
@@ -936,7 +935,7 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
                         return false;
                     }
                 }
-                self.can_sub(self.param_env, fty.output(), expected).is_ok()
+                self.can_sub(self.param_env, fty.output(), expected)
             }),
             _ => false,
         }
@@ -1577,7 +1576,7 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
                                 traits::ImplDerivedObligation(Box::new(
                                     traits::ImplDerivedObligationCause {
                                         derived,
-                                        impl_def_id,
+                                        impl_or_alias_def_id: impl_def_id,
                                         impl_def_predicate_index: None,
                                         span,
                                     },

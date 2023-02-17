@@ -31,6 +31,7 @@ use rustc_middle::ty::{
 };
 use rustc_span::DUMMY_SP;
 
+use crate::solve::search_graph::OverflowHandler;
 use crate::traits::ObligationCause;
 
 mod assembly;
@@ -210,27 +211,16 @@ impl<'a, 'tcx> EvalCtxt<'a, 'tcx> {
         search_graph: &'a mut search_graph::SearchGraph<'tcx>,
         canonical_goal: CanonicalGoal<'tcx>,
     ) -> QueryResult<'tcx> {
-        match search_graph.try_push_stack(tcx, canonical_goal) {
-            Ok(()) => {}
-            // Our goal is already on the stack, eager return.
-            Err(response) => return response,
-        }
-
-        // We may have to repeatedly recompute the goal in case of coinductive cycles,
-        // check out the `cache` module for more information.
+        // Deal with overflow, caching, and coinduction.
         //
-        // FIXME: Similar to `evaluate_all`, this has to check for overflow.
-        loop {
+        // The actual solver logic happens in `ecx.compute_goal`.
+        search_graph.with_new_goal(tcx, canonical_goal, |search_graph| {
             let (ref infcx, goal, var_values) =
                 tcx.infer_ctxt().build_with_canonical(DUMMY_SP, &canonical_goal);
             let mut ecx =
                 EvalCtxt { infcx, var_values, search_graph, in_projection_eq_hack: false };
-            let result = ecx.compute_goal(goal);
-
-            if search_graph.try_finalize_goal(tcx, canonical_goal, result) {
-                return result;
-            }
-        }
+            ecx.compute_goal(goal)
+        })
     }
 
     fn make_canonical_response(&self, certainty: Certainty) -> QueryResult<'tcx> {
@@ -265,12 +255,18 @@ impl<'a, 'tcx> EvalCtxt<'a, 'tcx> {
         // call `exists<U> <T as Trait>::Assoc == U` to enable better caching. This goal
         // could constrain `U` to `u32` which would cause this check to result in a
         // solver cycle.
-        if cfg!(debug_assertions) && has_changed && !self.in_projection_eq_hack {
+        if cfg!(debug_assertions)
+            && has_changed
+            && !self.in_projection_eq_hack
+            && !self.search_graph.in_cycle()
+        {
             let mut orig_values = OriginalQueryValues::default();
             let canonical_goal = self.infcx.canonicalize_query(goal, &mut orig_values);
             let canonical_response =
                 EvalCtxt::evaluate_canonical_goal(self.tcx(), self.search_graph, canonical_goal)?;
-            assert!(canonical_response.value.var_values.is_identity());
+            if !canonical_response.value.var_values.is_identity() {
+                bug!("unstable result: {goal:?} {canonical_goal:?} {canonical_response:?}");
+            }
             assert_eq!(certainty, canonical_response.value.certainty);
         }
 
@@ -485,35 +481,38 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
         mut goals: Vec<Goal<'tcx, ty::Predicate<'tcx>>>,
     ) -> Result<Certainty, NoSolution> {
         let mut new_goals = Vec::new();
-        self.repeat_while_none(|this| {
-            let mut has_changed = Err(Certainty::Yes);
-            for goal in goals.drain(..) {
-                let (changed, certainty) = match this.evaluate_goal(goal) {
-                    Ok(result) => result,
-                    Err(NoSolution) => return Some(Err(NoSolution)),
-                };
+        self.repeat_while_none(
+            |_| Ok(Certainty::Maybe(MaybeCause::Overflow)),
+            |this| {
+                let mut has_changed = Err(Certainty::Yes);
+                for goal in goals.drain(..) {
+                    let (changed, certainty) = match this.evaluate_goal(goal) {
+                        Ok(result) => result,
+                        Err(NoSolution) => return Some(Err(NoSolution)),
+                    };
 
-                if changed {
-                    has_changed = Ok(());
-                }
+                    if changed {
+                        has_changed = Ok(());
+                    }
 
-                match certainty {
-                    Certainty::Yes => {}
-                    Certainty::Maybe(_) => {
-                        new_goals.push(goal);
-                        has_changed = has_changed.map_err(|c| c.unify_and(certainty));
+                    match certainty {
+                        Certainty::Yes => {}
+                        Certainty::Maybe(_) => {
+                            new_goals.push(goal);
+                            has_changed = has_changed.map_err(|c| c.unify_and(certainty));
+                        }
                     }
                 }
-            }
 
-            match has_changed {
-                Ok(()) => {
-                    mem::swap(&mut new_goals, &mut goals);
-                    None
+                match has_changed {
+                    Ok(()) => {
+                        mem::swap(&mut new_goals, &mut goals);
+                        None
+                    }
+                    Err(certainty) => Some(Ok(certainty)),
                 }
-                Err(certainty) => Some(Ok(certainty)),
-            }
-        })
+            },
+        )
     }
 
     // Recursively evaluates a list of goals to completion, making a query response.
@@ -548,7 +547,7 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
             response.value.certainty == Certainty::Yes
                 && response.has_no_inference_or_external_constraints()
         }) {
-            return Ok(response.clone());
+            return Ok(*response);
         }
 
         let certainty = candidates.iter().fold(Certainty::AMBIGUOUS, |certainty, response| {

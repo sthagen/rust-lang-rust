@@ -9,7 +9,7 @@ use rustc_middle::ty::print::with_forced_trimmed_paths;
 use rustc_middle::ty::subst::InternalSubsts;
 use rustc_middle::ty::util::IntTypeExt;
 use rustc_middle::ty::{
-    self, DefIdTree, IsSuggestable, Ty, TyCtxt, TypeFolder, TypeSuperFoldable, TypeVisitable,
+    self, ir::TypeFolder, DefIdTree, IsSuggestable, Ty, TyCtxt, TypeSuperFoldable, TypeVisitable,
 };
 use rustc_span::symbol::Ident;
 use rustc_span::{Span, DUMMY_SP};
@@ -259,13 +259,8 @@ pub(super) fn type_of(tcx: TyCtxt<'_>, def_id: DefId) -> Ty<'_> {
             }
             TraitItemKind::Const(ty, body_id) => body_id
                 .and_then(|body_id| {
-                    if is_suggestable_infer_ty(ty) {
-                        Some(infer_placeholder_type(
-                            tcx, def_id, body_id, ty.span, item.ident, "constant",
-                        ))
-                    } else {
-                        None
-                    }
+                    is_suggestable_infer_ty(ty)
+                        .then(|| infer_placeholder_type(tcx, def_id, body_id, ty.span, item.ident, "constant",))
                 })
                 .unwrap_or_else(|| icx.to_ty(ty)),
             TraitItemKind::Type(_, Some(ty)) => icx.to_ty(ty),
@@ -850,8 +845,8 @@ fn infer_placeholder_type<'a>(
         tcx: TyCtxt<'tcx>,
     }
 
-    impl<'tcx> TypeFolder<'tcx> for MakeNameable<'tcx> {
-        fn tcx(&self) -> TyCtxt<'tcx> {
+    impl<'tcx> TypeFolder<TyCtxt<'tcx>> for MakeNameable<'tcx> {
+        fn interner(&self) -> TyCtxt<'tcx> {
             self.tcx
         }
 

@@ -527,26 +527,26 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                                 let kind = ty::BoundTyKind::Param(param.def_id, param.name);
                                 let bound_var = ty::BoundVariableKind::Ty(kind);
                                 bound_vars.push(bound_var);
-                                tcx.mk_ty(ty::Bound(
+                                tcx.mk_bound(
                                     ty::INNERMOST,
                                     ty::BoundTy {
                                         var: ty::BoundVar::from_usize(bound_vars.len() - 1),
                                         kind,
                                     },
-                                ))
+                                )
                                 .into()
                             }
                             GenericParamDefKind::Lifetime => {
                                 let kind = ty::BoundRegionKind::BrNamed(param.def_id, param.name);
                                 let bound_var = ty::BoundVariableKind::Region(kind);
                                 bound_vars.push(bound_var);
-                                tcx.mk_region(ty::ReLateBound(
+                                tcx.mk_re_late_bound(
                                     ty::INNERMOST,
                                     ty::BoundRegion {
                                         var: ty::BoundVar::from_usize(bound_vars.len() - 1),
                                         kind,
                                     },
-                                ))
+                                )
                                 .into()
                             }
                             GenericParamDefKind::Const { .. } => {
@@ -1189,7 +1189,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             let cause = obligation.derived_cause(|derived| {
                 ImplDerivedObligation(Box::new(ImplDerivedObligationCause {
                     derived,
-                    impl_def_id,
+                    impl_or_alias_def_id: impl_def_id,
                     impl_def_predicate_index: None,
                     span: obligation.cause.span,
                 }))

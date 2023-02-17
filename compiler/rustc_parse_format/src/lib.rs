@@ -835,7 +835,7 @@ impl<'a> Parser<'a> {
             );
         }
 
-        if found { Some(cur) } else { None }
+        found.then_some(cur)
     }
 
     fn suggest_format(&mut self) {
@@ -847,9 +847,7 @@ impl<'a> Parser<'a> {
                 0,
                 ParseError {
                     description: "expected format parameter to occur after `:`".to_owned(),
-                    note: Some(
-                        format!("`?` comes after `:`, try `{}:{}` instead", word, "?").to_owned(),
-                    ),
+                    note: Some(format!("`?` comes after `:`, try `{}:{}` instead", word, "?")),
                     label: "expected `?` to occur after `:`".to_owned(),
                     span: pos.to(pos),
                     secondary_label: None,

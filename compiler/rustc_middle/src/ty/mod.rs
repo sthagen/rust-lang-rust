@@ -36,7 +36,7 @@ use rustc_data_structures::intern::Interned;
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
 use rustc_data_structures::tagged_ptr::CopyTaggedPtr;
 use rustc_hir as hir;
-use rustc_hir::def::{CtorKind, CtorOf, DefKind, LifetimeRes, Res};
+use rustc_hir::def::{CtorKind, CtorOf, DefKind, DocLinkResMap, LifetimeRes, Res};
 use rustc_hir::def_id::{CrateNum, DefId, DefIdMap, LocalDefId, LocalDefIdMap};
 use rustc_hir::Node;
 use rustc_index::vec::IndexVec;
@@ -146,6 +146,10 @@ mod structural_impls;
 mod sty;
 mod typeck_results;
 
+pub mod ir {
+    pub use super::{fold::ir::*, visit::ir::*};
+}
+
 // Data types
 
 pub type RegisteredTools = FxHashSet<Ident>;
@@ -181,6 +185,9 @@ pub struct ResolverGlobalCtxt {
     /// exist under `std`. For example, wrote `str::from_utf8` instead of `std::str::from_utf8`.
     pub confused_type_with_std_module: FxHashMap<Span, Span>,
     pub registered_tools: RegisteredTools,
+    pub doc_link_resolutions: FxHashMap<LocalDefId, DocLinkResMap>,
+    pub doc_link_traits_in_scope: FxHashMap<LocalDefId, Vec<DefId>>,
+    pub all_macro_rules: FxHashMap<Symbol, Res<ast::NodeId>>,
 }
 
 /// Resolutions that should only be used for lowering.
@@ -911,13 +918,13 @@ impl<'a, 'tcx> HashStable<StableHashingContext<'a>> for Term<'tcx> {
     }
 }
 
-impl<'tcx> TypeFoldable<'tcx> for Term<'tcx> {
+impl<'tcx> ir::TypeFoldable<TyCtxt<'tcx>> for Term<'tcx> {
     fn try_fold_with<F: FallibleTypeFolder<'tcx>>(self, folder: &mut F) -> Result<Self, F::Error> {
         Ok(self.unpack().try_fold_with(folder)?.pack())
     }
 }
 
-impl<'tcx> TypeVisitable<'tcx> for Term<'tcx> {
+impl<'tcx> ir::TypeVisitable<TyCtxt<'tcx>> for Term<'tcx> {
     fn visit_with<V: TypeVisitor<'tcx>>(&self, visitor: &mut V) -> ControlFlow<V::BreakTy> {
         self.unpack().visit_with(visitor)
     }
@@ -1613,7 +1620,7 @@ impl<'a, 'tcx> HashStable<StableHashingContext<'a>> for ParamEnv<'tcx> {
     }
 }
 
-impl<'tcx> TypeFoldable<'tcx> for ParamEnv<'tcx> {
+impl<'tcx> ir::TypeFoldable<TyCtxt<'tcx>> for ParamEnv<'tcx> {
     fn try_fold_with<F: ty::fold::FallibleTypeFolder<'tcx>>(
         self,
         folder: &mut F,
@@ -1626,7 +1633,7 @@ impl<'tcx> TypeFoldable<'tcx> for ParamEnv<'tcx> {
     }
 }
 
-impl<'tcx> TypeVisitable<'tcx> for ParamEnv<'tcx> {
+impl<'tcx> ir::TypeVisitable<TyCtxt<'tcx>> for ParamEnv<'tcx> {
     fn visit_with<V: TypeVisitor<'tcx>>(&self, visitor: &mut V) -> ControlFlow<V::BreakTy> {
         self.caller_bounds().visit_with(visitor)?;
         self.reveal().visit_with(visitor)
@@ -2381,13 +2388,15 @@ impl<'tcx> TyCtxt<'tcx> {
         self.trait_def(trait_def_id).has_auto_impl
     }
 
+    /// Returns `true` if this is coinductive, either because it is
+    /// an auto trait or because it has the `#[rustc_coinductive]` attribute.
+    pub fn trait_is_coinductive(self, trait_def_id: DefId) -> bool {
+        self.trait_def(trait_def_id).is_coinductive
+    }
+
     /// Returns `true` if this is a trait alias.
     pub fn trait_is_alias(self, trait_def_id: DefId) -> bool {
         self.def_kind(trait_def_id) == DefKind::TraitAlias
-    }
-
-    pub fn trait_is_coinductive(self, trait_def_id: DefId) -> bool {
-        self.trait_is_auto(trait_def_id) || self.lang_items().sized_trait() == Some(trait_def_id)
     }
 
     /// Returns layout of a generator. Layout might be unavailable if the
@@ -2420,7 +2429,7 @@ impl<'tcx> TyCtxt<'tcx> {
     pub fn impl_of_method(self, def_id: DefId) -> Option<DefId> {
         if let DefKind::AssocConst | DefKind::AssocFn | DefKind::AssocTy = self.def_kind(def_id) {
             let parent = self.parent(def_id);
-            if let DefKind::Impl = self.def_kind(parent) {
+            if let DefKind::Impl { .. } = self.def_kind(parent) {
                 return Some(parent);
             }
         }

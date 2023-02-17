@@ -90,7 +90,7 @@ impl<'tcx> FnCtxt<'_, 'tcx> {
             self.demand_eqtype_with_origin(&self.pattern_cause(ti, cause_span), expected, actual)?;
         if let Some(expr) = ti.origin_expr {
             self.suggest_fn_call(&mut diag, expr, expected, |output| {
-                self.can_eq(self.param_env, output, actual).is_ok()
+                self.can_eq(self.param_env, output, actual)
             });
         }
         Some(diag)
@@ -675,7 +675,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     ) {
         match (expected.kind(), actual.kind(), ba) {
             (ty::Ref(_, inner_ty, _), _, hir::BindingAnnotation::NONE)
-                if self.can_eq(self.param_env, *inner_ty, actual).is_ok() =>
+                if self.can_eq(self.param_env, *inner_ty, actual) =>
             {
                 err.span_suggestion_verbose(
                     span.shrink_to_lo(),
@@ -685,7 +685,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 );
             }
             (_, ty::Ref(_, inner_ty, _), hir::BindingAnnotation::REF)
-                if self.can_eq(self.param_env, expected, *inner_ty).is_ok() =>
+                if self.can_eq(self.param_env, expected, *inner_ty) =>
             {
                 err.span_suggestion_verbose(
                     span.with_hi(span.lo() + BytePos(4)),
@@ -1296,7 +1296,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             )
         });
         let element_tys = tcx.mk_type_list(element_tys_iter);
-        let pat_ty = tcx.mk_ty(ty::Tuple(element_tys));
+        let pat_ty = tcx.intern_tup(element_tys);
         if let Some(mut err) = self.demand_eqtype_pat_diag(span, expected, pat_ty, ti) {
             let reported = err.emit();
             // Walk subpatterns with an expected type of `err` in this case to silence
@@ -2063,7 +2063,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         len: ty::Const<'tcx>,
         min_len: u64,
     ) -> (Option<Ty<'tcx>>, Ty<'tcx>) {
-        if let Some(len) = len.try_eval_usize(self.tcx, self.param_env) {
+        if let Some(len) = len.try_eval_target_usize(self.tcx, self.param_env) {
             // Now we know the length...
             if slice.is_none() {
                 // ...and since there is no variable-length pattern,

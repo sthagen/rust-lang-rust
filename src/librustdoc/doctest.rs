@@ -1,7 +1,7 @@
 use rustc_ast as ast;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_data_structures::sync::Lrc;
-use rustc_errors::{ColorConfig, ErrorGuaranteed, FatalError};
+use rustc_errors::{ColorConfig, ErrorGuaranteed, FatalError, TerminalUrl};
 use rustc_hir::def_id::{LocalDefId, CRATE_DEF_ID, LOCAL_CRATE};
 use rustc_hir::{self as hir, intravisit, CRATE_HIR_ID};
 use rustc_interface::interface;
@@ -229,11 +229,11 @@ fn scrape_test_config(attrs: &[ast::Attribute]) -> GlobalTestOptions {
         if attr.has_name(sym::no_crate_inject) {
             opts.no_crate_inject = true;
         }
-        if attr.has_name(sym::attr) {
-            if let Some(l) = attr.meta_item_list() {
-                for item in l {
-                    opts.attrs.push(pprust::meta_list_item_to_string(item));
-                }
+        if attr.has_name(sym::attr)
+            && let Some(l) = attr.meta_item_list()
+        {
+            for item in l {
+                opts.attrs.push(pprust::meta_list_item_to_string(item));
             }
         }
     }
@@ -557,6 +557,7 @@ pub(crate) fn make_test(
                 Some(80),
                 false,
                 false,
+                TerminalUrl::No,
             )
             .supports_color();
 
@@ -571,6 +572,7 @@ pub(crate) fn make_test(
                 None,
                 false,
                 false,
+                TerminalUrl::No,
             );
 
             // FIXME(misdreavus): pass `-Z treat-err-as-bug` to the doctest parser
@@ -592,31 +594,28 @@ pub(crate) fn make_test(
             loop {
                 match parser.parse_item(ForceCollect::No) {
                     Ok(Some(item)) => {
-                        if !found_main {
-                            if let ast::ItemKind::Fn(..) = item.kind {
-                                if item.ident.name == sym::main {
-                                    found_main = true;
-                                }
+                        if !found_main &&
+                            let ast::ItemKind::Fn(..) = item.kind &&
+                            item.ident.name == sym::main
+                        {
+                            found_main = true;
+                        }
+
+                        if !found_extern_crate &&
+                            let ast::ItemKind::ExternCrate(original) = item.kind
+                        {
+                            // This code will never be reached if `crate_name` is none because
+                            // `found_extern_crate` is initialized to `true` if it is none.
+                            let crate_name = crate_name.unwrap();
+
+                            match original {
+                                Some(name) => found_extern_crate = name.as_str() == crate_name,
+                                None => found_extern_crate = item.ident.as_str() == crate_name,
                             }
                         }
 
-                        if !found_extern_crate {
-                            if let ast::ItemKind::ExternCrate(original) = item.kind {
-                                // This code will never be reached if `crate_name` is none because
-                                // `found_extern_crate` is initialized to `true` if it is none.
-                                let crate_name = crate_name.unwrap();
-
-                                match original {
-                                    Some(name) => found_extern_crate = name.as_str() == crate_name,
-                                    None => found_extern_crate = item.ident.as_str() == crate_name,
-                                }
-                            }
-                        }
-
-                        if !found_macro {
-                            if let ast::ItemKind::MacCall(..) = item.kind {
-                                found_macro = true;
-                            }
+                        if !found_macro && let ast::ItemKind::MacCall(..) = item.kind {
+                            found_macro = true;
                         }
 
                         if found_main && found_extern_crate {
@@ -756,6 +755,7 @@ fn check_if_attr_is_complete(source: &str, edition: Edition) -> bool {
                 None,
                 false,
                 false,
+                TerminalUrl::No,
             );
 
             let handler = Handler::with_emitter(false, None, Box::new(emitter));
@@ -969,14 +969,12 @@ impl Collector {
     fn get_filename(&self) -> FileName {
         if let Some(ref source_map) = self.source_map {
             let filename = source_map.span_to_filename(self.position);
-            if let FileName::Real(ref filename) = filename {
-                if let Ok(cur_dir) = env::current_dir() {
-                    if let Some(local_path) = filename.local_path() {
-                        if let Ok(path) = local_path.strip_prefix(&cur_dir) {
-                            return path.to_owned().into();
-                        }
-                    }
-                }
+            if let FileName::Real(ref filename) = filename &&
+                let Ok(cur_dir) = env::current_dir() &&
+                let Some(local_path) = filename.local_path() &&
+                let Ok(path) = local_path.strip_prefix(&cur_dir)
+            {
+                return path.to_owned().into();
             }
             filename
         } else if let Some(ref filename) = self.filename {

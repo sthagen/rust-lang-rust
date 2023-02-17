@@ -9,7 +9,7 @@ use crate::dep_graph::{DepGraph, DepKindStruct};
 use crate::infer::canonical::{CanonicalVarInfo, CanonicalVarInfos};
 use crate::lint::struct_lint_level;
 use crate::middle::codegen_fn_attrs::CodegenFnAttrs;
-use crate::middle::resolve_lifetime;
+use crate::middle::resolve_bound_vars;
 use crate::middle::stability;
 use crate::mir::interpret::{self, Allocation, ConstAllocation};
 use crate::mir::{
@@ -100,9 +100,11 @@ impl<'tcx> Interner for TyCtxt<'tcx> {
     type AdtDef = ty::AdtDef<'tcx>;
     type SubstsRef = ty::SubstsRef<'tcx>;
     type DefId = DefId;
+    type Binder<T> = Binder<'tcx, T>;
     type Ty = Ty<'tcx>;
     type Const = ty::Const<'tcx>;
     type Region = Region<'tcx>;
+    type Predicate = Predicate<'tcx>;
     type TypeAndMut = TypeAndMut<'tcx>;
     type Mutability = hir::Mutability;
     type Movability = hir::Movability;
@@ -147,7 +149,7 @@ pub struct CtxtInterners<'tcx> {
     const_: InternedSet<'tcx, ConstData<'tcx>>,
     const_allocation: InternedSet<'tcx, Allocation>,
     bound_variable_kinds: InternedSet<'tcx, List<ty::BoundVariableKind>>,
-    layout: InternedSet<'tcx, LayoutS<VariantIdx>>,
+    layout: InternedSet<'tcx, LayoutS>,
     adt_def: InternedSet<'tcx, AdtDefData>,
     external_constraints: InternedSet<'tcx, ExternalConstraintsData<'tcx>>,
 }
@@ -241,6 +243,20 @@ impl<'tcx> CtxtInterners<'tcx> {
     }
 }
 
+// For these preinterned values, an alternative would be to have
+// variable-length vectors that grow as needed. But that turned out to be
+// slightly more complex and no faster.
+
+const NUM_PREINTERNED_TY_VARS: u32 = 100;
+const NUM_PREINTERNED_FRESH_TYS: u32 = 20;
+const NUM_PREINTERNED_FRESH_INT_TYS: u32 = 3;
+const NUM_PREINTERNED_FRESH_FLOAT_TYS: u32 = 3;
+
+// This number may seem high, but it is reached in all but the smallest crates.
+const NUM_PREINTERNED_RE_VARS: u32 = 500;
+const NUM_PREINTERNED_RE_LATE_BOUNDS_I: u32 = 2;
+const NUM_PREINTERNED_RE_LATE_BOUNDS_V: u32 = 20;
+
 pub struct CommonTypes<'tcx> {
     pub unit: Ty<'tcx>,
     pub bool: Ty<'tcx>,
@@ -266,7 +282,20 @@ pub struct CommonTypes<'tcx> {
     /// Dummy type used for the `Self` of a `TraitRef` created for converting
     /// a trait object, and which gets removed in `ExistentialTraitRef`.
     /// This type must not appear anywhere in other converted types.
+    /// `Infer(ty::FreshTy(0))` does the job.
     pub trait_object_dummy_self: Ty<'tcx>,
+
+    /// Pre-interned `Infer(ty::TyVar(n))` for small values of `n`.
+    pub ty_vars: Vec<Ty<'tcx>>,
+
+    /// Pre-interned `Infer(ty::FreshTy(n))` for small values of `n`.
+    pub fresh_tys: Vec<Ty<'tcx>>,
+
+    /// Pre-interned `Infer(ty::FreshIntTy(n))` for small values of `n`.
+    pub fresh_int_tys: Vec<Ty<'tcx>>,
+
+    /// Pre-interned `Infer(ty::FreshFloatTy(n))` for small values of `n`.
+    pub fresh_float_tys: Vec<Ty<'tcx>>,
 }
 
 pub struct CommonLifetimes<'tcx> {
@@ -275,6 +304,14 @@ pub struct CommonLifetimes<'tcx> {
 
     /// Erased region, used outside of type inference.
     pub re_erased: Region<'tcx>,
+
+    /// Pre-interned `ReVar(ty::RegionVar(n))` for small values of `n`.
+    pub re_vars: Vec<Region<'tcx>>,
+
+    /// Pre-interned values of the form:
+    /// `ReLateBound(DebruijnIndex(i), BoundRegion { var: v, kind: BrAnon(v, None) })
+    /// for small values of `i` and `v`.
+    pub re_late_bounds: Vec<Vec<Region<'tcx>>>,
 }
 
 pub struct CommonConsts<'tcx> {
@@ -288,6 +325,15 @@ impl<'tcx> CommonTypes<'tcx> {
         untracked: &Untracked,
     ) -> CommonTypes<'tcx> {
         let mk = |ty| interners.intern_ty(ty, sess, untracked);
+
+        let ty_vars =
+            (0..NUM_PREINTERNED_TY_VARS).map(|n| mk(Infer(ty::TyVar(TyVid::from(n))))).collect();
+        let fresh_tys: Vec<_> =
+            (0..NUM_PREINTERNED_FRESH_TYS).map(|n| mk(Infer(ty::FreshTy(n)))).collect();
+        let fresh_int_tys: Vec<_> =
+            (0..NUM_PREINTERNED_FRESH_INT_TYS).map(|n| mk(Infer(ty::FreshIntTy(n)))).collect();
+        let fresh_float_tys: Vec<_> =
+            (0..NUM_PREINTERNED_FRESH_FLOAT_TYS).map(|n| mk(Infer(ty::FreshFloatTy(n)))).collect();
 
         CommonTypes {
             unit: mk(Tuple(List::empty())),
@@ -311,7 +357,12 @@ impl<'tcx> CommonTypes<'tcx> {
             str_: mk(Str),
             self_param: mk(ty::Param(ty::ParamTy { index: 0, name: kw::SelfUpper })),
 
-            trait_object_dummy_self: mk(Infer(ty::FreshTy(0))),
+            trait_object_dummy_self: fresh_tys[0],
+
+            ty_vars,
+            fresh_tys,
+            fresh_int_tys,
+            fresh_float_tys,
         }
     }
 }
@@ -324,7 +375,31 @@ impl<'tcx> CommonLifetimes<'tcx> {
             ))
         };
 
-        CommonLifetimes { re_static: mk(ty::ReStatic), re_erased: mk(ty::ReErased) }
+        let re_vars =
+            (0..NUM_PREINTERNED_RE_VARS).map(|n| mk(ty::ReVar(ty::RegionVid::from(n)))).collect();
+
+        let re_late_bounds = (0..NUM_PREINTERNED_RE_LATE_BOUNDS_I)
+            .map(|i| {
+                (0..NUM_PREINTERNED_RE_LATE_BOUNDS_V)
+                    .map(|v| {
+                        mk(ty::ReLateBound(
+                            ty::DebruijnIndex::from(i),
+                            ty::BoundRegion {
+                                var: ty::BoundVar::from(v),
+                                kind: ty::BrAnon(v, None),
+                            },
+                        ))
+                    })
+                    .collect()
+            })
+            .collect();
+
+        CommonLifetimes {
+            re_static: mk(ty::ReStatic),
+            re_erased: mk(ty::ReErased),
+            re_vars,
+            re_late_bounds,
+        }
     }
 }
 
@@ -445,7 +520,7 @@ pub struct GlobalCtxt<'tcx> {
     pub on_disk_cache: Option<&'tcx dyn OnDiskCache<'tcx>>,
 
     pub queries: &'tcx dyn query::QueryEngine<'tcx>,
-    pub query_caches: query::QueryCaches<'tcx>,
+    pub query_system: query::QuerySystem<'tcx>,
     pub(crate) query_kinds: &'tcx [DepKindStruct<'tcx>],
 
     // Internal caches for metadata decoding. No need to track deps on this.
@@ -630,7 +705,7 @@ impl<'tcx> TyCtxt<'tcx> {
             untracked,
             on_disk_cache,
             queries,
-            query_caches: query::QueryCaches::default(),
+            query_system: Default::default(),
             query_kinds,
             ty_rcache: Default::default(),
             pred_rcache: Default::default(),
@@ -663,15 +738,15 @@ impl<'tcx> TyCtxt<'tcx> {
 
     /// Constructs a `RegionKind::ReError` lifetime.
     #[track_caller]
-    pub fn re_error(self, reported: ErrorGuaranteed) -> Region<'tcx> {
-        self.mk_region(ty::ReError(reported))
+    pub fn mk_re_error(self, reported: ErrorGuaranteed) -> Region<'tcx> {
+        self.intern_region(ty::ReError(reported))
     }
 
     /// Constructs a `RegionKind::ReError` lifetime and registers a `delay_span_bug` to ensure it
     /// gets used.
     #[track_caller]
-    pub fn re_error_misc(self) -> Region<'tcx> {
-        self.re_error_with_message(
+    pub fn mk_re_error_misc(self) -> Region<'tcx> {
+        self.mk_re_error_with_message(
             DUMMY_SP,
             "RegionKind::ReError constructed but no error reported",
         )
@@ -680,9 +755,9 @@ impl<'tcx> TyCtxt<'tcx> {
     /// Constructs a `RegionKind::ReError` lifetime and registers a `delay_span_bug` with the given
     /// `msg` to ensure it gets used.
     #[track_caller]
-    pub fn re_error_with_message<S: Into<MultiSpan>>(self, span: S, msg: &str) -> Region<'tcx> {
+    pub fn mk_re_error_with_message<S: Into<MultiSpan>>(self, span: S, msg: &str) -> Region<'tcx> {
         let reported = self.sess.delay_span_bug(span, msg);
-        self.re_error(reported)
+        self.mk_re_error(reported)
     }
 
     /// Like [TyCtxt::ty_error] but for constants, with current `ErrorGuaranteed`
@@ -1079,13 +1154,11 @@ impl<'tcx> TyCtxt<'tcx> {
             ty::FnDef(_, _) => {
                 let sig = ret_ty.fn_sig(self);
                 let output = self.erase_late_bound_regions(sig.output());
-                if output.is_impl_trait() {
+                output.is_impl_trait().then(|| {
                     let hir_id = self.hir().local_def_id_to_hir_id(scope_def_id);
                     let fn_decl = self.hir().fn_decl_by_hir_id(hir_id).unwrap();
-                    Some((output, fn_decl.output.span()))
-                } else {
-                    None
-                }
+                    (output, fn_decl.output.span())
+                })
             }
             _ => None,
         }
@@ -1191,13 +1264,12 @@ macro_rules! nop_lift {
         impl<'a, 'tcx> Lift<'tcx> for $ty {
             type Lifted = $lifted;
             fn lift_to_tcx(self, tcx: TyCtxt<'tcx>) -> Option<Self::Lifted> {
-                if tcx.interners.$set.contains_pointer_to(&InternedInSet(&*self.0.0)) {
+                tcx.interners
+                    .$set
+                    .contains_pointer_to(&InternedInSet(&*self.0.0))
                     // SAFETY: `self` is interned and therefore valid
                     // for the entire lifetime of the `TyCtxt`.
-                    Some(unsafe { mem::transmute(self) })
-                } else {
-                    None
-                }
+                    .then(|| unsafe { mem::transmute(self) })
             }
         }
     };
@@ -1212,13 +1284,13 @@ impl<'a, 'tcx> Lift<'tcx> for &'a List<Ty<'a>> {
         if self.is_empty() {
             return Some(List::empty());
         }
-        if tcx.interners.substs.contains_pointer_to(&InternedInSet(self.as_substs())) {
+
+        tcx.interners
+            .substs
+            .contains_pointer_to(&InternedInSet(self.as_substs()))
             // SAFETY: `self` is interned and therefore valid
             // for the entire lifetime of the `TyCtxt`.
-            Some(unsafe { mem::transmute::<&'a List<Ty<'a>>, &'tcx List<Ty<'tcx>>>(self) })
-        } else {
-            None
-        }
+            .then(|| unsafe { mem::transmute::<&'a List<Ty<'a>>, &'tcx List<Ty<'tcx>>>(self) })
     }
 }
 
@@ -1230,11 +1302,10 @@ macro_rules! nop_list_lift {
                 if self.is_empty() {
                     return Some(List::empty());
                 }
-                if tcx.interners.$set.contains_pointer_to(&InternedInSet(self)) {
-                    Some(unsafe { mem::transmute(self) })
-                } else {
-                    None
-                }
+                tcx.interners
+                    .$set
+                    .contains_pointer_to(&InternedInSet(self))
+                    .then(|| unsafe { mem::transmute(self) })
             }
         }
     };
@@ -1483,10 +1554,10 @@ macro_rules! direct_interners {
 }
 
 direct_interners! {
-    region: mk_region(RegionKind<'tcx>): Region -> Region<'tcx>,
+    region: intern_region(RegionKind<'tcx>): Region -> Region<'tcx>,
     const_: mk_const_internal(ConstData<'tcx>): Const -> Const<'tcx>,
     const_allocation: intern_const_alloc(Allocation): ConstAllocation -> ConstAllocation<'tcx>,
-    layout: intern_layout(LayoutS<VariantIdx>): Layout -> Layout<'tcx>,
+    layout: intern_layout(LayoutS): Layout -> Layout<'tcx>,
     adt_def: intern_adt_def(AdtDefData): AdtDef -> AdtDef<'tcx>,
     external_constraints: intern_external_constraints(ExternalConstraintsData<'tcx>): ExternalConstraints -> ExternalConstraints<'tcx>,
 }
@@ -1597,13 +1668,7 @@ impl<'tcx> TyCtxt<'tcx> {
         })
     }
 
-    /// Same a `self.mk_region(kind)`, but avoids accessing the interners if
-    /// `*r == kind`.
-    #[inline]
-    pub fn reuse_or_mk_region(self, r: Region<'tcx>, kind: RegionKind<'tcx>) -> Region<'tcx> {
-        if *r == kind { r } else { self.mk_region(kind) }
-    }
-
+    // Avoid this in favour of more specific `mk_*` methods, where possible.
     #[allow(rustc::usage_of_ty_tykind)]
     #[inline]
     pub fn mk_ty(self, st: TyKind<'tcx>) -> Ty<'tcx> {
@@ -1752,7 +1817,12 @@ impl<'tcx> TyCtxt<'tcx> {
 
     #[inline]
     pub fn mk_array(self, ty: Ty<'tcx>, n: u64) -> Ty<'tcx> {
-        self.mk_ty(Array(ty, ty::Const::from_usize(self, n)))
+        self.mk_ty(Array(ty, ty::Const::from_target_usize(self, n)))
+    }
+
+    #[inline]
+    pub fn mk_array_with_const_len(self, ty: Ty<'tcx>, ct: Const<'tcx>) -> Ty<'tcx> {
+        self.mk_ty(Array(ty, ct))
     }
 
     #[inline]
@@ -1762,11 +1832,11 @@ impl<'tcx> TyCtxt<'tcx> {
 
     #[inline]
     pub fn intern_tup(self, ts: &[Ty<'tcx>]) -> Ty<'tcx> {
-        self.mk_ty(Tuple(self.intern_type_list(&ts)))
+        if ts.is_empty() { self.types.unit } else { self.mk_ty(Tuple(self.intern_type_list(&ts))) }
     }
 
     pub fn mk_tup<I: InternAs<Ty<'tcx>, Ty<'tcx>>>(self, iter: I) -> I::Output {
-        iter.intern_with(|ts| self.mk_ty(Tuple(self.intern_type_list(&ts))))
+        iter.intern_with(|ts| self.intern_tup(ts))
     }
 
     #[inline]
@@ -1830,7 +1900,7 @@ impl<'tcx> TyCtxt<'tcx> {
         item_def_id: DefId,
         substs: impl IntoIterator<Item = impl Into<GenericArg<'tcx>>>,
     ) -> Ty<'tcx> {
-        self.mk_ty(Alias(ty::Projection, self.mk_alias_ty(item_def_id, substs)))
+        self.mk_alias(ty::Projection, self.mk_alias_ty(item_def_id, substs))
     }
 
     #[inline]
@@ -1868,28 +1938,54 @@ impl<'tcx> TyCtxt<'tcx> {
     }
 
     #[inline]
-    pub fn mk_ty_var(self, v: TyVid) -> Ty<'tcx> {
-        self.mk_ty_infer(TyVar(v))
-    }
-
-    #[inline]
     pub fn mk_const(self, kind: impl Into<ty::ConstKind<'tcx>>, ty: Ty<'tcx>) -> Const<'tcx> {
         self.mk_const_internal(ty::ConstData { kind: kind.into(), ty })
     }
 
     #[inline]
+    pub fn mk_ty_var(self, v: TyVid) -> Ty<'tcx> {
+        // Use a pre-interned one when possible.
+        self.types.ty_vars.get(v.as_usize()).copied().unwrap_or_else(|| self.mk_ty(Infer(TyVar(v))))
+    }
+
+    #[inline]
     pub fn mk_int_var(self, v: IntVid) -> Ty<'tcx> {
-        self.mk_ty_infer(IntVar(v))
+        self.mk_ty(Infer(IntVar(v)))
     }
 
     #[inline]
     pub fn mk_float_var(self, v: FloatVid) -> Ty<'tcx> {
-        self.mk_ty_infer(FloatVar(v))
+        self.mk_ty(Infer(FloatVar(v)))
     }
 
     #[inline]
-    pub fn mk_ty_infer(self, it: InferTy) -> Ty<'tcx> {
-        self.mk_ty(Infer(it))
+    pub fn mk_fresh_ty(self, n: u32) -> Ty<'tcx> {
+        // Use a pre-interned one when possible.
+        self.types
+            .fresh_tys
+            .get(n as usize)
+            .copied()
+            .unwrap_or_else(|| self.mk_ty(Infer(ty::FreshTy(n))))
+    }
+
+    #[inline]
+    pub fn mk_fresh_int_ty(self, n: u32) -> Ty<'tcx> {
+        // Use a pre-interned one when possible.
+        self.types
+            .fresh_int_tys
+            .get(n as usize)
+            .copied()
+            .unwrap_or_else(|| self.mk_ty(Infer(ty::FreshIntTy(n))))
+    }
+
+    #[inline]
+    pub fn mk_fresh_float_ty(self, n: u32) -> Ty<'tcx> {
+        // Use a pre-interned one when possible.
+        self.types
+            .fresh_float_tys
+            .get(n as usize)
+            .copied()
+            .unwrap_or_else(|| self.mk_ty(Infer(ty::FreshFloatTy(n))))
     }
 
     #[inline]
@@ -1900,7 +1996,7 @@ impl<'tcx> TyCtxt<'tcx> {
     pub fn mk_param_from_def(self, param: &ty::GenericParamDef) -> GenericArg<'tcx> {
         match param.kind {
             GenericParamDefKind::Lifetime => {
-                self.mk_region(ty::ReEarlyBound(param.to_early_bound_region_data())).into()
+                self.mk_re_early_bound(param.to_early_bound_region_data()).into()
             }
             GenericParamDefKind::Type { .. } => self.mk_ty_param(param.index, param.name).into(),
             GenericParamDefKind::Const { .. } => self
@@ -1913,8 +2009,83 @@ impl<'tcx> TyCtxt<'tcx> {
     }
 
     #[inline]
+    pub fn mk_bound(self, index: ty::DebruijnIndex, bound_ty: ty::BoundTy) -> Ty<'tcx> {
+        self.mk_ty(Bound(index, bound_ty))
+    }
+
+    #[inline]
+    pub fn mk_placeholder(self, placeholder: ty::PlaceholderType) -> Ty<'tcx> {
+        self.mk_ty(Placeholder(placeholder))
+    }
+
+    #[inline]
+    pub fn mk_alias(self, kind: ty::AliasKind, alias_ty: ty::AliasTy<'tcx>) -> Ty<'tcx> {
+        self.mk_ty(Alias(kind, alias_ty))
+    }
+
+    #[inline]
     pub fn mk_opaque(self, def_id: DefId, substs: SubstsRef<'tcx>) -> Ty<'tcx> {
-        self.mk_ty(Alias(ty::Opaque, self.mk_alias_ty(def_id, substs)))
+        self.mk_alias(ty::Opaque, self.mk_alias_ty(def_id, substs))
+    }
+
+    #[inline]
+    pub fn mk_re_early_bound(self, early_bound_region: ty::EarlyBoundRegion) -> Region<'tcx> {
+        self.intern_region(ty::ReEarlyBound(early_bound_region))
+    }
+
+    #[inline]
+    pub fn mk_re_late_bound(
+        self,
+        debruijn: ty::DebruijnIndex,
+        bound_region: ty::BoundRegion,
+    ) -> Region<'tcx> {
+        // Use a pre-interned one when possible.
+        if let ty::BoundRegion { var, kind: ty::BrAnon(v, None) } = bound_region
+            && var.as_u32() == v
+            && let Some(inner) = self.lifetimes.re_late_bounds.get(debruijn.as_usize())
+            && let Some(re) = inner.get(v as usize).copied()
+        {
+            re
+        } else {
+            self.intern_region(ty::ReLateBound(debruijn, bound_region))
+        }
+    }
+
+    #[inline]
+    pub fn mk_re_free(self, scope: DefId, bound_region: ty::BoundRegionKind) -> Region<'tcx> {
+        self.intern_region(ty::ReFree(ty::FreeRegion { scope, bound_region }))
+    }
+
+    #[inline]
+    pub fn mk_re_var(self, v: ty::RegionVid) -> Region<'tcx> {
+        // Use a pre-interned one when possible.
+        self.lifetimes
+            .re_vars
+            .get(v.as_usize())
+            .copied()
+            .unwrap_or_else(|| self.intern_region(ty::ReVar(v)))
+    }
+
+    #[inline]
+    pub fn mk_re_placeholder(self, placeholder: ty::PlaceholderRegion) -> Region<'tcx> {
+        self.intern_region(ty::RePlaceholder(placeholder))
+    }
+
+    // Avoid this in favour of more specific `mk_re_*` methods, where possible,
+    // to avoid the cost of the `match`.
+    pub fn mk_region(self, kind: ty::RegionKind<'tcx>) -> Region<'tcx> {
+        match kind {
+            ty::ReEarlyBound(region) => self.mk_re_early_bound(region),
+            ty::ReLateBound(debruijn, region) => self.mk_re_late_bound(debruijn, region),
+            ty::ReFree(ty::FreeRegion { scope, bound_region }) => {
+                self.mk_re_free(scope, bound_region)
+            }
+            ty::ReStatic => self.lifetimes.re_static,
+            ty::ReVar(vid) => self.mk_re_var(vid),
+            ty::RePlaceholder(region) => self.mk_re_placeholder(region),
+            ty::ReErased => self.lifetimes.re_erased,
+            ty::ReError(reported) => self.mk_re_error(reported),
+        }
     }
 
     pub fn mk_place_field(self, place: Place<'tcx>, f: Field, ty: Ty<'tcx>) -> Place<'tcx> {
@@ -2197,9 +2368,9 @@ impl<'tcx> TyCtxt<'tcx> {
         Some(&*candidates)
     }
 
-    pub fn named_region(self, id: HirId) -> Option<resolve_lifetime::Region> {
+    pub fn named_bound_var(self, id: HirId) -> Option<resolve_bound_vars::ResolvedArg> {
         debug!(?id, "named_region");
-        self.named_region_map(id.owner).and_then(|map| map.get(&id.local_id).cloned())
+        self.named_variable_map(id.owner).and_then(|map| map.get(&id.local_id).cloned())
     }
 
     pub fn is_late_bound(self, id: HirId) -> bool {

@@ -468,6 +468,9 @@ This was probably unintentional and should be reverted before this PR is merged.
 If this was intentional then you can ignore this comment.
 """
 
+[mentions."src/tools/x"]
+message = "`src/tools/x` was changed. Bump version of Cargo.toml in `src/tools/x` so tidy will suggest installing the new version."
+
 [assign]
 warn_non_default_branch = true
 contributing_url = "https://rustc-dev-guide.rust-lang.org/contributing.html"
@@ -627,7 +630,7 @@ style-team = [
 "/src/stage0.json" =                         ["bootstrap"]
 "/tests/ui" =                                ["compiler"]
 "/src/tools/cargo" =                         ["@ehuss", "@joshtriplett"]
-"/src/tools/compiletest" =                   ["bootstrap"]
+"/src/tools/compiletest" =                   ["bootstrap", "@wesleywiser", "@oli-obk"]
 "/src/tools/linkchecker" =                   ["@ehuss"]
 "/src/tools/rust-installer" =                ["bootstrap"]
 "/src/tools/rustbook" =                      ["@ehuss"]

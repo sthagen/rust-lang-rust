@@ -781,7 +781,7 @@ rustc_queries! {
         separate_provide_extern
     }
 
-    query issue33140_self_ty(key: DefId) -> Option<ty::Ty<'tcx>> {
+    query issue33140_self_ty(key: DefId) -> Option<ty::EarlyBinder<ty::Ty<'tcx>>> {
         desc { |tcx| "computing Self type wrt issue #33140 `{}`", tcx.def_path_str(key) }
     }
 
@@ -1641,12 +1641,12 @@ rustc_queries! {
     /// Does lifetime resolution on items. Importantly, we can't resolve
     /// lifetimes directly on things like trait methods, because of trait params.
     /// See `rustc_resolve::late::lifetimes for details.
-    query resolve_lifetimes(_: hir::OwnerId) -> &'tcx ResolveLifetimes {
+    query resolve_bound_vars(_: hir::OwnerId) -> &'tcx ResolveBoundVars {
         arena_cache
         desc { "resolving lifetimes" }
     }
-    query named_region_map(_: hir::OwnerId) ->
-        Option<&'tcx FxHashMap<ItemLocalId, Region>> {
+    query named_variable_map(_: hir::OwnerId) ->
+        Option<&'tcx FxHashMap<ItemLocalId, ResolvedArg>> {
         desc { "looking up a named region" }
     }
     query is_late_bound_map(_: hir::OwnerId) -> Option<&'tcx FxIndexSet<ItemLocalId>> {
@@ -1833,6 +1833,11 @@ rustc_queries! {
     /// NOTE: Not named just `traits` due to a naming conflict.
     query traits_in_crate(_: CrateNum) -> &'tcx [DefId] {
         desc { "fetching all traits in a crate" }
+        separate_provide_extern
+    }
+
+    query trait_impls_in_crate(_: CrateNum) -> &'tcx [DefId] {
+        desc { "fetching all trait impls in a crate" }
         separate_provide_extern
     }
 
@@ -2138,12 +2143,12 @@ rustc_queries! {
         separate_provide_extern
     }
 
-    query permits_uninit_init(key: ty::ParamEnvAnd<'tcx, TyAndLayout<'tcx>>) -> bool {
-        desc { "checking to see if `{}` permits being left uninit", key.value.ty }
+    query permits_uninit_init(key: ty::ParamEnvAnd<'tcx, Ty<'tcx>>) -> Result<bool, ty::layout::LayoutError<'tcx>> {
+        desc { "checking to see if `{}` permits being left uninit", key.value }
     }
 
-    query permits_zero_init(key: ty::ParamEnvAnd<'tcx, TyAndLayout<'tcx>>) -> bool {
-        desc { "checking to see if `{}` permits being left zeroed", key.value.ty }
+    query permits_zero_init(key: ty::ParamEnvAnd<'tcx, Ty<'tcx>>) -> Result<bool, ty::layout::LayoutError<'tcx>> {
+        desc { "checking to see if `{}` permits being left zeroed", key.value }
     }
 
     query compare_impl_const(
@@ -2155,5 +2160,24 @@ rustc_queries! {
     query deduced_param_attrs(def_id: DefId) -> &'tcx [ty::DeducedParamAttrs] {
         desc { |tcx| "deducing parameter attributes for {}", tcx.def_path_str(def_id) }
         separate_provide_extern
+    }
+
+    query doc_link_resolutions(def_id: DefId) -> &'tcx DocLinkResMap {
+        eval_always
+        desc { "resolutions for documentation links for a module" }
+        separate_provide_extern
+    }
+
+    query doc_link_traits_in_scope(def_id: DefId) -> &'tcx [DefId] {
+        eval_always
+        desc { "traits in scope for documentation links for a module" }
+        separate_provide_extern
+    }
+
+    /// Used in `super_combine_consts` to ICE if the type of the two consts are definitely not going to end up being
+    /// equal to eachother. This might return `Ok` even if the types are unequal, but will never return `Err` if
+    /// the types might be equal.
+    query check_tys_might_be_eq(arg: Canonical<'tcx, (ty::ParamEnv<'tcx>, Ty<'tcx>, Ty<'tcx>)>) -> Result<(), NoSolution> {
+        desc { "check whether two const param are definitely not equal to eachother"}
     }
 }

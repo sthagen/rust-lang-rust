@@ -573,6 +573,7 @@ impl Handler {
             None,
             flags.macro_backtrace,
             flags.track_diagnostics,
+            TerminalUrl::No,
         ));
         Self::with_emitter_and_flags(emitter, flags)
     }
@@ -1065,29 +1066,26 @@ impl Handler {
     }
 
     pub fn has_errors(&self) -> Option<ErrorGuaranteed> {
-        if self.inner.borrow().has_errors() { Some(ErrorGuaranteed(())) } else { None }
+        self.inner.borrow().has_errors().then(ErrorGuaranteed::unchecked_claim_error_was_emitted)
     }
 
     pub fn has_errors_or_lint_errors(&self) -> Option<ErrorGuaranteed> {
-        if self.inner.borrow().has_errors_or_lint_errors() {
-            Some(ErrorGuaranteed::unchecked_claim_error_was_emitted())
-        } else {
-            None
-        }
+        self.inner
+            .borrow()
+            .has_errors_or_lint_errors()
+            .then(ErrorGuaranteed::unchecked_claim_error_was_emitted)
     }
     pub fn has_errors_or_delayed_span_bugs(&self) -> Option<ErrorGuaranteed> {
-        if self.inner.borrow().has_errors_or_delayed_span_bugs() {
-            Some(ErrorGuaranteed::unchecked_claim_error_was_emitted())
-        } else {
-            None
-        }
+        self.inner
+            .borrow()
+            .has_errors_or_delayed_span_bugs()
+            .then(ErrorGuaranteed::unchecked_claim_error_was_emitted)
     }
     pub fn is_compilation_going_to_fail(&self) -> Option<ErrorGuaranteed> {
-        if self.inner.borrow().is_compilation_going_to_fail() {
-            Some(ErrorGuaranteed::unchecked_claim_error_was_emitted())
-        } else {
-            None
-        }
+        self.inner
+            .borrow()
+            .is_compilation_going_to_fail()
+            .then(ErrorGuaranteed::unchecked_claim_error_was_emitted)
     }
 
     pub fn print_error_count(&self, registry: &Registry) {
@@ -1836,6 +1834,13 @@ pub fn add_elided_lifetime_in_path_suggestion(
         suggestion,
         Applicability::MachineApplicable,
     );
+}
+
+#[derive(Clone, Copy, PartialEq, Hash, Debug)]
+pub enum TerminalUrl {
+    No,
+    Yes,
+    Auto,
 }
 
 /// Useful type to use with `Result<>` indicate that an error has already

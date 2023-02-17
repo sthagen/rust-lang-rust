@@ -19,7 +19,7 @@ use rustc_hir as hir;
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::subst::{GenericArg, InternalSubsts};
 use rustc_middle::ty::{
-    self, EarlyBinder, Ty, TyCtxt, TypeSuperVisitable, TypeVisitable, TypeVisitor,
+    self, ir::TypeVisitor, EarlyBinder, Ty, TyCtxt, TypeSuperVisitable, TypeVisitable,
 };
 use rustc_middle::ty::{Predicate, ToPredicate};
 use rustc_session::lint::builtin::WHERE_CLAUSES_OBJECT_SAFETY;
@@ -307,7 +307,7 @@ fn predicate_references_self<'tcx>(
     match predicate.kind().skip_binder() {
         ty::PredicateKind::Clause(ty::Clause::Trait(ref data)) => {
             // In the case of a trait predicate, we can skip the "self" type.
-            if data.trait_ref.substs[1..].iter().any(has_self_ty) { Some(sp) } else { None }
+            data.trait_ref.substs[1..].iter().any(has_self_ty).then_some(sp)
         }
         ty::PredicateKind::Clause(ty::Clause::Projection(ref data)) => {
             // And similarly for projections. This should be redundant with
@@ -325,7 +325,7 @@ fn predicate_references_self<'tcx>(
             //
             // This is ALT2 in issue #56288, see that for discussion of the
             // possible alternatives.
-            if data.projection_ty.substs[1..].iter().any(has_self_ty) { Some(sp) } else { None }
+            data.projection_ty.substs[1..].iter().any(has_self_ty).then_some(sp)
         }
         ty::PredicateKind::AliasEq(..) => bug!("`AliasEq` not allowed as assumption"),
 
@@ -527,8 +527,7 @@ fn virtual_call_violation_for_method<'tcx>(
                 }
             }
 
-            let trait_object_ty =
-                object_ty_for_trait(tcx, trait_def_id, tcx.mk_region(ty::ReStatic));
+            let trait_object_ty = object_ty_for_trait(tcx, trait_def_id, tcx.lifetimes.re_static);
 
             // e.g., `Rc<dyn Trait>`
             let trait_object_receiver =
@@ -599,7 +598,7 @@ fn virtual_call_violation_for_method<'tcx>(
             return false;
         }
 
-        contains_illegal_self_type_reference(tcx, trait_def_id, pred.clone())
+        contains_illegal_self_type_reference(tcx, trait_def_id, pred)
     }) {
         return Some(MethodViolationCode::WhereClauseReferencesSelf);
     }
@@ -836,7 +835,7 @@ fn contains_illegal_self_type_reference<'tcx, T: TypeVisitable<'tcx>>(
         supertraits: Option<Vec<DefId>>,
     }
 
-    impl<'tcx> TypeVisitor<'tcx> for IllegalSelfTypeVisitor<'tcx> {
+    impl<'tcx> TypeVisitor<TyCtxt<'tcx>> for IllegalSelfTypeVisitor<'tcx> {
         type BreakTy = ();
 
         fn visit_ty(&mut self, t: Ty<'tcx>) -> ControlFlow<Self::BreakTy> {

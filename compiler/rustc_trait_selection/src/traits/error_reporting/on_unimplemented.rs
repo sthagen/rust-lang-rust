@@ -60,7 +60,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
     ) -> Option<(DefId, SubstsRef<'tcx>)> {
         let tcx = self.tcx;
         let param_env = obligation.param_env;
-        let trait_ref = tcx.erase_late_bound_regions(trait_ref);
+        let trait_ref = self.instantiate_binder_with_placeholders(trait_ref);
         let trait_self_ty = trait_ref.self_ty();
 
         let mut self_match_impls = vec![];
@@ -72,7 +72,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
 
             let impl_self_ty = impl_trait_ref.self_ty();
 
-            if let Ok(..) = self.can_eq(param_env, trait_self_ty, impl_self_ty) {
+            if self.can_eq(param_env, trait_self_ty, impl_self_ty) {
                 self_match_impls.push((def_id, impl_substs));
 
                 if iter::zip(
@@ -261,7 +261,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             // Arrays give us `[]`, `[{ty}; _]` and `[{ty}; N]`
             if let ty::Array(aty, len) = self_ty.kind() {
                 flags.push((sym::_Self, Some("[]".to_string())));
-                let len = len.kind().try_to_value().and_then(|v| v.try_to_machine_usize(self.tcx));
+                let len = len.kind().try_to_value().and_then(|v| v.try_to_target_usize(self.tcx));
                 flags.push((sym::_Self, Some(format!("[{}; _]", aty))));
                 if let Some(n) = len {
                     flags.push((sym::_Self, Some(format!("[{}; {}]", aty, n))));
