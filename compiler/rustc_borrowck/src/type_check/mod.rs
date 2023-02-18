@@ -402,7 +402,7 @@ impl<'a, 'b, 'tcx> Visitor<'tcx> for TypeVerifier<'a, 'b, 'tcx> {
                     );
                 }
             } else if let Some(static_def_id) = constant.check_static_ptr(tcx) {
-                let unnormalized_ty = tcx.type_of(static_def_id);
+                let unnormalized_ty = tcx.type_of(static_def_id).subst_identity();
                 let normalized_ty = self.cx.normalize(unnormalized_ty, locations);
                 let literal_ty = constant.literal.ty().builtin_deref(true).unwrap().ty;
 
@@ -2589,7 +2589,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
             DefKind::InlineConst => substs.as_inline_const().parent_substs(),
             other => bug!("unexpected item {:?}", other),
         };
-        let parent_substs = tcx.mk_substs(parent_substs.iter());
+        let parent_substs = tcx.intern_substs(parent_substs);
 
         assert_eq!(typeck_root_substs.len(), parent_substs.len());
         if let Err(_) = self.eq_substs(

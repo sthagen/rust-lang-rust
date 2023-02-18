@@ -152,7 +152,7 @@ rustc_queries! {
     /// to an alias, it will "skip" this alias to return the aliased type.
     ///
     /// [`DefId`]: rustc_hir::def_id::DefId
-    query type_of(key: DefId) -> Ty<'tcx> {
+    query type_of(key: DefId) -> ty::EarlyBinder<Ty<'tcx>> {
         desc { |tcx|
             "{action} `{path}`",
             action = {
@@ -729,15 +729,14 @@ rustc_queries! {
     }
 
     /// Maps from a trait item to the trait item "descriptor".
-    query associated_item(key: DefId) -> &'tcx ty::AssocItem {
+    query associated_item(key: DefId) -> ty::AssocItem {
         desc { |tcx| "computing associated item data for `{}`", tcx.def_path_str(key) }
-        arena_cache
         cache_on_disk_if { key.is_local() }
         separate_provide_extern
     }
 
     /// Collects the associated items defined on a trait or impl.
-    query associated_items(key: DefId) -> &'tcx ty::AssocItems<'tcx> {
+    query associated_items(key: DefId) -> &'tcx ty::AssocItems {
         arena_cache
         desc { |tcx| "collecting associated items of `{}`", tcx.def_path_str(key) }
     }
