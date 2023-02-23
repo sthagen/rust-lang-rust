@@ -523,7 +523,7 @@ impl<'tcx> MissingStabilityAnnotations<'tcx> {
             && stab.is_none()
             && self.effective_visibilities.is_reachable(def_id)
         {
-            let descr = self.tcx.def_kind(def_id).descr(def_id.to_def_id());
+            let descr = self.tcx.def_descr(def_id.to_def_id());
             self.tcx.sess.emit_err(errors::MissingStabilityAttr { span, descr });
         }
     }
@@ -537,7 +537,7 @@ impl<'tcx> MissingStabilityAnnotations<'tcx> {
         // then it would be "stable" at least for the impl.
         // We gate usages of it using `feature(const_trait_impl)` anyways
         // so there is no unstable leakage
-        if self.tcx.is_builtin_derive(def_id.to_def_id()) {
+        if self.tcx.is_automatically_derived(def_id.to_def_id()) {
             return;
         }
 
@@ -551,7 +551,7 @@ impl<'tcx> MissingStabilityAnnotations<'tcx> {
         let is_reachable = self.effective_visibilities.is_reachable(def_id);
 
         if is_const && is_stable && missing_const_stability_attribute && is_reachable {
-            let descr = self.tcx.def_kind(def_id).descr(def_id.to_def_id());
+            let descr = self.tcx.def_descr(def_id.to_def_id());
             self.tcx.sess.emit_err(errors::MissingConstStabAttr { span, descr });
         }
     }

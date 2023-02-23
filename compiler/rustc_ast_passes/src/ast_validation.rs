@@ -13,7 +13,7 @@ use rustc_ast::walk_list;
 use rustc_ast::*;
 use rustc_ast_pretty::pprust::{self, State};
 use rustc_data_structures::fx::FxHashMap;
-use rustc_errors::{error_code, fluent, pluralize, struct_span_err, Applicability};
+use rustc_errors::{error_code, pluralize, struct_span_err, Applicability};
 use rustc_macros::Subdiagnostic;
 use rustc_parse::validate_attr;
 use rustc_session::lint::builtin::{
@@ -27,8 +27,10 @@ use rustc_span::Span;
 use rustc_target::spec::abi;
 use std::mem;
 use std::ops::{Deref, DerefMut};
+use thin_vec::thin_vec;
 
 use crate::errors::*;
+use crate::fluent_generated as fluent;
 
 const MORE_EXTERN: &str =
     "for more information, visit https://doc.rust-lang.org/std/keyword.extern.html";
@@ -68,10 +70,6 @@ struct AstValidator<'a> {
     /// Used to ban `impl Trait` in path projections like `<impl Iterator>::Item`
     /// or `Foo::Bar<impl Trait>`
     is_impl_trait_banned: bool,
-
-    /// Used to ban associated type bounds (i.e., `Type<AssocType: Bounds>`) in
-    /// certain positions.
-    is_assoc_ty_bound_banned: bool,
 
     /// See [ForbiddenLetReason]
     forbidden_let_reason: Option<ForbiddenLetReason>,
@@ -178,28 +176,10 @@ impl<'a> AstValidator<'a> {
         }
     }
 
-    fn with_banned_assoc_ty_bound(&mut self, f: impl FnOnce(&mut Self)) {
-        let old = mem::replace(&mut self.is_assoc_ty_bound_banned, true);
-        f(self);
-        self.is_assoc_ty_bound_banned = old;
-    }
-
     fn with_impl_trait(&mut self, outer: Option<Span>, f: impl FnOnce(&mut Self)) {
         let old = mem::replace(&mut self.outer_impl_trait, outer);
         f(self);
         self.outer_impl_trait = old;
-    }
-
-    fn visit_assoc_constraint_from_generic_args(&mut self, constraint: &'a AssocConstraint) {
-        match constraint.kind {
-            AssocConstraintKind::Equality { .. } => {}
-            AssocConstraintKind::Bound { .. } => {
-                if self.is_assoc_ty_bound_banned {
-                    self.session.emit_err(ForbiddenAssocConstraint { span: constraint.span });
-                }
-            }
-        }
-        self.visit_assoc_constraint(constraint);
     }
 
     // Mirrors `visit::walk_ty`, but tracks relevant state.
@@ -1246,7 +1226,7 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
                         // are allowed to contain nested `impl Trait`.
                         AngleBracketedArg::Constraint(constraint) => {
                             self.with_impl_trait(None, |this| {
-                                this.visit_assoc_constraint_from_generic_args(constraint);
+                                this.visit_assoc_constraint(constraint);
                             });
                         }
                     }
@@ -1369,14 +1349,6 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
         }
 
         visit::walk_param_bound(self, bound)
-    }
-
-    fn visit_variant_data(&mut self, s: &'a VariantData) {
-        self.with_banned_assoc_ty_bound(|this| visit::walk_struct_def(this, s))
-    }
-
-    fn visit_enum_def(&mut self, enum_definition: &'a EnumDef) {
-        self.with_banned_assoc_ty_bound(|this| visit::walk_enum_def(this, enum_definition))
     }
 
     fn visit_fn(&mut self, fk: FnKind<'a>, span: Span, id: NodeId) {
@@ -1615,7 +1587,7 @@ fn deny_equality_constraints(
                                         empty_args => {
                                             *empty_args = AngleBracketedArgs {
                                                 span: ident.span,
-                                                args: vec![arg],
+                                                args: thin_vec![arg],
                                             }
                                             .into();
                                         }
@@ -1707,7 +1679,6 @@ pub fn check_crate(session: &Session, krate: &Crate, lints: &mut LintBuffer) -> 
         outer_impl_trait: None,
         disallow_tilde_const: None,
         is_impl_trait_banned: false,
-        is_assoc_ty_bound_banned: false,
         forbidden_let_reason: Some(ForbiddenLetReason::GenericForbidden),
         lint_buffer: lints,
     };
@@ -1722,12 +1693,12 @@ pub(crate) enum ForbiddenLetReason {
     /// `let` is not valid and the source environment is not important
     GenericForbidden,
     /// A let chain with the `||` operator
-    #[note(not_supported_or)]
+    #[note(ast_passes_not_supported_or)]
     NotSupportedOr(#[primary_span] Span),
     /// A let chain with invalid parentheses
     ///
     /// For example, `let 1 = 1 && (expr && expr)` is allowed
     /// but `(let 1 = 1 && (let 1 = 1 && (let 1 = 1))) && let a = 1` is not
-    #[note(not_supported_parentheses)]
+    #[note(ast_passes_not_supported_parentheses)]
     NotSupportedParentheses(#[primary_span] Span),
 }

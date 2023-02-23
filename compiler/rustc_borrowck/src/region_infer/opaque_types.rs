@@ -6,7 +6,7 @@ use rustc_infer::infer::TyCtxtInferExt as _;
 use rustc_infer::infer::{DefiningAnchor, InferCtxt};
 use rustc_infer::traits::{Obligation, ObligationCause};
 use rustc_middle::ty::subst::{GenericArgKind, InternalSubsts};
-use rustc_middle::ty::visit::TypeVisitable;
+use rustc_middle::ty::visit::TypeVisitableExt;
 use rustc_middle::ty::{self, OpaqueHiddenType, OpaqueTypeKey, Ty, TyCtxt, TypeFoldable};
 use rustc_span::Span;
 use rustc_trait_selection::traits::error_reporting::TypeErrCtxtExt as _;
@@ -178,7 +178,7 @@ impl<'tcx> RegionInferenceContext<'tcx> {
     /// region names in error messages.
     pub(crate) fn name_regions<T>(&self, tcx: TyCtxt<'tcx>, ty: T) -> T
     where
-        T: TypeFoldable<'tcx>,
+        T: TypeFoldable<TyCtxt<'tcx>>,
     {
         tcx.fold_regions(ty, |region, _| match *region {
             ty::ReVar(vid) => {
@@ -273,7 +273,8 @@ impl<'tcx> InferCtxtExt<'tcx> for InferCtxt<'tcx> {
         // FIXME(oli-obk): Also do region checks here and then consider removing `check_opaque_meets_bounds` entirely.
         let param_env = self.tcx.param_env(def_id);
         // HACK This bubble is required for this tests to pass:
-        // type-alias-impl-trait/issue-67844-nested-opaque.rs
+        // nested-return-type2-tait2.rs
+        // nested-return-type2-tait3.rs
         let infcx =
             self.tcx.infer_ctxt().with_opaque_type_inference(DefiningAnchor::Bubble).build();
         let ocx = ObligationCtxt::new(&infcx);

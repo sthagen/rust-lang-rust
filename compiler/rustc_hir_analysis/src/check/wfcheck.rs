@@ -16,8 +16,8 @@ use rustc_middle::mir::ConstraintCategory;
 use rustc_middle::ty::query::Providers;
 use rustc_middle::ty::trait_def::TraitSpecializationKind;
 use rustc_middle::ty::{
-    self, ir::TypeVisitor, AdtKind, DefIdTree, GenericParamDefKind, Ty, TyCtxt, TypeFoldable,
-    TypeSuperVisitable,
+    self, AdtKind, GenericParamDefKind, Ty, TyCtxt, TypeFoldable, TypeSuperVisitable,
+    TypeVisitable, TypeVisitableExt, TypeVisitor,
 };
 use rustc_middle::ty::{GenericArgKind, InternalSubsts};
 use rustc_session::parse::feature_err;
@@ -56,7 +56,7 @@ impl<'tcx> WfCheckingCtxt<'_, 'tcx> {
     // `ObligationCtxt::normalize`, but provides a nice `ObligationCauseCode`.
     fn normalize<T>(&self, span: Span, loc: Option<WellFormedLoc>, value: T) -> T
     where
-        T: TypeFoldable<'tcx>,
+        T: TypeFoldable<TyCtxt<'tcx>>,
     {
         self.ocx.normalize(
             &ObligationCause::new(span, self.body_def_id, ObligationCauseCode::WellFormed(loc)),
@@ -277,56 +277,6 @@ fn check_trait_item(tcx: TyCtxt<'_>, trait_item: &hir::TraitItem<'_>) {
     };
     check_object_unsafe_self_trait_by_name(tcx, trait_item);
     check_associated_item(tcx, def_id, span, method_sig);
-
-    let encl_trait_def_id = tcx.local_parent(def_id);
-    let encl_trait = tcx.hir().expect_item(encl_trait_def_id);
-    let encl_trait_def_id = encl_trait.owner_id.to_def_id();
-    let fn_lang_item_name = if Some(encl_trait_def_id) == tcx.lang_items().fn_trait() {
-        Some("fn")
-    } else if Some(encl_trait_def_id) == tcx.lang_items().fn_mut_trait() {
-        Some("fn_mut")
-    } else {
-        None
-    };
-
-    if let (Some(fn_lang_item_name), "call") =
-        (fn_lang_item_name, trait_item.ident.name.to_ident_string().as_str())
-    {
-        // We are looking at the `call` function of the `fn` or `fn_mut` lang item.
-        // Do some rudimentary sanity checking to avoid an ICE later (issue #83471).
-        if let Some(hir::FnSig { decl, span, .. }) = method_sig {
-            if let [self_ty, _] = decl.inputs {
-                if !matches!(self_ty.kind, hir::TyKind::Ref(_, _)) {
-                    tcx.sess
-                        .struct_span_err(
-                            self_ty.span,
-                            &format!(
-                                "first argument of `call` in `{fn_lang_item_name}` lang item must be a reference",
-                            ),
-                        )
-                        .emit();
-                }
-            } else {
-                tcx.sess
-                    .struct_span_err(
-                        *span,
-                        &format!(
-                            "`call` function in `{fn_lang_item_name}` lang item takes exactly two arguments",
-                        ),
-                    )
-                    .emit();
-            }
-        } else {
-            tcx.sess
-                .struct_span_err(
-                    trait_item.span,
-                    &format!(
-                        "`call` trait item in `{fn_lang_item_name}` lang item must be a function",
-                    ),
-                )
-                .emit();
-        }
-    }
 }
 
 /// Require that the user writes where clauses on GATs for the implicit
@@ -560,7 +510,7 @@ fn augment_param_env<'tcx>(
 ///     fn into_iter<'a>(&'a self) -> Self::Iter<'a>;
 /// }
 /// ```
-fn gather_gat_bounds<'tcx, T: TypeFoldable<'tcx>>(
+fn gather_gat_bounds<'tcx, T: TypeFoldable<TyCtxt<'tcx>>>(
     tcx: TyCtxt<'tcx>,
     param_env: ty::ParamEnv<'tcx>,
     item_def_id: hir::OwnerId,
@@ -758,7 +708,7 @@ struct GATSubstCollector<'tcx> {
 }
 
 impl<'tcx> GATSubstCollector<'tcx> {
-    fn visit<T: TypeFoldable<'tcx>>(
+    fn visit<T: TypeFoldable<TyCtxt<'tcx>>>(
         gat: DefId,
         t: T,
     ) -> (FxHashSet<(ty::Region<'tcx>, usize)>, FxHashSet<(Ty<'tcx>, usize)>) {
@@ -1432,7 +1382,7 @@ fn check_where_clauses<'tcx>(wfcx: &WfCheckingCtxt<'_, 'tcx>, span: Span, def_id
             struct CountParams {
                 params: FxHashSet<u32>,
             }
-            impl<'tcx> ty::visit::ir::TypeVisitor<TyCtxt<'tcx>> for CountParams {
+            impl<'tcx> ty::visit::TypeVisitor<TyCtxt<'tcx>> for CountParams {
                 type BreakTy = ();
 
                 fn visit_ty(&mut self, t: Ty<'tcx>) -> ControlFlow<Self::BreakTy> {
@@ -1599,7 +1549,7 @@ fn check_return_position_impl_trait_in_trait_bounds<'tcx>(
     {
         for arg in fn_output.walk() {
             if let ty::GenericArgKind::Type(ty) = arg.unpack()
-                && let ty::Alias(ty::Projection, proj) = ty.kind()
+                && let ty::Alias(ty::Opaque, proj) = ty.kind()
                 && tcx.def_kind(proj.def_id) == DefKind::ImplTraitPlaceholder
                 && tcx.impl_trait_in_trait_parent(proj.def_id) == fn_def_id.to_def_id()
             {

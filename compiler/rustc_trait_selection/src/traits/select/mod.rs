@@ -49,7 +49,7 @@ use rustc_middle::ty::fold::BottomUpFolder;
 use rustc_middle::ty::relate::TypeRelation;
 use rustc_middle::ty::SubstsRef;
 use rustc_middle::ty::{self, EarlyBinder, PolyProjectionPredicate, ToPolyTraitRef, ToPredicate};
-use rustc_middle::ty::{Ty, TyCtxt, TypeFoldable};
+use rustc_middle::ty::{Ty, TyCtxt, TypeFoldable, TypeVisitableExt};
 use rustc_session::config::TraitSolver;
 use rustc_span::symbol::sym;
 
@@ -1406,7 +1406,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
     /// The weird return type of this function allows it to be used with the `try` (`?`)
     /// operator within certain functions.
     #[inline(always)]
-    fn check_recursion_limit<T: Display + TypeFoldable<'tcx>, V>(
+    fn check_recursion_limit<T: Display + TypeFoldable<TyCtxt<'tcx>>, V>(
         &self,
         obligation: &Obligation<'tcx, T>,
         error_obligation: &Obligation<'tcx, V>,
@@ -1752,7 +1752,6 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         });
         self.infcx
             .at(&obligation.cause, obligation.param_env)
-            .define_opaque_types(false)
             .sup(ty::Binder::dummy(placeholder_trait_ref), trait_bound)
             .map(|InferOk { obligations: _, value: () }| {
                 // This method is called within a probe, so we can't have
@@ -1815,7 +1814,6 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         let is_match = self
             .infcx
             .at(&obligation.cause, obligation.param_env)
-            .define_opaque_types(false)
             .sup(obligation.predicate, infer_projection)
             .map_or(false, |InferOk { obligations, value: () }| {
                 self.evaluate_predicates_recursively(
@@ -2148,12 +2146,13 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 }))
             }
 
-            ty::Alias(..) | ty::Param(_) => None,
+            ty::Alias(..) | ty::Param(_) | ty::Placeholder(..) => None,
             ty::Infer(ty::TyVar(_)) => Ambiguous,
 
-            ty::Placeholder(..)
-            | ty::Bound(..)
-            | ty::Infer(ty::FreshTy(_) | ty::FreshIntTy(_) | ty::FreshFloatTy(_)) => {
+            // We can make this an ICE if/once we actually instantiate the trait obligation.
+            ty::Bound(..) => None,
+
+            ty::Infer(ty::FreshTy(_) | ty::FreshIntTy(_) | ty::FreshFloatTy(_)) => {
                 bug!("asked to assemble builtin bounds of unexpected type: {:?}", self_ty);
             }
         }
@@ -2506,7 +2505,6 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         let InferOk { obligations, .. } = self
             .infcx
             .at(&cause, obligation.param_env)
-            .define_opaque_types(false)
             .eq(placeholder_obligation_trait_ref, impl_trait_ref)
             .map_err(|e| {
                 debug!("match_impl: failed eq_trait_refs due to `{}`", e.to_string(self.tcx()))
@@ -2557,11 +2555,6 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
     ) -> Result<Vec<PredicateObligation<'tcx>>, ()> {
         self.infcx
             .at(&obligation.cause, obligation.param_env)
-            // We don't want predicates for opaque types to just match all other types,
-            // if there is an obligation on the opaque type, then that obligation must be met
-            // opaquely. Otherwise we'd match any obligation to the opaque type and then error
-            // out later.
-            .define_opaque_types(false)
             .sup(obligation.predicate.to_poly_trait_ref(), poly_trait_ref)
             .map(|InferOk { obligations, .. }| obligations)
             .map_err(|_| ())

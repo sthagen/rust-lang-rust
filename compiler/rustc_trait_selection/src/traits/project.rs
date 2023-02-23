@@ -30,8 +30,8 @@ use rustc_infer::infer::at::At;
 use rustc_infer::infer::resolve::OpportunisticRegionResolver;
 use rustc_infer::traits::ImplSourceBuiltinData;
 use rustc_middle::traits::select::OverflowError;
-use rustc_middle::ty::fold::{ir::TypeFolder, TypeFoldable, TypeSuperFoldable};
-use rustc_middle::ty::visit::{MaxUniverse, TypeVisitable};
+use rustc_middle::ty::fold::{TypeFoldable, TypeFolder, TypeSuperFoldable};
+use rustc_middle::ty::visit::{MaxUniverse, TypeVisitable, TypeVisitableExt};
 use rustc_middle::ty::DefIdTree;
 use rustc_middle::ty::{self, Term, ToPredicate, Ty, TyCtxt};
 use rustc_span::symbol::sym;
@@ -53,11 +53,11 @@ pub trait NormalizeExt<'tcx> {
     ///
     /// This normalization should be used when the type contains inference variables or the
     /// projection may be fallible.
-    fn normalize<T: TypeFoldable<'tcx>>(&self, t: T) -> InferOk<'tcx, T>;
+    fn normalize<T: TypeFoldable<TyCtxt<'tcx>>>(&self, t: T) -> InferOk<'tcx, T>;
 }
 
 impl<'tcx> NormalizeExt<'tcx> for At<'_, 'tcx> {
-    fn normalize<T: TypeFoldable<'tcx>>(&self, value: T) -> InferOk<'tcx, T> {
+    fn normalize<T: TypeFoldable<TyCtxt<'tcx>>>(&self, value: T) -> InferOk<'tcx, T> {
         let mut selcx = SelectionContext::new(self.infcx);
         let Normalized { value, obligations } =
             normalize_with_depth(&mut selcx, self.param_env, self.cause.clone(), 0, value);
@@ -90,15 +90,7 @@ enum ProjectionCandidate<'tcx> {
     /// From an "impl" (or a "pseudo-impl" returned by select)
     Select(Selection<'tcx>),
 
-    ImplTraitInTrait(ImplTraitInTraitCandidate<'tcx>),
-}
-
-#[derive(PartialEq, Eq, Debug)]
-enum ImplTraitInTraitCandidate<'tcx> {
-    // The `impl Trait` from a trait function's default body
-    Trait,
-    // A concrete type provided from a trait's `impl Trait` from an impl
-    Impl(ImplSourceUserDefinedData<'tcx, PredicateObligation<'tcx>>),
+    ImplTraitInTrait(ImplSourceUserDefinedData<'tcx, PredicateObligation<'tcx>>),
 }
 
 enum ProjectionCandidateSet<'tcx> {
@@ -294,7 +286,12 @@ fn project_and_unify_type<'cx, 'tcx>(
         );
     obligations.extend(new);
 
-    match infcx.at(&obligation.cause, obligation.param_env).eq(normalized, actual) {
+    match infcx
+        .at(&obligation.cause, obligation.param_env)
+        // This is needed to support nested opaque types like `impl Fn() -> impl Trait`
+        .define_opaque_types(true)
+        .eq(normalized, actual)
+    {
         Ok(InferOk { obligations: inferred_obligations, value: () }) => {
             obligations.extend(inferred_obligations);
             ProjectAndUnifyResult::Holds(obligations)
@@ -315,7 +312,7 @@ pub(crate) fn normalize_with_depth<'a, 'b, 'tcx, T>(
     value: T,
 ) -> Normalized<'tcx, T>
 where
-    T: TypeFoldable<'tcx>,
+    T: TypeFoldable<TyCtxt<'tcx>>,
 {
     let mut obligations = Vec::new();
     let value = normalize_with_depth_to(selcx, param_env, cause, depth, value, &mut obligations);
@@ -332,7 +329,7 @@ pub(crate) fn normalize_with_depth_to<'a, 'b, 'tcx, T>(
     obligations: &mut Vec<PredicateObligation<'tcx>>,
 ) -> T
 where
-    T: TypeFoldable<'tcx>,
+    T: TypeFoldable<TyCtxt<'tcx>>,
 {
     debug!(obligations.len = obligations.len());
     let mut normalizer = AssocTypeNormalizer::new(selcx, param_env, cause, depth, obligations);
@@ -352,7 +349,7 @@ pub(crate) fn try_normalize_with_depth_to<'a, 'b, 'tcx, T>(
     obligations: &mut Vec<PredicateObligation<'tcx>>,
 ) -> T
 where
-    T: TypeFoldable<'tcx>,
+    T: TypeFoldable<TyCtxt<'tcx>>,
 {
     debug!(obligations.len = obligations.len());
     let mut normalizer = AssocTypeNormalizer::new_without_eager_inference_replacement(
@@ -368,7 +365,10 @@ where
     result
 }
 
-pub(crate) fn needs_normalization<'tcx, T: TypeVisitable<'tcx>>(value: &T, reveal: Reveal) -> bool {
+pub(crate) fn needs_normalization<'tcx, T: TypeVisitable<TyCtxt<'tcx>>>(
+    value: &T,
+    reveal: Reveal,
+) -> bool {
     match reveal {
         Reveal::UserFacing => value
             .has_type_flags(ty::TypeFlags::HAS_TY_PROJECTION | ty::TypeFlags::HAS_CT_PROJECTION),
@@ -430,7 +430,7 @@ impl<'a, 'b, 'tcx> AssocTypeNormalizer<'a, 'b, 'tcx> {
         }
     }
 
-    fn fold<T: TypeFoldable<'tcx>>(&mut self, value: T) -> T {
+    fn fold<T: TypeFoldable<TyCtxt<'tcx>>>(&mut self, value: T) -> T {
         let value = self.selcx.infcx.resolve_vars_if_possible(value);
         debug!(?value);
 
@@ -453,7 +453,7 @@ impl<'a, 'b, 'tcx> TypeFolder<TyCtxt<'tcx>> for AssocTypeNormalizer<'a, 'b, 'tcx
         self.selcx.tcx()
     }
 
-    fn fold_binder<T: TypeFoldable<'tcx>>(
+    fn fold_binder<T: TypeFoldable<TyCtxt<'tcx>>>(
         &mut self,
         t: ty::Binder<'tcx, T>,
     ) -> ty::Binder<'tcx, T> {
@@ -672,7 +672,12 @@ pub struct BoundVarReplacer<'me, 'tcx> {
 ///
 /// FIXME(@lcnr): We may even consider experimenting with eagerly replacing bound vars during
 /// normalization as well, at which point this function will be unnecessary and can be removed.
-pub fn with_replaced_escaping_bound_vars<'a, 'tcx, T: TypeFoldable<'tcx>, R: TypeFoldable<'tcx>>(
+pub fn with_replaced_escaping_bound_vars<
+    'a,
+    'tcx,
+    T: TypeFoldable<TyCtxt<'tcx>>,
+    R: TypeFoldable<TyCtxt<'tcx>>,
+>(
     infcx: &'a InferCtxt<'tcx>,
     universe_indices: &'a mut Vec<Option<ty::UniverseIndex>>,
     value: T,
@@ -698,7 +703,7 @@ pub fn with_replaced_escaping_bound_vars<'a, 'tcx, T: TypeFoldable<'tcx>, R: Typ
 impl<'me, 'tcx> BoundVarReplacer<'me, 'tcx> {
     /// Returns `Some` if we *were* able to replace bound vars. If there are any bound vars that
     /// use a binding level above `universe_indices.len()`, we fail.
-    pub fn replace_bound_vars<T: TypeFoldable<'tcx>>(
+    pub fn replace_bound_vars<T: TypeFoldable<TyCtxt<'tcx>>>(
         infcx: &'me InferCtxt<'tcx>,
         universe_indices: &'me mut Vec<Option<ty::UniverseIndex>>,
         value: T,
@@ -745,7 +750,7 @@ impl<'tcx> TypeFolder<TyCtxt<'tcx>> for BoundVarReplacer<'_, 'tcx> {
         self.infcx.tcx
     }
 
-    fn fold_binder<T: TypeFoldable<'tcx>>(
+    fn fold_binder<T: TypeFoldable<TyCtxt<'tcx>>>(
         &mut self,
         t: ty::Binder<'tcx, T>,
     ) -> ty::Binder<'tcx, T> {
@@ -826,7 +831,7 @@ pub struct PlaceholderReplacer<'me, 'tcx> {
 }
 
 impl<'me, 'tcx> PlaceholderReplacer<'me, 'tcx> {
-    pub fn replace_placeholders<T: TypeFoldable<'tcx>>(
+    pub fn replace_placeholders<T: TypeFoldable<TyCtxt<'tcx>>>(
         infcx: &'me InferCtxt<'tcx>,
         mapped_regions: BTreeMap<ty::PlaceholderRegion, ty::BoundRegion>,
         mapped_types: BTreeMap<ty::PlaceholderType, ty::BoundTy>,
@@ -851,7 +856,7 @@ impl<'tcx> TypeFolder<TyCtxt<'tcx>> for PlaceholderReplacer<'_, 'tcx> {
         self.infcx.tcx
     }
 
-    fn fold_binder<T: TypeFoldable<'tcx>>(
+    fn fold_binder<T: TypeFoldable<TyCtxt<'tcx>>>(
         &mut self,
         t: ty::Binder<'tcx, T>,
     ) -> ty::Binder<'tcx, T> {
@@ -1292,17 +1297,6 @@ fn assemble_candidate_for_impl_trait_in_trait<'cx, 'tcx>(
     let tcx = selcx.tcx();
     if tcx.def_kind(obligation.predicate.def_id) == DefKind::ImplTraitPlaceholder {
         let trait_fn_def_id = tcx.impl_trait_in_trait_parent(obligation.predicate.def_id);
-        // If we are trying to project an RPITIT with trait's default `Self` parameter,
-        // then we must be within a default trait body.
-        if obligation.predicate.self_ty()
-            == ty::InternalSubsts::identity_for_item(tcx, obligation.predicate.def_id).type_at(0)
-            && tcx.associated_item(trait_fn_def_id).defaultness(tcx).has_value()
-        {
-            candidate_set.push_candidate(ProjectionCandidate::ImplTraitInTrait(
-                ImplTraitInTraitCandidate::Trait,
-            ));
-            return;
-        }
 
         let trait_def_id = tcx.parent(trait_fn_def_id);
         let trait_substs =
@@ -1313,9 +1307,7 @@ fn assemble_candidate_for_impl_trait_in_trait<'cx, 'tcx>(
         let _ = selcx.infcx.commit_if_ok(|_| {
             match selcx.select(&obligation.with(tcx, trait_predicate)) {
                 Ok(Some(super::ImplSource::UserDefined(data))) => {
-                    candidate_set.push_candidate(ProjectionCandidate::ImplTraitInTrait(
-                        ImplTraitInTraitCandidate::Impl(data),
-                    ));
+                    candidate_set.push_candidate(ProjectionCandidate::ImplTraitInTrait(data));
                     Ok(())
                 }
                 Ok(None) => {
@@ -1777,18 +1769,9 @@ fn confirm_candidate<'cx, 'tcx>(
         ProjectionCandidate::Select(impl_source) => {
             confirm_select_candidate(selcx, obligation, impl_source)
         }
-        ProjectionCandidate::ImplTraitInTrait(ImplTraitInTraitCandidate::Impl(data)) => {
+        ProjectionCandidate::ImplTraitInTrait(data) => {
             confirm_impl_trait_in_trait_candidate(selcx, obligation, data)
         }
-        // If we're projecting an RPITIT for a default trait body, that's just
-        // the same def-id, but as an opaque type (with regular RPIT semantics).
-        ProjectionCandidate::ImplTraitInTrait(ImplTraitInTraitCandidate::Trait) => Progress {
-            term: selcx
-                .tcx()
-                .mk_opaque(obligation.predicate.def_id, obligation.predicate.substs)
-                .into(),
-            obligations: vec![],
-        },
     };
 
     // When checking for cycle during evaluation, we compare predicates with

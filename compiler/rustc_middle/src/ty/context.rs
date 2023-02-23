@@ -36,7 +36,7 @@ use rustc_data_structures::profiling::SelfProfilerRef;
 use rustc_data_structures::sharded::{IntoPointer, ShardedHashMap};
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
 use rustc_data_structures::steal::Steal;
-use rustc_data_structures::sync::{self, Lock, Lrc, ReadGuard, WorkerLocal};
+use rustc_data_structures::sync::{self, Lock, Lrc, MappedReadGuard, ReadGuard, WorkerLocal};
 use rustc_errors::{
     DecorateLint, DiagnosticBuilder, DiagnosticMessage, ErrorGuaranteed, MultiSpan,
 };
@@ -836,7 +836,7 @@ impl<'tcx> TyCtxt<'tcx> {
         if let Some(id) = id.as_local() {
             self.definitions_untracked().def_key(id)
         } else {
-            self.untracked.cstore.def_key(id)
+            self.cstore_untracked().def_key(id)
         }
     }
 
@@ -850,7 +850,7 @@ impl<'tcx> TyCtxt<'tcx> {
         if let Some(id) = id.as_local() {
             self.definitions_untracked().def_path(id)
         } else {
-            self.untracked.cstore.def_path(id)
+            self.cstore_untracked().def_path(id)
         }
     }
 
@@ -860,7 +860,7 @@ impl<'tcx> TyCtxt<'tcx> {
         if let Some(def_id) = def_id.as_local() {
             self.definitions_untracked().def_path_hash(def_id)
         } else {
-            self.untracked.cstore.def_path_hash(def_id)
+            self.cstore_untracked().def_path_hash(def_id)
         }
     }
 
@@ -869,7 +869,7 @@ impl<'tcx> TyCtxt<'tcx> {
         if crate_num == LOCAL_CRATE {
             self.sess.local_stable_crate_id()
         } else {
-            self.untracked.cstore.stable_crate_id(crate_num)
+            self.cstore_untracked().stable_crate_id(crate_num)
         }
     }
 
@@ -880,7 +880,7 @@ impl<'tcx> TyCtxt<'tcx> {
         if stable_crate_id == self.sess.local_stable_crate_id() {
             LOCAL_CRATE
         } else {
-            self.untracked.cstore.stable_crate_id_to_crate_num(stable_crate_id)
+            self.cstore_untracked().stable_crate_id_to_crate_num(stable_crate_id)
         }
     }
 
@@ -899,7 +899,7 @@ impl<'tcx> TyCtxt<'tcx> {
         } else {
             // If this is a DefPathHash from an upstream crate, let the CrateStore map
             // it to a DefId.
-            let cstore = &*self.untracked.cstore;
+            let cstore = &*self.cstore_untracked();
             let cnum = cstore.stable_crate_id_to_crate_num(stable_crate_id);
             cstore.def_path_hash_to_def_id(cnum, hash)
         }
@@ -913,7 +913,7 @@ impl<'tcx> TyCtxt<'tcx> {
         let (crate_name, stable_crate_id) = if def_id.is_local() {
             (self.crate_name(LOCAL_CRATE), self.sess.local_stable_crate_id())
         } else {
-            let cstore = &*self.untracked.cstore;
+            let cstore = &*self.cstore_untracked();
             (cstore.crate_name(def_id.krate), cstore.stable_crate_id(def_id.krate))
         };
 
@@ -1011,10 +1011,14 @@ impl<'tcx> TyCtxt<'tcx> {
 
     /// Note that this is *untracked* and should only be used within the query
     /// system if the result is otherwise tracked through queries
-    pub fn cstore_untracked(self) -> &'tcx CrateStoreDyn {
-        &*self.untracked.cstore
+    pub fn cstore_untracked(self) -> MappedReadGuard<'tcx, CrateStoreDyn> {
+        ReadGuard::map(self.untracked.cstore.read(), |c| &**c)
     }
 
+    /// Give out access to the untracked data without any sanity checks.
+    pub fn untracked(self) -> &'tcx Untracked {
+        &self.untracked
+    }
     /// Note that this is *untracked* and should only be used within the query
     /// system if the result is otherwise tracked through queries
     #[inline]
@@ -1026,7 +1030,7 @@ impl<'tcx> TyCtxt<'tcx> {
     /// system if the result is otherwise tracked through queries
     #[inline]
     pub fn source_span_untracked(self, def_id: LocalDefId) -> Span {
-        self.untracked.source_span.get(def_id).copied().unwrap_or(DUMMY_SP)
+        self.untracked.source_span.get(def_id).unwrap_or(DUMMY_SP)
     }
 
     #[inline(always)]
@@ -1196,13 +1200,8 @@ impl<'tcx> TyCtxt<'tcx> {
 
     /// Returns a displayable description and article for the given `def_id` (e.g. `("a", "struct")`).
     pub fn article_and_description(self, def_id: DefId) -> (&'static str, &'static str) {
-        match self.def_kind(def_id) {
-            DefKind::Generator => match self.generator_kind(def_id).unwrap() {
-                rustc_hir::GeneratorKind::Async(..) => ("an", "async closure"),
-                rustc_hir::GeneratorKind::Gen => ("a", "generator"),
-            },
-            def_kind => (def_kind.article(), def_kind.descr(def_id)),
-        }
+        let kind = self.def_kind(def_id);
+        (self.def_kind_descr_article(kind, def_id), self.def_kind_descr(kind, def_id))
     }
 
     pub fn type_length_limit(self) -> Limit {
@@ -1857,7 +1856,7 @@ impl<'tcx> TyCtxt<'tcx> {
     pub fn mk_fn_def(
         self,
         def_id: DefId,
-        substs: impl IntoIterator<Item = impl Into<GenericArg<'tcx>>>,
+        substs: impl IntoIterator<Item: Into<GenericArg<'tcx>>>,
     ) -> Ty<'tcx> {
         let substs = self.check_substs(def_id, substs);
         self.mk_ty(FnDef(def_id, substs))
@@ -1867,7 +1866,7 @@ impl<'tcx> TyCtxt<'tcx> {
     fn check_substs(
         self,
         _def_id: DefId,
-        substs: impl IntoIterator<Item = impl Into<GenericArg<'tcx>>>,
+        substs: impl IntoIterator<Item: Into<GenericArg<'tcx>>>,
     ) -> SubstsRef<'tcx> {
         let substs = substs.into_iter().map(Into::into);
         #[cfg(debug_assertions)]
@@ -1902,7 +1901,7 @@ impl<'tcx> TyCtxt<'tcx> {
     pub fn mk_projection(
         self,
         item_def_id: DefId,
-        substs: impl IntoIterator<Item = impl Into<GenericArg<'tcx>>>,
+        substs: impl IntoIterator<Item: Into<GenericArg<'tcx>>>,
     ) -> Ty<'tcx> {
         self.mk_alias(ty::Projection, self.mk_alias_ty(item_def_id, substs))
     }
@@ -2294,7 +2293,7 @@ impl<'tcx> TyCtxt<'tcx> {
     pub fn mk_trait_ref(
         self,
         trait_def_id: DefId,
-        substs: impl IntoIterator<Item = impl Into<GenericArg<'tcx>>>,
+        substs: impl IntoIterator<Item: Into<GenericArg<'tcx>>>,
     ) -> ty::TraitRef<'tcx> {
         let substs = self.check_substs(trait_def_id, substs);
         ty::TraitRef { def_id: trait_def_id, substs, _use_mk_trait_ref_instead: () }
@@ -2303,7 +2302,7 @@ impl<'tcx> TyCtxt<'tcx> {
     pub fn mk_alias_ty(
         self,
         def_id: DefId,
-        substs: impl IntoIterator<Item = impl Into<GenericArg<'tcx>>>,
+        substs: impl IntoIterator<Item: Into<GenericArg<'tcx>>>,
     ) -> ty::AliasTy<'tcx> {
         let substs = self.check_substs(def_id, substs);
         ty::AliasTy { def_id, substs, _use_mk_alias_ty_instead: () }
@@ -2447,6 +2446,10 @@ impl<'tcx> TyCtxt<'tcx> {
         )
     }
 
+    pub fn local_def_id_to_hir_id(self, local_def_id: LocalDefId) -> HirId {
+        self.opt_local_def_id_to_hir_id(local_def_id).unwrap()
+    }
+
     pub fn trait_solver_next(self) -> bool {
         self.sess.opts.unstable_opts.trait_solver == rustc_session::config::TraitSolver::Next
     }
@@ -2469,7 +2472,7 @@ impl<'tcx> TyCtxtAt<'tcx> {
     pub fn mk_trait_ref(
         self,
         trait_lang_item: LangItem,
-        substs: impl IntoIterator<Item = impl Into<ty::GenericArg<'tcx>>>,
+        substs: impl IntoIterator<Item: Into<ty::GenericArg<'tcx>>>,
     ) -> ty::TraitRef<'tcx> {
         let trait_def_id = self.require_lang_item(trait_lang_item, Some(self.span));
         self.tcx.mk_trait_ref(trait_def_id, substs)
@@ -2517,6 +2520,5 @@ pub fn provide(providers: &mut ty::query::Providers) {
         // We want to check if the panic handler was defined in this crate
         tcx.lang_items().panic_impl().map_or(false, |did| did.is_local())
     };
-    providers.source_span =
-        |tcx, def_id| tcx.untracked.source_span.get(def_id).copied().unwrap_or(DUMMY_SP);
+    providers.source_span = |tcx, def_id| tcx.untracked.source_span.get(def_id).unwrap_or(DUMMY_SP);
 }

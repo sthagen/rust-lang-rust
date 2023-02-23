@@ -42,11 +42,11 @@ use rustc_middle::middle::stability;
 use rustc_middle::ty::adjustment::{Adjust, Adjustment, AllowTwoPhase};
 use rustc_middle::ty::error::TypeError::FieldMisMatch;
 use rustc_middle::ty::subst::SubstsRef;
-use rustc_middle::ty::{self, AdtKind, Ty, TypeVisitable};
+use rustc_middle::ty::{self, AdtKind, Ty, TypeVisitableExt};
 use rustc_session::errors::ExprParenthesesNeeded;
 use rustc_session::parse::feature_err;
+use rustc_span::edit_distance::find_best_match_for_name;
 use rustc_span::hygiene::DesugaringKind;
-use rustc_span::lev_distance::find_best_match_for_name;
 use rustc_span::source_map::{Span, Spanned};
 use rustc_span::symbol::{kw, sym, Ident, Symbol};
 use rustc_target::spec::abi::Abi::RustIntrinsic;
@@ -2448,7 +2448,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         return_ty: Option<Ty<'tcx>>,
     ) {
         let struct_path = self.tcx().def_path_str(base_did);
-        let kind_name = self.tcx().def_kind(base_did).descr(base_did);
+        let kind_name = self.tcx().def_descr(base_did);
         let mut err = struct_span_err!(
             self.tcx().sess,
             field.span,

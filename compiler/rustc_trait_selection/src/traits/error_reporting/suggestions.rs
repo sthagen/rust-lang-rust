@@ -30,10 +30,10 @@ use rustc_middle::hir::map;
 use rustc_middle::ty::error::TypeError::{self, Sorts};
 use rustc_middle::ty::relate::TypeRelation;
 use rustc_middle::ty::{
-    self, ir::TypeFolder, suggest_arbitrary_trait_bound, suggest_constraining_type_param, AdtKind,
-    DefIdTree, GeneratorDiagnosticData, GeneratorInteriorTypeCause, Infer, InferTy, InternalSubsts,
-    IsSuggestable, ToPredicate, Ty, TyCtxt, TypeAndMut, TypeFoldable, TypeSuperFoldable,
-    TypeckResults,
+    self, suggest_arbitrary_trait_bound, suggest_constraining_type_param, AdtKind, DefIdTree,
+    GeneratorDiagnosticData, GeneratorInteriorTypeCause, Infer, InferTy, InternalSubsts,
+    IsSuggestable, ToPredicate, Ty, TyCtxt, TypeAndMut, TypeFoldable, TypeFolder,
+    TypeSuperFoldable, TypeVisitableExt, TypeckResults,
 };
 use rustc_span::def_id::LocalDefId;
 use rustc_span::symbol::{sym, Ident, Symbol};
@@ -927,7 +927,10 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                 DefKind::Ctor(CtorOf::Variant, _) => {
                     "use parentheses to construct this tuple variant".to_string()
                 }
-                kind => format!("use parentheses to call this {}", kind.descr(def_id)),
+                kind => format!(
+                    "use parentheses to call this {}",
+                    self.tcx.def_kind_descr(kind, def_id)
+                ),
             },
             DefIdOrName::Name(name) => format!("use parentheses to call this {name}"),
         };
@@ -2139,7 +2142,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                 err.note(&format!(
                     "{}s cannot be accessed directly on a `trait`, they can only be \
                         accessed through a specific `impl`",
-                    assoc_item.kind.as_def_kind().descr(item_def_id)
+                    self.tcx.def_kind_descr(assoc_item.kind.as_def_kind(), item_def_id)
                 ));
                 err.span_suggestion(
                     span,
@@ -2784,7 +2787,13 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                             _ => true,
                         };
                     if ident.span.is_visible(sm) && !ident.span.overlaps(span) && !same_line {
-                        multispan.push_span_label(ident.span, "required by a bound in this");
+                        multispan.push_span_label(
+                            ident.span,
+                            format!(
+                                "required by a bound in this {}",
+                                tcx.def_kind(item_def_id).descr(item_def_id)
+                            ),
+                        );
                     }
                 }
                 let descr = format!("required by a bound in `{item_name}`");

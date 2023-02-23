@@ -23,16 +23,16 @@ use rustc_infer::infer::InferResult;
 use rustc_middle::ty::adjustment::{Adjust, Adjustment, AutoBorrow, AutoBorrowMutability};
 use rustc_middle::ty::error::TypeError;
 use rustc_middle::ty::fold::TypeFoldable;
-use rustc_middle::ty::visit::TypeVisitable;
+use rustc_middle::ty::visit::{TypeVisitable, TypeVisitableExt};
 use rustc_middle::ty::{
-    self, AdtKind, CanonicalUserType, DefIdTree, GenericParamDefKind, Ty, UserType,
+    self, AdtKind, CanonicalUserType, DefIdTree, GenericParamDefKind, Ty, TyCtxt, UserType,
 };
 use rustc_middle::ty::{GenericArgKind, SubstsRef, UserSelfTy, UserSubsts};
 use rustc_session::lint;
 use rustc_span::def_id::LocalDefId;
 use rustc_span::hygiene::DesugaringKind;
 use rustc_span::symbol::{kw, sym, Ident};
-use rustc_span::{Span, DUMMY_SP};
+use rustc_span::Span;
 use rustc_trait_selection::traits::error_reporting::TypeErrCtxtExt as _;
 use rustc_trait_selection::traits::{self, NormalizeExt, ObligationCauseCode, ObligationCtxt};
 
@@ -315,7 +315,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
     pub(in super::super) fn normalize<T>(&self, span: Span, value: T) -> T
     where
-        T: TypeFoldable<'tcx>,
+        T: TypeFoldable<TyCtxt<'tcx>>,
     {
         self.register_infer_ok_obligations(
             self.at(&self.misc(span), self.param_env).normalize(value),
@@ -443,7 +443,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     // sufficiently enforced with erased regions. =)
     fn can_contain_user_lifetime_bounds<T>(t: T) -> bool
     where
-        T: TypeVisitable<'tcx>,
+        T: TypeVisitable<TyCtxt<'tcx>>,
     {
         t.has_free_regions() || t.has_projections() || t.has_infer_types()
     }
@@ -737,7 +737,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 if let ty::subst::GenericArgKind::Type(ty) = ty.unpack()
                     && let ty::Alias(ty::Opaque, ty::AliasTy { def_id, .. }) = *ty.kind()
                     && let Some(def_id) = def_id.as_local()
-                    && self.opaque_type_origin(def_id, DUMMY_SP).is_some() {
+                    && self.opaque_type_origin(def_id).is_some() {
                     return None;
                 }
             }

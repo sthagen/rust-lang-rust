@@ -12,7 +12,7 @@ use rustc_infer::infer::InferOk;
 use rustc_infer::infer::LateBoundRegionConversionTime::HigherRankedType;
 use rustc_middle::ty::{
     self, Binder, GenericParamDefKind, InternalSubsts, SubstsRef, ToPolyTraitRef, ToPredicate,
-    TraitRef, Ty, TyCtxt, TypeVisitable,
+    TraitRef, Ty, TyCtxt, TypeVisitableExt,
 };
 use rustc_session::config::TraitSolver;
 use rustc_span::def_id::DefId;
@@ -821,6 +821,8 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
 
         self.infcx
             .at(&obligation.cause, obligation.param_env)
+            // needed for tests/ui/type-alias-impl-trait/assoc-projection-ice.rs
+            .define_opaque_types(true)
             .sup(obligation_trait_ref, expected_trait_ref)
             .map(|InferOk { mut obligations, .. }| {
                 obligations.extend(nested);

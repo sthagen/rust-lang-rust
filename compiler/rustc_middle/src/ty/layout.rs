@@ -1,6 +1,7 @@
+use crate::fluent_generated as fluent;
 use crate::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use crate::ty::normalize_erasing_regions::NormalizationError;
-use crate::ty::{self, ReprOptions, Ty, TyCtxt, TypeVisitable};
+use crate::ty::{self, ReprOptions, Ty, TyCtxt, TypeVisitableExt};
 use rustc_errors::{DiagnosticBuilder, Handler, IntoDiagnostic};
 use rustc_hir as hir;
 use rustc_hir::def_id::DefId;
@@ -182,16 +183,16 @@ impl IntoDiagnostic<'_, !> for LayoutError<'_> {
         match self {
             LayoutError::Unknown(ty) => {
                 diag.set_arg("ty", ty);
-                diag.set_primary_message(rustc_errors::fluent::middle_unknown_layout);
+                diag.set_primary_message(fluent::middle_unknown_layout);
             }
             LayoutError::SizeOverflow(ty) => {
                 diag.set_arg("ty", ty);
-                diag.set_primary_message(rustc_errors::fluent::middle_values_too_big);
+                diag.set_primary_message(fluent::middle_values_too_big);
             }
             LayoutError::NormalizationFailure(ty, e) => {
                 diag.set_arg("ty", ty);
                 diag.set_arg("failure_ty", e.get_type_for_failure());
-                diag.set_primary_message(rustc_errors::fluent::middle_cannot_be_normalized);
+                diag.set_primary_message(fluent::middle_cannot_be_normalized);
             }
         }
         diag
@@ -770,7 +771,7 @@ where
 
                 ty::Dynamic(_, _, ty::DynStar) => {
                     if i == 0 {
-                        TyMaybeWithLayout::Ty(tcx.types.usize)
+                        TyMaybeWithLayout::Ty(tcx.mk_mut_ptr(tcx.types.unit))
                     } else if i == 1 {
                         // FIXME(dyn-star) same FIXME as above applies here too
                         TyMaybeWithLayout::Ty(
@@ -1120,13 +1121,6 @@ impl From<call::AdjustForForeignAbiError> for FnAbiError<'_> {
 
 impl<'tcx> fmt::Display for FnAbiError<'tcx> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        #[cfg(bootstrap)]
-        match self {
-            Self::Layout(err) => fmt::Display::fmt(err, f),
-            Self::AdjustForForeignAbi(err) => fmt::Display::fmt(err, f),
-        }
-
-        #[cfg(not(bootstrap))]
         match self {
             Self::Layout(err) => err.fmt(f),
             Self::AdjustForForeignAbi(err) => err.fmt(f),

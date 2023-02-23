@@ -99,9 +99,11 @@ pub mod structured_errors;
 mod variance;
 
 use rustc_errors::{struct_span_err, ErrorGuaranteed};
+use rustc_errors::{DiagnosticMessage, SubdiagnosticMessage};
 use rustc_hir as hir;
 use rustc_hir::Node;
 use rustc_infer::infer::{InferOk, TyCtxtInferExt};
+use rustc_macros::fluent_messages;
 use rustc_middle::middle;
 use rustc_middle::ty::query::Providers;
 use rustc_middle::ty::{self, Ty, TyCtxt};
@@ -117,6 +119,8 @@ use std::ops::Not;
 
 use astconv::AstConv;
 use bounds::Bounds;
+
+fluent_messages! { "../locales/en-US.ftl" }
 
 fn require_c_abi_if_c_variadic(tcx: TyCtxt<'_>, decl: &hir::FnDecl<'_>, abi: Abi, span: Span) {
     const ERROR_HEAD: &str = "C-variadic function must have a compatible calling convention";
@@ -267,16 +271,10 @@ fn check_main_fn_ty(tcx: TyCtxt<'_>, main_def_id: DefId) {
     } else if !main_fn_predicates.predicates.is_empty() {
         // generics may bring in implicit predicates, so we skip this check if generics is present.
         let generics_where_clauses_span = main_fn_where_clauses_span(tcx, main_def_id);
-        let mut diag = struct_span_err!(
-            tcx.sess,
-            generics_where_clauses_span.unwrap_or(main_span),
-            E0646,
-            "`main` function is not allowed to have a `where` clause"
-        );
-        if let Some(generics_where_clauses_span) = generics_where_clauses_span {
-            diag.span_label(generics_where_clauses_span, "`main` cannot have a `where` clause");
-        }
-        diag.emit();
+        tcx.sess.emit_err(errors::WhereClauseOnMain {
+            span: generics_where_clauses_span.unwrap_or(main_span),
+            generics_span: generics_where_clauses_span,
+        });
         error = true;
     }
 
@@ -297,10 +295,7 @@ fn check_main_fn_ty(tcx: TyCtxt<'_>, main_def_id: DefId) {
     }
 
     for attr in tcx.get_attrs(main_def_id, sym::track_caller) {
-        tcx.sess
-            .struct_span_err(attr.span, "`main` function is not allowed to be `#[track_caller]`")
-            .span_label(main_span, "`main` function is not allowed to be `#[track_caller]`")
-            .emit();
+        tcx.sess.emit_err(errors::TrackCallerOnMain { span: attr.span, annotated: main_span });
         error = true;
     }
 

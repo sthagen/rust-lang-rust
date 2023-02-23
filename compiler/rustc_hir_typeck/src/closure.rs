@@ -11,8 +11,8 @@ use rustc_infer::infer::LateBoundRegionConversionTime;
 use rustc_infer::infer::{InferOk, InferResult};
 use rustc_macros::{TypeFoldable, TypeVisitable};
 use rustc_middle::ty::subst::InternalSubsts;
-use rustc_middle::ty::visit::TypeVisitable;
-use rustc_middle::ty::{self, ir::TypeVisitor, Ty, TyCtxt, TypeSuperVisitable};
+use rustc_middle::ty::visit::{TypeVisitable, TypeVisitableExt};
+use rustc_middle::ty::{self, Ty, TyCtxt, TypeSuperVisitable, TypeVisitor};
 use rustc_span::def_id::LocalDefId;
 use rustc_span::source_map::Span;
 use rustc_span::sym;
@@ -561,8 +561,10 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             ) {
                 // Check that E' = S'.
                 let cause = self.misc(hir_ty.span);
-                let InferOk { value: (), obligations } =
-                    self.at(&cause, self.param_env).eq(*expected_ty, supplied_ty)?;
+                let InferOk { value: (), obligations } = self
+                    .at(&cause, self.param_env)
+                    .define_opaque_types(true)
+                    .eq(*expected_ty, supplied_ty)?;
                 all_obligations.extend(obligations);
             }
 
@@ -574,6 +576,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             let cause = &self.misc(decl.output.span());
             let InferOk { value: (), obligations } = self
                 .at(cause, self.param_env)
+                .define_opaque_types(true)
                 .eq(expected_sigs.liberated_sig.output(), supplied_output_ty)?;
             all_obligations.extend(obligations);
 

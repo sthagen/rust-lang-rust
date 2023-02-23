@@ -12,7 +12,7 @@
 #![allow(rustc::usage_of_ty_tykind)]
 
 pub use self::fold::{FallibleTypeFolder, TypeFoldable, TypeFolder, TypeSuperFoldable};
-pub use self::visit::{TypeSuperVisitable, TypeVisitable, TypeVisitor};
+pub use self::visit::{TypeSuperVisitable, TypeVisitable, TypeVisitableExt, TypeVisitor};
 pub use self::AssocItemContainer::*;
 pub use self::BorrowKind::*;
 pub use self::IntVarValue::*;
@@ -43,10 +43,9 @@ use rustc_index::vec::IndexVec;
 use rustc_macros::HashStable;
 use rustc_query_system::ich::StableHashingContext;
 use rustc_serialize::{Decodable, Encodable};
-use rustc_session::cstore::Untracked;
 use rustc_span::hygiene::MacroKind;
 use rustc_span::symbol::{kw, sym, Ident, Symbol};
-use rustc_span::{ExpnId, Span};
+use rustc_span::{ExpnId, ExpnKind, Span};
 use rustc_target::abi::{Align, Integer, IntegerType, VariantIdx};
 pub use rustc_target::abi::{ReprFlags, ReprOptions};
 use rustc_type_ir::WithCachedTypeInfo;
@@ -146,10 +145,6 @@ mod structural_impls;
 mod sty;
 mod typeck_results;
 
-pub mod ir {
-    pub use super::{fold::ir::*, visit::ir::*};
-}
-
 // Data types
 
 pub type RegisteredTools = FxHashSet<Ident>;
@@ -157,7 +152,6 @@ pub type RegisteredTools = FxHashSet<Ident>;
 pub struct ResolverOutputs {
     pub global_ctxt: ResolverGlobalCtxt,
     pub ast_lowering: ResolverAstLowering,
-    pub untracked: Untracked,
 }
 
 #[derive(Debug)]
@@ -923,14 +917,17 @@ impl<'a, 'tcx> HashStable<StableHashingContext<'a>> for Term<'tcx> {
     }
 }
 
-impl<'tcx> ir::TypeFoldable<TyCtxt<'tcx>> for Term<'tcx> {
-    fn try_fold_with<F: FallibleTypeFolder<'tcx>>(self, folder: &mut F) -> Result<Self, F::Error> {
+impl<'tcx> TypeFoldable<TyCtxt<'tcx>> for Term<'tcx> {
+    fn try_fold_with<F: FallibleTypeFolder<TyCtxt<'tcx>>>(
+        self,
+        folder: &mut F,
+    ) -> Result<Self, F::Error> {
         Ok(self.unpack().try_fold_with(folder)?.pack())
     }
 }
 
-impl<'tcx> ir::TypeVisitable<TyCtxt<'tcx>> for Term<'tcx> {
-    fn visit_with<V: TypeVisitor<'tcx>>(&self, visitor: &mut V) -> ControlFlow<V::BreakTy> {
+impl<'tcx> TypeVisitable<TyCtxt<'tcx>> for Term<'tcx> {
+    fn visit_with<V: TypeVisitor<TyCtxt<'tcx>>>(&self, visitor: &mut V) -> ControlFlow<V::BreakTy> {
         self.unpack().visit_with(visitor)
     }
 }
@@ -1628,8 +1625,8 @@ impl<'a, 'tcx> HashStable<StableHashingContext<'a>> for ParamEnv<'tcx> {
     }
 }
 
-impl<'tcx> ir::TypeFoldable<TyCtxt<'tcx>> for ParamEnv<'tcx> {
-    fn try_fold_with<F: ty::fold::FallibleTypeFolder<'tcx>>(
+impl<'tcx> TypeFoldable<TyCtxt<'tcx>> for ParamEnv<'tcx> {
+    fn try_fold_with<F: ty::fold::FallibleTypeFolder<TyCtxt<'tcx>>>(
         self,
         folder: &mut F,
     ) -> Result<Self, F::Error> {
@@ -1641,8 +1638,8 @@ impl<'tcx> ir::TypeFoldable<TyCtxt<'tcx>> for ParamEnv<'tcx> {
     }
 }
 
-impl<'tcx> ir::TypeVisitable<TyCtxt<'tcx>> for ParamEnv<'tcx> {
-    fn visit_with<V: TypeVisitor<'tcx>>(&self, visitor: &mut V) -> ControlFlow<V::BreakTy> {
+impl<'tcx> TypeVisitable<TyCtxt<'tcx>> for ParamEnv<'tcx> {
+    fn visit_with<V: TypeVisitor<TyCtxt<'tcx>>>(&self, visitor: &mut V) -> ControlFlow<V::BreakTy> {
         self.caller_bounds().visit_with(visitor)?;
         self.reveal().visit_with(visitor)
     }
@@ -1767,7 +1764,7 @@ impl<'tcx> ParamEnv<'tcx> {
     /// `where Box<u32>: Copy`, which are clearly never
     /// satisfiable. We generally want to behave as if they were true,
     /// although the surrounding function is never reachable.
-    pub fn and<T: TypeVisitable<'tcx>>(self, value: T) -> ParamEnvAnd<'tcx, T> {
+    pub fn and<T: TypeVisitable<TyCtxt<'tcx>>>(self, value: T) -> ParamEnvAnd<'tcx, T> {
         match self.reveal() {
             Reveal::UserFacing => ParamEnvAnd { param_env: self, value },
 
@@ -2444,8 +2441,23 @@ impl<'tcx> TyCtxt<'tcx> {
         None
     }
 
-    /// If the given `DefId` belongs to a trait that was automatically derived, returns `true`.
-    pub fn is_builtin_derive(self, def_id: DefId) -> bool {
+    /// Check if the given `DefId` is `#\[automatically_derived\], *and*
+    /// whether it was produced by expanding a builtin derive macro.
+    pub fn is_builtin_derived(self, def_id: DefId) -> bool {
+        if self.is_automatically_derived(def_id)
+            && let Some(def_id) = def_id.as_local()
+            && let outer = self.def_span(def_id).ctxt().outer_expn_data()
+            && matches!(outer.kind, ExpnKind::Macro(MacroKind::Derive, _))
+            && self.has_attr(outer.macro_def_id.unwrap(), sym::rustc_builtin_macro)
+        {
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Check if the given `DefId` is `#\[automatically_derived\]`.
+    pub fn is_automatically_derived(self, def_id: DefId) -> bool {
         self.has_attr(def_id, sym::automatically_derived)
     }
 

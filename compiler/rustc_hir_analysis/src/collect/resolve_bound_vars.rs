@@ -17,7 +17,8 @@ use rustc_hir::{GenericArg, GenericParam, GenericParamKind, HirIdMap, LifetimeNa
 use rustc_middle::bug;
 use rustc_middle::hir::nested_filter;
 use rustc_middle::middle::resolve_bound_vars::*;
-use rustc_middle::ty::{self, ir::TypeVisitor, DefIdTree, TyCtxt, TypeSuperVisitable};
+use rustc_middle::ty::{self, DefIdTree, TyCtxt, TypeSuperVisitable, TypeVisitor};
+use rustc_session::lint;
 use rustc_span::def_id::DefId;
 use rustc_span::symbol::{sym, Ident};
 use rustc_span::Span;
@@ -50,7 +51,7 @@ impl RegionExt for ResolvedArg {
 
     fn id(&self) -> Option<DefId> {
         match *self {
-            ResolvedArg::StaticLifetime => None,
+            ResolvedArg::StaticLifetime | ResolvedArg::Error(_) => None,
 
             ResolvedArg::EarlyBound(id)
             | ResolvedArg::LateBound(_, _, id)
@@ -336,7 +337,57 @@ impl<'a, 'tcx> BoundVarContext<'a, 'tcx> {
             }
         }
     }
+
+    fn visit_poly_trait_ref_inner(
+        &mut self,
+        trait_ref: &'tcx hir::PolyTraitRef<'tcx>,
+        non_lifetime_binder_allowed: NonLifetimeBinderAllowed,
+    ) {
+        debug!("visit_poly_trait_ref(trait_ref={:?})", trait_ref);
+
+        let (mut binders, scope_type) = self.poly_trait_ref_binder_info();
+
+        let initial_bound_vars = binders.len() as u32;
+        let mut bound_vars: FxIndexMap<LocalDefId, ResolvedArg> = FxIndexMap::default();
+        let binders_iter =
+            trait_ref.bound_generic_params.iter().enumerate().map(|(late_bound_idx, param)| {
+                let pair = ResolvedArg::late(initial_bound_vars + late_bound_idx as u32, param);
+                let r = late_arg_as_bound_arg(self.tcx, &pair.1, param);
+                bound_vars.insert(pair.0, pair.1);
+                r
+            });
+        binders.extend(binders_iter);
+
+        if let NonLifetimeBinderAllowed::Deny(where_) = non_lifetime_binder_allowed {
+            deny_non_region_late_bound(self.tcx, &mut bound_vars, where_);
+        }
+
+        debug!(?binders);
+        self.record_late_bound_vars(trait_ref.trait_ref.hir_ref_id, binders);
+
+        // Always introduce a scope here, even if this is in a where clause and
+        // we introduced the binders around the bounded Ty. In that case, we
+        // just reuse the concatenation functionality also present in nested trait
+        // refs.
+        let scope = Scope::Binder {
+            hir_id: trait_ref.trait_ref.hir_ref_id,
+            bound_vars,
+            s: self.scope,
+            scope_type,
+            where_bound_origin: None,
+        };
+        self.with(scope, |this| {
+            walk_list!(this, visit_generic_param, trait_ref.bound_generic_params);
+            this.visit_trait_ref(&trait_ref.trait_ref);
+        });
+    }
 }
+
+enum NonLifetimeBinderAllowed {
+    Deny(&'static str),
+    Allow,
+}
+
 impl<'a, 'tcx> Visitor<'tcx> for BoundVarContext<'a, 'tcx> {
     type NestedFilter = nested_filter::OnlyBodies;
 
@@ -400,7 +451,7 @@ impl<'a, 'tcx> Visitor<'tcx> for BoundVarContext<'a, 'tcx> {
                 }
             }
 
-            let (bound_vars, binders): (FxIndexMap<LocalDefId, ResolvedArg>, Vec<_>) =
+            let (mut bound_vars, binders): (FxIndexMap<LocalDefId, ResolvedArg>, Vec<_>) =
                 bound_generic_params
                     .iter()
                     .enumerate()
@@ -410,6 +461,8 @@ impl<'a, 'tcx> Visitor<'tcx> for BoundVarContext<'a, 'tcx> {
                         (pair, r)
                     })
                     .unzip();
+
+            deny_non_region_late_bound(self.tcx, &mut bound_vars, "closures");
 
             self.record_late_bound_vars(e.hir_id, binders);
             let scope = Scope::Binder {
@@ -567,7 +620,7 @@ impl<'a, 'tcx> Visitor<'tcx> for BoundVarContext<'a, 'tcx> {
     fn visit_ty(&mut self, ty: &'tcx hir::Ty<'tcx>) {
         match ty.kind {
             hir::TyKind::BareFn(c) => {
-                let (bound_vars, binders): (FxIndexMap<LocalDefId, ResolvedArg>, Vec<_>) = c
+                let (mut bound_vars, binders): (FxIndexMap<LocalDefId, ResolvedArg>, Vec<_>) = c
                     .generic_params
                     .iter()
                     .enumerate()
@@ -577,6 +630,9 @@ impl<'a, 'tcx> Visitor<'tcx> for BoundVarContext<'a, 'tcx> {
                         (pair, r)
                     })
                     .unzip();
+
+                deny_non_region_late_bound(self.tcx, &mut bound_vars, "function pointer types");
+
                 self.record_late_bound_vars(ty.hir_id, binders);
                 let scope = Scope::Binder {
                     hir_id: ty.hir_id,
@@ -596,7 +652,10 @@ impl<'a, 'tcx> Visitor<'tcx> for BoundVarContext<'a, 'tcx> {
                 let scope = Scope::TraitRefBoundary { s: self.scope };
                 self.with(scope, |this| {
                     for bound in bounds {
-                        this.visit_poly_trait_ref(bound);
+                        this.visit_poly_trait_ref_inner(
+                            bound,
+                            NonLifetimeBinderAllowed::Deny("trait object types"),
+                        );
                     }
                 });
                 match lifetime.res {
@@ -865,17 +924,16 @@ impl<'a, 'tcx> Visitor<'tcx> for BoundVarContext<'a, 'tcx> {
                         origin,
                         ..
                     }) => {
-
                         let (bound_vars, binders): (FxIndexMap<LocalDefId, ResolvedArg>, Vec<_>) =
                             bound_generic_params
-                            .iter()
-                            .enumerate()
-                            .map(|(late_bound_idx, param)| {
-                                let pair = ResolvedArg::late(late_bound_idx as u32, param);
-                                let r = late_arg_as_bound_arg(this.tcx, &pair.1, param);
-                                (pair, r)
-                            })
-                            .unzip();
+                                .iter()
+                                .enumerate()
+                                .map(|(late_bound_idx, param)| {
+                                    let pair = ResolvedArg::late(late_bound_idx as u32, param);
+                                    let r = late_arg_as_bound_arg(this.tcx, &pair.1, param);
+                                    (pair, r)
+                                })
+                                .unzip();
                         this.record_late_bound_vars(hir_id, binders.clone());
                         // Even if there are no lifetimes defined here, we still wrap it in a binder
                         // scope. If there happens to be a nested poly trait ref (an error), that
@@ -910,20 +968,22 @@ impl<'a, 'tcx> Visitor<'tcx> for BoundVarContext<'a, 'tcx> {
                                     continue;
                                 }
                                 this.insert_lifetime(lt, ResolvedArg::StaticLifetime);
-                                this.tcx
-                                    .sess
-                                    .struct_span_warn(
-                                        lifetime.ident.span,
-                                        &format!(
-                                            "unnecessary lifetime parameter `{}`",
+                                this.tcx.struct_span_lint_hir(
+                                    lint::builtin::UNUSED_LIFETIMES,
+                                    lifetime.hir_id,
+                                    lifetime.ident.span,
+                                    format!(
+                                        "unnecessary lifetime parameter `{}`",
+                                        lifetime.ident
+                                    ),
+                                    |lint| {
+                                        let help = &format!(
+                                            "you can use the `'static` lifetime directly, in place of `{}`",
                                             lifetime.ident,
-                                        ),
-                                    )
-                                    .help(&format!(
-                                        "you can use the `'static` lifetime directly, in place of `{}`",
-                                        lifetime.ident,
-                                    ))
-                                    .emit();
+                                        );
+                                        lint.help(help)
+                                    },
+                                );
                             }
                         }
                     }
@@ -967,39 +1027,7 @@ impl<'a, 'tcx> Visitor<'tcx> for BoundVarContext<'a, 'tcx> {
     }
 
     fn visit_poly_trait_ref(&mut self, trait_ref: &'tcx hir::PolyTraitRef<'tcx>) {
-        debug!("visit_poly_trait_ref(trait_ref={:?})", trait_ref);
-
-        let (mut binders, scope_type) = self.poly_trait_ref_binder_info();
-
-        let initial_bound_vars = binders.len() as u32;
-        let mut bound_vars: FxIndexMap<LocalDefId, ResolvedArg> = FxIndexMap::default();
-        let binders_iter =
-            trait_ref.bound_generic_params.iter().enumerate().map(|(late_bound_idx, param)| {
-                let pair = ResolvedArg::late(initial_bound_vars + late_bound_idx as u32, param);
-                let r = late_arg_as_bound_arg(self.tcx, &pair.1, param);
-                bound_vars.insert(pair.0, pair.1);
-                r
-            });
-        binders.extend(binders_iter);
-
-        debug!(?binders);
-        self.record_late_bound_vars(trait_ref.trait_ref.hir_ref_id, binders);
-
-        // Always introduce a scope here, even if this is in a where clause and
-        // we introduced the binders around the bounded Ty. In that case, we
-        // just reuse the concatenation functionality also present in nested trait
-        // refs.
-        let scope = Scope::Binder {
-            hir_id: trait_ref.trait_ref.hir_ref_id,
-            bound_vars,
-            s: self.scope,
-            scope_type,
-            where_bound_origin: None,
-        };
-        self.with(scope, |this| {
-            walk_list!(this, visit_generic_param, trait_ref.bound_generic_params);
-            this.visit_trait_ref(&trait_ref.trait_ref);
-        });
+        self.visit_poly_trait_ref_inner(trait_ref, NonLifetimeBinderAllowed::Allow);
     }
 }
 
@@ -1364,7 +1392,9 @@ impl<'a, 'tcx> BoundVarContext<'a, 'tcx> {
             return;
         }
 
-        span_bug!(self.tcx.hir().span(hir_id), "could not resolve {param_def_id:?}",);
+        self.tcx
+            .sess
+            .delay_span_bug(self.tcx.hir().span(hir_id), "could not resolve {param_def_id:?}");
     }
 
     #[instrument(level = "debug", skip(self))]
@@ -1913,5 +1943,39 @@ fn is_late_bound_map(
                 self.regions.insert(def_id);
             }
         }
+    }
+}
+
+pub fn deny_non_region_late_bound(
+    tcx: TyCtxt<'_>,
+    bound_vars: &mut FxIndexMap<LocalDefId, ResolvedArg>,
+    where_: &str,
+) {
+    let mut first = true;
+
+    for (var, arg) in bound_vars {
+        let Node::GenericParam(param) = tcx.hir().get_by_def_id(*var) else {
+            bug!();
+        };
+
+        let what = match param.kind {
+            hir::GenericParamKind::Type { .. } => "type",
+            hir::GenericParamKind::Const { .. } => "const",
+            hir::GenericParamKind::Lifetime { .. } => continue,
+        };
+
+        let mut diag = tcx.sess.struct_span_err(
+            param.span,
+            format!("late-bound {what} parameter not allowed on {where_}"),
+        );
+
+        let guar = if tcx.features().non_lifetime_binders && first {
+            diag.emit()
+        } else {
+            diag.delay_as_bug()
+        };
+
+        first = false;
+        *arg = ResolvedArg::Error(guar);
     }
 }

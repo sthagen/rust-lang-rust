@@ -4,7 +4,7 @@ use rustc_hir::def::Res;
 use rustc_hir::def_id::DefId;
 use rustc_infer::traits::ObligationCauseCode;
 use rustc_middle::ty::{
-    self, ir::TypeVisitor, DefIdTree, Ty, TyCtxt, TypeSuperVisitable, TypeVisitable,
+    self, DefIdTree, Ty, TyCtxt, TypeSuperVisitable, TypeVisitable, TypeVisitor,
 };
 use rustc_span::{self, Span};
 use rustc_trait_selection::traits;
@@ -243,7 +243,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         true
     }
 
-    fn find_ambiguous_parameter_in<T: TypeVisitable<'tcx>>(
+    fn find_ambiguous_parameter_in<T: TypeVisitable<TyCtxt<'tcx>>>(
         &self,
         item_def_id: DefId,
         t: T,
@@ -548,6 +548,19 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let ty::GenericArgKind::Type(in_ty) = in_ty.unpack() else {
             return Err(expr);
         };
+
+        if let (
+            hir::ExprKind::AddrOf(_borrow_kind, _borrow_mutability, borrowed_expr),
+            ty::Ref(_ty_region, ty_ref_type, _ty_mutability),
+        ) = (&expr.kind, in_ty.kind())
+        {
+            // We can "drill into" the borrowed expression.
+            return self.blame_specific_part_of_expr_corresponding_to_generic_param(
+                param,
+                borrowed_expr,
+                (*ty_ref_type).into(),
+            );
+        }
 
         if let (hir::ExprKind::Tup(expr_elements), ty::Tuple(in_ty_elements)) =
             (&expr.kind, in_ty.kind())
