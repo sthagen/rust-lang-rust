@@ -402,9 +402,6 @@ passes_invalid_attr_at_crate_level =
     `{$name}` attribute cannot be used at crate level
     .suggestion = perhaps you meant to use an outer attribute
 
-passes_duplicate_diagnostic_item =
-    duplicate diagnostic item found: `{$name}`.
-
 passes_duplicate_diagnostic_item_in_crate =
     duplicate diagnostic item in crate `{$crate_name}`: `{$name}`.
     .note = the diagnostic item is first defined in crate `{$orig_crate_name}`.
@@ -745,3 +742,7 @@ passes_proc_macro_invalid_abi = proc macro functions may not be `extern "{$abi}"
 passes_proc_macro_unsafe = proc macro functions may not be `unsafe`
 
 passes_skipping_const_checks = skipping const checks
+
+passes_invalid_macro_export_arguments = `{$name}` isn't a valid `#[macro_export]` argument
+
+passes_invalid_macro_export_arguments_too_many_items = `#[macro_export]` can only take 1 or 0 arguments

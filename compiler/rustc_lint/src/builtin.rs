@@ -677,21 +677,21 @@ impl<'tcx> LateLintPass<'tcx> for MissingCopyImplementations {
                     return;
                 }
                 let def = cx.tcx.adt_def(item.owner_id);
-                (def, cx.tcx.mk_adt(def, cx.tcx.intern_substs(&[])))
+                (def, cx.tcx.mk_adt(def, ty::List::empty()))
             }
             hir::ItemKind::Union(_, ref ast_generics) => {
                 if !ast_generics.params.is_empty() {
                     return;
                 }
                 let def = cx.tcx.adt_def(item.owner_id);
-                (def, cx.tcx.mk_adt(def, cx.tcx.intern_substs(&[])))
+                (def, cx.tcx.mk_adt(def, ty::List::empty()))
             }
             hir::ItemKind::Enum(_, ref ast_generics) => {
                 if !ast_generics.params.is_empty() {
                     return;
                 }
                 let def = cx.tcx.adt_def(item.owner_id);
-                (def, cx.tcx.mk_adt(def, cx.tcx.intern_substs(&[])))
+                (def, cx.tcx.mk_adt(def, ty::List::empty()))
             }
             _ => return,
         };
@@ -1288,7 +1288,7 @@ declare_lint! {
 }
 
 declare_lint_pass!(
-    /// Explains corresponding feature flag must be enabled for the `#[track_caller] attribute to
+    /// Explains corresponding feature flag must be enabled for the `#[track_caller]` attribute to
     /// do anything
     UngatedAsyncFnTrackCaller => [UNGATED_ASYNC_FN_TRACK_CALLER]
 );

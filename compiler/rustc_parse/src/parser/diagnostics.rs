@@ -19,7 +19,7 @@ use crate::errors::{
 };
 
 use crate::fluent_generated as fluent;
-use crate::lexer::UnmatchedBrace;
+use crate::lexer::UnmatchedDelim;
 use crate::parser;
 use rustc_ast as ast;
 use rustc_ast::ptr::P;
@@ -165,8 +165,6 @@ enum IsStandalone {
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum IncOrDec {
     Inc,
-    // FIXME: `i--` recovery isn't implemented yet
-    #[allow(dead_code)]
     Dec,
 }
 
@@ -222,7 +220,7 @@ impl MultiSugg {
 /// is dropped.
 pub struct SnapshotParser<'a> {
     parser: Parser<'a>,
-    unclosed_delims: Vec<UnmatchedBrace>,
+    unclosed_delims: Vec<UnmatchedDelim>,
 }
 
 impl<'a> Deref for SnapshotParser<'a> {
@@ -264,7 +262,7 @@ impl<'a> Parser<'a> {
         self.unclosed_delims.extend(snapshot.unclosed_delims);
     }
 
-    pub fn unclosed_delims(&self) -> &[UnmatchedBrace] {
+    pub fn unclosed_delims(&self) -> &[UnmatchedDelim] {
         &self.unclosed_delims
     }
 
@@ -693,7 +691,7 @@ impl<'a> Parser<'a> {
                 span: self.prev_token.span.shrink_to_lo(),
                 tokens: None,
             };
-            let struct_expr = snapshot.parse_struct_expr(None, path, false);
+            let struct_expr = snapshot.parse_expr_struct(None, path, false);
             let block_tail = self.parse_block_tail(lo, s, AttemptLocalParseRecovery::No);
             return Some(match (struct_expr, block_tail) {
                 (Ok(expr), Err(mut err)) => {
@@ -1357,6 +1355,20 @@ impl<'a> Parser<'a> {
         self.recover_from_inc_dec(operand_expr, kind, op_span)
     }
 
+    pub(super) fn recover_from_postfix_decrement(
+        &mut self,
+        operand_expr: P<Expr>,
+        op_span: Span,
+        start_stmt: bool,
+    ) -> PResult<'a, P<Expr>> {
+        let kind = IncDecRecovery {
+            standalone: if start_stmt { IsStandalone::Standalone } else { IsStandalone::Subexpr },
+            op: IncOrDec::Dec,
+            fixity: UnaryFixity::Post,
+        };
+        self.recover_from_inc_dec(operand_expr, kind, op_span)
+    }
+
     fn recover_from_inc_dec(
         &mut self,
         base: P<Expr>,
@@ -1624,7 +1636,7 @@ impl<'a> Parser<'a> {
             // Handle `await { <expr> }`.
             // This needs to be handled separately from the next arm to avoid
             // interpreting `await { <expr> }?` as `<expr>?.await`.
-            self.parse_block_expr(None, self.token.span, BlockCheckMode::Default)
+            self.parse_expr_block(None, self.token.span, BlockCheckMode::Default)
         } else {
             self.parse_expr()
         }

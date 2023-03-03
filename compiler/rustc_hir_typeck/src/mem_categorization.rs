@@ -383,7 +383,7 @@ impl<'a, 'tcx> MemCategorizationContext<'a, 'tcx> {
             | hir::ExprKind::Repeat(..)
             | hir::ExprKind::InlineAsm(..)
             | hir::ExprKind::Box(..)
-            | hir::ExprKind::Err => Ok(self.cat_rvalue(expr.hir_id, expr.span, expr_ty)),
+            | hir::ExprKind::Err(_) => Ok(self.cat_rvalue(expr.hir_id, expr.span, expr_ty)),
         }
     }
 
@@ -636,7 +636,7 @@ impl<'a, 'tcx> MemCategorizationContext<'a, 'tcx> {
         // `&&Some(x,)` `place_foo`
         //  `&Some(x,)` `deref { place_foo}`
         //   `Some(x,)` `deref { deref { place_foo }}`
-        //        (x,)` `field0 { deref { deref { place_foo }}}` <- resulting place
+        //       `(x,)` `field0 { deref { deref { place_foo }}}` <- resulting place
         //
         // The above example has no adjustments. If the code were instead the (after adjustments,
         // equivalent) version

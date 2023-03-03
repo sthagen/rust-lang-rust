@@ -87,7 +87,7 @@ fn get_modified_rs_files(build: &Builder<'_>) -> Result<Option<Vec<String>>, Str
     get_git_modified_files(Some(&build.config.src), &vec!["rs"])
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde_derive::Deserialize)]
 struct RustfmtConfig {
     ignore: Vec<String>,
 }
@@ -218,7 +218,7 @@ pub fn format(build: &Builder<'_>, check: bool, paths: &[PathBuf]) {
                     WalkBuilder::new(first)
                 }
             } else {
-                WalkBuilder::new(first)
+                WalkBuilder::new(src.join(first))
             };
 
             for path in &paths[1..] {
@@ -229,7 +229,7 @@ pub fn format(build: &Builder<'_>, check: bool, paths: &[PathBuf]) {
                         walker.add(path);
                     }
                 } else {
-                    walker.add(path);
+                    walker.add(src.join(path));
                 }
             }
 

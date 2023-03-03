@@ -192,7 +192,7 @@ fn remap_mir_for_const_eval_select<'tcx>(
                 let arguments = (0..num_args).map(|x| {
                     let mut place_elems = place_elems.to_vec();
                     place_elems.push(ProjectionElem::Field(x.into(), fields[x]));
-                    let projection = tcx.intern_place_elems(&place_elems);
+                    let projection = tcx.mk_place_elems(&place_elems);
                     let place = Place {
                         local: place.local,
                         projection,
@@ -248,7 +248,7 @@ fn mir_const_qualif(tcx: TyCtxt<'_>, def: ty::WithOptConstParam<LocalDefId>) -> 
 
     // N.B., this `borrow()` is guaranteed to be valid (i.e., the value
     // cannot yet be stolen), because `mir_promoted()`, which steals
-    // from `mir_const(), forces this query to execute before
+    // from `mir_const()`, forces this query to execute before
     // performing the steal.
     let body = &tcx.mir_const(def).borrow();
 

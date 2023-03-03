@@ -77,10 +77,11 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
         let nested_goals = self
             .eq(goal.param_env, goal.predicate.term, normalized_alias.into())
             .expect("failed to unify with unconstrained term");
-        let rhs_certainty =
+
+        let unify_certainty =
             self.evaluate_all(nested_goals).expect("failed to unify with unconstrained term");
 
-        self.make_canonical_response(normalization_certainty.unify_and(rhs_certainty))
+        self.make_canonical_response(normalization_certainty.unify_and(unify_certainty))
     }
 }
 
@@ -115,6 +116,51 @@ impl<'tcx> assembly::GoalKind<'tcx> for ProjectionPredicate<'tcx> {
                     assumption_projection_pred.projection_ty,
                 )?;
                 nested_goals.extend(requirements);
+                let subst_certainty = ecx.evaluate_all(nested_goals)?;
+
+                ecx.eq_term_and_make_canonical_response(
+                    goal,
+                    subst_certainty,
+                    assumption_projection_pred.term,
+                )
+            })
+        } else {
+            Err(NoSolution)
+        }
+    }
+
+    fn consider_object_bound_candidate(
+        ecx: &mut EvalCtxt<'_, 'tcx>,
+        goal: Goal<'tcx, Self>,
+        assumption: ty::Predicate<'tcx>,
+    ) -> QueryResult<'tcx> {
+        if let Some(poly_projection_pred) = assumption.to_opt_poly_projection_pred()
+            && poly_projection_pred.projection_def_id() == goal.predicate.def_id()
+        {
+            ecx.probe(|ecx| {
+                let assumption_projection_pred =
+                    ecx.instantiate_binder_with_infer(poly_projection_pred);
+                let mut nested_goals = ecx.eq(
+                    goal.param_env,
+                    goal.predicate.projection_ty,
+                    assumption_projection_pred.projection_ty,
+                )?;
+
+                let tcx = ecx.tcx();
+                let ty::Dynamic(bounds, _, _) = *goal.predicate.self_ty().kind() else {
+                    bug!("expected object type in `consider_object_bound_candidate`");
+                };
+                nested_goals.extend(
+                    structural_traits::predicates_for_object_candidate(
+                        ecx,
+                        goal.param_env,
+                        goal.predicate.projection_ty.trait_ref(tcx),
+                        bounds,
+                    )
+                    .into_iter()
+                    .map(|pred| goal.with(tcx, pred)),
+                );
+
                 let subst_certainty = ecx.evaluate_all(nested_goals)?;
 
                 ecx.eq_term_and_make_canonical_response(

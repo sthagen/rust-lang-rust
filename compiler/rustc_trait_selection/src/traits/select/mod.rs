@@ -151,7 +151,7 @@ struct TraitObligationStack<'prev, 'tcx> {
     /// you don't want to cache that `B: AutoTrait` or `A: AutoTrait`
     /// is `EvaluatedToOk`; this is because they were only considered
     /// ok on the premise that if `A: AutoTrait` held, but we indeed
-    /// encountered a problem (later on) with `A: AutoTrait. So we
+    /// encountered a problem (later on) with `A: AutoTrait`. So we
     /// currently set a flag on the stack node for `B: AutoTrait` (as
     /// well as the second instance of `A: AutoTrait`) to suppress
     /// caching.
@@ -727,7 +727,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                             // Otherwise, we can say that `T: NonAutoTrait` is
                             // true.
                             // Let's imagine we have a predicate stack like
-                            //         `Foo: Bar -> WF(T) -> T: NonAutoTrait -> T: Auto
+                            //         `Foo: Bar -> WF(T) -> T: NonAutoTrait -> T: Auto`
                             // depth   ^1                    ^2                 ^3
                             // and the current predicate is `WF(T)`. `wf_args`
                             // would contain `(T, 1)`. We want to check all
@@ -2230,7 +2230,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                     }
                 }
                 // (*) binder moved here
-                let all_vars = self.tcx().mk_bound_variable_kinds(
+                let all_vars = self.tcx().mk_bound_variable_kinds_from_iter(
                     obligation.predicate.bound_vars().iter().chain(binder.bound_vars().iter()),
                 );
                 Where(ty::Binder::bind_with_vars(witness_tys.to_vec(), all_vars))
@@ -2300,11 +2300,13 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             | ty::Float(_)
             | ty::FnDef(..)
             | ty::FnPtr(_)
-            | ty::Str
             | ty::Error(_)
             | ty::Infer(ty::IntVar(_) | ty::FloatVar(_))
             | ty::Never
             | ty::Char => ty::Binder::dummy(Vec::new()),
+
+            // Treat this like `struct str([u8]);`
+            ty::Str => ty::Binder::dummy(vec![self.tcx().mk_slice(self.tcx().types.u8)]),
 
             ty::Placeholder(..)
             | ty::Dynamic(..)
@@ -3034,7 +3036,7 @@ fn bind_generator_hidden_types_above<'tcx>(
     if considering_regions {
         debug_assert!(!hidden_types.has_erased_regions());
     }
-    let bound_vars = tcx.mk_bound_variable_kinds(bound_vars.iter().chain(
+    let bound_vars = tcx.mk_bound_variable_kinds_from_iter(bound_vars.iter().chain(
         (num_bound_variables..counter).map(|i| ty::BoundVariableKind::Region(ty::BrAnon(i, None))),
     ));
     ty::Binder::bind_with_vars(hidden_types, bound_vars)

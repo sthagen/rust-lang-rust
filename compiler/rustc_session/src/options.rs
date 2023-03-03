@@ -1489,6 +1489,8 @@ options! {
         "keep hygiene data after analysis (default: no)"),
     layout_seed: Option<u64> = (None, parse_opt_number, [TRACKED],
         "seed layout randomization"),
+    link_directives: bool = (true, parse_bool, [TRACKED],
+        "honor #[link] directives in the compiled crate (default: yes)"),
     link_native_libraries: bool = (true, parse_bool, [UNTRACKED],
         "link native libraries in the linker invocation (default: yes)"),
     link_only: bool = (false, parse_bool, [TRACKED],
@@ -1501,6 +1503,9 @@ options! {
         "what location details should be tracked when using caller_location, either \
         `none`, or a comma separated list of location details, for which \
         valid options are `file`, `line`, and `column` (default: `file,line,column`)"),
+    lower_impl_trait_in_trait_to_assoc_ty: bool = (false, parse_bool, [TRACKED],
+        "modify the lowering strategy for `impl Trait` in traits so that they are lowered to \
+        generic associated types"),
     ls: bool = (false, parse_bool, [UNTRACKED],
         "list the symbols defined by a library crate (default: no)"),
     macro_backtrace: bool = (false, parse_bool, [UNTRACKED],

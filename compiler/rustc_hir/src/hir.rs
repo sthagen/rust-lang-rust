@@ -369,10 +369,10 @@ impl<'hir> GenericArgs<'hir> {
 
     pub fn has_err(&self) -> bool {
         self.args.iter().any(|arg| match arg {
-            GenericArg::Type(ty) => matches!(ty.kind, TyKind::Err),
+            GenericArg::Type(ty) => matches!(ty.kind, TyKind::Err(_)),
             _ => false,
         }) || self.bindings.iter().any(|arg| match arg.kind {
-            TypeBindingKind::Equality { term: Term::Ty(ty) } => matches!(ty.kind, TyKind::Err),
+            TypeBindingKind::Equality { term: Term::Ty(ty) } => matches!(ty.kind, TyKind::Err(_)),
             _ => false,
         })
     }
@@ -498,6 +498,7 @@ pub struct GenericParam<'hir> {
     pub pure_wrt_drop: bool,
     pub kind: GenericParamKind<'hir>,
     pub colon_span: Option<Span>,
+    pub source: GenericParamSource,
 }
 
 impl<'hir> GenericParam<'hir> {
@@ -514,6 +515,20 @@ impl<'hir> GenericParam<'hir> {
     pub fn is_elided_lifetime(&self) -> bool {
         matches!(self.kind, GenericParamKind::Lifetime { kind: LifetimeParamKind::Elided })
     }
+}
+
+/// Records where the generic parameter originated from.
+///
+/// This can either be from an item's generics, in which case it's typically
+/// early-bound (but can be a late-bound lifetime in functions, for example),
+/// or from a `for<...>` binder, in which case it's late-bound (and notably,
+/// does not show up in the parent item's generics).
+#[derive(Debug, HashStable_Generic, PartialEq, Eq, Copy, Clone)]
+pub enum GenericParamSource {
+    // Early or late-bound parameters defined on an item
+    Generics,
+    // Late-bound parameters defined via a `for<...>`
+    Binder,
 }
 
 #[derive(Default)]
@@ -1688,7 +1703,7 @@ impl Expr<'_> {
             ExprKind::Struct(..) => ExprPrecedence::Struct,
             ExprKind::Repeat(..) => ExprPrecedence::Repeat,
             ExprKind::Yield(..) => ExprPrecedence::Yield,
-            ExprKind::Err => ExprPrecedence::Err,
+            ExprKind::Err(_) => ExprPrecedence::Err,
         }
     }
 
@@ -1754,7 +1769,7 @@ impl Expr<'_> {
             | ExprKind::Yield(..)
             | ExprKind::Cast(..)
             | ExprKind::DropTemps(..)
-            | ExprKind::Err => false,
+            | ExprKind::Err(_) => false,
         }
     }
 
@@ -1840,7 +1855,7 @@ impl Expr<'_> {
             | ExprKind::Binary(..)
             | ExprKind::Yield(..)
             | ExprKind::DropTemps(..)
-            | ExprKind::Err => true,
+            | ExprKind::Err(_) => true,
         }
     }
 
@@ -2013,7 +2028,7 @@ pub enum ExprKind<'hir> {
     Yield(&'hir Expr<'hir>, YieldSource),
 
     /// A placeholder for an expression that wasn't syntactically well formed in some way.
-    Err,
+    Err(rustc_span::ErrorGuaranteed),
 }
 
 /// Represents an optionally `Self`-qualified value/type path or associated extension.
@@ -2676,7 +2691,7 @@ pub enum TyKind<'hir> {
     /// specified. This can appear anywhere in a type.
     Infer,
     /// Placeholder for a type that has failed to be defined.
-    Err,
+    Err(rustc_span::ErrorGuaranteed),
 }
 
 #[derive(Debug, HashStable_Generic)]

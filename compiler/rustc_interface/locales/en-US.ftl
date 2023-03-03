@@ -11,10 +11,6 @@ interface_mixed_bin_crate =
 interface_mixed_proc_macro_crate =
     cannot mix `proc-macro` crate type with others
 
-interface_proc_macro_doc_without_arg =
-    Trying to document proc macro crate without passing '--crate-type proc-macro to rustdoc
-    .warn = The generated documentation may be incorrect
-
 interface_error_writing_dependencies =
     error writing dependencies to `{$path}`: {$error}
 
@@ -37,7 +33,7 @@ interface_rustc_error_fatal =
     fatal error triggered by #[rustc_error]
 
 interface_rustc_error_unexpected_annotation =
-    unexpected annotation used with `#[rustc_error(...)]!
+    unexpected annotation used with `#[rustc_error(...)]`!
 
 interface_failed_writing_file =
     failed to write file {$path}: {$error}"

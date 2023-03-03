@@ -50,7 +50,7 @@ impl<'tcx> InferCtxt<'tcx> {
 
     /// Like [Self::canonicalize_query], but preserves distinct universes. For
     /// example, canonicalizing `&'?0: Trait<'?1>`, where `'?0` is in `U1` and
-    /// `'?1` is in `U3` would be canonicalized to have ?0` in `U1` and `'?1`
+    /// `'?1` is in `U3` would be canonicalized to have `?0` in `U1` and `'?1`
     /// in `U2`.
     ///
     /// This is used for Chalk integration.
@@ -572,7 +572,7 @@ impl<'cx, 'tcx> Canonicalizer<'cx, 'tcx> {
         debug_assert!(!out_value.needs_infer() && !out_value.has_placeholders());
 
         let canonical_variables =
-            tcx.intern_canonical_var_infos(&canonicalizer.universe_canonicalized_variables());
+            tcx.mk_canonical_var_infos(&canonicalizer.universe_canonicalized_variables());
 
         let max_universe = canonical_variables
             .iter()

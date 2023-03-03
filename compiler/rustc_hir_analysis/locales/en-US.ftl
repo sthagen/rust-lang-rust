@@ -62,14 +62,6 @@ hir_analysis_manual_implementation =
 
 hir_analysis_substs_on_overridden_impl = could not resolve substs on overridden impl
 
-hir_analysis_unused_extern_crate =
-    unused extern crate
-    .suggestion = remove it
-
-hir_analysis_extern_crate_not_idiomatic =
-    `extern crate` is not idiomatic in the new edition
-    .suggestion = convert it to a `{$msg_code}`
-
 hir_analysis_trait_object_declared_with_no_traits =
     at least one trait is required for an object type
     .alias_span = this alias does not contain a trait
@@ -131,4 +123,35 @@ hir_analysis_where_clause_on_main = `main` function is not allowed to have a `wh
     .label = `main` cannot have a `where` clause
 
 hir_analysis_track_caller_on_main = `main` function is not allowed to be `#[track_caller]`
-    .label = `main` function is not allowed to be `#[track_caller]`
+    .suggestion = remove this annotation
+
+hir_analysis_start_not_track_caller = `start` is not allowed to be `#[track_caller]`
+    .label = `start` is not allowed to be `#[track_caller]`
+
+hir_analysis_start_not_async = `start` is not allowed to be `async`
+    .label = `start` is not allowed to be `async`
+
+hir_analysis_start_function_where = start function is not allowed to have a `where` clause
+    .label = start function cannot have a `where` clause
+
+hir_analysis_start_function_parameters = start function is not allowed to have type parameters
+    .label = start function cannot have type parameters
+
+hir_analysis_main_function_return_type_generic = `main` function return type is not allowed to have generic parameters
+
+hir_analysis_main_function_async = `main` function is not allowed to be `async`
+    .label = `main` function is not allowed to be `async`
+
+hir_analysis_main_function_generic_parameters = `main` function is not allowed to have generic parameters
+    .label = `main` cannot have generic parameters
+
+hir_analysis_variadic_function_compatible_convention = C-variadic function must have a compatible calling convention, like {$conventions}
+    .label = C-variadic function must have a compatible calling convention
+
+hir_analysis_cannot_capture_late_bound_ty_in_anon_const =
+    cannot capture late-bound type parameter in a constant
+    .label = parameter defined here
+
+hir_analysis_cannot_capture_late_bound_const_in_anon_const =
+    cannot capture late-bound const parameter in a constant
+    .label = parameter defined here

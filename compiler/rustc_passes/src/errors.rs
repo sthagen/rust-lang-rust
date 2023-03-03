@@ -641,8 +641,16 @@ pub struct MacroUse {
 }
 
 #[derive(LintDiagnostic)]
-#[diag(passes_macro_export)]
-pub struct MacroExport;
+pub enum MacroExport {
+    #[diag(passes_macro_export)]
+    Normal,
+
+    #[diag(passes_invalid_macro_export_arguments)]
+    UnknownItem { name: Symbol },
+
+    #[diag(passes_invalid_macro_export_arguments_too_many_items)]
+    TooManyItems,
+}
 
 #[derive(LintDiagnostic)]
 #[diag(passes_plugin_registrar)]
@@ -802,22 +810,16 @@ impl IntoDiagnostic<'_> for InvalidAttrAtCrateLevel {
 }
 
 #[derive(Diagnostic)]
-#[diag(passes_duplicate_diagnostic_item)]
-pub struct DuplicateDiagnosticItem {
-    #[primary_span]
-    pub span: Span,
-    pub name: Symbol,
-}
-
-#[derive(Diagnostic)]
 #[diag(passes_duplicate_diagnostic_item_in_crate)]
 pub struct DuplicateDiagnosticItemInCrate {
+    #[primary_span]
+    pub duplicate_span: Option<Span>,
     #[note(passes_diagnostic_item_first_defined)]
-    pub span: Option<Span>,
-    pub orig_crate_name: Symbol,
+    pub orig_span: Option<Span>,
     #[note]
-    pub have_orig_crate_name: Option<()>,
+    pub different_crates: Option<()>,
     pub crate_name: Symbol,
+    pub orig_crate_name: Symbol,
     pub name: Symbol,
 }
 

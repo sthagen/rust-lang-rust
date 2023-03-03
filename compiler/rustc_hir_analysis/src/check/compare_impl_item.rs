@@ -196,7 +196,7 @@ fn compare_method_predicate_entailment<'tcx>(
     // the new hybrid bounds we computed.
     let normalize_cause = traits::ObligationCause::misc(impl_m_span, impl_m_def_id);
     let param_env = ty::ParamEnv::new(
-        tcx.intern_predicates(&hybrid_preds.predicates),
+        tcx.mk_predicates(&hybrid_preds.predicates),
         Reveal::UserFacing,
         hir::Constness::NotConst,
     );
@@ -648,6 +648,13 @@ pub(super) fn collect_return_position_impl_trait_in_trait_tys<'tcx>(
             tcx.fn_sig(trait_m.def_id).subst(tcx, trait_to_placeholder_substs),
         )
         .fold_with(&mut collector);
+
+    debug_assert_ne!(
+        collector.types.len(),
+        0,
+        "expect >1 RPITITs in call to `collect_return_position_impl_trait_in_trait_tys`"
+    );
+
     let trait_sig = ocx.normalize(&norm_cause, param_env, unnormalized_trait_sig);
     trait_sig.error_reported()?;
     let trait_return_ty = trait_sig.output();
@@ -1795,7 +1802,7 @@ fn compare_type_predicate_entailment<'tcx>(
     let impl_ty_span = tcx.def_span(impl_ty_def_id);
     let normalize_cause = traits::ObligationCause::misc(impl_ty_span, impl_ty_def_id);
     let param_env = ty::ParamEnv::new(
-        tcx.intern_predicates(&hybrid_preds.predicates),
+        tcx.mk_predicates(&hybrid_preds.predicates),
         Reveal::UserFacing,
         hir::Constness::NotConst,
     );
@@ -1866,7 +1873,7 @@ pub(super) fn check_type_bounds<'tcx>(
     //     type Bar<C> =...
     // }
     //
-    // - `impl_trait_ref` would be `<(A, B) as Foo<u32>>
+    // - `impl_trait_ref` would be `<(A, B) as Foo<u32>>`
     // - `impl_ty_substs` would be `[A, B, ^0.0]` (`^0.0` here is the bound var with db 0 and index 0)
     // - `rebased_substs` would be `[(A, B), u32, ^0.0]`, combining the substs from
     //    the *trait* with the generic associated type parameters (as bound vars).
@@ -1937,8 +1944,8 @@ pub(super) fn check_type_bounds<'tcx>(
             .into()
         }
     });
-    let bound_vars = tcx.intern_bound_variable_kinds(&bound_vars);
-    let impl_ty_substs = tcx.intern_substs(&substs);
+    let bound_vars = tcx.mk_bound_variable_kinds(&bound_vars);
+    let impl_ty_substs = tcx.mk_substs(&substs);
     let container_id = impl_ty.container_id(tcx);
 
     let rebased_substs = impl_ty_substs.rebase_onto(tcx, container_id, impl_trait_ref.substs);
@@ -1978,11 +1985,7 @@ pub(super) fn check_type_bounds<'tcx>(
                 .to_predicate(tcx),
             ),
         };
-        ty::ParamEnv::new(
-            tcx.intern_predicates(&predicates),
-            Reveal::UserFacing,
-            param_env.constness(),
-        )
+        ty::ParamEnv::new(tcx.mk_predicates(&predicates), Reveal::UserFacing, param_env.constness())
     };
     debug!(?normalize_param_env);
 
