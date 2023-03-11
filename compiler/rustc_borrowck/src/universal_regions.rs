@@ -22,9 +22,7 @@ use rustc_hir::BodyOwnerKind;
 use rustc_index::vec::{Idx, IndexVec};
 use rustc_infer::infer::NllRegionVariableOrigin;
 use rustc_middle::ty::fold::TypeFoldable;
-use rustc_middle::ty::{
-    self, DefIdTree, InlineConstSubsts, InlineConstSubstsParts, RegionVid, Ty, TyCtxt,
-};
+use rustc_middle::ty::{self, InlineConstSubsts, InlineConstSubstsParts, RegionVid, Ty, TyCtxt};
 use rustc_middle::ty::{InternalSubsts, SubstsRef};
 use rustc_span::Symbol;
 use std::iter;
@@ -314,6 +312,9 @@ impl<'tcx> UniversalRegions<'tcx> {
     }
 
     /// Gets an iterator over all the early-bound regions that have names.
+    /// Iteration order may be unstable, so this should only be used when
+    /// iteration order doesn't affect anything
+    #[allow(rustc::potential_query_instability)]
     pub fn named_universal_regions<'s>(
         &'s self,
     ) -> impl Iterator<Item = (ty::Region<'tcx>, ty::RegionVid)> + 's {

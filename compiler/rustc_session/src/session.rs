@@ -11,7 +11,7 @@ use crate::{filesearch, lint};
 pub use rustc_ast::attr::MarkedAttrs;
 pub use rustc_ast::Attribute;
 use rustc_data_structures::flock;
-use rustc_data_structures::fx::{FxHashMap, FxHashSet};
+use rustc_data_structures::fx::{FxHashMap, FxIndexSet};
 use rustc_data_structures::jobserver::{self, Client};
 use rustc_data_structures::profiling::{duration_to_secs_str, SelfProfiler, SelfProfilerRef};
 use rustc_data_structures::sync::{
@@ -207,10 +207,10 @@ pub struct Session {
     pub asm_arch: Option<InlineAsmArch>,
 
     /// Set of enabled features for the current target.
-    pub target_features: FxHashSet<Symbol>,
+    pub target_features: FxIndexSet<Symbol>,
 
     /// Set of enabled features for the current target, including unstable ones.
-    pub unstable_target_features: FxHashSet<Symbol>,
+    pub unstable_target_features: FxIndexSet<Symbol>,
 }
 
 pub struct PerfStats {
@@ -882,10 +882,14 @@ impl Session {
 
     /// We want to know if we're allowed to do an optimization for crate foo from -z fuel=foo=n.
     /// This expends fuel if applicable, and records fuel if applicable.
-    pub fn consider_optimizing<T: Fn() -> String>(&self, crate_name: &str, msg: T) -> bool {
+    pub fn consider_optimizing(
+        &self,
+        get_crate_name: impl Fn() -> Symbol,
+        msg: impl Fn() -> String,
+    ) -> bool {
         let mut ret = true;
         if let Some((ref c, _)) = self.opts.unstable_opts.fuel {
-            if c == crate_name {
+            if c == get_crate_name().as_str() {
                 assert_eq!(self.threads(), 1);
                 let mut fuel = self.optimization_fuel.lock();
                 ret = fuel.remaining != 0;
@@ -903,7 +907,7 @@ impl Session {
             }
         }
         if let Some(ref c) = self.opts.unstable_opts.print_fuel {
-            if c == crate_name {
+            if c == get_crate_name().as_str() {
                 assert_eq!(self.threads(), 1);
                 self.print_fuel.fetch_add(1, SeqCst);
             }
@@ -1484,8 +1488,8 @@ pub fn build_session(
         ctfe_backtrace,
         miri_unleashed_features: Lock::new(Default::default()),
         asm_arch,
-        target_features: FxHashSet::default(),
-        unstable_target_features: FxHashSet::default(),
+        target_features: Default::default(),
+        unstable_target_features: Default::default(),
     };
 
     validate_commandline_args_with_session_available(&sess);

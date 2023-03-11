@@ -42,7 +42,7 @@
 //! another function. The `dialect` and `phase` parameters indicate which [version of MIR][dialect
 //! docs] you are inserting here. Generally you'll want to use `#![custom_mir(dialect = "built")]`
 //! if you want your MIR to be modified by the full MIR pipeline, or `#![custom_mir(dialect =
-//! "runtime", phase = "optimized")] if you don't.
+//! "runtime", phase = "optimized")]` if you don't.
 //!
 //! [dialect docs]:
 //!     https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/mir/enum.MirPhase.html
@@ -227,7 +227,7 @@
 //! are no resume and abort terminators, and terminators that might unwind do not have any way to
 //! indicate the unwind block.
 //!
-//!  - [`Goto`], [`Return`], [`Unreachable`], [`Drop`](Drop()), and [`DropAndReplace`] have associated functions.
+//!  - [`Goto`], [`Return`], [`Unreachable`] and [`Drop`](Drop()) have associated functions.
 //!  - `match some_int_operand` becomes a `SwitchInt`. Each arm should be `literal => basic_block`
 //!     - The exception is the last arm, which must be `_ => basic_block` and corresponds to the
 //!       otherwise branch.
@@ -259,7 +259,6 @@ define!("mir_return", fn Return() -> BasicBlock);
 define!("mir_goto", fn Goto(destination: BasicBlock) -> BasicBlock);
 define!("mir_unreachable", fn Unreachable() -> BasicBlock);
 define!("mir_drop", fn Drop<T>(place: T, goto: BasicBlock));
-define!("mir_drop_and_replace", fn DropAndReplace<T>(place: T, value: T, goto: BasicBlock));
 define!("mir_call", fn Call<T>(place: T, goto: BasicBlock, call: T));
 define!("mir_storage_live", fn StorageLive<T>(local: T));
 define!("mir_storage_dead", fn StorageDead<T>(local: T));

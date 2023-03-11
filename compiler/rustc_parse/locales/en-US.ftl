@@ -412,8 +412,7 @@ parse_fn_ptr_with_generics = function pointer types may not have generic paramet
         *[false] a
     } `for` parameter list
 
-parse_invalid_identifier_with_leading_number = expected identifier, found number literal
-    .label = identifiers cannot start with a number
+parse_invalid_identifier_with_leading_number = identifiers cannot start with a number
 
 parse_maybe_fn_typo_with_impl = you might have meant to write `impl` instead of `fn`
     .suggestion = replace `fn` with `impl` here
@@ -710,7 +709,7 @@ parse_zero_chars = empty character literal
 parse_lone_slash = invalid trailing slash in literal
     .label = {parse_lone_slash}
 
-parse_unskipped_whitespace = non-ASCII whitespace symbol '{$ch}' is not skipped
+parse_unskipped_whitespace = whitespace symbol '{$ch}' is not skipped
     .label = {parse_unskipped_whitespace}
 
 parse_multiple_skipped_lines = multiple lines skipped by escaped newline

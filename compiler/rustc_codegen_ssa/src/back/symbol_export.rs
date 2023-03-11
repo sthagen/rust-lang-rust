@@ -1,3 +1,5 @@
+use crate::base::allocator_kind_for_codegen;
+
 use std::collections::hash_map::Entry::*;
 
 use rustc_ast::expand::allocator::ALLOCATOR_METHODS;
@@ -11,7 +13,7 @@ use rustc_middle::middle::exported_symbols::{
 use rustc_middle::ty::query::{ExternProviders, Providers};
 use rustc_middle::ty::subst::{GenericArgKind, SubstsRef};
 use rustc_middle::ty::Instance;
-use rustc_middle::ty::{self, DefIdTree, SymbolName, TyCtxt};
+use rustc_middle::ty::{self, SymbolName, TyCtxt};
 use rustc_session::config::{CrateType, OomStrategy};
 use rustc_target::spec::SanitizerSet;
 
@@ -58,7 +60,7 @@ fn reachable_non_generics_provider(tcx: TyCtxt<'_>, cnum: CrateNum) -> DefIdMap<
 
     let mut reachable_non_generics: DefIdMap<_> = tcx
         .reachable_set(())
-        .iter()
+        .items()
         .filter_map(|&def_id| {
             // We want to ignore some FFI functions that are not exposed from
             // this crate. Reachable FFI functions can be lumped into two
@@ -136,7 +138,7 @@ fn reachable_non_generics_provider(tcx: TyCtxt<'_>, cnum: CrateNum) -> DefIdMap<
             };
             (def_id.to_def_id(), info)
         })
-        .collect();
+        .into();
 
     if let Some(id) = tcx.proc_macro_decls_static(()) {
         reachable_non_generics.insert(
@@ -200,7 +202,8 @@ fn exported_symbols_provider_local(
         ));
     }
 
-    if tcx.allocator_kind(()).is_some() {
+    // Mark allocator shim symbols as exported only if they were generated.
+    if allocator_kind_for_codegen(tcx).is_some() {
         for symbol_name in ALLOCATOR_METHODS
             .iter()
             .map(|method| format!("__rust_{}", method.name))

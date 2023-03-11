@@ -2,6 +2,7 @@
 //! up data structures required by type-checking/codegen.
 
 use crate::errors::{CopyImplOnNonAdt, CopyImplOnTypeWithDtor, DropImplOnWrongItem};
+use rustc_data_structures::fx::FxHashSet;
 use rustc_errors::{struct_span_err, MultiSpan};
 use rustc_hir as hir;
 use rustc_hir::def_id::{DefId, LocalDefId};
@@ -86,7 +87,7 @@ fn visit_implementation_of_copy(tcx: TyCtxt<'_>, impl_did: LocalDefId) {
                 tcx.sess,
                 span,
                 E0204,
-                "the trait `Copy` may not be implemented for this type"
+                "the trait `Copy` cannot be implemented for this type"
             );
 
             // We'll try to suggest constraining type parameters to fulfill the requirements of
@@ -94,7 +95,14 @@ fn visit_implementation_of_copy(tcx: TyCtxt<'_>, impl_did: LocalDefId) {
             let mut errors: BTreeMap<_, Vec<_>> = Default::default();
             let mut bounds = vec![];
 
+            let mut seen_tys = FxHashSet::default();
+
             for (field, ty, reason) in fields {
+                // Only report an error once per type.
+                if !seen_tys.insert(ty) {
+                    continue;
+                }
+
                 let field_span = tcx.def_span(field.did);
                 err.span_label(field_span, "this field does not implement `Copy`");
 
@@ -337,7 +345,7 @@ fn visit_implementation_of_dispatch_from_dyn(tcx: TyCtxt<'_>, impl_did: LocalDef
                     }),
                 );
                 if !errors.is_empty() {
-                    infcx.err_ctxt().report_fulfillment_errors(&errors, None);
+                    infcx.err_ctxt().report_fulfillment_errors(&errors);
                 }
 
                 // Finally, resolve all regions.
@@ -577,7 +585,7 @@ pub fn coerce_unsized_info<'tcx>(tcx: TyCtxt<'tcx>, impl_did: DefId) -> CoerceUn
         predicate_for_trait_def(tcx, param_env, cause, trait_def_id, 0, [source, target]);
     let errors = traits::fully_solve_obligation(&infcx, predicate);
     if !errors.is_empty() {
-        infcx.err_ctxt().report_fulfillment_errors(&errors, None);
+        infcx.err_ctxt().report_fulfillment_errors(&errors);
     }
 
     // Finally, resolve all regions.

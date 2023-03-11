@@ -1210,8 +1210,13 @@ impl<'a> Parser<'a> {
                         // `Enum::Foo { a: 3, b: 4 }` or `Enum::Foo(3, 4)`.
                         self.restore_snapshot(snapshot);
                         let close_paren = self.prev_token.span;
-                        let span = lo.to(self.prev_token.span);
-                        if !fields.is_empty() {
+                        let span = lo.to(close_paren);
+                        if !fields.is_empty() &&
+                            // `token.kind` should not be compared here.
+                            // This is because the `snapshot.token.kind` is treated as the same as
+                            // that of the open delim in `TokenTreesReader::parse_token_tree`, even if they are different.
+                            self.span_to_snippet(close_paren).map_or(false, |snippet| snippet == ")")
+                        {
                             let mut replacement_err = errors::ParenthesesWithStructFields {
                                 span,
                                 r#type: path,
@@ -1389,19 +1394,6 @@ impl<'a> Parser<'a> {
             self.parse_expr_let()
         } else if self.eat_keyword(kw::Underscore) {
             Ok(self.mk_expr(self.prev_token.span, ExprKind::Underscore))
-        } else if !self.unclosed_delims.is_empty() && self.check(&token::Semi) {
-            // Don't complain about bare semicolons after unclosed braces
-            // recovery in order to keep the error count down. Fixing the
-            // delimiters will possibly also fix the bare semicolon found in
-            // expression context. For example, silence the following error:
-            //
-            //     error: expected expression, found `;`
-            //      --> file.rs:2:13
-            //       |
-            //     2 |     foo(bar(;
-            //       |             ^ expected expression
-            self.bump();
-            Ok(self.mk_expr_err(self.token.span))
         } else if self.token.uninterpolated_span().rust_2018() {
             // `Span::rust_2018()` is somewhat expensive; don't get it repeatedly.
             if self.check_keyword(kw::Async) {

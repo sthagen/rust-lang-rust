@@ -556,6 +556,12 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
 
             _ => {
                 let place_builder = unpack!(block = self.as_place_builder(block, initializer));
+
+                if let Some(place) = place_builder.try_to_place(self) {
+                    let source_info = self.source_info(initializer.span);
+                    self.cfg.push_place_mention(block, source_info, place);
+                }
+
                 self.place_into_pattern(block, &irrefutable_pat, place_builder, true)
             }
         }
@@ -576,13 +582,14 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             false,
             &mut [&mut candidate],
         );
+
         // For matches and function arguments, the place that is being matched
         // can be set when creating the variables. But the place for
         // let PATTERN = ... might not even exist until we do the assignment.
         // so we set it here instead.
         if set_match_place {
-            let mut candidate_ref = &candidate;
-            while let Some(next) = {
+            let mut next = Some(&candidate);
+            while let Some(candidate_ref) = next.take() {
                 for binding in &candidate_ref.bindings {
                     let local = self.var_local_id(binding.var_id, OutsideGuard);
                     // `try_to_place` may fail if it is unable to resolve the given
@@ -610,9 +617,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 }
                 // All of the subcandidates should bind the same locals, so we
                 // only visit the first one.
-                candidate_ref.subcandidates.get(0)
-            } {
-                candidate_ref = next;
+                next = candidate_ref.subcandidates.get(0)
             }
         }
 

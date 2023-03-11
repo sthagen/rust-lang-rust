@@ -13,7 +13,7 @@ use rustc_middle::mir::{
     Place, PlaceRef, ProjectionElem, Rvalue, Statement, StatementKind, Terminator, TerminatorKind,
 };
 use rustc_middle::ty::print::Print;
-use rustc_middle::ty::{self, DefIdTree, Instance, Ty, TyCtxt};
+use rustc_middle::ty::{self, Instance, Ty, TyCtxt};
 use rustc_mir_dataflow::move_paths::{InitLocation, LookupResult};
 use rustc_span::def_id::LocalDefId;
 use rustc_span::{symbol::sym, Span, Symbol, DUMMY_SP};
@@ -925,7 +925,20 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
             return OtherUse(use_span);
         }
 
-        for stmt in &self.body[location.block].statements[location.statement_index + 1..] {
+        // drop and replace might have moved the assignment to the next block
+        let maybe_additional_statement =
+            if let TerminatorKind::Drop { target: drop_target, .. } =
+                self.body[location.block].terminator().kind
+            {
+                self.body[drop_target].statements.first()
+            } else {
+                None
+            };
+
+        let statements =
+            self.body[location.block].statements[location.statement_index + 1..].iter();
+
+        for stmt in statements.chain(maybe_additional_statement) {
             if let StatementKind::Assign(box (_, Rvalue::Aggregate(kind, places))) = &stmt.kind {
                 let (&def_id, is_generator) = match kind {
                     box AggregateKind::Closure(def_id, _) => (def_id, false),

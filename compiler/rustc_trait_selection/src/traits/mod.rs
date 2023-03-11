@@ -28,7 +28,7 @@ use crate::traits::query::evaluate_obligation::InferCtxtExt as _;
 use rustc_errors::ErrorGuaranteed;
 use rustc_middle::ty::fold::TypeFoldable;
 use rustc_middle::ty::visit::{TypeVisitable, TypeVisitableExt};
-use rustc_middle::ty::{self, DefIdTree, ToPredicate, Ty, TyCtxt, TypeSuperVisitable};
+use rustc_middle::ty::{self, ToPredicate, Ty, TyCtxt, TypeSuperVisitable};
 use rustc_middle::ty::{InternalSubsts, SubstsRef};
 use rustc_span::def_id::{DefId, CRATE_DEF_ID};
 use rustc_span::Span;
@@ -155,10 +155,12 @@ fn pred_known_to_hold_modulo_regions<'tcx>(
         predicate: pred.to_predicate(infcx.tcx),
     };
 
-    let result = infcx.predicate_must_hold_modulo_regions(&obligation);
+    let result = infcx.evaluate_obligation_no_overflow(&obligation);
     debug!(?result);
 
-    if result && has_non_region_infer {
+    if result.must_apply_modulo_regions() && !has_non_region_infer {
+        true
+    } else if result.may_apply() {
         // Because of inference "guessing", selection can sometimes claim
         // to succeed while the success requires a guess. To ensure
         // this function's result remains infallible, we must confirm
@@ -179,7 +181,7 @@ fn pred_known_to_hold_modulo_regions<'tcx>(
             }
         }
     } else {
-        result
+        false
     }
 }
 
@@ -208,7 +210,7 @@ fn do_normalize_predicates<'tcx>(
     let predicates = match fully_normalize(&infcx, cause, elaborated_env, predicates) {
         Ok(predicates) => predicates,
         Err(errors) => {
-            let reported = infcx.err_ctxt().report_fulfillment_errors(&errors, None);
+            let reported = infcx.err_ctxt().report_fulfillment_errors(&errors);
             return Err(reported);
         }
     };

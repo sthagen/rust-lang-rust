@@ -711,6 +711,7 @@ impl<'a> Builder<'a> {
                 test::RustdocUi,
                 test::RustdocJson,
                 test::HtmlCheck,
+                test::RustInstaller,
                 // Run bootstrap close to the end as it's unlikely to fail
                 test::Bootstrap,
                 // Run run-make last, since these won't pass without make on Windows
@@ -910,14 +911,16 @@ impl<'a> Builder<'a> {
     /// new artifacts, it can't be used to rely on the presence of a particular
     /// sysroot.
     ///
-    /// See `force_use_stage1` for documentation on what each argument is.
+    /// See `force_use_stage1` and `force_use_stage2` for documentation on what each argument is.
     pub fn compiler_for(
         &self,
         stage: u32,
         host: TargetSelection,
         target: TargetSelection,
     ) -> Compiler {
-        if self.build.force_use_stage1(Compiler { stage, host }, target) {
+        if self.build.force_use_stage2() {
+            self.compiler(2, self.config.build)
+        } else if self.build.force_use_stage1(Compiler { stage, host }, target) {
             self.compiler(1, self.config.build)
         } else {
             self.compiler(stage, host)
@@ -1717,6 +1720,15 @@ impl<'a> Builder<'a> {
         }
 
         cargo.env("RUSTC_VERBOSE", self.verbosity.to_string());
+
+        // Downstream forks of the Rust compiler might want to use a custom libc to add support for
+        // targets that are not yet available upstream. Adding a patch to replace libc with a
+        // custom one would cause compilation errors though, because Cargo would interpret the
+        // custom libc as part of the workspace, and apply the check-cfg lints on it.
+        //
+        // The libc build script emits check-cfg flags only when this environment variable is set,
+        // so this line allows the use of custom libcs.
+        cargo.env("LIBC_CHECK_CFG", "1");
 
         if source_type == SourceType::InTree {
             let mut lint_flags = Vec::new();

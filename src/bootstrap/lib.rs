@@ -482,12 +482,7 @@ impl Build {
 
             // Make sure we update these before gathering metadata so we don't get an error about missing
             // Cargo.toml files.
-            let rust_submodules = [
-                "src/tools/rust-installer",
-                "src/tools/cargo",
-                "library/backtrace",
-                "library/stdarch",
-            ];
+            let rust_submodules = ["src/tools/cargo", "library/backtrace", "library/stdarch"];
             for s in rust_submodules {
                 build.update_submodule(Path::new(s));
             }
@@ -1207,6 +1202,15 @@ impl Build {
         !self.config.full_bootstrap
             && compiler.stage >= 2
             && (self.hosts.iter().any(|h| *h == target) || target == self.build)
+    }
+
+    /// Checks whether the `compiler` compiling for `target` should be forced to
+    /// use a stage2 compiler instead.
+    ///
+    /// When we download the pre-compiled version of rustc it should be forced to
+    /// use a stage2 compiler.
+    fn force_use_stage2(&self) -> bool {
+        self.config.download_rustc()
     }
 
     /// Given `num` in the form "a.b.c" return a "release string" which

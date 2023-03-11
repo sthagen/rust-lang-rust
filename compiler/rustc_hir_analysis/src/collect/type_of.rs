@@ -9,7 +9,7 @@ use rustc_middle::ty::print::with_forced_trimmed_paths;
 use rustc_middle::ty::subst::InternalSubsts;
 use rustc_middle::ty::util::IntTypeExt;
 use rustc_middle::ty::{
-    self, DefIdTree, IsSuggestable, Ty, TyCtxt, TypeFolder, TypeSuperFoldable, TypeVisitableExt,
+    self, IsSuggestable, Ty, TyCtxt, TypeFolder, TypeSuperFoldable, TypeVisitableExt,
 };
 use rustc_span::symbol::Ident;
 use rustc_span::{Span, DUMMY_SP};
@@ -344,8 +344,8 @@ pub(super) fn type_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::EarlyBinder<Ty<'_>>
                     in_trait,
                     ..
                 }) => {
-                    if in_trait {
-                        assert!(tcx.impl_defaultness(owner).has_value());
+                    if in_trait && !tcx.impl_defaultness(owner).has_value() {
+                        span_bug!(tcx.def_span(def_id), "tried to get type of this RPITIT with no definition");
                     }
                     find_opaque_ty_constraints_for_rpit(tcx, def_id, owner)
                 }

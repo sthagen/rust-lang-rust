@@ -1,7 +1,7 @@
 use either::Either;
 use rustc_const_eval::util::CallKind;
 use rustc_data_structures::captures::Captures;
-use rustc_data_structures::fx::FxHashSet;
+use rustc_data_structures::fx::FxIndexSet;
 use rustc_errors::{
     struct_span_err, Applicability, Diagnostic, DiagnosticBuilder, ErrorGuaranteed, MultiSpan,
 };
@@ -173,7 +173,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
 
             let mut is_loop_move = false;
             let mut in_pattern = false;
-            let mut seen_spans = FxHashSet::default();
+            let mut seen_spans = FxIndexSet::default();
 
             for move_site in &move_site_vec {
                 let move_out = self.move_data.moves[(*move_site).moi];
@@ -1467,6 +1467,32 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
 
     /// Reports StorageDeadOrDrop of `place` conflicts with `borrow`.
     ///
+    /// Depending on the origin of the StorageDeadOrDrop, this may be
+    /// reported as either a drop or an illegal mutation of a borrowed value.
+    /// The latter is preferred when the this is a drop triggered by a
+    /// reassignment, as it's more user friendly to report a problem with the
+    /// explicit assignment than the implicit drop.
+    #[instrument(level = "debug", skip(self))]
+    pub(crate) fn report_storage_dead_or_drop_of_borrowed(
+        &mut self,
+        location: Location,
+        place_span: (Place<'tcx>, Span),
+        borrow: &BorrowData<'tcx>,
+    ) {
+        // It's sufficient to check the last desugaring as Replace is the last
+        // one to be applied.
+        if let Some(DesugaringKind::Replace) = place_span.1.desugaring_kind() {
+            self.report_illegal_mutation_of_borrowed(location, place_span, borrow)
+        } else {
+            self.report_borrowed_value_does_not_live_long_enough(
+                location,
+                borrow,
+                place_span,
+                Some(WriteKind::StorageDeadOrDrop),
+            )
+        }
+    }
+
     /// This means that some data referenced by `borrow` needs to live
     /// past the point where the StorageDeadOrDrop of `place` occurs.
     /// This is usually interpreted as meaning that `place` has too
@@ -2197,8 +2223,8 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
             }
         }
 
-        let mut visited = FxHashSet::default();
-        let mut move_locations = FxHashSet::default();
+        let mut visited = FxIndexSet::default();
+        let mut move_locations = FxIndexSet::default();
         let mut reinits = vec![];
         let mut result = vec![];
 
@@ -2325,7 +2351,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         let reinits_reachable = reinits
             .into_iter()
             .filter(|reinit| {
-                let mut visited = FxHashSet::default();
+                let mut visited = FxIndexSet::default();
                 let mut stack = vec![*reinit];
                 while let Some(location) = stack.pop() {
                     if !visited.insert(location) {
