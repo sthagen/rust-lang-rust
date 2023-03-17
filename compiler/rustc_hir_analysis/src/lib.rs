@@ -102,7 +102,7 @@ use rustc_errors::ErrorGuaranteed;
 use rustc_errors::{DiagnosticMessage, SubdiagnosticMessage};
 use rustc_hir as hir;
 use rustc_hir::Node;
-use rustc_infer::infer::{InferOk, TyCtxtInferExt};
+use rustc_infer::infer::{DefineOpaqueTypes, InferOk, TyCtxtInferExt};
 use rustc_macros::fluent_messages;
 use rustc_middle::middle;
 use rustc_middle::ty::query::Providers;
@@ -120,7 +120,7 @@ use std::ops::Not;
 use astconv::AstConv;
 use bounds::Bounds;
 
-fluent_messages! { "../locales/en-US.ftl" }
+fluent_messages! { "../messages.ftl" }
 
 fn require_c_abi_if_c_variadic(tcx: TyCtxt<'_>, decl: &hir::FnDecl<'_>, abi: Abi, span: Span) {
     const CONVENTIONS_UNSTABLE: &str = "`C`, `cdecl`, `win64`, `sysv64` or `efiapi`";
@@ -165,7 +165,7 @@ fn require_same_types<'tcx>(
 ) -> bool {
     let infcx = &tcx.infer_ctxt().build();
     let param_env = ty::ParamEnv::empty();
-    let errors = match infcx.at(cause, param_env).eq(expected, actual) {
+    let errors = match infcx.at(cause, param_env).eq(DefineOpaqueTypes::No, expected, actual) {
         Ok(InferOk { obligations, .. }) => traits::fully_solve_obligations(infcx, obligations),
         Err(err) => {
             infcx.err_ctxt().report_mismatched_types(cause, expected, actual, err).emit();
@@ -283,6 +283,15 @@ fn check_main_fn_ty(tcx: TyCtxt<'_>, main_def_id: DefId) {
         error = true;
     }
 
+    if !tcx.codegen_fn_attrs(main_def_id).target_features.is_empty()
+        // Calling functions with `#[target_feature]` is not unsafe on WASM, see #84988
+        && !tcx.sess.target.is_like_wasm
+        && !tcx.sess.opts.actually_rustdoc
+    {
+        tcx.sess.emit_err(errors::TargetFeatureOnMain { main: main_span });
+        error = true;
+    }
+
     if error {
         return;
     }
@@ -368,6 +377,18 @@ fn check_start_fn_ty(tcx: TyCtxt<'_>, start_def_id: DefId) {
                     for attr in attrs {
                         if attr.has_name(sym::track_caller) {
                             tcx.sess.emit_err(errors::StartTrackCaller {
+                                span: attr.span,
+                                start: start_span,
+                            });
+                            error = true;
+                        }
+                        if attr.has_name(sym::target_feature)
+                            // Calling functions with `#[target_feature]` is
+                            // not unsafe on WASM, see #84988
+                            && !tcx.sess.target.is_like_wasm
+                            && !tcx.sess.opts.actually_rustdoc
+                        {
+                            tcx.sess.emit_err(errors::StartTargetFeature {
                                 span: attr.span,
                                 start: start_span,
                             });

@@ -26,7 +26,7 @@ use rustc_middle::middle::exported_symbols::{
 use rustc_middle::mir::interpret;
 use rustc_middle::traits::specialization_graph;
 use rustc_middle::ty::codec::TyEncoder;
-use rustc_middle::ty::fast_reject::{self, SimplifiedType, TreatParams};
+use rustc_middle::ty::fast_reject::{self, SimplifiedType, TreatParams, TreatProjections};
 use rustc_middle::ty::query::Providers;
 use rustc_middle::ty::{self, SymbolName, Ty, TyCtxt};
 use rustc_middle::util::common::to_readable_str;
@@ -1104,7 +1104,7 @@ fn should_encode_const(def_kind: DefKind) -> bool {
 // We only encode impl trait in trait when using `lower-impl-trait-in-trait-to-assoc-ty` unstable
 // option.
 fn should_encode_fn_impl_trait_in_trait<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> bool {
-    if tcx.sess.opts.unstable_opts.lower_impl_trait_in_trait_to_assoc_ty
+    if tcx.lower_impl_trait_in_trait_to_assoc_ty()
         && let Some(assoc_item) = tcx.opt_associated_item(def_id)
         && assoc_item.container == ty::AssocItemContainer::TraitContainer
         && assoc_item.kind == ty::AssocKind::Fn
@@ -1350,19 +1350,24 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         if trait_item.kind == ty::AssocKind::Fn {
             record!(self.tables.fn_sig[def_id] <- tcx.fn_sig(def_id));
         }
+        if let Some(rpitit_info) = trait_item.opt_rpitit_info {
+            let rpitit_info = self.lazy(rpitit_info);
+            self.tables.opt_rpitit_info.set_some(def_id.index, rpitit_info);
+        }
     }
 
     fn encode_info_for_impl_item(&mut self, def_id: DefId) {
         debug!("EncodeContext::encode_info_for_impl_item({:?})", def_id);
         let tcx = self.tcx;
 
-        let ast_item = self.tcx.hir().expect_impl_item(def_id.expect_local());
-        self.tables.impl_defaultness.set_some(def_id.index, ast_item.defaultness);
+        let defaultness = self.tcx.impl_defaultness(def_id.expect_local());
+        self.tables.impl_defaultness.set_some(def_id.index, defaultness);
         let impl_item = self.tcx.associated_item(def_id);
         self.tables.assoc_container.set_some(def_id.index, impl_item.container);
 
         match impl_item.kind {
             ty::AssocKind::Fn => {
+                let ast_item = self.tcx.hir().expect_impl_item(def_id.expect_local());
                 let hir::ImplItemKind::Fn(ref sig, body) = ast_item.kind else { bug!() };
                 self.tables.asyncness.set_some(def_id.index, sig.header.asyncness);
                 record_array!(self.tables.fn_arg_names[def_id] <- self.tcx.hir().body_param_names(body));
@@ -1382,6 +1387,10 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         if impl_item.kind == ty::AssocKind::Fn {
             record!(self.tables.fn_sig[def_id] <- tcx.fn_sig(def_id));
             self.tables.is_intrinsic.set(def_id.index, tcx.is_intrinsic(def_id));
+        }
+        if let Some(rpitit_info) = impl_item.opt_rpitit_info {
+            let rpitit_info = self.lazy(rpitit_info);
+            self.tables.opt_rpitit_info.set_some(def_id.index, rpitit_info);
         }
     }
 
@@ -1858,7 +1867,8 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                     let simplified_self_ty = fast_reject::simplify_type(
                         self.tcx,
                         trait_ref.self_ty(),
-                        TreatParams::AsInfer,
+                        TreatParams::AsCandidateKey,
+                        TreatProjections::AsCandidateKey,
                     );
 
                     fx_hash_map
@@ -2050,13 +2060,13 @@ fn prefetch_mir(tcx: TyCtxt<'_>) {
         let (encode_const, encode_opt) = should_encode_mir(tcx, def_id);
 
         if encode_const {
-            tcx.ensure().mir_for_ctfe(def_id);
+            tcx.ensure_with_value().mir_for_ctfe(def_id);
         }
         if encode_opt {
-            tcx.ensure().optimized_mir(def_id);
+            tcx.ensure_with_value().optimized_mir(def_id);
         }
         if encode_opt || encode_const {
-            tcx.ensure().promoted_mir(def_id);
+            tcx.ensure_with_value().promoted_mir(def_id);
         }
     })
 }

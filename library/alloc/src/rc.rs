@@ -681,6 +681,24 @@ impl<T> Rc<T> {
             Err(this)
         }
     }
+
+    /// Returns the inner value, if the `Rc` has exactly one strong reference.
+    ///
+    /// Otherwise, [`None`] is returned and the `Rc` is dropped.
+    ///
+    /// This will succeed even if there are outstanding weak references.
+    ///
+    /// If `Rc::into_inner` is called on every clone of this `Rc`,
+    /// it is guaranteed that exactly one of the calls returns the inner value.
+    /// This means in particular that the inner value is not dropped.
+    ///
+    /// This is equivalent to `Rc::try_unwrap(...).ok()`. (Note that these are not equivalent for
+    /// `Arc`, due to race conditions that do not apply to `Rc`.)
+    #[inline]
+    #[unstable(feature = "rc_into_inner", issue = "106894")]
+    pub fn into_inner(this: Self) -> Option<T> {
+        Rc::try_unwrap(this).ok()
+    }
 }
 
 impl<T> Rc<[T]> {
@@ -1720,11 +1738,11 @@ impl<T: ?Sized + PartialEq> PartialEq for Rc<T> {
 
     /// Inequality for two `Rc`s.
     ///
-    /// Two `Rc`s are unequal if their inner values are unequal.
+    /// Two `Rc`s are not equal if their inner values are not equal.
     ///
     /// If `T` also implements `Eq` (implying reflexivity of equality),
     /// two `Rc`s that point to the same allocation are
-    /// never unequal.
+    /// always equal.
     ///
     /// # Examples
     ///

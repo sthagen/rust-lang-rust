@@ -38,6 +38,7 @@ use rustc_data_structures::stack::ensure_sufficient_stack;
 use rustc_errors::Diagnostic;
 use rustc_hir as hir;
 use rustc_hir::def_id::DefId;
+use rustc_infer::infer::DefineOpaqueTypes;
 use rustc_infer::infer::LateBoundRegionConversionTime;
 use rustc_infer::traits::TraitEngine;
 use rustc_infer::traits::TraitEngineExt;
@@ -50,7 +51,6 @@ use rustc_middle::ty::relate::TypeRelation;
 use rustc_middle::ty::SubstsRef;
 use rustc_middle::ty::{self, EarlyBinder, PolyProjectionPredicate, ToPolyTraitRef, ToPredicate};
 use rustc_middle::ty::{Ty, TyCtxt, TypeFoldable, TypeVisitableExt};
-use rustc_session::config::TraitSolver;
 use rustc_span::symbol::sym;
 
 use std::cell::{Cell, RefCell};
@@ -545,13 +545,13 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         obligation: &PredicateObligation<'tcx>,
     ) -> Result<EvaluationResult, OverflowError> {
         self.evaluation_probe(|this| {
-            if this.tcx().sess.opts.unstable_opts.trait_solver != TraitSolver::Next {
+            if this.tcx().trait_solver_next() {
+                this.evaluate_predicates_recursively_in_new_solver([obligation.clone()])
+            } else {
                 this.evaluate_predicate_recursively(
                     TraitObligationStackList::empty(&ProvisionalEvaluationCache::default()),
                     obligation.clone(),
                 )
-            } else {
-                this.evaluate_predicates_recursively_in_new_solver([obligation.clone()])
             }
         })
     }
@@ -591,7 +591,9 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
     where
         I: IntoIterator<Item = PredicateObligation<'tcx>> + std::fmt::Debug,
     {
-        if self.tcx().sess.opts.unstable_opts.trait_solver != TraitSolver::Next {
+        if self.tcx().trait_solver_next() {
+            self.evaluate_predicates_recursively_in_new_solver(predicates)
+        } else {
             let mut result = EvaluatedToOk;
             for obligation in predicates {
                 let eval = self.evaluate_predicate_recursively(stack, obligation.clone())?;
@@ -604,8 +606,6 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 }
             }
             Ok(result)
-        } else {
-            self.evaluate_predicates_recursively_in_new_solver(predicates)
         }
     }
 
@@ -913,7 +913,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                                     .infcx
                                     .at(&obligation.cause, obligation.param_env)
                                     .trace(c1, c2)
-                                    .eq(a.substs, b.substs)
+                                    .eq(DefineOpaqueTypes::No, a.substs, b.substs)
                                 {
                                     let mut obligations = new_obligations.obligations;
                                     self.add_depth(
@@ -931,7 +931,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                                 if let Ok(new_obligations) = self
                                     .infcx
                                     .at(&obligation.cause, obligation.param_env)
-                                    .eq(c1, c2)
+                                    .eq(DefineOpaqueTypes::No, c1, c2)
                                 {
                                     let mut obligations = new_obligations.obligations;
                                     self.add_depth(
@@ -965,8 +965,11 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
 
                     match (evaluate(c1), evaluate(c2)) {
                         (Ok(c1), Ok(c2)) => {
-                            match self.infcx.at(&obligation.cause, obligation.param_env).eq(c1, c2)
-                            {
+                            match self.infcx.at(&obligation.cause, obligation.param_env).eq(
+                                DefineOpaqueTypes::No,
+                                c1,
+                                c2,
+                            ) {
                                 Ok(inf_ok) => self.evaluate_predicates_recursively(
                                     previous_stack,
                                     inf_ok.into_obligations(),
@@ -994,7 +997,11 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 }
                 ty::PredicateKind::Ambiguous => Ok(EvaluatedToAmbig),
                 ty::PredicateKind::Clause(ty::Clause::ConstArgHasType(ct, ty)) => {
-                    match self.infcx.at(&obligation.cause, obligation.param_env).eq(ct.ty(), ty) {
+                    match self.infcx.at(&obligation.cause, obligation.param_env).eq(
+                        DefineOpaqueTypes::No,
+                        ct.ty(),
+                        ty,
+                    ) {
                         Ok(inf_ok) => self.evaluate_predicates_recursively(
                             previous_stack,
                             inf_ok.into_obligations(),
@@ -1752,7 +1759,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         });
         self.infcx
             .at(&obligation.cause, obligation.param_env)
-            .sup(ty::Binder::dummy(placeholder_trait_ref), trait_bound)
+            .sup(DefineOpaqueTypes::No, ty::Binder::dummy(placeholder_trait_ref), trait_bound)
             .map(|InferOk { obligations: _, value: () }| {
                 // This method is called within a probe, so we can't have
                 // inference variables and placeholders escape.
@@ -1814,7 +1821,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         let is_match = self
             .infcx
             .at(&obligation.cause, obligation.param_env)
-            .sup(obligation.predicate, infer_projection)
+            .sup(DefineOpaqueTypes::No, obligation.predicate, infer_projection)
             .map_or(false, |InferOk { obligations, value: () }| {
                 self.evaluate_predicates_recursively(
                     TraitObligationStackList::empty(&ProvisionalEvaluationCache::default()),
@@ -2535,7 +2542,7 @@ impl<'tcx> SelectionContext<'_, 'tcx> {
         let InferOk { obligations, .. } = self
             .infcx
             .at(&cause, obligation.param_env)
-            .eq(placeholder_obligation_trait_ref, impl_trait_ref)
+            .eq(DefineOpaqueTypes::No, placeholder_obligation_trait_ref, impl_trait_ref)
             .map_err(|e| {
                 debug!("match_impl: failed eq_trait_refs due to `{}`", e.to_string(self.tcx()))
             })?;
@@ -2559,7 +2566,7 @@ impl<'tcx> SelectionContext<'_, 'tcx> {
         // We can avoid creating type variables and doing the full
         // substitution if we find that any of the input types, when
         // simplified, do not match.
-        let drcx = DeepRejectCtxt { treat_obligation_params: TreatParams::AsPlaceholder };
+        let drcx = DeepRejectCtxt { treat_obligation_params: TreatParams::ForLookup };
         iter::zip(obligation.predicate.skip_binder().trait_ref.substs, impl_trait_ref.substs)
             .any(|(obl, imp)| !drcx.generic_args_may_unify(obl, imp))
     }
@@ -2585,7 +2592,7 @@ impl<'tcx> SelectionContext<'_, 'tcx> {
     ) -> Result<Vec<PredicateObligation<'tcx>>, ()> {
         self.infcx
             .at(&obligation.cause, obligation.param_env)
-            .sup(obligation.predicate.to_poly_trait_ref(), poly_trait_ref)
+            .sup(DefineOpaqueTypes::No, obligation.predicate.to_poly_trait_ref(), poly_trait_ref)
             .map(|InferOk { obligations, .. }| obligations)
             .map_err(|_| ())
     }

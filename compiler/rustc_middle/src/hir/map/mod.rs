@@ -316,7 +316,7 @@ impl<'hir> Map<'hir> {
     /// Retrieves the `Node` corresponding to `id`, returning `None` if cannot be found.
     #[inline]
     pub fn find_by_def_id(self, id: LocalDefId) -> Option<Node<'hir>> {
-        self.find(self.local_def_id_to_hir_id(id))
+        self.find(self.tcx.opt_local_def_id_to_hir_id(id)?)
     }
 
     /// Retrieves the `Node` corresponding to `id`, panicking if it cannot be found.
@@ -333,7 +333,7 @@ impl<'hir> Map<'hir> {
     }
 
     pub fn get_if_local(self, id: DefId) -> Option<Node<'hir>> {
-        id.as_local().and_then(|id| self.find(self.local_def_id_to_hir_id(id)))
+        id.as_local().and_then(|id| self.find(self.tcx.opt_local_def_id_to_hir_id(id)?))
     }
 
     pub fn get_generics(self, id: LocalDefId) -> Option<&'hir Generics<'hir>> {
@@ -1134,7 +1134,7 @@ impl<'hir> intravisit::Map<'hir> for Map<'hir> {
 pub(super) fn crate_hash(tcx: TyCtxt<'_>, crate_num: CrateNum) -> Svh {
     debug_assert_eq!(crate_num, LOCAL_CRATE);
     let krate = tcx.hir_crate(());
-    let hir_body_hash = krate.hir_hash;
+    let hir_body_hash = krate.opt_hir_hash.expect("HIR hash missing while computing crate hash");
 
     let upstream_crates = upstream_crates(tcx);
 

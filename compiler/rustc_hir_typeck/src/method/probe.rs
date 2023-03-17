@@ -13,8 +13,10 @@ use rustc_hir_analysis::astconv::InferCtxtExt as _;
 use rustc_hir_analysis::autoderef::{self, Autoderef};
 use rustc_infer::infer::canonical::OriginalQueryValues;
 use rustc_infer::infer::canonical::{Canonical, QueryResponse};
+use rustc_infer::infer::DefineOpaqueTypes;
 use rustc_infer::infer::{self, InferOk, TyCtxtInferExt};
 use rustc_middle::middle::stability;
+use rustc_middle::ty::fast_reject::TreatProjections;
 use rustc_middle::ty::fast_reject::{simplify_type, TreatParams};
 use rustc_middle::ty::AssocItem;
 use rustc_middle::ty::GenericParamDefKind;
@@ -699,7 +701,7 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
     }
 
     fn assemble_inherent_candidates_for_incoherent_ty(&mut self, self_ty: Ty<'tcx>) {
-        let Some(simp) = simplify_type(self.tcx, self_ty, TreatParams::AsInfer) else {
+        let Some(simp) = simplify_type(self.tcx, self_ty, TreatParams::AsCandidateKey, TreatProjections::AsCandidateKey) else {
             bug!("unexpected incoherent type: {:?}", self_ty)
         };
         for &impl_def_id in self.tcx.incoherent_impls(simp) {
@@ -929,7 +931,7 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
                 if let Some(self_ty) = self_ty {
                     if self
                         .at(&ObligationCause::dummy(), self.param_env)
-                        .sup(fty.inputs()[0], self_ty)
+                        .sup(DefineOpaqueTypes::No, fty.inputs()[0], self_ty)
                         .is_err()
                     {
                         return false;
@@ -1338,6 +1340,7 @@ impl<'tcx> Pick<'tcx> {
                     container: _,
                     trait_item_def_id: _,
                     fn_has_self_parameter: _,
+                    opt_rpitit_info: _,
                 },
             kind: _,
             import_ids: _,
@@ -1434,9 +1437,11 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
                 CandidateSource::Trait(candidate.item.container_id(self.tcx))
             }
             TraitCandidate(trait_ref) => self.probe(|_| {
-                let _ = self
-                    .at(&ObligationCause::dummy(), self.param_env)
-                    .sup(candidate.xform_self_ty, self_ty);
+                let _ = self.at(&ObligationCause::dummy(), self.param_env).sup(
+                    DefineOpaqueTypes::No,
+                    candidate.xform_self_ty,
+                    self_ty,
+                );
                 match self.select_trait_candidate(trait_ref) {
                     Ok(Some(traits::ImplSource::UserDefined(ref impl_data))) => {
                         // If only a single impl matches, make the error message point
@@ -1463,10 +1468,11 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
 
         self.probe(|_| {
             // First check that the self type can be related.
-            let sub_obligations = match self
-                .at(&ObligationCause::dummy(), self.param_env)
-                .sup(probe.xform_self_ty, self_ty)
-            {
+            let sub_obligations = match self.at(&ObligationCause::dummy(), self.param_env).sup(
+                DefineOpaqueTypes::No,
+                probe.xform_self_ty,
+                self_ty,
+            ) {
                 Ok(InferOk { obligations, value: () }) => obligations,
                 Err(err) => {
                     debug!("--> cannot relate self-types {:?}", err);
@@ -1681,7 +1687,7 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
                 if let ProbeResult::Match = result
                     && self
                     .at(&ObligationCause::dummy(), self.param_env)
-                    .sup(return_ty, xform_ret_ty)
+                    .sup(DefineOpaqueTypes::No, return_ty, xform_ret_ty)
                     .is_err()
                 {
                     result = ProbeResult::BadReturnType;

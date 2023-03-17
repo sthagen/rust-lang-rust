@@ -55,7 +55,7 @@ pub enum DryRun {
 /// Note that this structure is not decoded directly into, but rather it is
 /// filled out from the decoded forms of the structs below. For documentation
 /// each field, see the corresponding fields in
-/// `config.toml.example`.
+/// `config.example.toml`.
 #[derive(Default)]
 #[cfg_attr(test, derive(Clone))]
 pub struct Config {
@@ -133,6 +133,7 @@ pub struct Config {
     pub llvm_allow_old_toolchain: bool,
     pub llvm_polly: bool,
     pub llvm_clang: bool,
+    pub llvm_enable_warnings: bool,
     pub llvm_from_ci: bool,
     pub llvm_build_config: HashMap<String, String>,
 
@@ -325,7 +326,7 @@ impl std::str::FromStr for SplitDebuginfo {
 
 impl SplitDebuginfo {
     /// Returns the default `-Csplit-debuginfo` value for the current target. See the comment for
-    /// `rust.split-debuginfo` in `config.toml.example`.
+    /// `rust.split-debuginfo` in `config.example.toml`.
     fn default_for_platform(target: &str) -> Self {
         if target.contains("apple") {
             SplitDebuginfo::Unpacked
@@ -688,6 +689,7 @@ define_config! {
         allow_old_toolchain: Option<bool> = "allow-old-toolchain",
         polly: Option<bool> = "polly",
         clang: Option<bool> = "clang",
+        enable_warnings: Option<bool> = "enable-warnings",
         download_ci_llvm: Option<StringOrBool> = "download-ci-llvm",
         build_config: Option<HashMap<String, String>> = "build-config",
     }
@@ -1184,6 +1186,7 @@ impl Config {
             config.llvm_allow_old_toolchain = llvm.allow_old_toolchain.unwrap_or(false);
             config.llvm_polly = llvm.polly.unwrap_or(false);
             config.llvm_clang = llvm.clang.unwrap_or(false);
+            config.llvm_enable_warnings = llvm.enable_warnings.unwrap_or(false);
             config.llvm_build_config = llvm.build_config.clone().unwrap_or(Default::default());
 
             let asserts = llvm_assertions.unwrap_or(false);

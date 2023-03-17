@@ -1440,6 +1440,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                             tcx.associated_items(pred.def_id())
                                 .in_definition_order()
                                 .filter(|item| item.kind == ty::AssocKind::Type)
+                                .filter(|item| tcx.opt_rpitit_info(item.def_id).is_none())
                                 .map(|item| item.def_id),
                         );
                     }
@@ -3048,10 +3049,18 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
             }
             &hir::TyKind::OpaqueDef(item_id, lifetimes, in_trait) => {
                 let opaque_ty = tcx.hir().item(item_id);
-                let def_id = item_id.owner_id.to_def_id();
 
                 match opaque_ty.kind {
                     hir::ItemKind::OpaqueTy(hir::OpaqueTy { origin, .. }) => {
+                        let local_def_id = item_id.owner_id.def_id;
+                        // If this is an RPITIT and we are using the new RPITIT lowering scheme, we
+                        // generate the def_id of an associated type for the trait and return as
+                        // type a projection.
+                        let def_id = if in_trait && tcx.lower_impl_trait_in_trait_to_assoc_ty() {
+                            tcx.associated_item_for_impl_trait_in_trait(local_def_id).to_def_id()
+                        } else {
+                            local_def_id.to_def_id()
+                        };
                         self.impl_trait_ty_to_ty(def_id, lifetimes, origin, in_trait)
                     }
                     ref i => bug!("`impl Trait` pointed to non-opaque type?? {:#?}", i),

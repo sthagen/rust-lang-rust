@@ -17,6 +17,7 @@ use crate::mir::{
 };
 use crate::thir::Thir;
 use crate::traits;
+use crate::traits::solve;
 use crate::traits::solve::{ExternalConstraints, ExternalConstraintsData};
 use crate::ty::query::{self, TyCtxtAt};
 use crate::ty::{
@@ -70,6 +71,7 @@ use rustc_type_ir::WithCachedTypeInfo;
 use rustc_type_ir::{CollectAndApply, DynKind, Interner, TypeFlags};
 
 use std::any::Any;
+use std::assert_matches::debug_assert_matches;
 use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::fmt;
@@ -537,6 +539,9 @@ pub struct GlobalCtxt<'tcx> {
     /// Merge this with `selection_cache`?
     pub evaluation_cache: traits::EvaluationCache<'tcx>,
 
+    /// Caches the results of goal evaluation in the new solver.
+    pub new_solver_evaluation_cache: solve::EvaluationCache<'tcx>,
+
     /// Data layout specification for the current target.
     pub data_layout: TargetDataLayout,
 
@@ -712,6 +717,7 @@ impl<'tcx> TyCtxt<'tcx> {
             pred_rcache: Default::default(),
             selection_cache: Default::default(),
             evaluation_cache: Default::default(),
+            new_solver_evaluation_cache: Default::default(),
             data_layout,
             alloc_map: Lock::new(interpret::AllocMap::new()),
         }
@@ -2044,6 +2050,12 @@ impl<'tcx> TyCtxt<'tcx> {
 
     #[inline]
     pub fn mk_alias(self, kind: ty::AliasKind, alias_ty: ty::AliasTy<'tcx>) -> Ty<'tcx> {
+        debug_assert_matches!(
+            (kind, self.def_kind(alias_ty.def_id)),
+            (ty::Opaque, DefKind::OpaqueTy)
+                | (ty::Projection, DefKind::AssocTy)
+                | (ty::Opaque | ty::Projection, DefKind::ImplTraitPlaceholder)
+        );
         self.mk_ty_from_kind(Alias(kind, alias_ty))
     }
 
@@ -2439,6 +2451,18 @@ impl<'tcx> TyCtxt<'tcx> {
 
     pub fn trait_solver_next(self) -> bool {
         self.sess.opts.unstable_opts.trait_solver == rustc_session::config::TraitSolver::Next
+    }
+
+    pub fn lower_impl_trait_in_trait_to_assoc_ty(self) -> bool {
+        self.sess.opts.unstable_opts.lower_impl_trait_in_trait_to_assoc_ty
+    }
+
+    pub fn is_impl_trait_in_trait(self, def_id: DefId) -> bool {
+        if self.lower_impl_trait_in_trait_to_assoc_ty() {
+            self.opt_rpitit_info(def_id).is_some()
+        } else {
+            self.def_kind(def_id) == DefKind::ImplTraitPlaceholder
+        }
     }
 }
 
