@@ -38,7 +38,7 @@ pub const SIGRTMAX: i32 = 42;
 
 /// Extra data stored with each stack frame
 pub struct FrameExtra<'tcx> {
-    /// Extra data for Stacked Borrows.
+    /// Extra data for the Borrow Tracker.
     pub borrow_tracker: Option<borrow_tracker::FrameState>,
 
     /// If this is Some(), then this is a special "catch unwind" frame (the frame of `try_fn`
@@ -146,7 +146,7 @@ impl fmt::Display for MiriMemoryKind {
 pub enum Provenance {
     Concrete {
         alloc_id: AllocId,
-        /// Stacked Borrows tag.
+        /// Borrow Tracker tag.
         tag: BorTag,
     },
     Wildcard,
@@ -195,7 +195,7 @@ impl fmt::Debug for Provenance {
                 } else {
                     write!(f, "[{alloc_id:?}]")?;
                 }
-                // Print Stacked Borrows tag.
+                // Print Borrow Tracker tag.
                 write!(f, "{tag:?}")?;
             }
             Provenance::Wildcard => {
@@ -822,7 +822,7 @@ impl<'mir, 'tcx> Machine<'mir, 'tcx> for MiriMachine<'mir, 'tcx> {
     }
 
     #[inline(always)]
-    fn ignore_checkable_overflow_assertions(ecx: &MiriInterpCx<'mir, 'tcx>) -> bool {
+    fn ignore_optional_overflow_checks(ecx: &MiriInterpCx<'mir, 'tcx>) -> bool {
         !ecx.tcx.sess.overflow_checks()
     }
 
