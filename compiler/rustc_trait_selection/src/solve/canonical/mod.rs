@@ -48,7 +48,13 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
     /// - `external_constraints`: additional constraints which aren't expressable
     ///   using simple unification of inference variables.
     #[instrument(level = "debug", skip(self))]
-    pub(super) fn make_canonical_response(&self, certainty: Certainty) -> QueryResult<'tcx> {
+    pub(super) fn evaluate_added_goals_and_make_canonical_response(
+        &mut self,
+        certainty: Certainty,
+    ) -> QueryResult<'tcx> {
+        let goals_certainty = self.try_evaluate_added_goals()?;
+        let certainty = certainty.unify_and(goals_certainty);
+
         let external_constraints = self.compute_external_query_constraints()?;
 
         let response = Response { var_values: self.var_values, external_constraints, certainty };
@@ -93,20 +99,20 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
         param_env: ty::ParamEnv<'tcx>,
         original_values: Vec<ty::GenericArg<'tcx>>,
         response: CanonicalResponse<'tcx>,
-    ) -> Result<Certainty, NoSolution> {
+    ) -> Result<(Certainty, Vec<Goal<'tcx, ty::Predicate<'tcx>>>), NoSolution> {
         let substitution = self.compute_query_response_substitution(&original_values, &response);
 
         let Response { var_values, external_constraints, certainty } =
             response.substitute(self.tcx(), &substitution);
 
-        self.unify_query_var_values(param_env, &original_values, var_values)?;
+        let nested_goals = self.unify_query_var_values(param_env, &original_values, var_values)?;
 
         // FIXME: implement external constraints.
         let ExternalConstraintsData { region_constraints, opaque_types: _ } =
             external_constraints.deref();
         self.register_region_constraints(region_constraints);
 
-        Ok(certainty)
+        Ok((certainty, nested_goals))
     }
 
     /// This returns the substitutions to instantiate the bound variables of
@@ -199,21 +205,15 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
         param_env: ty::ParamEnv<'tcx>,
         original_values: &[ty::GenericArg<'tcx>],
         var_values: CanonicalVarValues<'tcx>,
-    ) -> Result<(), NoSolution> {
+    ) -> Result<Vec<Goal<'tcx, ty::Predicate<'tcx>>>, NoSolution> {
         assert_eq!(original_values.len(), var_values.len());
+
+        let mut nested_goals = vec![];
         for (&orig, response) in iter::zip(original_values, var_values.var_values) {
-            // This can fail due to the occurs check, see
-            // `tests/ui/typeck/lazy-norm/equating-projection-cyclically.rs` for an example
-            // where that can happen.
-            //
-            // FIXME: To deal with #105787 I also expect us to emit nested obligations here at
-            // some point. We can figure out how to deal with this once we actually have
-            // an ICE.
-            let nested_goals = self.eq(param_env, orig, response)?;
-            assert!(nested_goals.is_empty(), "{nested_goals:?}");
+            nested_goals.extend(self.eq_and_get_goals(param_env, orig, response)?);
         }
 
-        Ok(())
+        Ok(nested_goals)
     }
 
     fn register_region_constraints(&mut self, region_constraints: &QueryRegionConstraints<'tcx>) {

@@ -55,6 +55,7 @@ mod format;
 mod install;
 mod metadata;
 mod native;
+mod render_tests;
 mod run;
 mod sanity;
 mod setup;
@@ -88,6 +89,7 @@ pub use crate::builder::PathSet;
 use crate::cache::{Interned, INTERNER};
 pub use crate::config::Config;
 pub use crate::flags::Subcommand;
+use termcolor::{ColorChoice, StandardStream, WriteColor};
 
 const LLVM_TOOLS: &[&str] = &[
     "llvm-cov",      // used to generate coverage report
@@ -1202,19 +1204,20 @@ impl Build {
     ///
     /// When all of these conditions are met the build will lift artifacts from
     /// the previous stage forward.
-    fn force_use_stage1(&self, compiler: Compiler, target: TargetSelection) -> bool {
+    fn force_use_stage1(&self, stage: u32, target: TargetSelection) -> bool {
         !self.config.full_bootstrap
-            && compiler.stage >= 2
+            && !self.config.download_rustc()
+            && stage >= 2
             && (self.hosts.iter().any(|h| *h == target) || target == self.build)
     }
 
     /// Checks whether the `compiler` compiling for `target` should be forced to
     /// use a stage2 compiler instead.
     ///
-    /// When we download the pre-compiled version of rustc it should be forced to
-    /// use a stage2 compiler.
-    fn force_use_stage2(&self) -> bool {
-        self.config.download_rustc()
+    /// When we download the pre-compiled version of rustc and compiler stage is >= 2,
+    /// it should be forced to use a stage2 compiler.
+    fn force_use_stage2(&self, stage: u32) -> bool {
+        self.config.download_rustc() && stage >= 2
     }
 
     /// Given `num` in the form "a.b.c" return a "release string" which
@@ -1581,6 +1584,31 @@ to download LLVM rather than building it.
         }
 
         self.config.ninja_in_file
+    }
+
+    pub fn colored_stdout<R, F: FnOnce(&mut dyn WriteColor) -> R>(&self, f: F) -> R {
+        self.colored_stream_inner(StandardStream::stdout, self.config.stdout_is_tty, f)
+    }
+
+    pub fn colored_stderr<R, F: FnOnce(&mut dyn WriteColor) -> R>(&self, f: F) -> R {
+        self.colored_stream_inner(StandardStream::stderr, self.config.stderr_is_tty, f)
+    }
+
+    fn colored_stream_inner<R, F, C>(&self, constructor: C, is_tty: bool, f: F) -> R
+    where
+        C: Fn(ColorChoice) -> StandardStream,
+        F: FnOnce(&mut dyn WriteColor) -> R,
+    {
+        let choice = match self.config.color {
+            flags::Color::Always => ColorChoice::Always,
+            flags::Color::Never => ColorChoice::Never,
+            flags::Color::Auto if !is_tty => ColorChoice::Never,
+            flags::Color::Auto => ColorChoice::Auto,
+        };
+        let mut stream = constructor(choice);
+        let result = f(&mut stream);
+        stream.reset().unwrap();
+        result
     }
 }
 

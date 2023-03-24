@@ -128,7 +128,7 @@ impl<'tcx> InferCtxt<'tcx> {
             (_, ty::Alias(AliasKind::Projection, _)) | (ty::Alias(AliasKind::Projection, _), _)
                 if self.tcx.trait_solver_next() =>
             {
-                relation.register_type_equate_obligation(a, b);
+                relation.register_type_relate_obligation(a, b);
                 Ok(a)
             }
 
@@ -189,10 +189,19 @@ impl<'tcx> InferCtxt<'tcx> {
         // the expected const's type. Specifically, we don't want const infer vars
         // to do any type shapeshifting before and after resolution.
         if let Err(guar) = compatible_types {
-            return Ok(self.tcx.const_error_with_guaranteed(
-                if relation.a_is_expected() { a.ty() } else { b.ty() },
-                guar,
-            ));
+            // HACK: equating both sides with `[const error]` eagerly prevents us
+            // from leaving unconstrained inference vars during things like impl
+            // matching in the solver.
+            let a_error = self.tcx.const_error_with_guaranteed(a.ty(), guar);
+            if let ty::ConstKind::Infer(InferConst::Var(vid)) = a.kind() {
+                return self.unify_const_variable(vid, a_error);
+            }
+            let b_error = self.tcx.const_error_with_guaranteed(b.ty(), guar);
+            if let ty::ConstKind::Infer(InferConst::Var(vid)) = b.kind() {
+                return self.unify_const_variable(vid, b_error);
+            }
+
+            return Ok(if relation.a_is_expected() { a_error } else { b_error });
         }
 
         match (a.kind(), b.kind()) {
@@ -833,23 +842,25 @@ pub trait ObligationEmittingRelation<'tcx>: TypeRelation<'tcx> {
         let (a, b) = if self.a_is_expected() { (a, b) } else { (b, a) };
 
         self.register_predicates([ty::Binder::dummy(if self.tcx().trait_solver_next() {
-            ty::PredicateKind::AliasEq(a.into(), b.into())
+            ty::PredicateKind::AliasRelate(a.into(), b.into(), ty::AliasRelationDirection::Equate)
         } else {
             ty::PredicateKind::ConstEquate(a, b)
         })]);
     }
 
-    /// Register an obligation that both types must be equal to each other.
-    ///
-    /// If they aren't equal then the relation doesn't hold.
-    fn register_type_equate_obligation(&mut self, a: Ty<'tcx>, b: Ty<'tcx>) {
-        let (a, b) = if self.a_is_expected() { (a, b) } else { (b, a) };
-
-        self.register_predicates([ty::Binder::dummy(ty::PredicateKind::AliasEq(
+    /// Register an obligation that both types must be related to each other according to
+    /// the [`ty::AliasRelationDirection`] given by [`ObligationEmittingRelation::alias_relate_direction`]
+    fn register_type_relate_obligation(&mut self, a: Ty<'tcx>, b: Ty<'tcx>) {
+        self.register_predicates([ty::Binder::dummy(ty::PredicateKind::AliasRelate(
             a.into(),
             b.into(),
+            self.alias_relate_direction(),
         ))]);
     }
+
+    /// Relation direction emitted for `AliasRelate` predicates, corresponding to the direction
+    /// of the relation.
+    fn alias_relate_direction(&self) -> ty::AliasRelationDirection;
 }
 
 fn int_unification_error<'tcx>(

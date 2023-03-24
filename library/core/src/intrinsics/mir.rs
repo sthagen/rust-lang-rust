@@ -49,6 +49,8 @@
 //!
 //! The input to the [`mir!`] macro is:
 //!
+//!  - An optional return type annotation in the form of `type RET = ...;`. This may be required
+//!    if the compiler cannot infer the type of RET.
 //!  - A possibly empty list of local declarations. Locals can also be declared inline on
 //!    assignments via `let`. Type inference generally works. Shadowing does not.
 //!  - A list of basic blocks. The first of these is the start block and is where execution begins.
@@ -120,6 +122,18 @@
 //!         }
 //!
 //!         ret = {
+//!             Return()
+//!         }
+//!     )
+//! }
+//!
+//! #[custom_mir(dialect = "runtime", phase = "optimized")]
+//! fn annotated_return_type() -> (i32, bool) {
+//!     mir!(
+//!         type RET = (i32, bool);
+//!         {
+//!             RET.0 = 1;
+//!             RET.1 = true;
 //!             Return()
 //!         }
 //!     )
@@ -330,6 +344,14 @@ define!(
     fn Variant<T>(place: T, index: u32) -> ()
 );
 define!(
+    "mir_cast_transmute",
+    /// Emits a `CastKind::Transmute` cast.
+    ///
+    /// Needed to test the UB when `sizeof(T) != sizeof(U)`, which can't be
+    /// generated via the normal `mem::transmute`.
+    fn CastTransmute<T, U>(operand: T) -> U
+);
+define!(
     "mir_make_place",
     #[doc(hidden)]
     fn __internal_make_place<T>(place: T) -> *mut T
@@ -342,6 +364,7 @@ define!(
 #[rustc_macro_transparency = "transparent"]
 pub macro mir {
     (
+        $(type RET = $ret_ty:ty ;)?
         $(let $local_decl:ident $(: $local_decl_ty:ty)? ;)*
 
         {
@@ -362,7 +385,7 @@ pub macro mir {
         {
             // Now all locals
             #[allow(non_snake_case)]
-            let RET;
+            let RET $(: $ret_ty)?;
             $(
                 let $local_decl $(: $local_decl_ty)? ;
             )*

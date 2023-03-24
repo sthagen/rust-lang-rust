@@ -211,7 +211,7 @@ fn check_opaque(tcx: TyCtxt<'_>, id: hir::ItemId) {
         return;
     }
 
-    let substs = InternalSubsts::identity_for_item(tcx, item.owner_id.to_def_id());
+    let substs = InternalSubsts::identity_for_item(tcx, item.owner_id);
     let span = tcx.def_span(item.owner_id.def_id);
 
     if !tcx.features().impl_trait_projections {
@@ -304,8 +304,8 @@ pub(super) fn check_opaque_for_inheriting_lifetimes(
         ..
     }) = item.kind
     {
-        let substs = InternalSubsts::identity_for_item(tcx, def_id.to_def_id());
-        let opaque_identity_ty = if in_trait {
+        let substs = InternalSubsts::identity_for_item(tcx, def_id);
+        let opaque_identity_ty = if in_trait && !tcx.lower_impl_trait_in_trait_to_assoc_ty() {
             tcx.mk_projection(def_id.to_def_id(), substs)
         } else {
             tcx.mk_opaque(def_id.to_def_id(), substs)
@@ -535,7 +535,7 @@ fn check_item_type(tcx: TyCtxt<'_>, id: hir::ItemId) {
                     }
                     ty::AssocKind::Type if assoc_item.defaultness(tcx).has_value() => {
                         let trait_substs =
-                            InternalSubsts::identity_for_item(tcx, id.owner_id.to_def_id());
+                            InternalSubsts::identity_for_item(tcx, id.owner_id);
                         let _: Result<_, rustc_errors::ErrorGuaranteed> = check_type_bounds(
                             tcx,
                             assoc_item,
@@ -554,7 +554,15 @@ fn check_item_type(tcx: TyCtxt<'_>, id: hir::ItemId) {
             check_union(tcx, id.owner_id.def_id);
         }
         DefKind::OpaqueTy => {
-            check_opaque(tcx, id);
+            let opaque = tcx.hir().expect_item(id.owner_id.def_id).expect_opaque_ty();
+            if let hir::OpaqueTyOrigin::FnReturn(fn_def_id) | hir::OpaqueTyOrigin::AsyncFn(fn_def_id) = opaque.origin
+                && let hir::Node::TraitItem(trait_item) = tcx.hir().get_by_def_id(fn_def_id)
+                && let (_, hir::TraitFn::Required(..)) = trait_item.expect_fn()
+            {
+                // Skip opaques from RPIT in traits with no default body.
+            } else {
+                check_opaque(tcx, id);
+            }
         }
         DefKind::ImplTraitPlaceholder => {
             let parent = tcx.impl_trait_in_trait_parent_fn(id.owner_id.to_def_id());
@@ -1161,7 +1169,7 @@ fn check_enum(tcx: TyCtxt<'_>, def_id: LocalDefId) {
     def.destructor(tcx); // force the destructor to be evaluated
 
     if def.variants().is_empty() {
-        if let Some(attr) = tcx.get_attrs(def_id.to_def_id(), sym::repr).next() {
+        if let Some(attr) = tcx.get_attrs(def_id, sym::repr).next() {
             struct_span_err!(
                 tcx.sess,
                 attr.span,

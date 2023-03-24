@@ -543,7 +543,7 @@ impl<'tcx> Predicate<'tcx> {
             | PredicateKind::Clause(Clause::TypeOutlives(_))
             | PredicateKind::Clause(Clause::Projection(_))
             | PredicateKind::Clause(Clause::ConstArgHasType(..))
-            | PredicateKind::AliasEq(..)
+            | PredicateKind::AliasRelate(..)
             | PredicateKind::ObjectSafe(_)
             | PredicateKind::ClosureKind(_, _, _)
             | PredicateKind::Subtype(_)
@@ -640,7 +640,23 @@ pub enum PredicateKind<'tcx> {
     /// This predicate requires two terms to be equal to eachother.
     ///
     /// Only used for new solver
-    AliasEq(Term<'tcx>, Term<'tcx>),
+    AliasRelate(Term<'tcx>, Term<'tcx>, AliasRelationDirection),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, TyEncodable, TyDecodable)]
+#[derive(HashStable, Debug)]
+pub enum AliasRelationDirection {
+    Equate,
+    Subtype,
+}
+
+impl std::fmt::Display for AliasRelationDirection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AliasRelationDirection::Equate => write!(f, " == "),
+            AliasRelationDirection::Subtype => write!(f, " <: "),
+        }
+    }
 }
 
 /// The crate outlives map is computed during typeck and contains the
@@ -976,11 +992,11 @@ impl<'tcx> Term<'tcx> {
         }
     }
 
-    /// This function returns `None` for `AliasKind::Opaque`.
+    /// This function returns the inner `AliasTy` if this term is a projection.
     ///
     /// FIXME: rename `AliasTy` to `AliasTerm` and make sure we correctly
     /// deal with constants.
-    pub fn to_alias_term_no_opaque(&self, tcx: TyCtxt<'tcx>) -> Option<AliasTy<'tcx>> {
+    pub fn to_projection_term(&self, tcx: TyCtxt<'tcx>) -> Option<AliasTy<'tcx>> {
         match self.unpack() {
             TermKind::Ty(ty) => match ty.kind() {
                 ty::Alias(kind, alias_ty) => match kind {
@@ -1032,6 +1048,21 @@ impl<'tcx> TermKind<'tcx> {
         };
 
         Term { ptr: unsafe { NonZeroUsize::new_unchecked(ptr | tag) }, marker: PhantomData }
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum ParamTerm {
+    Ty(ParamTy),
+    Const(ParamConst),
+}
+
+impl ParamTerm {
+    pub fn index(self) -> usize {
+        match self {
+            ParamTerm::Ty(ty) => ty.index as usize,
+            ParamTerm::Const(ct) => ct.index as usize,
+        }
     }
 }
 
@@ -1128,6 +1159,13 @@ impl<'tcx, T> ToPredicate<'tcx, T> for T {
     }
 }
 
+impl<'tcx> ToPredicate<'tcx> for PredicateKind<'tcx> {
+    #[inline(always)]
+    fn to_predicate(self, tcx: TyCtxt<'tcx>) -> Predicate<'tcx> {
+        ty::Binder::dummy(self).to_predicate(tcx)
+    }
+}
+
 impl<'tcx> ToPredicate<'tcx> for Binder<'tcx, PredicateKind<'tcx>> {
     #[inline(always)]
     fn to_predicate(self, tcx: TyCtxt<'tcx>) -> Predicate<'tcx> {
@@ -1139,6 +1177,13 @@ impl<'tcx> ToPredicate<'tcx> for Clause<'tcx> {
     #[inline(always)]
     fn to_predicate(self, tcx: TyCtxt<'tcx>) -> Predicate<'tcx> {
         tcx.mk_predicate(ty::Binder::dummy(ty::PredicateKind::Clause(self)))
+    }
+}
+
+impl<'tcx> ToPredicate<'tcx> for TraitRef<'tcx> {
+    #[inline(always)]
+    fn to_predicate(self, tcx: TyCtxt<'tcx>) -> Predicate<'tcx> {
+        ty::Binder::dummy(self).to_predicate(tcx)
     }
 }
 
@@ -1192,7 +1237,7 @@ impl<'tcx> Predicate<'tcx> {
             PredicateKind::Clause(Clause::Trait(t)) => Some(predicate.rebind(t)),
             PredicateKind::Clause(Clause::Projection(..))
             | PredicateKind::Clause(Clause::ConstArgHasType(..))
-            | PredicateKind::AliasEq(..)
+            | PredicateKind::AliasRelate(..)
             | PredicateKind::Subtype(..)
             | PredicateKind::Coerce(..)
             | PredicateKind::Clause(Clause::RegionOutlives(..))
@@ -1213,7 +1258,7 @@ impl<'tcx> Predicate<'tcx> {
             PredicateKind::Clause(Clause::Projection(t)) => Some(predicate.rebind(t)),
             PredicateKind::Clause(Clause::Trait(..))
             | PredicateKind::Clause(Clause::ConstArgHasType(..))
-            | PredicateKind::AliasEq(..)
+            | PredicateKind::AliasRelate(..)
             | PredicateKind::Subtype(..)
             | PredicateKind::Coerce(..)
             | PredicateKind::Clause(Clause::RegionOutlives(..))
@@ -1235,7 +1280,7 @@ impl<'tcx> Predicate<'tcx> {
             PredicateKind::Clause(Clause::Trait(..))
             | PredicateKind::Clause(Clause::ConstArgHasType(..))
             | PredicateKind::Clause(Clause::Projection(..))
-            | PredicateKind::AliasEq(..)
+            | PredicateKind::AliasRelate(..)
             | PredicateKind::Subtype(..)
             | PredicateKind::Coerce(..)
             | PredicateKind::Clause(Clause::RegionOutlives(..))
@@ -1385,7 +1430,7 @@ impl<'tcx> OpaqueHiddenType<'tcx> {
         // lifetimes with 'static and remapping only those used in the
         // `impl Trait` return type, resulting in the parameters
         // shifting.
-        let id_substs = InternalSubsts::identity_for_item(tcx, def_id.to_def_id());
+        let id_substs = InternalSubsts::identity_for_item(tcx, def_id);
         debug!(?id_substs);
 
         // This zip may have several times the same lifetime in `substs` paired with a different
@@ -2027,7 +2072,6 @@ impl<'tcx> FieldDef {
     }
 }
 
-pub type Attributes<'tcx> = impl Iterator<Item = &'tcx ast::Attribute>;
 #[derive(Debug, PartialEq, Eq)]
 pub enum ImplOverlapKind {
     /// These impls are always allowed to overlap.
@@ -2375,7 +2419,12 @@ impl<'tcx> TyCtxt<'tcx> {
     }
 
     /// Gets all attributes with the given name.
-    pub fn get_attrs(self, did: DefId, attr: Symbol) -> ty::Attributes<'tcx> {
+    pub fn get_attrs(
+        self,
+        did: impl Into<DefId>,
+        attr: Symbol,
+    ) -> impl Iterator<Item = &'tcx ast::Attribute> {
+        let did: DefId = did.into();
         let filter_fn = move |a: &&ast::Attribute| a.has_name(attr);
         if let Some(did) = did.as_local() {
             self.hir().attrs(self.hir().local_def_id_to_hir_id(did)).iter().filter(filter_fn)
@@ -2386,8 +2435,9 @@ impl<'tcx> TyCtxt<'tcx> {
         }
     }
 
-    pub fn get_attr(self, did: DefId, attr: Symbol) -> Option<&'tcx ast::Attribute> {
+    pub fn get_attr(self, did: impl Into<DefId>, attr: Symbol) -> Option<&'tcx ast::Attribute> {
         if cfg!(debug_assertions) && !rustc_feature::is_valid_for_get_attr(attr) {
+            let did: DefId = did.into();
             bug!("get_attr: unexpected called with DefId `{:?}`, attr `{:?}`", did, attr);
         } else {
             self.get_attrs(did, attr).next()
@@ -2395,7 +2445,8 @@ impl<'tcx> TyCtxt<'tcx> {
     }
 
     /// Determines whether an item is annotated with an attribute.
-    pub fn has_attr(self, did: DefId, attr: Symbol) -> bool {
+    pub fn has_attr(self, did: impl Into<DefId>, attr: Symbol) -> bool {
+        let did: DefId = did.into();
         if cfg!(debug_assertions) && !did.is_local() && rustc_feature::is_builtin_only_local(attr) {
             bug!("tried to access the `only_local` attribute `{}` from an extern crate", attr);
         } else {
@@ -2505,7 +2556,7 @@ impl<'tcx> TyCtxt<'tcx> {
         ident
     }
 
-    // FIXME(vincenzoapalzzo): move the HirId to a LocalDefId
+    // FIXME(vincenzopalazzo): move the HirId to a LocalDefId
     pub fn adjust_ident_and_get_scope(
         self,
         mut ident: Ident,

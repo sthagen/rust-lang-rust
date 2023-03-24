@@ -212,7 +212,7 @@ pub trait TypeErrCtxtExt<'tcx> {
 
     fn extract_callable_info(
         &self,
-        hir_id: HirId,
+        body_id: LocalDefId,
         param_env: ty::ParamEnv<'tcx>,
         found: Ty<'tcx>,
     ) -> Option<(DefIdOrName, Ty<'tcx>, Vec<Ty<'tcx>>)>;
@@ -420,6 +420,7 @@ fn suggest_restriction<'tcx>(
 ) {
     if hir_generics.where_clause_span.from_expansion()
         || hir_generics.where_clause_span.desugaring_kind().is_some()
+        || projection.map_or(false, |projection| tcx.opt_rpitit_info(projection.def_id).is_some())
     {
         return;
     }
@@ -908,9 +909,8 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             trait_pred.self_ty(),
         );
 
-        let body_hir_id = self.tcx.hir().local_def_id_to_hir_id(obligation.cause.body_id);
         let Some((def_id_or_name, output, inputs)) = self.extract_callable_info(
-            body_hir_id,
+            obligation.cause.body_id,
             obligation.param_env,
             self_ty,
         ) else { return false; };
@@ -1112,10 +1112,9 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
     /// Extracts information about a callable type for diagnostics. This is a
     /// heuristic -- it doesn't necessarily mean that a type is always callable,
     /// because the callable type must also be well-formed to be called.
-    // FIXME(vincenzopalazzo): move the HirId to a LocalDefId
     fn extract_callable_info(
         &self,
-        hir_id: HirId,
+        body_id: LocalDefId,
         param_env: ty::ParamEnv<'tcx>,
         found: Ty<'tcx>,
     ) -> Option<(DefIdOrName, Ty<'tcx>, Vec<Ty<'tcx>>)> {
@@ -1167,7 +1166,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                     })
                 }
                 ty::Param(param) => {
-                    let generics = self.tcx.generics_of(hir_id.owner.to_def_id());
+                    let generics = self.tcx.generics_of(body_id);
                     let name = if generics.count() > param.index as usize
                         && let def = generics.param_at(param.index as usize, self.tcx)
                         && matches!(def.kind, ty::GenericParamDefKind::Type { .. })
@@ -1357,6 +1356,31 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                             Applicability::MaybeIncorrect,
                         );
                     } else {
+                        let is_mut = mut_ref_self_ty_satisfies_pred || ref_inner_ty_mut;
+                        let sugg_prefix = format!("&{}", if is_mut { "mut " } else { "" });
+                        let sugg_msg = &format!(
+                            "consider{} borrowing here",
+                            if is_mut { " mutably" } else { "" }
+                        );
+
+                        // Issue #109436, we need to add parentheses properly for method calls
+                        // for example, `foo.into()` should be `(&foo).into()`
+                        if let Ok(snippet) = self.tcx.sess.source_map().span_to_snippet(
+                            self.tcx.sess.source_map().span_look_ahead(span, Some("."), Some(50)),
+                        ) {
+                            if snippet == "." {
+                                err.multipart_suggestion_verbose(
+                                    sugg_msg,
+                                    vec![
+                                        (span.shrink_to_lo(), format!("({}", sugg_prefix)),
+                                        (span.shrink_to_hi(), ")".to_string()),
+                                    ],
+                                    Applicability::MaybeIncorrect,
+                                );
+                                return true;
+                            }
+                        }
+
                         // Issue #104961, we need to add parentheses properly for compond expressions
                         // for example, `x.starts_with("hi".to_string() + "you")`
                         // should be `x.starts_with(&("hi".to_string() + "you"))`
@@ -1373,14 +1397,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                             _ => false,
                         };
 
-                        let is_mut = mut_ref_self_ty_satisfies_pred || ref_inner_ty_mut;
                         let span = if needs_parens { span } else { span.shrink_to_lo() };
-                        let sugg_prefix = format!("&{}", if is_mut { "mut " } else { "" });
-                        let sugg_msg = &format!(
-                            "consider{} borrowing here",
-                            if is_mut { " mutably" } else { "" }
-                        );
-
                         let suggestions = if !needs_parens {
                             vec![(span.shrink_to_lo(), format!("{}", sugg_prefix))]
                         } else {

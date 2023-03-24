@@ -1,5 +1,4 @@
 use rustc_data_structures::fx::{FxIndexMap, FxIndexSet};
-use rustc_data_structures::vec_map::VecMap;
 use rustc_errors::ErrorGuaranteed;
 use rustc_hir::def_id::LocalDefId;
 use rustc_hir::OpaqueTyOrigin;
@@ -61,9 +60,9 @@ impl<'tcx> RegionInferenceContext<'tcx> {
     pub(crate) fn infer_opaque_types(
         &self,
         infcx: &InferCtxt<'tcx>,
-        opaque_ty_decls: VecMap<OpaqueTypeKey<'tcx>, (OpaqueHiddenType<'tcx>, OpaqueTyOrigin)>,
-    ) -> VecMap<LocalDefId, OpaqueHiddenType<'tcx>> {
-        let mut result: VecMap<LocalDefId, OpaqueHiddenType<'tcx>> = VecMap::new();
+        opaque_ty_decls: FxIndexMap<OpaqueTypeKey<'tcx>, (OpaqueHiddenType<'tcx>, OpaqueTyOrigin)>,
+    ) -> FxIndexMap<LocalDefId, OpaqueHiddenType<'tcx>> {
+        let mut result: FxIndexMap<LocalDefId, OpaqueHiddenType<'tcx>> = FxIndexMap::default();
 
         let member_constraints: FxIndexMap<_, _> = self
             .member_constraints
@@ -284,7 +283,7 @@ impl<'tcx> InferCtxtExt<'tcx> for InferCtxt<'tcx> {
         // hidden type is well formed even without those bounds.
         let predicate = ty::Binder::dummy(ty::PredicateKind::WellFormed(definition_ty.into()));
 
-        let id_substs = InternalSubsts::identity_for_item(self.tcx, def_id.to_def_id());
+        let id_substs = InternalSubsts::identity_for_item(self.tcx, def_id);
 
         // Require that the hidden type actually fulfills all the bounds of the opaque type, even without
         // the bounds that the function supplies.

@@ -18,8 +18,8 @@ pub fn provide(providers: &mut ty::query::Providers) {
     };
 }
 
-fn associated_item_def_ids(tcx: TyCtxt<'_>, def_id: DefId) -> &[DefId] {
-    let item = tcx.hir().expect_item(def_id.expect_local());
+fn associated_item_def_ids(tcx: TyCtxt<'_>, def_id: LocalDefId) -> &[DefId] {
+    let item = tcx.hir().expect_item(def_id);
     match item.kind {
         hir::ItemKind::Trait(.., ref trait_item_refs) => {
             if tcx.lower_impl_trait_in_trait_to_assoc_ty() {
@@ -107,27 +107,26 @@ fn impl_item_implementor_ids(tcx: TyCtxt<'_>, impl_id: DefId) -> DefIdMap<DefId>
         .collect()
 }
 
-fn associated_item(tcx: TyCtxt<'_>, def_id: DefId) -> ty::AssocItem {
-    let id = tcx.hir().local_def_id_to_hir_id(def_id.expect_local());
+fn associated_item(tcx: TyCtxt<'_>, def_id: LocalDefId) -> ty::AssocItem {
+    let id = tcx.hir().local_def_id_to_hir_id(def_id);
     let parent_def_id = tcx.hir().get_parent_item(id);
     let parent_item = tcx.hir().expect_item(parent_def_id.def_id);
     match parent_item.kind {
         hir::ItemKind::Impl(ref impl_) => {
-            if let Some(impl_item_ref) =
-                impl_.items.iter().find(|i| i.id.owner_id.to_def_id() == def_id)
+            if let Some(impl_item_ref) = impl_.items.iter().find(|i| i.id.owner_id.def_id == def_id)
             {
                 let assoc_item = associated_item_from_impl_item_ref(impl_item_ref);
-                debug_assert_eq!(assoc_item.def_id, def_id);
+                debug_assert_eq!(assoc_item.def_id.expect_local(), def_id);
                 return assoc_item;
             }
         }
 
         hir::ItemKind::Trait(.., ref trait_item_refs) => {
             if let Some(trait_item_ref) =
-                trait_item_refs.iter().find(|i| i.id.owner_id.to_def_id() == def_id)
+                trait_item_refs.iter().find(|i| i.id.owner_id.def_id == def_id)
             {
                 let assoc_item = associated_item_from_trait_item_ref(trait_item_ref);
-                debug_assert_eq!(assoc_item.def_id, def_id);
+                debug_assert_eq!(assoc_item.def_id.expect_local(), def_id);
                 return assoc_item;
             }
         }
@@ -191,9 +190,9 @@ fn associated_item_from_impl_item_ref(impl_item_ref: &hir::ImplItemRef) -> ty::A
 /// above, synthesize a corresponding associated type in the impl.
 fn associated_types_for_impl_traits_in_associated_fn(
     tcx: TyCtxt<'_>,
-    fn_def_id: DefId,
+    fn_def_id: LocalDefId,
 ) -> &'_ [DefId] {
-    let parent_def_id = tcx.parent(fn_def_id);
+    let parent_def_id = tcx.local_parent(fn_def_id);
 
     match tcx.def_kind(parent_def_id) {
         DefKind::Trait => {
@@ -212,7 +211,7 @@ fn associated_types_for_impl_traits_in_associated_fn(
 
             let mut visitor = RPITVisitor { rpits: Vec::new() };
 
-            if let Some(output) = tcx.hir().get_fn_output(fn_def_id.expect_local()) {
+            if let Some(output) = tcx.hir().get_fn_output(fn_def_id) {
                 visitor.visit_fn_ret_ty(output);
 
                 tcx.arena.alloc_from_iter(visitor.rpits.iter().map(|opaque_ty_def_id| {
@@ -232,7 +231,7 @@ fn associated_types_for_impl_traits_in_associated_fn(
                         associated_type_for_impl_trait_in_impl(
                             tcx,
                             trait_assoc_def_id.expect_local(),
-                            fn_def_id.expect_local(),
+                            fn_def_id,
                         )
                         .to_def_id()
                     },
@@ -255,13 +254,16 @@ fn associated_type_for_impl_trait_in_trait(
     tcx: TyCtxt<'_>,
     opaque_ty_def_id: LocalDefId,
 ) -> LocalDefId {
-    let fn_def_id = tcx.impl_trait_in_trait_parent_fn(opaque_ty_def_id.to_def_id());
-    let trait_def_id = tcx.parent(fn_def_id);
+    let (hir::OpaqueTyOrigin::FnReturn(fn_def_id) | hir::OpaqueTyOrigin::AsyncFn(fn_def_id)) =
+        tcx.hir().expect_item(opaque_ty_def_id).expect_opaque_ty().origin
+    else {
+        bug!("expected opaque for {opaque_ty_def_id:?}");
+    };
+    let trait_def_id = tcx.local_parent(fn_def_id);
     assert_eq!(tcx.def_kind(trait_def_id), DefKind::Trait);
 
     let span = tcx.def_span(opaque_ty_def_id);
-    let trait_assoc_ty =
-        tcx.at(span).create_def(trait_def_id.expect_local(), DefPathData::ImplTraitAssocTy);
+    let trait_assoc_ty = tcx.at(span).create_def(trait_def_id, DefPathData::ImplTraitAssocTy);
 
     let local_def_id = trait_assoc_ty.def_id();
     let def_id = local_def_id.to_def_id();
@@ -283,7 +285,7 @@ fn associated_type_for_impl_trait_in_trait(
         container: ty::TraitContainer,
         fn_has_self_parameter: false,
         opt_rpitit_info: Some(ImplTraitInTraitData::Trait {
-            fn_def_id,
+            fn_def_id: fn_def_id.to_def_id(),
             opaque_def_id: opaque_ty_def_id.to_def_id(),
         }),
     });
@@ -297,7 +299,7 @@ fn associated_type_for_impl_trait_in_trait(
     // Copy type_of of the opaque.
     trait_assoc_ty.type_of(ty::EarlyBinder(tcx.mk_opaque(
         opaque_ty_def_id.to_def_id(),
-        InternalSubsts::identity_for_item(tcx, opaque_ty_def_id.to_def_id()),
+        InternalSubsts::identity_for_item(tcx, opaque_ty_def_id),
     )));
 
     trait_assoc_ty.is_type_alias_impl_trait(false);
@@ -325,7 +327,7 @@ fn associated_type_for_impl_trait_in_trait(
             params.iter().map(|param| (param.def_id, param.index)).collect();
 
         ty::Generics {
-            parent: Some(trait_def_id),
+            parent: Some(trait_def_id.to_def_id()),
             parent_count,
             params,
             param_def_id_to_index,
@@ -336,7 +338,7 @@ fn associated_type_for_impl_trait_in_trait(
 
     // There are no predicates for the synthesized associated type.
     trait_assoc_ty.explicit_predicates_of(ty::GenericPredicates {
-        parent: Some(trait_def_id),
+        parent: Some(trait_def_id.to_def_id()),
         predicates: &[],
     });
 
@@ -357,7 +359,6 @@ fn associated_type_for_impl_trait_in_impl(
     impl_fn_def_id: LocalDefId,
 ) -> LocalDefId {
     let impl_local_def_id = tcx.local_parent(impl_fn_def_id);
-    let impl_def_id = impl_local_def_id.to_def_id();
 
     // FIXME fix the span, we probably want the def_id of the return type of the function
     let span = tcx.def_span(impl_fn_def_id);
@@ -385,10 +386,6 @@ fn associated_type_for_impl_trait_in_impl(
         opt_rpitit_info: Some(ImplTraitInTraitData::Impl { fn_def_id: impl_fn_def_id.to_def_id() }),
     });
 
-    // Copy param_env of the containing function. The synthesized associated type doesn't have
-    // extra predicates to assume.
-    impl_assoc_ty.param_env(tcx.param_env(impl_fn_def_id));
-
     // Copy visility of the containing function.
     impl_assoc_ty.visibility(tcx.visibility(impl_fn_def_id));
 
@@ -403,7 +400,7 @@ fn associated_type_for_impl_trait_in_impl(
         let trait_assoc_parent_count = trait_assoc_generics.parent_count;
         let mut params = trait_assoc_generics.params.clone();
 
-        let parent_generics = tcx.generics_of(impl_def_id);
+        let parent_generics = tcx.generics_of(impl_local_def_id.to_def_id());
         let parent_count = parent_generics.parent_count + parent_generics.params.len();
 
         for param in &mut params {
@@ -414,7 +411,7 @@ fn associated_type_for_impl_trait_in_impl(
             params.iter().map(|param| (param.def_id, param.index)).collect();
 
         ty::Generics {
-            parent: Some(impl_def_id),
+            parent: Some(impl_local_def_id.to_def_id()),
             parent_count,
             params,
             param_def_id_to_index,
@@ -425,7 +422,7 @@ fn associated_type_for_impl_trait_in_impl(
 
     // There are no predicates for the synthesized associated type.
     impl_assoc_ty.explicit_predicates_of(ty::GenericPredicates {
-        parent: Some(impl_def_id),
+        parent: Some(impl_local_def_id.to_def_id()),
         predicates: &[],
     });
 
