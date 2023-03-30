@@ -17,6 +17,7 @@ use rustc_middle::thir::*;
 use rustc_middle::ty::cast::{mir_cast_kind, CastTy};
 use rustc_middle::ty::{self, Ty, UpvarSubsts};
 use rustc_span::Span;
+use rustc_target::abi::FieldIdx;
 
 impl<'a, 'tcx> Builder<'a, 'tcx> {
     /// Returns an rvalue suitable for use until the end of the current
@@ -553,8 +554,8 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                     result_value,
                     Rvalue::CheckedBinaryOp(op, Box::new((lhs.to_copy(), rhs.to_copy()))),
                 );
-                let val_fld = Field::new(0);
-                let of_fld = Field::new(1);
+                let val_fld = FieldIdx::new(0);
+                let of_fld = FieldIdx::new(1);
 
                 let tcx = self.tcx;
                 let val = tcx.mk_place_field(result_value, val_fld, ty);
@@ -568,7 +569,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             BinOp::Shl | BinOp::Shr if self.check_overflow && ty.is_integral() => {
                 // For an unsigned RHS, the shift is in-range for `rhs < bits`.
                 // For a signed RHS, `IntToInt` cast to the equivalent unsigned
-                // type and do that same comparison.  Because the type is the
+                // type and do that same comparison. Because the type is the
                 // same size, there's no negative shift amount that ends up
                 // overlapping with valid ones, thus it catches negatives too.
                 let (lhs_size, _) = ty.int_size_and_signed(self.tcx);

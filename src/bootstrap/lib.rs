@@ -53,8 +53,8 @@ mod download;
 mod flags;
 mod format;
 mod install;
+mod llvm;
 mod metadata;
-mod native;
 mod render_tests;
 mod run;
 mod sanity;
@@ -125,6 +125,7 @@ const EXTRA_CHECK_CFGS: &[(Option<Mode>, &'static str, Option<&[&'static str]>)]
     (Some(Mode::Std), "no_rc", None),
     (Some(Mode::Std), "no_sync", None),
     (Some(Mode::Std), "freebsd12", None),
+    (Some(Mode::Std), "freebsd13", None),
     (Some(Mode::Std), "backtrace_in_libstd", None),
     /* Extra values not defined in the built-in targets yet, but used in std */
     (Some(Mode::Std), "target_env", Some(&["libnx"])),
@@ -149,6 +150,8 @@ const EXTRA_CHECK_CFGS: &[(Option<Mode>, &'static str, Option<&[&'static str]>)]
     // Needed to avoid the need to copy windows.lib into the sysroot.
     (Some(Mode::Rustc), "windows_raw_dylib", None),
     (Some(Mode::ToolRustc), "windows_raw_dylib", None),
+    // #[cfg(bootstrap)] ohos
+    (Some(Mode::Std), "target_env", Some(&["ohos"])),
 ];
 
 /// A structure representing a Rust compiler.

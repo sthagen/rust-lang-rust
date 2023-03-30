@@ -785,7 +785,7 @@ fn codegen_stmt<'tcx>(
                             let variant_dest = lval.downcast_variant(fx, variant_index);
                             (variant_index, variant_dest, active_field_index)
                         }
-                        _ => (VariantIdx::from_u32(0), lval, None),
+                        _ => (FIRST_VARIANT, lval, None),
                     };
                     if active_field_index.is_some() {
                         assert_eq!(operands.len(), 1);
@@ -797,7 +797,7 @@ fn codegen_stmt<'tcx>(
                             let index = fx.bcx.ins().iconst(fx.pointer_type, field_index as i64);
                             variant_dest.place_index(fx, index)
                         } else {
-                            variant_dest.place_field(fx, mir::Field::new(field_index))
+                            variant_dest.place_field(fx, FieldIdx::new(field_index))
                         };
                         to.write_cvalue(fx, operand);
                     }
