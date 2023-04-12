@@ -357,7 +357,7 @@ impl<'a, 'tcx> EvalCtxt<'a, 'tcx> {
                             // deal with `has_changed` in the next iteration.
                             new_goals.normalizes_to_hack_goal =
                                 Some(this.resolve_vars_if_possible(goal));
-                            has_changed = has_changed.map_err(|c| c.unify_and(certainty));
+                            has_changed = has_changed.map_err(|c| c.unify_with(certainty));
                         }
                     }
                 }
@@ -378,7 +378,7 @@ impl<'a, 'tcx> EvalCtxt<'a, 'tcx> {
                         Certainty::Yes => {}
                         Certainty::Maybe(_) => {
                             new_goals.goals.push(goal);
-                            has_changed = has_changed.map_err(|c| c.unify_and(certainty));
+                            has_changed = has_changed.map_err(|c| c.unify_with(certainty));
                         }
                     }
                 }
@@ -638,5 +638,26 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
     ) -> Option<impl Iterator<Item = Goal<'tcx, ty::Predicate<'tcx>>>> {
         crate::traits::wf::unnormalized_obligations(self.infcx, param_env, arg)
             .map(|obligations| obligations.into_iter().map(|obligation| obligation.into()))
+    }
+
+    pub(super) fn is_transmutable(
+        &self,
+        src_and_dst: rustc_transmute::Types<'tcx>,
+        scope: Ty<'tcx>,
+        assume: rustc_transmute::Assume,
+    ) -> Result<Certainty, NoSolution> {
+        // FIXME(transmutability): This really should be returning nested goals for `Answer::If*`
+        match rustc_transmute::TransmuteTypeEnv::new(self.infcx).is_transmutable(
+            ObligationCause::dummy(),
+            ty::Binder::dummy(src_and_dst),
+            scope,
+            assume,
+        ) {
+            rustc_transmute::Answer::Yes => Ok(Certainty::Yes),
+            rustc_transmute::Answer::No(_)
+            | rustc_transmute::Answer::IfTransmutable { .. }
+            | rustc_transmute::Answer::IfAll(_)
+            | rustc_transmute::Answer::IfAny(_) => Err(NoSolution),
+        }
     }
 }

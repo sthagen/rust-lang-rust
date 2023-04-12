@@ -119,7 +119,7 @@ impl DiagnosticDeriveBuilder {
 impl<'a> DiagnosticDeriveVariantBuilder<'a> {
     /// Generates calls to `code` and similar functions based on the attributes on the type or
     /// variant.
-    pub fn preamble<'s>(&mut self, variant: &VariantInfo<'s>) -> TokenStream {
+    pub fn preamble(&mut self, variant: &VariantInfo<'_>) -> TokenStream {
         let ast = variant.ast();
         let attrs = &ast.attrs;
         let preamble = attrs.iter().map(|attr| {
@@ -133,7 +133,7 @@ impl<'a> DiagnosticDeriveVariantBuilder<'a> {
 
     /// Generates calls to `span_label` and similar functions based on the attributes on fields or
     /// calls to `set_arg` when no attributes are present.
-    pub fn body<'s>(&mut self, variant: &VariantInfo<'s>) -> TokenStream {
+    pub fn body(&mut self, variant: &VariantInfo<'_>) -> TokenStream {
         let mut body = quote! {};
         // Generate `set_arg` calls first..
         for binding in variant.bindings().iter().filter(|bi| should_generate_set_arg(bi.ast())) {
@@ -392,14 +392,16 @@ impl<'a> DiagnosticDeriveVariantBuilder<'a> {
             }
             SubdiagnosticKind::Note | SubdiagnosticKind::Help | SubdiagnosticKind::Warn => {
                 let inner = info.ty.inner_type();
-                if type_matches_path(inner, &["rustc_span", "Span"]) {
+                if type_matches_path(inner, &["rustc_span", "Span"])
+                    || type_matches_path(inner, &["rustc_span", "MultiSpan"])
+                {
                     Ok(self.add_spanned_subdiagnostic(binding, &fn_ident, slug))
                 } else if type_is_unit(inner)
                     || (matches!(info.ty, FieldInnerTy::Plain(_)) && type_is_bool(inner))
                 {
                     Ok(self.add_subdiagnostic(&fn_ident, slug))
                 } else {
-                    report_type_error(attr, "`Span`, `bool` or `()`")?
+                    report_type_error(attr, "`Span`, `MultiSpan`, `bool` or `()`")?
                 }
             }
             SubdiagnosticKind::Suggestion {
