@@ -74,6 +74,7 @@ use rustc_middle::ty::{
     self, error::TypeError, List, Region, Ty, TyCtxt, TypeFoldable, TypeSuperVisitable,
     TypeVisitable, TypeVisitableExt,
 };
+use rustc_span::DUMMY_SP;
 use rustc_span::{sym, symbol::kw, BytePos, DesugaringKind, Pos, Span};
 use rustc_target::spec::abi;
 use std::ops::{ControlFlow, Deref};
@@ -113,7 +114,11 @@ fn escape_literal(s: &str) -> String {
 
 /// A helper for building type related errors. The `typeck_results`
 /// field is only populated during an in-progress typeck.
-/// Get an instance by calling `InferCtxt::err` or `FnCtxt::infer_err`.
+/// Get an instance by calling `InferCtxt::err_ctxt` or `FnCtxt::err_ctxt`.
+///
+/// You must only create this if you intend to actually emit an error.
+/// This provides a lot of utility methods which should not be used
+/// during the happy path.
 pub struct TypeErrCtxt<'a, 'tcx> {
     pub infcx: &'a InferCtxt<'tcx>,
     pub typeck_results: Option<std::cell::Ref<'a, ty::TypeckResults<'tcx>>>,
@@ -123,6 +128,19 @@ pub struct TypeErrCtxt<'a, 'tcx> {
 
     pub autoderef_steps:
         Box<dyn Fn(Ty<'tcx>) -> Vec<(Ty<'tcx>, Vec<PredicateObligation<'tcx>>)> + 'a>,
+}
+
+impl Drop for TypeErrCtxt<'_, '_> {
+    fn drop(&mut self) {
+        if let Some(_) = self.infcx.tcx.sess.has_errors_or_delayed_span_bugs() {
+            // ok, emitted an error.
+        } else {
+            self.infcx
+                .tcx
+                .sess
+                .delay_span_bug(DUMMY_SP, "used a `TypeErrCtxt` without failing compilation");
+        }
+    }
 }
 
 impl TypeErrCtxt<'_, '_> {
@@ -185,9 +203,58 @@ fn msg_span_from_named_region<'tcx>(
     alt_span: Option<Span>,
 ) -> (String, Option<Span>) {
     match *region {
-        ty::ReEarlyBound(_) | ty::ReFree(_) => {
-            let (msg, span) = msg_span_from_early_bound_and_free_regions(tcx, region);
-            (msg, Some(span))
+        ty::ReEarlyBound(ref br) => {
+            let scope = region.free_region_binding_scope(tcx).expect_local();
+            let span = if let Some(param) =
+                tcx.hir().get_generics(scope).and_then(|generics| generics.get_named(br.name))
+            {
+                param.span
+            } else {
+                tcx.def_span(scope)
+            };
+            let text = if br.has_name() {
+                format!("the lifetime `{}` as defined here", br.name)
+            } else {
+                "the anonymous lifetime as defined here".to_string()
+            };
+            (text, Some(span))
+        }
+        ty::ReFree(ref fr) => {
+            if !fr.bound_region.is_named()
+                && let Some((ty, _)) = find_anon_type(tcx, region, &fr.bound_region)
+            {
+                ("the anonymous lifetime defined here".to_string(), Some(ty.span))
+            } else {
+                let scope = region.free_region_binding_scope(tcx).expect_local();
+                match fr.bound_region {
+                    ty::BoundRegionKind::BrNamed(_, name) => {
+                        let span = if let Some(param) =
+                            tcx.hir().get_generics(scope).and_then(|generics| generics.get_named(name))
+                        {
+                            param.span
+                        } else {
+                            tcx.def_span(scope)
+                        };
+                        let text = if name == kw::UnderscoreLifetime {
+                            "the anonymous lifetime as defined here".to_string()
+                        } else {
+                            format!("the lifetime `{}` as defined here", name)
+                        };
+                        (text, Some(span))
+                    }
+                    ty::BrAnon(span) => (
+                        "the anonymous lifetime as defined here".to_string(),
+                        Some(match span {
+                            Some(span) => span,
+                            None => tcx.def_span(scope)
+                        })
+                    ),
+                    _ => (
+                        format!("the lifetime `{}` as defined here", region),
+                        Some(tcx.def_span(scope)),
+                    ),
+                }
+            }
         }
         ty::ReStatic => ("the static lifetime".to_owned(), alt_span),
         ty::RePlaceholder(ty::PlaceholderRegion {
@@ -203,65 +270,6 @@ fn msg_span_from_named_region<'tcx>(
             ..
         }) => (format!("an anonymous lifetime"), None),
         _ => bug!("{:?}", region),
-    }
-}
-
-fn msg_span_from_early_bound_and_free_regions<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    region: ty::Region<'tcx>,
-) -> (String, Span) {
-    let scope = region.free_region_binding_scope(tcx).expect_local();
-    match *region {
-        ty::ReEarlyBound(ref br) => {
-            let mut sp = tcx.def_span(scope);
-            if let Some(param) =
-                tcx.hir().get_generics(scope).and_then(|generics| generics.get_named(br.name))
-            {
-                sp = param.span;
-            }
-            let text = if br.has_name() {
-                format!("the lifetime `{}` as defined here", br.name)
-            } else {
-                "the anonymous lifetime as defined here".to_string()
-            };
-            (text, sp)
-        }
-        ty::ReFree(ref fr) => {
-            if !fr.bound_region.is_named()
-                && let Some((ty, _)) = find_anon_type(tcx, region, &fr.bound_region)
-            {
-                ("the anonymous lifetime defined here".to_string(), ty.span)
-            } else {
-                match fr.bound_region {
-                    ty::BoundRegionKind::BrNamed(_, name) => {
-                        let mut sp = tcx.def_span(scope);
-                        if let Some(param) =
-                            tcx.hir().get_generics(scope).and_then(|generics| generics.get_named(name))
-                        {
-                            sp = param.span;
-                        }
-                        let text = if name == kw::UnderscoreLifetime {
-                            "the anonymous lifetime as defined here".to_string()
-                        } else {
-                            format!("the lifetime `{}` as defined here", name)
-                        };
-                        (text, sp)
-                    }
-                    ty::BrAnon(span) => (
-                        "the anonymous lifetime as defined here".to_string(),
-                        match span {
-                            Some(span) => span,
-                            None => tcx.def_span(scope)
-                        }
-                    ),
-                    _ => (
-                        format!("the lifetime `{}` as defined here", region),
-                        tcx.def_span(scope),
-                    ),
-                }
-            }
-        }
-        _ => bug!(),
     }
 }
 
@@ -419,7 +427,11 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
         &self,
         generic_param_scope: LocalDefId,
         errors: &[RegionResolutionError<'tcx>],
-    ) {
+    ) -> ErrorGuaranteed {
+        if let Some(guaranteed) = self.infcx.tainted_by_errors() {
+            return guaranteed;
+        }
+
         debug!("report_region_errors(): {} errors to start", errors.len());
 
         // try to pre-process the errors, which will group some of them
@@ -499,6 +511,10 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                 }
             }
         }
+
+        self.tcx
+            .sess
+            .delay_span_bug(self.tcx.def_span(generic_param_scope), "expected region errors")
     }
 
     // This method goes through all the errors and try to group certain types
@@ -1829,7 +1845,7 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                             // will try to hide in some case such as `async fn`, so
                             // to make an error more use friendly we will
                             // avoid to suggest a mismatch type with a
-                            // type that the user usually are not usign
+                            // type that the user usually are not using
                             // directly such as `impl Future<Output = u8>`.
                             if !self.tcx.ty_is_opaque_future(found_ty) {
                                 diag.note_expected_found_extra(

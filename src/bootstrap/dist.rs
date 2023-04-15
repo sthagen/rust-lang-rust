@@ -895,6 +895,8 @@ impl Step for Src {
 
     /// Creates the `rust-src` installer component
     fn run(self, builder: &Builder<'_>) -> GeneratedTarball {
+        builder.update_submodule(&Path::new("src/llvm-project"));
+
         let tarball = Tarball::new_targetless(builder, "rust-src");
 
         // A lot of tools expect the rust-src component to be entirely in this directory, so if you
@@ -1958,6 +1960,20 @@ fn maybe_install_llvm(builder: &Builder<'_>, target: TargetSelection, dst_libdir
             // still want to install it, as it otherwise won't be available.
             return false;
         }
+    }
+
+    // FIXME: for reasons I don't understand, the LLVM so in the `rustc` component is different than the one in `rust-dev`.
+    // Only the one in `rustc` works with the downloaded compiler.
+    if builder.download_rustc() && target == builder.build.build {
+        let src_libdir = builder.ci_rustc_dir(target).join("lib");
+        for entry in t!(std::fs::read_dir(&src_libdir)) {
+            let entry = t!(entry);
+            if entry.file_name().to_str().unwrap().starts_with("libLLVM-") {
+                install_llvm_file(builder, &entry.path(), dst_libdir);
+                return !builder.config.dry_run();
+            }
+        }
+        panic!("libLLVM.so not found in src_libdir {}!", src_libdir.display());
     }
 
     // On macOS, rustc (and LLVM tools) link to an unversioned libLLVM.dylib
