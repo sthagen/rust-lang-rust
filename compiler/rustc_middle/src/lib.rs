@@ -59,6 +59,7 @@
 #![feature(result_option_inspect)]
 #![feature(const_option)]
 #![feature(trait_alias)]
+#![feature(ptr_alignment_type)]
 #![recursion_limit = "512"]
 #![allow(rustc::potential_query_instability)]
 
@@ -74,7 +75,7 @@ extern crate tracing;
 extern crate smallvec;
 
 use rustc_errors::{DiagnosticMessage, SubdiagnosticMessage};
-use rustc_macros::fluent_messages;
+use rustc_fluent_macro::fluent_messages;
 
 #[cfg(test)]
 mod tests;
