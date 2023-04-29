@@ -702,7 +702,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                 .copied()
                 .find_map(find_fn_kind_from_did),
             ty::Alias(ty::Opaque, ty::AliasTy { def_id, substs, .. }) => tcx
-                .bound_explicit_item_bounds(def_id)
+                .explicit_item_bounds(def_id)
                 .subst_iter_copied(tcx, substs)
                 .find_map(find_fn_kind_from_did),
             ty::Closure(_, substs) => match substs.as_closure().kind() {
@@ -1359,7 +1359,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         }
 
         // Get closure's arguments
-        let ty::Closure(_, substs) = typeck_results.expr_ty(closure_expr).kind() else { unreachable!() };
+        let ty::Closure(_, substs) = typeck_results.expr_ty(closure_expr).kind() else { /* hir::Closure can be a generator too */ return };
         let sig = substs.as_closure().sig();
         let tupled_params =
             tcx.erase_late_bound_regions(sig.inputs().iter().next().unwrap().map_bound(|&b| b));

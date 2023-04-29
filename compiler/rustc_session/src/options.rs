@@ -662,7 +662,7 @@ mod parse {
 
     pub(crate) fn parse_oom_strategy(slot: &mut OomStrategy, v: Option<&str>) -> bool {
         match v {
-            Some("unwind") => *slot = OomStrategy::Unwind,
+            Some("panic") => *slot = OomStrategy::Panic,
             Some("abort") => *slot = OomStrategy::Abort,
             _ => return false,
         }
@@ -917,7 +917,7 @@ mod parse {
             }
         }
 
-        let mut options = slot.get_or_insert_default();
+        let options = slot.get_or_insert_default();
         let mut seen_always = false;
         let mut seen_never = false;
         let mut seen_ignore_loops = false;

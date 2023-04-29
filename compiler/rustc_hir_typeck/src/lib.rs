@@ -152,10 +152,6 @@ fn used_trait_imports(tcx: TyCtxt<'_>, def_id: LocalDefId) -> &UnordSet<LocalDef
     &*tcx.typeck(def_id).used_trait_imports
 }
 
-fn typeck_item_bodies(tcx: TyCtxt<'_>, (): ()) {
-    tcx.hir().par_body_owners(|body_owner_def_id| tcx.ensure().typeck(body_owner_def_id));
-}
-
 fn typeck<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> &ty::TypeckResults<'tcx> {
     let fallback = move || tcx.type_of(def_id.to_def_id()).subst_identity();
     typeck_with_fallback(tcx, def_id, fallback)
@@ -225,12 +221,6 @@ fn typeck_with_fallback<'tcx>(
             }))
         } else if let Node::AnonConst(_) = node {
             match tcx.hir().get(tcx.hir().parent_id(id)) {
-                Node::Expr(&hir::Expr {
-                    kind: hir::ExprKind::ConstBlock(ref anon_const), ..
-                }) if anon_const.hir_id == id => Some(fcx.next_ty_var(TypeVariableOrigin {
-                    kind: TypeVariableOriginKind::TypeInference,
-                    span,
-                })),
                 Node::Ty(&hir::Ty { kind: hir::TyKind::Typeof(ref anon_const), .. })
                     if anon_const.hir_id == id =>
                 {
@@ -465,21 +455,14 @@ fn fatally_break_rust(sess: &Session) {
     ));
 }
 
-fn has_expected_num_generic_args(
-    tcx: TyCtxt<'_>,
-    trait_did: Option<DefId>,
-    expected: usize,
-) -> bool {
-    trait_did.map_or(true, |trait_did| {
-        let generics = tcx.generics_of(trait_did);
-        generics.count() == expected + if generics.has_self { 1 } else { 0 }
-    })
+fn has_expected_num_generic_args(tcx: TyCtxt<'_>, trait_did: DefId, expected: usize) -> bool {
+    let generics = tcx.generics_of(trait_did);
+    generics.count() == expected + if generics.has_self { 1 } else { 0 }
 }
 
 pub fn provide(providers: &mut Providers) {
     method::provide(providers);
     *providers = Providers {
-        typeck_item_bodies,
         typeck,
         diagnostic_only_typeck,
         has_typeck_results,

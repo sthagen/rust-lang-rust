@@ -2,7 +2,6 @@
 
 use crate::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use crate::mir;
-use crate::ty::fast_reject::TreatProjections;
 use crate::ty::layout::IntegerExt;
 use crate::ty::{
     self, FallibleTypeFolder, ToPredicate, Ty, TyCtxt, TypeFoldable, TypeFolder, TypeSuperFoldable,
@@ -17,7 +16,7 @@ use rustc_hir as hir;
 use rustc_hir::def::{CtorOf, DefKind, Res};
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_index::bit_set::GrowableBitSet;
-use rustc_index::vec::{Idx, IndexVec};
+use rustc_index::{Idx, IndexVec};
 use rustc_macros::HashStable;
 use rustc_session::Limit;
 use rustc_span::sym;
@@ -359,21 +358,29 @@ impl<'tcx> TyCtxt<'tcx> {
         self.ensure().coherent_trait(drop_trait);
 
         let ty = self.type_of(adt_did).subst_identity();
-        let (did, constness) = self.find_map_relevant_impl(
-            drop_trait,
-            ty,
-            // FIXME: This could also be some other mode, like "unexpected"
-            TreatProjections::ForLookup,
-            |impl_did| {
-                if let Some(item_id) = self.associated_item_def_ids(impl_did).first() {
-                    if validate(self, impl_did).is_ok() {
-                        return Some((*item_id, self.constness(impl_did)));
-                    }
-                }
-                None
-            },
-        )?;
+        let mut dtor_candidate = None;
+        self.for_each_relevant_impl(drop_trait, ty, |impl_did| {
+            let Some(item_id) = self.associated_item_def_ids(impl_did).first() else {
+                self.sess.delay_span_bug(self.def_span(impl_did), "Drop impl without drop function");
+                return;
+            };
 
+            if validate(self, impl_did).is_err() {
+                // Already `ErrorGuaranteed`, no need to delay a span bug here.
+                return;
+            }
+
+            if let Some((old_item_id, _)) = dtor_candidate {
+                self.sess
+                    .struct_span_err(self.def_span(item_id), "multiple drop impls found")
+                    .span_note(self.def_span(old_item_id), "other impl here")
+                    .delay_as_bug();
+            }
+
+            dtor_candidate = Some((*item_id, self.constness(impl_did)));
+        });
+
+        let (did, constness) = dtor_candidate?;
         Some(ty::Destructor { did, constness })
     }
 
@@ -692,13 +699,6 @@ impl<'tcx> TyCtxt<'tcx> {
 
         let expanded_type = visitor.expand_opaque_ty(def_id, substs).unwrap();
         if visitor.found_recursion { Err(expanded_type) } else { Ok(expanded_type) }
-    }
-
-    pub fn bound_explicit_item_bounds(
-        self,
-        def_id: DefId,
-    ) -> ty::EarlyBinder<&'tcx [(ty::Predicate<'tcx>, rustc_span::Span)]> {
-        ty::EarlyBinder(self.explicit_item_bounds(def_id))
     }
 
     /// Returns names of captured upvars for closures and generators.
@@ -1151,7 +1151,7 @@ impl<'tcx> Ty<'tcx> {
                 // context, or *something* like that, but for now just avoid passing inference
                 // variables to queries that can't cope with them. Instead, conservatively
                 // return "true" (may change drop order).
-                if query_ty.needs_infer() {
+                if query_ty.has_infer() {
                     return true;
                 }
 
