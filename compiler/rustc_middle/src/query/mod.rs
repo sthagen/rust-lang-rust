@@ -9,6 +9,7 @@ use rustc_span::def_id::LOCAL_CRATE;
 
 pub mod erase;
 mod keys;
+pub mod on_disk_cache;
 pub use keys::{AsLocalKey, Key, LocalCrate};
 
 // Each of these queries corresponds to a function pointer field in the
@@ -616,13 +617,11 @@ rustc_queries! {
     /// `is_const_fn` function. Consider using `is_const_fn` or `is_const_fn_raw` instead.
     query constness(key: DefId) -> hir::Constness {
         desc { |tcx| "checking if item is const: `{}`", tcx.def_path_str(key) }
-        cache_on_disk_if { key.is_local() }
         separate_provide_extern
     }
 
     query asyncness(key: DefId) -> hir::IsAsync {
         desc { |tcx| "checking if the function is async: `{}`", tcx.def_path_str(key) }
-        cache_on_disk_if { key.is_local() }
         separate_provide_extern
     }
 
@@ -640,14 +639,12 @@ rustc_queries! {
     /// Returns `true` if this is a foreign item (i.e., linked via `extern { ... }`).
     query is_foreign_item(key: DefId) -> bool {
         desc { |tcx| "checking if `{}` is a foreign item", tcx.def_path_str(key) }
-        cache_on_disk_if { key.is_local() }
         separate_provide_extern
     }
 
     /// Returns `Some(generator_kind)` if the node pointed to by `def_id` is a generator.
     query generator_kind(def_id: DefId) -> Option<hir::GeneratorKind> {
         desc { |tcx| "looking up generator kind of `{}`", tcx.def_path_str(def_id) }
-        cache_on_disk_if { def_id.is_local() }
         separate_provide_extern
     }
 
@@ -746,7 +743,6 @@ rustc_queries! {
     }
     query impl_polarity(impl_id: DefId) -> ty::ImplPolarity {
         desc { |tcx| "computing implementation polarity of `{}`", tcx.def_path_str(impl_id) }
-        cache_on_disk_if { impl_id.is_local() }
         separate_provide_extern
     }
 
@@ -874,11 +870,10 @@ rustc_queries! {
 
     query typeck(key: LocalDefId) -> &'tcx ty::TypeckResults<'tcx> {
         desc { |tcx| "type-checking `{}`", tcx.def_path_str(key) }
-        cache_on_disk_if { true }
+        cache_on_disk_if(tcx) { !tcx.is_typeck_child(key.to_def_id()) }
     }
     query diagnostic_only_typeck(key: LocalDefId) -> &'tcx ty::TypeckResults<'tcx> {
         desc { |tcx| "type-checking `{}`", tcx.def_path_str(key) }
-        cache_on_disk_if { true }
     }
 
     query used_trait_imports(key: LocalDefId) -> &'tcx UnordSet<LocalDefId> {
@@ -1143,7 +1138,6 @@ rustc_queries! {
 
     query fn_arg_names(def_id: DefId) -> &'tcx [rustc_span::symbol::Ident] {
         desc { |tcx| "looking up function parameter names for `{}`", tcx.def_path_str(def_id) }
-        cache_on_disk_if { def_id.is_local() }
         separate_provide_extern
     }
     /// Gets the rendered value of the specified constant or associated constant.
@@ -1151,12 +1145,10 @@ rustc_queries! {
     query rendered_const(def_id: DefId) -> &'tcx String {
         arena_cache
         desc { |tcx| "rendering constant initializer of `{}`", tcx.def_path_str(def_id) }
-        cache_on_disk_if { def_id.is_local() }
         separate_provide_extern
     }
     query impl_parent(def_id: DefId) -> Option<DefId> {
         desc { |tcx| "computing specialization parent impl of `{}`", tcx.def_path_str(def_id) }
-        cache_on_disk_if { def_id.is_local() }
         separate_provide_extern
     }
 
@@ -1409,7 +1401,6 @@ rustc_queries! {
 
     query impl_defaultness(def_id: DefId) -> hir::Defaultness {
         desc { |tcx| "looking up whether `{}` is a default impl", tcx.def_path_str(def_id) }
-        cache_on_disk_if { def_id.is_local() }
         separate_provide_extern
         feedable
     }

@@ -107,6 +107,7 @@
 #![feature(const_arguments_as_str)]
 #![feature(const_array_from_ref)]
 #![feature(const_array_into_iter_constructors)]
+#![feature(const_assume)]
 #![feature(const_bigint_helper_methods)]
 #![feature(const_black_box)]
 #![feature(const_caller_location)]
@@ -162,6 +163,7 @@
 #![feature(const_waker)]
 #![feature(core_panic)]
 #![feature(duration_consts_float)]
+#![feature(internal_impls_macro)]
 #![feature(ip)]
 #![feature(is_ascii_octdigit)]
 #![feature(maybe_uninit_uninit_array)]
@@ -376,6 +378,7 @@ pub mod alloc;
 
 // note: does not need to be public
 mod bool;
+mod escape;
 mod tuple;
 mod unit;
 

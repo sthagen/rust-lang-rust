@@ -7,14 +7,15 @@
 #![feature(assert_matches)]
 #![feature(box_patterns)]
 #![feature(drain_filter)]
-#![feature(let_chains)]
-#![feature(test)]
-#![feature(never_type)]
-#![feature(lazy_cell)]
-#![feature(type_ascription)]
-#![feature(iter_intersperse)]
-#![feature(type_alias_impl_trait)]
 #![feature(impl_trait_in_assoc_type)]
+#![feature(iter_intersperse)]
+#![feature(lazy_cell)]
+#![feature(let_chains)]
+#![feature(never_type)]
+#![feature(round_char_boundary)]
+#![feature(test)]
+#![feature(type_alias_impl_trait)]
+#![feature(type_ascription)]
 #![recursion_limit = "256"]
 #![warn(rustc::internal)]
 #![allow(clippy::collapsible_if, clippy::collapsible_else_if)]
@@ -33,6 +34,7 @@ extern crate tracing;
 // Dependencies listed in Cargo.toml do not need `extern crate`.
 
 extern crate pulldown_cmark;
+extern crate rustc_abi;
 extern crate rustc_ast;
 extern crate rustc_ast_pretty;
 extern crate rustc_attr;
@@ -170,7 +172,11 @@ pub fn main() {
 
     let exit_code = rustc_driver::catch_with_exit_code(|| match get_args() {
         Some(args) => main_args(&args),
-        _ => Err(ErrorGuaranteed::unchecked_claim_error_was_emitted()),
+        _ =>
+        {
+            #[allow(deprecated)]
+            Err(ErrorGuaranteed::unchecked_claim_error_was_emitted())
+        }
     });
     process::exit(exit_code);
 }
@@ -675,7 +681,7 @@ fn wrap_return(diag: &rustc_errors::Handler, res: Result<(), String>) -> MainRes
     match res {
         Ok(()) => diag.has_errors().map_or(Ok(()), Err),
         Err(err) => {
-            let reported = diag.struct_err(&err).emit();
+            let reported = diag.struct_err(err).emit();
             Err(reported)
         }
     }
@@ -691,10 +697,10 @@ fn run_renderer<'tcx, T: formats::FormatRenderer<'tcx>>(
         Ok(_) => tcx.sess.has_errors().map_or(Ok(()), Err),
         Err(e) => {
             let mut msg =
-                tcx.sess.struct_err(&format!("couldn't generate documentation: {}", e.error));
+                tcx.sess.struct_err(format!("couldn't generate documentation: {}", e.error));
             let file = e.file.display().to_string();
             if !file.is_empty() {
-                msg.note(&format!("failed to create or modify \"{}\"", file));
+                msg.note(format!("failed to create or modify \"{}\"", file));
             }
             Err(msg.emit())
         }
@@ -723,6 +729,7 @@ fn main_args(at_args: &[String]) -> MainResult {
             return if code == 0 {
                 Ok(())
             } else {
+                #[allow(deprecated)]
                 Err(ErrorGuaranteed::unchecked_claim_error_was_emitted())
             };
         }

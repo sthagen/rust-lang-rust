@@ -69,7 +69,6 @@ use std::hash::Hash;
 use std::ops::{Add, Range, Sub};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::Arc;
 
 use md5::Digest;
 use md5::Md5;
@@ -1269,13 +1268,13 @@ pub enum DebuggerVisualizerType {
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Encodable, Decodable)]
 pub struct DebuggerVisualizerFile {
     /// The complete debugger visualizer source.
-    pub src: Arc<[u8]>,
+    pub src: Lrc<[u8]>,
     /// Indicates which visualizer type this targets.
     pub visualizer_type: DebuggerVisualizerType,
 }
 
 impl DebuggerVisualizerFile {
-    pub fn new(src: Arc<[u8]>, visualizer_type: DebuggerVisualizerType) -> Self {
+    pub fn new(src: Lrc<[u8]>, visualizer_type: DebuggerVisualizerType) -> Self {
         DebuggerVisualizerFile { src, visualizer_type }
     }
 }
@@ -2200,6 +2199,7 @@ pub struct ErrorGuaranteed(());
 impl ErrorGuaranteed {
     /// To be used only if you really know what you are doing... ideally, we would find a way to
     /// eliminate all calls to this method.
+    #[deprecated = "`Session::delay_span_bug` should be preferred over this function"]
     pub fn unchecked_claim_error_was_emitted() -> Self {
         ErrorGuaranteed(())
     }

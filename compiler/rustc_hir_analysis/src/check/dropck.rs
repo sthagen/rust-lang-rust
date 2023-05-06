@@ -1,13 +1,15 @@
 // FIXME(@lcnr): Move this module out of `rustc_hir_analysis`.
 //
 // We don't do any drop checking during hir typeck.
-use crate::hir::def_id::{DefId, LocalDefId};
 use rustc_errors::{struct_span_err, ErrorGuaranteed};
 use rustc_middle::ty::error::TypeError;
 use rustc_middle::ty::relate::{Relate, RelateResult, TypeRelation};
 use rustc_middle::ty::subst::SubstsRef;
 use rustc_middle::ty::util::IgnoreRegions;
 use rustc_middle::ty::{self, Predicate, Ty, TyCtxt};
+
+use crate::errors;
+use crate::hir::def_id::{DefId, LocalDefId};
 
 /// This function confirms that the `Drop` implementation identified by
 /// `drop_impl_did` is not any more specialized than the type it is
@@ -27,6 +29,19 @@ use rustc_middle::ty::{self, Predicate, Ty, TyCtxt};
 ///    cannot do `struct S<T>; impl<T:Clone> Drop for S<T> { ... }`).
 ///
 pub fn check_drop_impl(tcx: TyCtxt<'_>, drop_impl_did: DefId) -> Result<(), ErrorGuaranteed> {
+    match tcx.impl_polarity(drop_impl_did) {
+        ty::ImplPolarity::Positive => {}
+        ty::ImplPolarity::Negative => {
+            return Err(tcx.sess.emit_err(errors::DropImplPolarity::Negative {
+                span: tcx.def_span(drop_impl_did),
+            }));
+        }
+        ty::ImplPolarity::Reservation => {
+            return Err(tcx.sess.emit_err(errors::DropImplPolarity::Reservation {
+                span: tcx.def_span(drop_impl_did),
+            }));
+        }
+    }
     let dtor_self_type = tcx.type_of(drop_impl_did).subst_identity();
     let dtor_predicates = tcx.predicates_of(drop_impl_did);
     match dtor_self_type.kind() {
@@ -52,7 +67,7 @@ pub fn check_drop_impl(tcx: TyCtxt<'_>, drop_impl_did: DefId) -> Result<(), Erro
             let span = tcx.def_span(drop_impl_did);
             let reported = tcx.sess.delay_span_bug(
                 span,
-                &format!("should have been rejected by coherence check: {dtor_self_type}"),
+                format!("should have been rejected by coherence check: {dtor_self_type}"),
             );
             Err(reported)
         }
@@ -76,15 +91,15 @@ fn ensure_drop_params_and_item_params_correspond<'tcx>(
         struct_span_err!(tcx.sess, drop_impl_span, E0366, "`Drop` impls cannot be specialized");
     match arg {
         ty::util::NotUniqueParam::DuplicateParam(arg) => {
-            err.note(&format!("`{arg}` is mentioned multiple times"))
+            err.note(format!("`{arg}` is mentioned multiple times"))
         }
         ty::util::NotUniqueParam::NotParam(arg) => {
-            err.note(&format!("`{arg}` is not a generic parameter"))
+            err.note(format!("`{arg}` is not a generic parameter"))
         }
     };
     err.span_note(
         item_span,
-        &format!(
+        format!(
             "use the same sequence of generic lifetime, type and const parameters \
                      as the {self_descr} definition",
         ),

@@ -381,6 +381,7 @@ pub fn check_intrinsic_type(tcx: TyCtxt<'_>, it: &hir::ForeignItem<'_>) {
             sym::unlikely => (0, vec![tcx.types.bool], tcx.types.bool),
 
             sym::read_via_copy => (1, vec![tcx.mk_imm_ptr(param(0))], param(0)),
+            sym::write_via_move => (1, vec![tcx.mk_mut_ptr(param(0)), param(0)], tcx.mk_unit()),
 
             sym::discriminant_value => {
                 let assoc_items = tcx.associated_item_def_ids(
@@ -546,14 +547,14 @@ pub fn check_platform_intrinsic_type(tcx: TyCtxt<'_>, it: &hir::ForeignItem<'_>)
                 Err(_) => {
                     let msg =
                         format!("unrecognized platform-specific intrinsic function: `{name}`");
-                    tcx.sess.struct_span_err(it.span, &msg).emit();
+                    tcx.sess.struct_span_err(it.span, msg).emit();
                     return;
                 }
             }
         }
         _ => {
             let msg = format!("unrecognized platform-specific intrinsic function: `{name}`");
-            tcx.sess.struct_span_err(it.span, &msg).emit();
+            tcx.sess.struct_span_err(it.span, msg).emit();
             return;
         }
     };

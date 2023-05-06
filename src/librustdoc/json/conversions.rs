@@ -41,12 +41,7 @@ impl JsonRenderer<'_> {
             })
             .collect();
         let docs = item.attrs.collapsed_doc_value();
-        let attrs = item
-            .attrs
-            .other_attrs
-            .iter()
-            .map(rustc_ast_pretty::pprust::attribute_to_string)
-            .collect();
+        let attrs = item.attributes(self.tcx, true);
         let span = item.span(self.tcx);
         let visibility = item.visibility(self.tcx);
         let clean::Item { name, item_id, .. } = item;
@@ -538,6 +533,10 @@ pub(crate) fn from_trait_bound_modifier(
         None => TraitBoundModifier::None,
         Maybe => TraitBoundModifier::Maybe,
         MaybeConst => TraitBoundModifier::MaybeConst,
+        // FIXME(negative-bounds): This bound should be rendered negative, but
+        // since that's experimental, maybe let's not add it to the rustdoc json
+        // API just now...
+        Negative => TraitBoundModifier::None,
     }
 }
 

@@ -1309,7 +1309,7 @@ impl Config {
         if config.llvm_from_ci {
             let triple = &config.build.triple;
             let ci_llvm_bin = config.ci_llvm_root().join("bin");
-            let mut build_target = config
+            let build_target = config
                 .target_config
                 .entry(config.build)
                 .or_insert_with(|| Target::from_triple(&triple));
@@ -1440,6 +1440,28 @@ impl Config {
         let mut git = Command::new("git");
         git.current_dir(&self.src);
         git
+    }
+
+    pub(crate) fn test_args(&self) -> Vec<&str> {
+        let mut test_args = match self.cmd {
+            Subcommand::Test { ref test_args, .. } | Subcommand::Bench { ref test_args, .. } => {
+                test_args.iter().flat_map(|s| s.split_whitespace()).collect()
+            }
+            _ => vec![],
+        };
+        test_args.extend(self.free_args.iter().map(|s| s.as_str()));
+        test_args
+    }
+
+    pub(crate) fn args(&self) -> Vec<&str> {
+        let mut args = match self.cmd {
+            Subcommand::Run { ref args, .. } => {
+                args.iter().flat_map(|s| s.split_whitespace()).collect()
+            }
+            _ => vec![],
+        };
+        args.extend(self.free_args.iter().map(|s| s.as_str()));
+        args
     }
 
     /// Bootstrap embeds a version number into the name of shared libraries it uploads in CI.

@@ -35,6 +35,10 @@ hir_analysis_field_already_declared =
 
 hir_analysis_expected_used_symbol = expected `used`, `used(compiler)` or `used(linker)`
 
+hir_analysis_const_param_ty_impl_on_non_adt =
+    the trait `ConstParamTy` may not be implemented for this type
+    .label = type is not a structure or enumeration
+
 hir_analysis_ambiguous_lifetime_bound =
     ambiguous lifetime bound, explicit lifetime bound required
 
@@ -276,3 +280,7 @@ hir_analysis_const_specialize = cannot specialize on const impl with non-const i
 hir_analysis_static_specialize = cannot specialize on `'static` lifetime
 
 hir_analysis_missing_tilde_const = missing `~const` qualifier for specialization
+
+hir_analysis_drop_impl_negative = negative `Drop` impls are not supported
+
+hir_analysis_drop_impl_reservation = reservation `Drop` impls are not supported

@@ -334,9 +334,6 @@ impl<'p, 'tcx> MatchVisitor<'_, 'p, 'tcx> {
                     let refutable = !is_let_irrefutable(&mut ncx, local_lint_level, tpat);
                     Some((expr.span, refutable))
                 }
-                ExprKind::LogicalOp { op: LogicalOp::And, .. } => {
-                    bug!()
-                }
                 _ => None,
             }
         };
@@ -675,7 +672,7 @@ fn non_exhaustive_match<'p, 'tcx>(
         ty::Adt(def, _) if def.is_variant_list_non_exhaustive() && !def.did().is_local());
 
     adt_defined_here(cx, &mut err, scrut_ty, &witnesses);
-    err.note(&format!(
+    err.note(format!(
         "the matched value is of type `{}`{}",
         scrut_ty,
         if is_variant_list_non_exhaustive { ", which is marked as non-exhaustive" } else { "" }
@@ -685,13 +682,13 @@ fn non_exhaustive_match<'p, 'tcx>(
         && witnesses.len() == 1
         && matches!(witnesses[0].ctor(), Constructor::NonExhaustive)
     {
-        err.note(&format!(
+        err.note(format!(
             "`{}` does not have a fixed maximum value, so a wildcard `_` is necessary to match \
              exhaustively",
             scrut_ty,
         ));
         if cx.tcx.sess.is_nightly_build() {
-            err.help(&format!(
+            err.help(format!(
                 "add `#![feature(precise_pointer_size_matching)]` to the crate attributes to \
                  enable precise `{}` matching",
                 scrut_ty,
@@ -796,9 +793,9 @@ fn non_exhaustive_match<'p, 'tcx>(
         },
     );
     if let Some((span, sugg)) = suggestion {
-        err.span_suggestion_verbose(span, &msg, sugg, Applicability::HasPlaceholders);
+        err.span_suggestion_verbose(span, msg, sugg, Applicability::HasPlaceholders);
     } else {
-        err.help(&msg);
+        err.help(msg);
     }
     err.emit();
 }
@@ -860,7 +857,7 @@ fn adt_defined_here<'p, 'tcx>(
         for pat in spans {
             span.push_span_label(pat, "not covered");
         }
-        err.span_note(span, &format!("`{}` defined here", ty));
+        err.span_note(span, format!("`{}` defined here", ty));
     }
 }
 

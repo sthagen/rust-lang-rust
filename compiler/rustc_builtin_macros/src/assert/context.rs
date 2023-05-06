@@ -182,7 +182,6 @@ impl<'cx, 'a> Context<'cx, 'a> {
                     delim: MacDelimiter::Parenthesis,
                     tokens: initial.into_iter().chain(captures).collect::<TokenStream>(),
                 }),
-                prior_type_ascription: None,
             })),
         )
     }
@@ -288,7 +287,7 @@ impl<'cx, 'a> Context<'cx, 'a> {
             ExprKind::Assign(_, _, _)
             | ExprKind::AssignOp(_, _, _)
             | ExprKind::Async(_, _)
-            | ExprKind::Await(_)
+            | ExprKind::Await(_, _)
             | ExprKind::Block(_, _)
             | ExprKind::Break(_, _)
             | ExprKind::Closure(_)
