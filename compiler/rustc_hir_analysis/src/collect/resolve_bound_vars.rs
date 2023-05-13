@@ -526,7 +526,8 @@ impl<'a, 'tcx> Visitor<'tcx> for BoundVarContext<'a, 'tcx> {
                 });
             }
             hir::ItemKind::OpaqueTy(hir::OpaqueTy {
-                origin: hir::OpaqueTyOrigin::TyAlias, ..
+                origin: hir::OpaqueTyOrigin::TyAlias { .. },
+                ..
             }) => {
                 // Opaque types are visited when we visit the
                 // `TyKind::OpaqueDef`, so that they have the lifetimes from
@@ -707,7 +708,7 @@ impl<'a, 'tcx> Visitor<'tcx> for BoundVarContext<'a, 'tcx> {
                 let opaque_ty = self.tcx.hir().item(item_id);
                 match &opaque_ty.kind {
                     hir::ItemKind::OpaqueTy(hir::OpaqueTy {
-                        origin: hir::OpaqueTyOrigin::TyAlias,
+                        origin: hir::OpaqueTyOrigin::TyAlias { .. },
                         ..
                     }) => {
                         intravisit::walk_ty(self, ty);
@@ -1652,17 +1653,16 @@ impl<'a, 'tcx> BoundVarContext<'a, 'tcx> {
             if binding.gen_args.parenthesized == hir::GenericArgsParentheses::ReturnTypeNotation {
                 let bound_vars = if let Some(type_def_id) = type_def_id
                     && self.tcx.def_kind(type_def_id) == DefKind::Trait
-                    // FIXME(return_type_notation): We could bound supertrait methods.
-                    && let Some(assoc_fn) = self
-                        .tcx
-                        .associated_items(type_def_id)
-                        .find_by_name_and_kind(self.tcx, binding.ident, ty::AssocKind::Fn, type_def_id)
+                    && let Some((mut bound_vars, assoc_fn)) =
+                        BoundVarContext::supertrait_hrtb_vars(
+                            self.tcx,
+                            type_def_id,
+                            binding.ident,
+                            ty::AssocKind::Fn,
+                        )
                 {
-                    self.tcx
-                        .generics_of(assoc_fn.def_id)
-                        .params
-                        .iter()
-                        .map(|param| match param.kind {
+                    bound_vars.extend(self.tcx.generics_of(assoc_fn.def_id).params.iter().map(
+                        |param| match param.kind {
                             ty::GenericParamDefKind::Lifetime => ty::BoundVariableKind::Region(
                                 ty::BoundRegionKind::BrNamed(param.def_id, param.name),
                             ),
@@ -1670,9 +1670,11 @@ impl<'a, 'tcx> BoundVarContext<'a, 'tcx> {
                                 ty::BoundTyKind::Param(param.def_id, param.name),
                             ),
                             ty::GenericParamDefKind::Const { .. } => ty::BoundVariableKind::Const,
-                        })
-                        .chain(self.tcx.fn_sig(assoc_fn.def_id).subst_identity().bound_vars())
-                        .collect()
+                        },
+                    ));
+                    bound_vars
+                        .extend(self.tcx.fn_sig(assoc_fn.def_id).subst_identity().bound_vars());
+                    bound_vars
                 } else {
                     self.tcx.sess.delay_span_bug(
                         binding.ident.span,
@@ -1689,8 +1691,13 @@ impl<'a, 'tcx> BoundVarContext<'a, 'tcx> {
                     });
                 });
             } else if let Some(type_def_id) = type_def_id {
-                let bound_vars =
-                    BoundVarContext::supertrait_hrtb_vars(self.tcx, type_def_id, binding.ident);
+                let bound_vars = BoundVarContext::supertrait_hrtb_vars(
+                    self.tcx,
+                    type_def_id,
+                    binding.ident,
+                    ty::AssocKind::Type,
+                )
+                .map(|(bound_vars, _)| bound_vars);
                 self.with(scope, |this| {
                     let scope = Scope::Supertrait {
                         bound_vars: bound_vars.unwrap_or_default(),
@@ -1720,11 +1727,15 @@ impl<'a, 'tcx> BoundVarContext<'a, 'tcx> {
         tcx: TyCtxt<'tcx>,
         def_id: DefId,
         assoc_name: Ident,
-    ) -> Option<Vec<ty::BoundVariableKind>> {
-        let trait_defines_associated_type_named = |trait_def_id: DefId| {
-            tcx.associated_items(trait_def_id)
-                .find_by_name_and_kind(tcx, assoc_name, ty::AssocKind::Type, trait_def_id)
-                .is_some()
+        assoc_kind: ty::AssocKind,
+    ) -> Option<(Vec<ty::BoundVariableKind>, &'tcx ty::AssocItem)> {
+        let trait_defines_associated_item_named = |trait_def_id: DefId| {
+            tcx.associated_items(trait_def_id).find_by_name_and_kind(
+                tcx,
+                assoc_name,
+                assoc_kind,
+                trait_def_id,
+            )
         };
 
         use smallvec::{smallvec, SmallVec};
@@ -1742,10 +1753,10 @@ impl<'a, 'tcx> BoundVarContext<'a, 'tcx> {
                 _ => break None,
             }
 
-            if trait_defines_associated_type_named(def_id) {
-                break Some(bound_vars.into_iter().collect());
+            if let Some(assoc_item) = trait_defines_associated_item_named(def_id) {
+                break Some((bound_vars.into_iter().collect(), assoc_item));
             }
-            let predicates = tcx.super_predicates_that_define_assoc_type((def_id, assoc_name));
+            let predicates = tcx.super_predicates_that_define_assoc_item((def_id, assoc_name));
             let obligations = predicates.predicates.iter().filter_map(|&(pred, _)| {
                 let bound_predicate = pred.kind();
                 match bound_predicate.skip_binder() {
@@ -1913,7 +1924,7 @@ fn is_late_bound_map(
     /// handles cycle detection as we go through the query system.
     ///
     /// This is necessary in the first place for the following case:
-    /// ```
+    /// ```rust,ignore (pseudo-Rust)
     /// type Alias<'a, T> = <T as Trait<'a>>::Assoc;
     /// fn foo<'a>(_: Alias<'a, ()>) -> Alias<'a, ()> { ... }
     /// ```
@@ -1938,7 +1949,7 @@ fn is_late_bound_map(
                 ty::Param(param_ty) => {
                     self.arg_is_constrained[param_ty.index as usize] = true;
                 }
-                ty::Alias(ty::Projection, _) => return ControlFlow::Continue(()),
+                ty::Alias(ty::Projection | ty::Inherent, _) => return ControlFlow::Continue(()),
                 _ => (),
             }
             t.super_visit_with(self)

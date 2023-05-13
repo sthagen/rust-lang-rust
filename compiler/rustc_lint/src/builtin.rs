@@ -62,6 +62,7 @@ use rustc_middle::lint::in_external_macro;
 use rustc_middle::ty::layout::{LayoutError, LayoutOf};
 use rustc_middle::ty::print::with_no_trimmed_paths;
 use rustc_middle::ty::subst::GenericArgKind;
+use rustc_middle::ty::TypeVisitableExt;
 use rustc_middle::ty::{self, Instance, Ty, TyCtxt, VariantDef};
 use rustc_session::config::ExpectedValues;
 use rustc_session::lint::{BuiltinLintDiagnostics, FutureIncompatibilityReason};
@@ -117,8 +118,7 @@ impl EarlyLintPass for WhileTrue {
     #[inline]
     fn check_expr(&mut self, cx: &EarlyContext<'_>, e: &ast::Expr) {
         if let ast::ExprKind::While(cond, _, label) = &e.kind
-            && let cond = pierce_parens(cond)
-            && let ast::ExprKind::Lit(token_lit) = cond.kind
+            && let ast::ExprKind::Lit(token_lit) = pierce_parens(cond).kind
             && let token::Lit { kind: token::Bool, symbol: kw::True, .. } = token_lit
             && !cond.span.from_expansion()
         {
@@ -547,32 +547,13 @@ impl<'tcx> LateLintPass<'tcx> for MissingDoc {
     }
 
     fn check_item(&mut self, cx: &LateContext<'_>, it: &hir::Item<'_>) {
-        match it.kind {
-            hir::ItemKind::Trait(..) => {
-                // Issue #11592: traits are always considered exported, even when private.
-                if cx.tcx.visibility(it.owner_id)
-                    == ty::Visibility::Restricted(
-                        cx.tcx.parent_module_from_def_id(it.owner_id.def_id).to_def_id(),
-                    )
-                {
-                    return;
-                }
-            }
-            hir::ItemKind::TyAlias(..)
-            | hir::ItemKind::Fn(..)
-            | hir::ItemKind::Macro(..)
-            | hir::ItemKind::Mod(..)
-            | hir::ItemKind::Enum(..)
-            | hir::ItemKind::Struct(..)
-            | hir::ItemKind::Union(..)
-            | hir::ItemKind::Const(..)
-            | hir::ItemKind::Static(..) => {}
-
-            _ => return,
-        };
+        // Previously the Impl and Use types have been excluded from missing docs,
+        // so we will continue to exclude them for compatibility
+        if let hir::ItemKind::Impl(..) | hir::ItemKind::Use(..) = it.kind {
+            return;
+        }
 
         let (article, desc) = cx.tcx.article_and_description(it.owner_id.to_def_id());
-
         self.check_missing_docs_attrs(cx, it.owner_id.def_id, article, desc);
     }
 
@@ -1462,6 +1443,10 @@ impl<'tcx> LateLintPass<'tcx> for TypeAliasBounds {
             // Bounds are respected for `type X = impl Trait`
             return;
         }
+        if cx.tcx.type_of(item.owner_id).skip_binder().has_inherent_projections() {
+            // Bounds are respected for `type X = … Type::Inherent …`
+            return;
+        }
         // There must not be a where clause
         if type_alias_generics.predicates.is_empty() {
             return;
@@ -1581,7 +1566,6 @@ declare_lint_pass!(
 
 impl<'tcx> LateLintPass<'tcx> for TrivialConstraints {
     fn check_item(&mut self, cx: &LateContext<'tcx>, item: &'tcx hir::Item<'tcx>) {
-        use rustc_middle::ty::visit::TypeVisitableExt;
         use rustc_middle::ty::Clause;
         use rustc_middle::ty::PredicateKind::*;
 
@@ -1898,8 +1882,8 @@ declare_lint_pass!(
 struct UnderMacro(bool);
 
 impl KeywordIdents {
-    fn check_tokens(&mut self, cx: &EarlyContext<'_>, tokens: TokenStream) {
-        for tt in tokens.into_trees() {
+    fn check_tokens(&mut self, cx: &EarlyContext<'_>, tokens: &TokenStream) {
+        for tt in tokens.trees() {
             match tt {
                 // Only report non-raw idents.
                 TokenTree::Token(token, _) => {
@@ -1960,10 +1944,10 @@ impl KeywordIdents {
 
 impl EarlyLintPass for KeywordIdents {
     fn check_mac_def(&mut self, cx: &EarlyContext<'_>, mac_def: &ast::MacroDef) {
-        self.check_tokens(cx, mac_def.body.tokens.clone());
+        self.check_tokens(cx, &mac_def.body.tokens);
     }
     fn check_mac(&mut self, cx: &EarlyContext<'_>, mac: &ast::MacCall) {
-        self.check_tokens(cx, mac.args.tokens.clone());
+        self.check_tokens(cx, &mac.args.tokens);
     }
     fn check_ident(&mut self, cx: &EarlyContext<'_>, ident: Ident) {
         self.check_ident_token(cx, UnderMacro(false), ident);
@@ -2918,6 +2902,7 @@ impl ClashingExternDeclarations {
                         | (Generator(..), Generator(..))
                         | (GeneratorWitness(..), GeneratorWitness(..))
                         | (Alias(ty::Projection, ..), Alias(ty::Projection, ..))
+                        | (Alias(ty::Inherent, ..), Alias(ty::Inherent, ..))
                         | (Alias(ty::Opaque, ..), Alias(ty::Opaque, ..)) => false,
 
                         // These definitely should have been caught above.

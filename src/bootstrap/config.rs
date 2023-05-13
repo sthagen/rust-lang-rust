@@ -21,7 +21,7 @@ use crate::cache::{Interned, INTERNER};
 use crate::cc_detect::{ndk_compiler, Language};
 use crate::channel::{self, GitInfo};
 pub use crate::flags::Subcommand;
-use crate::flags::{Color, Flags};
+use crate::flags::{Color, Flags, Warnings};
 use crate::util::{exe, output, t};
 use once_cell::sync::OnceCell;
 use serde::{Deserialize, Deserializer};
@@ -237,6 +237,8 @@ pub struct Config {
     initial_rustfmt: RefCell<RustfmtState>,
     #[cfg(test)]
     pub initial_rustfmt: RefCell<RustfmtState>,
+
+    pub paths: Vec<PathBuf>,
 }
 
 #[derive(Default, Deserialize, Clone)]
@@ -376,6 +378,16 @@ pub struct TargetSelection {
     file: Option<Interned<String>>,
 }
 
+/// Newtype over `Vec<TargetSelection>` so we can implement custom parsing logic
+#[derive(Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct TargetSelectionList(Vec<TargetSelection>);
+
+pub fn target_selection_list(s: &str) -> Result<TargetSelectionList, String> {
+    Ok(TargetSelectionList(
+        s.split(",").filter(|s| !s.is_empty()).map(TargetSelection::from_user).collect(),
+    ))
+}
+
 impl TargetSelection {
     pub fn from_user(selection: &str) -> Self {
         let path = Path::new(selection);
@@ -455,6 +467,7 @@ pub struct Target {
     pub ndk: Option<PathBuf>,
     pub sanitizers: Option<bool>,
     pub profiler: Option<bool>,
+    pub rpath: Option<bool>,
     pub crt_static: Option<bool>,
     pub musl_root: Option<PathBuf>,
     pub musl_libdir: Option<PathBuf>,
@@ -800,6 +813,7 @@ define_config! {
         android_ndk: Option<String> = "android-ndk",
         sanitizers: Option<bool> = "sanitizers",
         profiler: Option<bool> = "profiler",
+        rpath: Option<bool> = "rpath",
         crt_static: Option<bool> = "crt-static",
         musl_root: Option<String> = "musl-root",
         musl_libdir: Option<String> = "musl-libdir",
@@ -871,26 +885,24 @@ impl Config {
     }
 
     fn parse_inner<'a>(args: &[String], get_toml: impl 'a + Fn(&Path) -> TomlConfig) -> Config {
-        let flags = Flags::parse(&args);
+        let mut flags = Flags::parse(&args);
         let mut config = Config::default_opts();
 
         // Set flags.
+        config.paths = std::mem::take(&mut flags.paths);
         config.exclude = flags.exclude.into_iter().map(|path| TaskPath::parse(path)).collect();
         config.include_default_paths = flags.include_default_paths;
         config.rustc_error_format = flags.rustc_error_format;
         config.json_output = flags.json_output;
         config.on_fail = flags.on_fail;
-        config.jobs = flags.jobs.map(threads_from_config);
+        config.jobs = Some(threads_from_config(flags.jobs as u32));
         config.cmd = flags.cmd;
         config.incremental = flags.incremental;
         config.dry_run = if flags.dry_run { DryRun::UserSelected } else { DryRun::Disabled };
         config.keep_stage = flags.keep_stage;
         config.keep_stage_std = flags.keep_stage_std;
         config.color = flags.color;
-        config.free_args = flags.free_args.clone().unwrap_or_default();
-        if let Some(value) = flags.deny_warnings {
-            config.deny_warnings = value;
-        }
+        config.free_args = std::mem::take(&mut flags.free_args);
         config.llvm_profile_use = flags.llvm_profile_use;
         config.llvm_profile_generate = flags.llvm_profile_generate;
         config.llvm_bolt_profile_generate = flags.llvm_bolt_profile_generate;
@@ -1021,14 +1033,14 @@ impl Config {
             config.out = dir;
         }
 
-        config.hosts = if let Some(arg_host) = flags.host {
+        config.hosts = if let Some(TargetSelectionList(arg_host)) = flags.host {
             arg_host
         } else if let Some(file_host) = build.host {
             file_host.iter().map(|h| TargetSelection::from_user(h)).collect()
         } else {
             vec![config.build]
         };
-        config.targets = if let Some(arg_target) = flags.target {
+        config.targets = if let Some(TargetSelectionList(arg_target)) = flags.target {
             arg_target
         } else if let Some(file_target) = build.target {
             file_target.iter().map(|h| TargetSelection::from_user(h)).collect()
@@ -1064,7 +1076,7 @@ impl Config {
         set(&mut config.print_step_rusage, build.print_step_rusage);
         set(&mut config.patch_binaries_for_nix, build.patch_binaries_for_nix);
 
-        config.verbose = cmp::max(config.verbose, flags.verbose);
+        config.verbose = cmp::max(config.verbose, flags.verbose as usize);
 
         if let Some(install) = toml.install {
             config.prefix = install.prefix.map(PathBuf::from);
@@ -1137,7 +1149,14 @@ impl Config {
             config.rustc_default_linker = rust.default_linker;
             config.musl_root = rust.musl_root.map(PathBuf::from);
             config.save_toolstates = rust.save_toolstates.map(PathBuf::from);
-            set(&mut config.deny_warnings, flags.deny_warnings.or(rust.deny_warnings));
+            set(
+                &mut config.deny_warnings,
+                match flags.warnings {
+                    Warnings::Deny => Some(true),
+                    Warnings::Warn => Some(false),
+                    Warnings::Default => rust.deny_warnings,
+                },
+            );
             set(&mut config.backtrace_on_ice, rust.backtrace_on_ice);
             set(&mut config.rust_verify_llvm_ir, rust.verify_llvm_ir);
             config.rust_thin_lto_import_instr_limit = rust.thin_lto_import_instr_limit;
@@ -1301,6 +1320,7 @@ impl Config {
                 target.qemu_rootfs = cfg.qemu_rootfs.map(PathBuf::from);
                 target.sanitizers = cfg.sanitizers;
                 target.profiler = cfg.profiler;
+                target.rpath = cfg.rpath;
 
                 config.target_config.insert(TargetSelection::from_user(&triple), target);
             }
@@ -1630,6 +1650,10 @@ impl Config {
 
     pub fn any_profiler_enabled(&self) -> bool {
         self.target_config.values().any(|t| t.profiler == Some(true)) || self.profiler
+    }
+
+    pub fn rpath_enabled(&self, target: TargetSelection) -> bool {
+        self.target_config.get(&target).map(|t| t.rpath).flatten().unwrap_or(self.rust_rpath)
     }
 
     pub fn llvm_enabled(&self) -> bool {

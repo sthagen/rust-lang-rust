@@ -856,7 +856,12 @@ impl<'a, 'tcx> CrateMetadataRef<'a> {
         ty::EarlyBinder(&*output)
     }
 
-    fn get_variant(self, kind: &DefKind, index: DefIndex, parent_did: DefId) -> ty::VariantDef {
+    fn get_variant(
+        self,
+        kind: DefKind,
+        index: DefIndex,
+        parent_did: DefId,
+    ) -> (VariantIdx, ty::VariantDef) {
         let adt_kind = match kind {
             DefKind::Variant => ty::AdtKind::Enum,
             DefKind::Struct => ty::AdtKind::Struct,
@@ -870,22 +875,25 @@ impl<'a, 'tcx> CrateMetadataRef<'a> {
             if adt_kind == ty::AdtKind::Enum { Some(self.local_def_id(index)) } else { None };
         let ctor = data.ctor.map(|(kind, index)| (kind, self.local_def_id(index)));
 
-        ty::VariantDef::new(
-            self.item_name(index),
-            variant_did,
-            ctor,
-            data.discr,
-            self.get_associated_item_or_field_def_ids(index)
-                .map(|did| ty::FieldDef {
-                    did,
-                    name: self.item_name(did.index),
-                    vis: self.get_visibility(did.index),
-                })
-                .collect(),
-            adt_kind,
-            parent_did,
-            false,
-            data.is_non_exhaustive,
+        (
+            data.idx,
+            ty::VariantDef::new(
+                self.item_name(index),
+                variant_did,
+                ctor,
+                data.discr,
+                self.get_associated_item_or_field_def_ids(index)
+                    .map(|did| ty::FieldDef {
+                        did,
+                        name: self.item_name(did.index),
+                        vis: self.get_visibility(did.index),
+                    })
+                    .collect(),
+                adt_kind,
+                parent_did,
+                false,
+                data.is_non_exhaustive,
+            ),
         )
     }
 
@@ -901,7 +909,7 @@ impl<'a, 'tcx> CrateMetadataRef<'a> {
         };
         let repr = self.root.tables.repr_options.get(self, item_id).unwrap().decode(self);
 
-        let variants = if let ty::AdtKind::Enum = adt_kind {
+        let mut variants: Vec<_> = if let ty::AdtKind::Enum = adt_kind {
             self.root
                 .tables
                 .module_children_non_reexports
@@ -912,15 +920,22 @@ impl<'a, 'tcx> CrateMetadataRef<'a> {
                     let kind = self.def_kind(index);
                     match kind {
                         DefKind::Ctor(..) => None,
-                        _ => Some(self.get_variant(&kind, index, did)),
+                        _ => Some(self.get_variant(kind, index, did)),
                     }
                 })
                 .collect()
         } else {
-            std::iter::once(self.get_variant(&kind, item_id, did)).collect()
+            std::iter::once(self.get_variant(kind, item_id, did)).collect()
         };
 
-        tcx.mk_adt_def(did, adt_kind, variants, repr)
+        variants.sort_by_key(|(idx, _)| *idx);
+
+        tcx.mk_adt_def(
+            did,
+            adt_kind,
+            variants.into_iter().map(|(_, variant)| variant).collect(),
+            repr,
+        )
     }
 
     fn get_visibility(self, id: DefIndex) -> Visibility<DefId> {
@@ -1457,28 +1472,30 @@ impl<'a, 'tcx> CrateMetadataRef<'a> {
                     ..
                 } = source_file_to_import;
 
-                // If this file is under $sysroot/lib/rustlib/src/ but has not been remapped
-                // during rust bootstrapping by `remap-debuginfo = true`, and the user
-                // wish to simulate that behaviour by -Z simulate-remapped-rust-src-base,
+                // If this file is under $sysroot/lib/rustlib/src/
+                // and the user wish to simulate remapping with -Z simulate-remapped-rust-src-base,
                 // then we change `name` to a similar state as if the rust was bootstrapped
                 // with `remap-debuginfo = true`.
                 // This is useful for testing so that tests about the effects of
                 // `try_to_translate_virtual_to_real` don't have to worry about how the
                 // compiler is bootstrapped.
                 if let Some(virtual_dir) = &sess.opts.unstable_opts.simulate_remapped_rust_src_base
-                {
-                    if let Some(real_dir) = &sess.opts.real_rust_source_base_dir {
-                        for subdir in ["library", "compiler"] {
-                            if let rustc_span::FileName::Real(ref mut old_name) = name {
-                                if let rustc_span::RealFileName::LocalPath(local) = old_name {
-                                    if let Ok(rest) = local.strip_prefix(real_dir.join(subdir)) {
-                                        *old_name = rustc_span::RealFileName::Remapped {
-                                            local_path: None,
-                                            virtual_name: virtual_dir.join(subdir).join(rest),
-                                        };
-                                    }
-                                }
-                            }
+                && let Some(real_dir) = &sess.opts.real_rust_source_base_dir
+                && let rustc_span::FileName::Real(ref mut old_name) = name {
+                    let relative_path = match old_name {
+                        rustc_span::RealFileName::LocalPath(local) => local.strip_prefix(real_dir).ok(),
+                        rustc_span::RealFileName::Remapped { virtual_name, .. } => {
+                            option_env!("CFG_VIRTUAL_RUST_SOURCE_BASE_DIR").and_then(|virtual_dir| virtual_name.strip_prefix(virtual_dir).ok())
+                        }
+                    };
+                    debug!(?relative_path, ?virtual_dir, "simulate_remapped_rust_src_base");
+                    for subdir in ["library", "compiler"] {
+                        if let Some(rest) = relative_path.and_then(|p| p.strip_prefix(subdir).ok()) {
+                            *old_name = rustc_span::RealFileName::Remapped {
+                                local_path: None, // FIXME: maybe we should preserve this?
+                                virtual_name: virtual_dir.join(subdir).join(rest),
+                            };
+                            break;
                         }
                     }
                 }

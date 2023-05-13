@@ -599,6 +599,7 @@ pub enum PrintRequest {
     StackProtectorStrategies,
     LinkArgs,
     SplitDebuginfo,
+    DeploymentTarget,
 }
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -1059,6 +1060,9 @@ fn default_configuration(sess: &Session) -> CrateConfig {
     if sess.opts.debug_assertions {
         ret.insert((sym::debug_assertions, None));
     }
+    if sess.overflow_checks() {
+        ret.insert((sym::overflow_checks, None));
+    }
     // JUSTIFICATION: before wrapper fn is available
     #[allow(rustc::bad_opt_access)]
     if sess.opts.crate_types.contains(&CrateType::ProcMacro) {
@@ -1208,6 +1212,7 @@ impl CrateCheckConfig {
             sym::windows,
             sym::proc_macro,
             sym::debug_assertions,
+            sym::overflow_checks,
             sym::target_thread_local,
         ] {
             self.expecteds.entry(name).or_insert_with(no_values);
@@ -1481,7 +1486,7 @@ pub fn rustc_short_optgroups() -> Vec<RustcOptGroup> {
             "[crate-name|file-names|sysroot|target-libdir|cfg|calling-conventions|\
              target-list|target-cpus|target-features|relocation-models|code-models|\
              tls-models|target-spec-json|all-target-specs-json|native-static-libs|\
-             stack-protector-strategies|link-args]",
+             stack-protector-strategies|link-args|deployment-target]",
         ),
         opt::flagmulti_s("g", "", "Equivalent to -C debuginfo=2"),
         opt::flagmulti_s("O", "", "Equivalent to -C opt-level=2"),
@@ -1931,6 +1936,7 @@ fn collect_print_requests(
         ("all-target-specs-json", PrintRequest::AllTargetSpecs),
         ("link-args", PrintRequest::LinkArgs),
         ("split-debuginfo", PrintRequest::SplitDebuginfo),
+        ("deployment-target", PrintRequest::DeploymentTarget),
     ];
 
     prints.extend(matches.opt_strs("print").into_iter().map(|req| {

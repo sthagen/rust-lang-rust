@@ -281,9 +281,6 @@ pub enum ObligationCauseCode<'tcx> {
     /// A type like `Box<Foo<'a> + 'b>` is WF only if `'b: 'a`.
     ObjectTypeBound(Ty<'tcx>, ty::Region<'tcx>),
 
-    /// Obligation incurred due to an object cast.
-    ObjectCastObligation(/* Concrete type */ Ty<'tcx>, /* Object type */ Ty<'tcx>),
-
     /// Obligation incurred due to a coercion.
     Coercion {
         source: Ty<'tcx>,
@@ -444,6 +441,10 @@ pub enum ObligationCauseCode<'tcx> {
     AscribeUserTypeProvePredicate(Span),
 
     RustCall,
+
+    /// Obligations to prove that a `std::ops::Drop` impl is not stronger than
+    /// the ADT it's being implemented for.
+    DropImpl,
 }
 
 /// The 'location' at which we try to perform HIR-based wf checking.
@@ -576,11 +577,7 @@ pub enum SelectionError<'tcx> {
     /// After a closure impl has selected, its "outputs" were evaluated
     /// (which for closures includes the "input" type params) and they
     /// didn't resolve. See `confirm_poly_trait_refs` for more.
-    OutputTypeParameterMismatch(
-        ty::PolyTraitRef<'tcx>,
-        ty::PolyTraitRef<'tcx>,
-        ty::error::TypeError<'tcx>,
-    ),
+    OutputTypeParameterMismatch(Box<SelectionOutputTypeParameterMismatch<'tcx>>),
     /// The trait pointed by `DefId` is not object safe.
     TraitNotObjectSafe(DefId),
     /// A given constant couldn't be evaluated.
@@ -590,6 +587,13 @@ pub enum SelectionError<'tcx> {
     /// Signaling that an error has already been emitted, to avoid
     /// multiple errors being shown.
     ErrorReporting,
+}
+
+#[derive(Clone, Debug, TypeVisitable, Lift)]
+pub struct SelectionOutputTypeParameterMismatch<'tcx> {
+    pub found_trait_ref: ty::PolyTraitRef<'tcx>,
+    pub expected_trait_ref: ty::PolyTraitRef<'tcx>,
+    pub terr: ty::error::TypeError<'tcx>,
 }
 
 /// When performing resolution, it is typically the case that there

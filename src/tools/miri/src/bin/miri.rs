@@ -63,7 +63,9 @@ impl rustc_driver::Callbacks for MiriCompilerCalls {
         queries: &'tcx rustc_interface::Queries<'tcx>,
     ) -> Compilation {
         queries.global_ctxt().unwrap().enter(|tcx| {
-            tcx.sess.abort_if_errors();
+            if tcx.sess.compile_status().is_err() {
+                tcx.sess.fatal("miri cannot be run on programs that fail compilation");
+            }
 
             init_late_loggers(tcx);
             if !tcx.sess.crate_types().contains(&CrateType::Executable) {
@@ -286,11 +288,10 @@ fn main() {
     // (`install_ice_hook` might change `RUST_BACKTRACE`.)
     let env_snapshot = env::vars_os().collect::<Vec<_>>();
 
-    // Earliest rustc setup.
-    rustc_driver::install_ice_hook();
-
     // If the environment asks us to actually be rustc, then do that.
     if let Some(crate_kind) = env::var_os("MIRI_BE_RUSTC") {
+        // Earliest rustc setup.
+        rustc_driver::install_ice_hook(rustc_driver::DEFAULT_BUG_REPORT_URL, |_| ());
         rustc_driver::init_rustc_env_logger();
 
         let target_crate = if crate_kind == "target" {
@@ -308,6 +309,9 @@ fn main() {
             &mut MiriBeRustCompilerCalls { target_crate },
         )
     }
+
+    // Add an ICE bug report hook.
+    rustc_driver::install_ice_hook("https://github.com/rust-lang/miri/issues/new", |_| ());
 
     // Init loggers the Miri way.
     init_early_loggers();

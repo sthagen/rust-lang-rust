@@ -729,7 +729,7 @@ pub trait PrettyPrinter<'tcx>:
             ty::Foreign(def_id) => {
                 p!(print_def_path(def_id, &[]));
             }
-            ty::Alias(ty::Projection, ref data) => {
+            ty::Alias(ty::Projection | ty::Inherent, ref data) => {
                 if !(self.should_print_verbose() || NO_QUERIES.with(|q| q.get()))
                     && self.tcx().is_impl_trait_in_trait(data.def_id)
                 {
@@ -2632,6 +2632,12 @@ macro_rules! define_print_and_forward_display {
 /// `<T as Trait<U>>`.
 #[derive(Copy, Clone, TypeFoldable, TypeVisitable, Lift)]
 pub struct TraitRefPrintOnlyTraitPath<'tcx>(ty::TraitRef<'tcx>);
+
+impl<'tcx> rustc_errors::IntoDiagnosticArg for TraitRefPrintOnlyTraitPath<'tcx> {
+    fn into_diagnostic_arg(self) -> rustc_errors::DiagnosticArgValue<'static> {
+        self.to_string().into_diagnostic_arg()
+    }
+}
 
 impl<'tcx> fmt::Debug for TraitRefPrintOnlyTraitPath<'tcx> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

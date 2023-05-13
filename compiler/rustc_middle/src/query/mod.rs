@@ -236,6 +236,15 @@ rustc_queries! {
         cache_on_disk_if { key.is_local() }
     }
 
+    query opaque_types_defined_by(
+        key: LocalDefId
+    ) -> &'tcx [LocalDefId] {
+        desc {
+            |tcx| "computing the opaque types defined by `{}`",
+            tcx.def_path_str(key.to_def_id())
+        }
+    }
+
     /// Returns the list of bounds that can be used for
     /// `SelectionCandidate::ProjectionCandidate(_)` and
     /// `ProjectionTyCandidate::TraitDef`.
@@ -402,7 +411,7 @@ rustc_queries! {
     /// Try to build an abstract representation of the given constant.
     query thir_abstract_const(
         key: DefId
-    ) -> Result<Option<ty::Const<'tcx>>, ErrorGuaranteed> {
+    ) -> Result<Option<ty::EarlyBinder<ty::Const<'tcx>>>, ErrorGuaranteed> {
         desc {
             |tcx| "building an abstract representation for `{}`", tcx.def_path_str(key),
         }
@@ -569,7 +578,7 @@ rustc_queries! {
     /// returns the full set of predicates. If `Some<Ident>`, then the query returns only the
     /// subset of super-predicates that reference traits that define the given associated type.
     /// This is used to avoid cycles in resolving types like `T::Item`.
-    query super_predicates_that_define_assoc_type(key: (DefId, rustc_span::symbol::Ident)) -> ty::GenericPredicates<'tcx> {
+    query super_predicates_that_define_assoc_item(key: (DefId, rustc_span::symbol::Ident)) -> ty::GenericPredicates<'tcx> {
         desc { |tcx| "computing the super traits of `{}` with associated type name `{}`",
             tcx.def_path_str(key.0),
             key.1
@@ -1016,7 +1025,7 @@ rustc_queries! {
         desc { "converting literal to mir constant" }
     }
 
-    query check_match(key: LocalDefId) {
+    query check_match(key: LocalDefId) -> Result<(), rustc_errors::ErrorGuaranteed> {
         desc { |tcx| "match-checking `{}`", tcx.def_path_str(key) }
         cache_on_disk_if { true }
     }
@@ -1813,6 +1822,16 @@ rustc_queries! {
 
     /// Do not call this query directly: invoke `normalize` instead.
     query normalize_projection_ty(
+        goal: CanonicalProjectionGoal<'tcx>
+    ) -> Result<
+        &'tcx Canonical<'tcx, canonical::QueryResponse<'tcx, NormalizationResult<'tcx>>>,
+        NoSolution,
+    > {
+        desc { "normalizing `{}`", goal.value.value }
+    }
+
+    /// Do not call this query directly: invoke `normalize` instead.
+    query normalize_inherent_projection_ty(
         goal: CanonicalProjectionGoal<'tcx>
     ) -> Result<
         &'tcx Canonical<'tcx, canonical::QueryResponse<'tcx, NormalizationResult<'tcx>>>,

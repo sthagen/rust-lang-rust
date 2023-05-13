@@ -1062,7 +1062,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
 
     /// Convert the bounds in `ast_bounds` that refer to traits which define an associated type
     /// named `assoc_name` into ty::Bounds. Ignore the rest.
-    pub(crate) fn compute_bounds_that_match_assoc_type(
+    pub(crate) fn compute_bounds_that_match_assoc_item(
         &self,
         param_ty: Ty<'tcx>,
         ast_bounds: &[hir::GenericBound<'_>],
@@ -1073,7 +1073,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         for ast_bound in ast_bounds {
             if let Some(trait_ref) = ast_bound.trait_ref()
                 && let Some(trait_did) = trait_ref.trait_def_id()
-                && self.tcx().trait_may_define_assoc_type(trait_did, assoc_name)
+                && self.tcx().trait_may_define_assoc_item(trait_did, assoc_name)
             {
                 result.push(ast_bound.clone());
             }
@@ -1141,11 +1141,12 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
             ) {
                 trait_ref
             } else {
-                return Err(tcx.sess.emit_err(crate::errors::ReturnTypeNotationMissingMethod {
-                    span: binding.span,
-                    trait_name: tcx.item_name(trait_ref.def_id()),
-                    assoc_name: binding.item_name.name,
-                }));
+                self.one_bound_for_assoc_method(
+                    traits::supertraits(tcx, trait_ref),
+                    trait_ref.print_only_trait_path(),
+                    binding.item_name,
+                    path_span,
+                )?
             }
         } else if self.trait_defines_associated_item_named(
             trait_ref.def_id(),
@@ -1946,7 +1947,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         let param_name = tcx.hir().ty_param_name(ty_param_def_id);
         self.one_bound_for_assoc_type(
             || {
-                traits::transitive_bounds_that_define_assoc_type(
+                traits::transitive_bounds_that_define_assoc_item(
                     tcx,
                     predicates.iter().filter_map(|(p, _)| {
                         Some(p.to_opt_poly_trait_pred()?.map_bound(|t| t.trait_ref))
@@ -2079,6 +2080,46 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         }
 
         Ok(bound)
+    }
+
+    #[instrument(level = "debug", skip(self, all_candidates, ty_name), ret)]
+    fn one_bound_for_assoc_method(
+        &self,
+        all_candidates: impl Iterator<Item = ty::PolyTraitRef<'tcx>>,
+        ty_name: impl Display,
+        assoc_name: Ident,
+        span: Span,
+    ) -> Result<ty::PolyTraitRef<'tcx>, ErrorGuaranteed> {
+        let mut matching_candidates = all_candidates.filter(|r| {
+            self.trait_defines_associated_item_named(r.def_id(), ty::AssocKind::Fn, assoc_name)
+        });
+
+        let candidate = match matching_candidates.next() {
+            Some(candidate) => candidate,
+            None => {
+                return Err(self.tcx().sess.emit_err(
+                    crate::errors::ReturnTypeNotationMissingMethod {
+                        span,
+                        ty_name: ty_name.to_string(),
+                        assoc_name: assoc_name.name,
+                    },
+                ));
+            }
+        };
+
+        if let Some(conflicting_candidate) = matching_candidates.next() {
+            return Err(self.tcx().sess.emit_err(
+                crate::errors::ReturnTypeNotationConflictingBound {
+                    span,
+                    ty_name: ty_name.to_string(),
+                    assoc_name: assoc_name.name,
+                    first_bound: candidate.print_only_trait_path(),
+                    second_bound: conflicting_candidate.print_only_trait_path(),
+                },
+            ));
+        }
+
+        Ok(candidate)
     }
 
     // Create a type from a path to an associated type or to an enum variant.
@@ -2378,6 +2419,10 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
             return Ok(None);
         }
 
+        //
+        // Select applicable inherent associated type candidates modulo regions.
+        //
+
         // In contexts that have no inference context, just make a new one.
         // We do need a local variable to store it, though.
         let infcx_;
@@ -2390,7 +2435,9 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
             }
         };
 
-        let param_env = tcx.param_env(block.owner.to_def_id());
+        // FIXME(inherent_associated_types): Acquiring the ParamEnv this early leads to cycle errors
+        // when inside of an ADT (#108491) or where clause.
+        let param_env = tcx.param_env(block.owner);
         let cause = ObligationCause::misc(span, block.owner.def_id);
 
         let mut fulfillment_errors = Vec::new();
@@ -2398,6 +2445,8 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
             let universe = infcx.create_next_universe();
 
             // Regions are not considered during selection.
+            // FIXME(non_lifetime_binders): Here we are "truncating" or "flattening" the universes
+            // of type and const binders. Is that correct in the selection phase? See also #109505.
             let self_ty = tcx.replace_escaping_bound_vars_uncached(
                 self_ty,
                 FnMutDelegate {
@@ -2413,41 +2462,40 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
 
             candidates
                 .iter()
-                .filter_map(|&(impl_, (assoc_item, def_scope))| {
+                .copied()
+                .filter(|&(impl_, _)| {
                     infcx.probe(|_| {
                         let ocx = ObligationCtxt::new_in_snapshot(&infcx);
 
-                        let impl_ty = tcx.type_of(impl_);
                         let impl_substs = infcx.fresh_item_substs(impl_);
-                        let impl_ty = impl_ty.subst(tcx, impl_substs);
+                        let impl_ty = tcx.type_of(impl_).subst(tcx, impl_substs);
                         let impl_ty = ocx.normalize(&cause, param_env, impl_ty);
 
-                        // Check that the Self-types can be related.
-                        // FIXME(fmease): Should we use `eq` here?
-                        ocx.sup(&ObligationCause::dummy(), param_env, impl_ty, self_ty).ok()?;
+                        // Check that the self types can be related.
+                        // FIXME(inherent_associated_types): Should we use `eq` here? Method probing uses
+                        // `sup` for this situtation, too. What for? To constrain inference variables?
+                        if ocx.sup(&ObligationCause::dummy(), param_env, impl_ty, self_ty).is_err()
+                        {
+                            return false;
+                        }
 
                         // Check whether the impl imposes obligations we have to worry about.
-                        let impl_bounds = tcx.predicates_of(impl_);
-                        let impl_bounds = impl_bounds.instantiate(tcx, impl_substs);
-
+                        let impl_bounds = tcx.predicates_of(impl_).instantiate(tcx, impl_substs);
                         let impl_bounds = ocx.normalize(&cause, param_env, impl_bounds);
-
                         let impl_obligations = traits::predicates_for_generics(
                             |_, _| cause.clone(),
                             param_env,
                             impl_bounds,
                         );
-
                         ocx.register_obligations(impl_obligations);
 
                         let mut errors = ocx.select_where_possible();
                         if !errors.is_empty() {
                             fulfillment_errors.append(&mut errors);
-                            return None;
+                            return false;
                         }
 
-                        // FIXME(fmease): Unsolved vars can escape this InferCtxt snapshot.
-                        Some((assoc_item, def_scope, infcx.resolve_vars_if_possible(impl_substs)))
+                        true
                     })
                 })
                 .collect()
@@ -2456,24 +2504,26 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         if applicable_candidates.len() > 1 {
             return Err(self.complain_about_ambiguous_inherent_assoc_type(
                 name,
-                applicable_candidates.into_iter().map(|(candidate, ..)| candidate).collect(),
+                applicable_candidates.into_iter().map(|(_, (candidate, _))| candidate).collect(),
                 span,
             ));
         }
 
-        if let Some((assoc_item, def_scope, impl_substs)) = applicable_candidates.pop() {
+        if let Some((impl_, (assoc_item, def_scope))) = applicable_candidates.pop() {
             self.check_assoc_ty(assoc_item, name, def_scope, block, span);
 
-            // FIXME(inherent_associated_types): To fully *confirm* the *probed* candidate, we still
-            // need to relate the Self-type with fresh item substs & register region obligations for
-            // regionck to prove/disprove.
+            // FIXME(fmease): Currently creating throwaway `parent_substs` to please
+            // `create_substs_for_associated_item`. Modify the latter instead (or sth. similar) to
+            // not require the parent substs logic.
+            let parent_substs = InternalSubsts::identity_for_item(tcx, impl_);
+            let substs =
+                self.create_substs_for_associated_item(span, assoc_item, segment, parent_substs);
+            let substs = tcx.mk_substs_from_iter(
+                std::iter::once(ty::GenericArg::from(self_ty))
+                    .chain(substs.into_iter().skip(parent_substs.len())),
+            );
 
-            let item_substs =
-                self.create_substs_for_associated_item(span, assoc_item, segment, impl_substs);
-
-            // FIXME(fmease, #106722): Check if the bounds on the parameters of the
-            // associated type hold, if any.
-            let ty = tcx.type_of(assoc_item).subst(tcx, item_substs);
+            let ty = tcx.mk_alias(ty::Inherent, tcx.mk_alias_ty(assoc_item, substs));
 
             return Ok(Some((ty, assoc_item)));
         }

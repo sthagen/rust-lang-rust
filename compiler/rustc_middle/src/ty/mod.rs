@@ -1004,7 +1004,7 @@ impl<'tcx> Term<'tcx> {
         match self.unpack() {
             TermKind::Ty(ty) => match ty.kind() {
                 ty::Alias(kind, alias_ty) => match kind {
-                    AliasKind::Projection => Some(*alias_ty),
+                    AliasKind::Projection | AliasKind::Inherent => Some(*alias_ty),
                     AliasKind::Opaque => None,
                 },
                 _ => None,
@@ -1739,7 +1739,7 @@ pub struct Destructor {
 
 bitflags! {
     #[derive(HashStable, TyEncodable, TyDecodable)]
-    pub struct VariantFlags: u32 {
+    pub struct VariantFlags: u8 {
         const NO_VARIANT_FLAGS        = 0;
         /// Indicates whether the field list of this variant is `#[non_exhaustive]`.
         const IS_FIELD_LIST_NON_EXHAUSTIVE = 1 << 0;
@@ -2476,6 +2476,18 @@ impl<'tcx> TyCtxt<'tcx> {
         }
     }
 
+    /// Returns the `DefId` of the item within which the `impl Trait` is declared.
+    /// For type-alias-impl-trait this is the `type` alias.
+    /// For impl-trait-in-assoc-type this is the assoc type.
+    /// For return-position-impl-trait this is the function.
+    pub fn impl_trait_parent(self, mut def_id: LocalDefId) -> LocalDefId {
+        // Find the surrounding item (type alias or assoc type)
+        while let DefKind::OpaqueTy = self.def_kind(def_id) {
+            def_id = self.local_parent(def_id);
+        }
+        def_id
+    }
+
     pub fn impl_method_has_trait_impl_trait_tys(self, def_id: DefId) -> bool {
         if self.def_kind(def_id) != DefKind::AssocFn {
             return false;
@@ -2520,7 +2532,7 @@ pub fn is_impl_trait_defn(tcx: TyCtxt<'_>, def_id: DefId) -> Option<LocalDefId> 
                 hir::OpaqueTyOrigin::FnReturn(parent) | hir::OpaqueTyOrigin::AsyncFn(parent) => {
                     Some(parent)
                 }
-                hir::OpaqueTyOrigin::TyAlias => None,
+                hir::OpaqueTyOrigin::TyAlias { .. } => None,
             };
         }
     }

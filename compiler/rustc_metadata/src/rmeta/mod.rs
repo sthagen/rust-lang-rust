@@ -31,6 +31,7 @@ use rustc_span::edition::Edition;
 use rustc_span::hygiene::{ExpnIndex, MacroKind};
 use rustc_span::symbol::{Ident, Symbol};
 use rustc_span::{self, ExpnData, ExpnHash, ExpnId, Span};
+use rustc_target::abi::VariantIdx;
 use rustc_target::spec::{PanicStrategy, TargetTriple};
 
 use std::marker::PhantomData;
@@ -394,7 +395,7 @@ define_tables! {
     mir_for_ctfe: Table<DefIndex, LazyValue<mir::Body<'static>>>,
     mir_generator_witnesses: Table<DefIndex, LazyValue<mir::GeneratorLayout<'static>>>,
     promoted_mir: Table<DefIndex, LazyValue<IndexVec<mir::Promoted, mir::Body<'static>>>>,
-    thir_abstract_const: Table<DefIndex, LazyValue<ty::Const<'static>>>,
+    thir_abstract_const: Table<DefIndex, LazyValue<ty::EarlyBinder<ty::Const<'static>>>>,
     impl_parent: Table<DefIndex, RawDefId>,
     impl_polarity: Table<DefIndex, ty::ImplPolarity>,
     constness: Table<DefIndex, hir::Constness>,
@@ -430,6 +431,7 @@ define_tables! {
 
 #[derive(TyEncodable, TyDecodable)]
 struct VariantData {
+    idx: VariantIdx,
     discr: ty::VariantDiscr,
     /// If this is unit or tuple-variant/struct, then this is the index of the ctor id.
     ctor: Option<(CtorKind, DefIndex)>,

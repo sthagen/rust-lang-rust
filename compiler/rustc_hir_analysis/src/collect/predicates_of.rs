@@ -565,7 +565,7 @@ pub(super) fn super_predicates_of(
     implied_predicates_with_filter(tcx, trait_def_id.to_def_id(), PredicateFilter::SelfOnly)
 }
 
-pub(super) fn super_predicates_that_define_assoc_type(
+pub(super) fn super_predicates_that_define_assoc_item(
     tcx: TyCtxt<'_>,
     (trait_def_id, assoc_name): (DefId, Ident),
 ) -> ty::GenericPredicates<'_> {
@@ -640,7 +640,7 @@ pub(super) fn implied_predicates_with_filter(
         ),
         PredicateFilter::SelfThatDefines(assoc_name) => (
             // Convert the bounds that follow the colon (or equal) that reference the associated name
-            icx.astconv().compute_bounds_that_match_assoc_type(self_param_ty, bounds, assoc_name),
+            icx.astconv().compute_bounds_that_match_assoc_item(self_param_ty, bounds, assoc_name),
             // Include where clause bounds for `Self` that reference the associated name
             icx.type_parameter_bounds_in_generics(
                 generics,
@@ -657,14 +657,15 @@ pub(super) fn implied_predicates_with_filter(
         &*tcx.arena.alloc_from_iter(superbounds.predicates().chain(where_bounds_that_match));
     debug!(?implied_bounds);
 
-    // Now require that immediate supertraits are converted,
-    // which will, in turn, reach indirect supertraits.
+    // Now require that immediate supertraits are converted, which will, in
+    // turn, reach indirect supertraits, so we detect cycles now instead of
+    // overflowing during elaboration.
     if matches!(filter, PredicateFilter::SelfOnly) {
-        // Now require that immediate supertraits are converted,
-        // which will, in turn, reach indirect supertraits.
         for &(pred, span) in implied_bounds {
             debug!("superbound: {:?}", pred);
-            if let ty::PredicateKind::Clause(ty::Clause::Trait(bound)) = pred.kind().skip_binder() {
+            if let ty::PredicateKind::Clause(ty::Clause::Trait(bound)) = pred.kind().skip_binder()
+                && bound.polarity == ty::ImplPolarity::Positive
+            {
                 tcx.at(span).super_predicates_of(bound.def_id());
             }
         }
@@ -720,7 +721,7 @@ pub(super) fn type_param_predicates(
                 | ItemKind::TyAlias(_, generics)
                 | ItemKind::OpaqueTy(OpaqueTy {
                     generics,
-                    origin: hir::OpaqueTyOrigin::TyAlias,
+                    origin: hir::OpaqueTyOrigin::TyAlias { .. },
                     ..
                 })
                 | ItemKind::Enum(_, generics)
@@ -819,7 +820,7 @@ impl<'tcx> ItemCtxt<'tcx> {
             hir::GenericBound::Trait(poly_trait_ref, _) => {
                 let trait_ref = &poly_trait_ref.trait_ref;
                 if let Some(trait_did) = trait_ref.trait_def_id() {
-                    self.tcx.trait_may_define_assoc_type(trait_did, assoc_name)
+                    self.tcx.trait_may_define_assoc_item(trait_did, assoc_name)
                 } else {
                     false
                 }

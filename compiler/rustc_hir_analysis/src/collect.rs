@@ -64,8 +64,8 @@ pub fn provide(providers: &mut Providers) {
         explicit_predicates_of: predicates_of::explicit_predicates_of,
         super_predicates_of: predicates_of::super_predicates_of,
         implied_predicates_of: predicates_of::implied_predicates_of,
-        super_predicates_that_define_assoc_type:
-            predicates_of::super_predicates_that_define_assoc_type,
+        super_predicates_that_define_assoc_item:
+            predicates_of::super_predicates_that_define_assoc_item,
         trait_explicit_predicates_and_bounds: predicates_of::trait_explicit_predicates_and_bounds,
         type_param_predicates: predicates_of::type_param_predicates,
         trait_def,
@@ -1483,7 +1483,7 @@ fn generator_kind(tcx: TyCtxt<'_>, def_id: LocalDefId) -> Option<hir::GeneratorK
 fn is_type_alias_impl_trait<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> bool {
     match tcx.hir().get_by_def_id(def_id) {
         Node::Item(hir::Item { kind: hir::ItemKind::OpaqueTy(opaque), .. }) => {
-            matches!(opaque.origin, hir::OpaqueTyOrigin::TyAlias)
+            matches!(opaque.origin, hir::OpaqueTyOrigin::TyAlias { .. })
         }
         _ => bug!("tried getting opaque_ty_origin for non-opaque: {:?}", def_id),
     }
