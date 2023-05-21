@@ -478,6 +478,7 @@ pub enum StashKey {
     /// FRU syntax
     MaybeFruTypo,
     CallAssocMethod,
+    TraitMissingMethod,
 }
 
 fn default_track_diagnostic(d: &mut Diagnostic, f: &mut dyn FnMut(&mut Diagnostic)) {
@@ -1739,7 +1740,7 @@ impl DelayedDiagnostic {
     }
 
     fn decorate(mut self) -> Diagnostic {
-        self.inner.note(format!("delayed at {}", self.note));
+        self.inner.note(format!("delayed at {}\n{}", self.inner.emitted_at, self.note));
         self.inner
     }
 }

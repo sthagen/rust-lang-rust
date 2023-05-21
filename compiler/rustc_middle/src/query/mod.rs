@@ -12,6 +12,7 @@ use crate::infer::canonical::{self, Canonical};
 use crate::lint::LintExpectation;
 use crate::metadata::ModChild;
 use crate::middle::codegen_fn_attrs::CodegenFnAttrs;
+use crate::middle::debugger_visualizer::DebuggerVisualizerFile;
 use crate::middle::exported_symbols::{ExportedSymbol, SymbolExportInfo};
 use crate::middle::lib_features::LibFeatures;
 use crate::middle::privacy::EffectiveVisibilities;
@@ -25,6 +26,7 @@ use crate::mir::interpret::{
 use crate::mir::interpret::{LitToConstError, LitToConstInput};
 use crate::mir::mono::CodegenUnit;
 use crate::query::erase::{erase, restore, Erase};
+use crate::query::plumbing::{query_ensure, query_get_at, DynamicQuery};
 use crate::thir;
 use crate::traits::query::{
     CanonicalPredicateGoal, CanonicalProjectionGoal, CanonicalTyGoal,
@@ -39,10 +41,6 @@ use crate::traits::specialization_graph;
 use crate::traits::{self, ImplSource};
 use crate::ty::fast_reject::SimplifiedType;
 use crate::ty::layout::ValidityRequirement;
-use crate::ty::query::{
-    query_ensure, query_get_at, DynamicQuery, IntoQueryParam, TyCtxtAt, TyCtxtEnsure,
-    TyCtxtEnsureWithValue,
-};
 use crate::ty::subst::{GenericArg, SubstsRef};
 use crate::ty::util::AlwaysRequiresDrop;
 use crate::ty::GeneratorDiagnosticData;
@@ -90,8 +88,11 @@ use std::sync::Arc;
 
 pub mod erase;
 mod keys;
-pub mod on_disk_cache;
 pub use keys::{AsLocalKey, Key, LocalCrate};
+pub mod on_disk_cache;
+#[macro_use]
+pub mod plumbing;
+pub use plumbing::{IntoQueryParam, TyCtxtAt, TyCtxtEnsure, TyCtxtEnsureWithValue};
 
 // Each of these queries corresponds to a function pointer field in the
 // `Providers` struct for requesting a value of that type, and a method
@@ -724,12 +725,6 @@ rustc_queries! {
     /// constructor function).
     query is_promotable_const_fn(key: DefId) -> bool {
         desc { |tcx| "checking if item is promotable: `{}`", tcx.def_path_str(key) }
-    }
-
-    /// Returns `true` if this is a foreign item (i.e., linked via `extern { ... }`).
-    query is_foreign_item(key: DefId) -> bool {
-        desc { |tcx| "checking if `{}` is a foreign item", tcx.def_path_str(key) }
-        separate_provide_extern
     }
 
     /// Returns `Some(generator_kind)` if the node pointed to by `def_id` is a generator.
@@ -1790,12 +1785,18 @@ rustc_queries! {
         desc { "looking at the source for a crate" }
         separate_provide_extern
     }
+
     /// Returns the debugger visualizers defined for this crate.
-    query debugger_visualizers(_: CrateNum) -> &'tcx Vec<rustc_span::DebuggerVisualizerFile> {
+    /// NOTE: This query has to be marked `eval_always` because it reads data
+    ///       directly from disk that is not tracked anywhere else. I.e. it
+    ///       represents a genuine input to the query system.
+    query debugger_visualizers(_: CrateNum) -> &'tcx Vec<DebuggerVisualizerFile> {
         arena_cache
         desc { "looking up the debugger visualizers for this crate" }
         separate_provide_extern
+        eval_always
     }
+
     query postorder_cnums(_: ()) -> &'tcx [CrateNum] {
         eval_always
         desc { "generating a postorder list of CrateNums" }
