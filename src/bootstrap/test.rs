@@ -101,7 +101,7 @@ impl Step for CrateBootstrap {
         );
         builder.info(&format!(
             "{} {} stage0 ({})",
-            builder.kind.test_description(),
+            builder.kind.description(),
             path,
             bootstrap_host,
         ));
@@ -220,7 +220,7 @@ impl Step for HtmlCheck {
         }
         // Ensure that a few different kinds of documentation are available.
         builder.default_doc(&[]);
-        builder.ensure(crate::doc::Rustc { target: self.target, stage: builder.top_stage });
+        builder.ensure(crate::doc::Rustc::new(builder.top_stage, self.target, builder));
 
         try_run(builder, builder.tool_cmd(Tool::HtmlChecker).arg(builder.doc_out(self.target)));
     }
@@ -316,6 +316,17 @@ impl Step for Cargo {
         // those features won't be able to land.
         cargo.env("CARGO_TEST_DISABLE_NIGHTLY", "1");
         cargo.env("PATH", &path_for_cargo(builder, compiler));
+
+        #[cfg(feature = "build-metrics")]
+        builder.metrics.begin_test_suite(
+            crate::metrics::TestSuiteMetadata::CargoPackage {
+                crates: vec!["cargo".into()],
+                target: self.host.triple.to_string(),
+                host: self.host.triple.to_string(),
+                stage: self.stage,
+            },
+            builder,
+        );
 
         let _time = util::timeit(&builder);
         add_flags_and_try_run_tests(builder, &mut cargo);
@@ -762,7 +773,7 @@ impl Step for Clippy {
         }
 
         if !builder.config.cmd.bless() {
-            crate::detail_exit(1);
+            crate::detail_exit_macro!(1);
         }
 
         let mut cargo = builder.cargo(compiler, Mode::ToolRustc, SourceType::InTree, host, "run");
@@ -875,11 +886,11 @@ impl Step for RustdocJSStd {
                     command.arg("--test-file").arg(path);
                 }
             }
-            builder.ensure(crate::doc::Std {
-                target: self.target,
-                stage: builder.top_stage,
-                format: DocumentationFormat::HTML,
-            });
+            builder.ensure(crate::doc::Std::new(
+                builder.top_stage,
+                self.target,
+                DocumentationFormat::HTML,
+            ));
             builder.run(&mut command);
         } else {
             builder.info("No nodejs found, skipping \"tests/rustdoc-js-std\" tests");
@@ -1074,7 +1085,7 @@ help: to skip test's attempt to check tidiness, pass `--exclude src/tools/tidy` 
                     PATH = inferred_rustfmt_dir.display(),
                     CHAN = builder.config.channel,
                 );
-                crate::detail_exit(1);
+                crate::detail_exit_macro!(1);
             }
             crate::format::format(&builder, !builder.config.cmd.bless(), &[]);
         }
@@ -1097,7 +1108,7 @@ help: to skip test's attempt to check tidiness, pass `--exclude src/tools/tidy` 
                 eprintln!(
                     "x.py completions were changed; run `x.py run generate-completions` to update them"
                 );
-                crate::detail_exit(1);
+                crate::detail_exit_macro!(1);
             }
         }
     }
@@ -1318,7 +1329,7 @@ help: to test the compiler, use `--stage 1` instead
 help: to test the standard library, use `--stage 0 library/std` instead
 note: if you're sure you want to do this, please open an issue as to why. In the meantime, you can override this with `COMPILETEST_FORCE_STAGE0=1`."
             );
-            crate::detail_exit(1);
+            crate::detail_exit_macro!(1);
         }
 
         let mut compiler = self.compiler;
@@ -1693,11 +1704,20 @@ note: if you're sure you want to do this, please open an issue as to why. In the
             cmd.arg("--git-hash");
         }
 
-        if let Some(commit) = builder.config.download_rustc_commit() {
-            cmd.env("FAKE_DOWNLOAD_RUSTC_PREFIX", format!("/rustc/{commit}"));
-        }
-
         builder.ci_env.force_coloring_in_ci(&mut cmd);
+
+        #[cfg(feature = "build-metrics")]
+        builder.metrics.begin_test_suite(
+            crate::metrics::TestSuiteMetadata::Compiletest {
+                suite: suite.into(),
+                mode: mode.into(),
+                compare_mode: None,
+                target: self.target.triple.to_string(),
+                host: self.compiler.host.triple.to_string(),
+                stage: self.compiler.stage,
+            },
+            builder,
+        );
 
         builder.info(&format!(
             "Check compiletest suite={} mode={} ({} -> {})",
@@ -1708,6 +1728,20 @@ note: if you're sure you want to do this, please open an issue as to why. In the
 
         if let Some(compare_mode) = compare_mode {
             cmd.arg("--compare-mode").arg(compare_mode);
+
+            #[cfg(feature = "build-metrics")]
+            builder.metrics.begin_test_suite(
+                crate::metrics::TestSuiteMetadata::Compiletest {
+                    suite: suite.into(),
+                    mode: mode.into(),
+                    compare_mode: Some(compare_mode.into()),
+                    target: self.target.triple.to_string(),
+                    host: self.compiler.host.triple.to_string(),
+                    stage: self.compiler.stage,
+                },
+                builder,
+            );
+
             builder.info(&format!(
                 "Check compiletest suite={} mode={} compare_mode={} ({} -> {})",
                 suite, mode, compare_mode, &compiler.host, target
@@ -1738,6 +1772,14 @@ impl Step for BookTest {
     ///
     /// This uses the `rustdoc` that sits next to `compiler`.
     fn run(self, builder: &Builder<'_>) {
+        let host = self.compiler.host;
+        let _guard = builder.msg(
+            Kind::Test,
+            self.compiler.stage,
+            &format!("book {}", self.name),
+            host,
+            host,
+        );
         // External docs are different from local because:
         // - Some books need pre-processing by mdbook before being tested.
         // - They need to save their state to toolstate.
@@ -1929,7 +1971,7 @@ fn markdown_test(builder: &Builder<'_>, compiler: Compiler, markdown: &Path) -> 
         }
     }
 
-    builder.info(&format!("doc tests for: {}", markdown.display()));
+    builder.verbose(&format!("doc tests for: {}", markdown.display()));
     let mut cmd = builder.rustdoc_cmd(compiler);
     builder.add_rust_test_threads(&mut cmd);
     // allow for unstable options such as new editions
@@ -2034,6 +2076,17 @@ fn run_cargo_test(
     let mut cargo =
         prepare_cargo_test(cargo, libtest_args, crates, primary_crate, compiler, target, builder);
     let _time = util::timeit(&builder);
+
+    #[cfg(feature = "build-metrics")]
+    builder.metrics.begin_test_suite(
+        crate::metrics::TestSuiteMetadata::CargoPackage {
+            crates: crates.iter().map(|c| c.to_string()).collect(),
+            target: target.triple.to_string(),
+            host: compiler.host.triple.to_string(),
+            stage: compiler.stage,
+        },
+        builder,
+    );
     add_flags_and_try_run_tests(builder, &mut cargo)
 }
 
@@ -2454,6 +2507,9 @@ impl Step for Distcheck {
         let toml = dir.join("rust-src/lib/rustlib/src/rust/library/std/Cargo.toml");
         builder.run(
             Command::new(&builder.initial_cargo)
+                // Will read the libstd Cargo.toml
+                // which uses the unstable `public-dependency` feature.
+                .env("RUSTC_BOOTSTRAP", "1")
                 .arg("generate-lockfile")
                 .arg("--manifest-path")
                 .arg(&toml)

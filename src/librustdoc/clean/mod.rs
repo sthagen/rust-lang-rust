@@ -1111,8 +1111,8 @@ fn clean_fn_decl_with_args<'tcx>(
     args: Arguments,
 ) -> FnDecl {
     let output = match decl.output {
-        hir::FnRetTy::Return(typ) => Return(clean_ty(typ, cx)),
-        hir::FnRetTy::DefaultReturn(..) => DefaultReturn,
+        hir::FnRetTy::Return(typ) => clean_ty(typ, cx),
+        hir::FnRetTy::DefaultReturn(..) => Type::Tuple(Vec::new()),
     };
     FnDecl { inputs: args, output, c_variadic: decl.c_variadic }
 }
@@ -1126,10 +1126,7 @@ fn clean_fn_decl_from_did_and_sig<'tcx>(
 
     // We assume all empty tuples are default return type. This theoretically can discard `-> ()`,
     // but shouldn't change any code meaning.
-    let output = match clean_middle_ty(sig.output(), cx, None) {
-        Type::Tuple(inner) if inner.is_empty() => DefaultReturn,
-        ty => Return(ty),
-    };
+    let output = clean_middle_ty(sig.output(), cx, None);
 
     FnDecl {
         output,
@@ -1227,7 +1224,7 @@ pub(crate) fn clean_impl_item<'tcx>(
             }
             hir::ImplItemKind::Fn(ref sig, body) => {
                 let m = clean_function(cx, sig, impl_.generics, FunctionArgs::Body(body));
-                let defaultness = cx.tcx.impl_defaultness(impl_.owner_id);
+                let defaultness = cx.tcx.defaultness(impl_.owner_id);
                 MethodItem(m, Some(defaultness))
             }
             hir::ImplItemKind::Type(hir_ty) => {
@@ -1261,7 +1258,7 @@ pub(crate) fn clean_middle_assoc_item<'tcx>(
 
             let provided = match assoc_item.container {
                 ty::ImplContainer => true,
-                ty::TraitContainer => tcx.impl_defaultness(assoc_item.def_id).has_value(),
+                ty::TraitContainer => tcx.defaultness(assoc_item.def_id).has_value(),
             };
             if provided {
                 AssocConstItem(ty, ConstantKind::Extern { def_id: assoc_item.def_id })
@@ -1443,7 +1440,7 @@ pub(crate) fn clean_middle_assoc_item<'tcx>(
                 }
                 generics.where_predicates = where_predicates;
 
-                if tcx.impl_defaultness(assoc_item.def_id).has_value() {
+                if tcx.defaultness(assoc_item.def_id).has_value() {
                     AssocTypeItem(
                         Box::new(Typedef {
                             type_: clean_middle_ty(
@@ -2592,7 +2589,8 @@ fn clean_use_statement_inner<'tcx>(
     } else {
         if inline_attr.is_none()
             && let Res::Def(DefKind::Mod, did) = path.res
-            && !did.is_local() && did.is_crate_root()
+            && !did.is_local()
+            && did.is_crate_root()
         {
             // if we're `pub use`ing an extern crate root, don't inline it unless we
             // were specifically asked for it

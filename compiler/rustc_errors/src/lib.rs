@@ -6,7 +6,6 @@
 #![feature(array_windows)]
 #![feature(drain_filter)]
 #![feature(if_let_guard)]
-#![feature(adt_const_params)]
 #![feature(let_chains)]
 #![feature(never_type)]
 #![feature(result_option_inspect)]
@@ -628,7 +627,7 @@ impl Handler {
         message: DiagnosticMessage,
         args: impl Iterator<Item = DiagnosticArg<'a, 'static>>,
     ) -> SubdiagnosticMessage {
-        SubdiagnosticMessage::Eager(self.eagerly_translate_to_string(message, args))
+        SubdiagnosticMessage::Eager(Cow::from(self.eagerly_translate_to_string(message, args)))
     }
 
     /// Translate `message` eagerly with `args` to `String`.
@@ -845,7 +844,7 @@ impl Handler {
         &self,
         msg: impl Into<DiagnosticMessage>,
     ) -> DiagnosticBuilder<'_, ErrorGuaranteed> {
-        DiagnosticBuilder::new_guaranteeing_error::<_, { Level::Error { lint: false } }>(self, msg)
+        DiagnosticBuilder::new_guaranteeing_error(self, msg)
     }
 
     /// This should only be used by `rustc_middle::lint::struct_lint_level`. Do not use it for hard errors.
@@ -1450,14 +1449,14 @@ impl HandlerInner {
         self.emit_stashed_diagnostics();
 
         let warnings = match self.deduplicated_warn_count {
-            0 => String::new(),
-            1 => "1 warning emitted".to_string(),
-            count => format!("{count} warnings emitted"),
+            0 => Cow::from(""),
+            1 => Cow::from("1 warning emitted"),
+            count => Cow::from(format!("{count} warnings emitted")),
         };
         let errors = match self.deduplicated_err_count {
-            0 => String::new(),
-            1 => "aborting due to previous error".to_string(),
-            count => format!("aborting due to {count} previous errors"),
+            0 => Cow::from(""),
+            1 => Cow::from("aborting due to previous error"),
+            count => Cow::from(format!("aborting due to {count} previous errors")),
         };
         if self.treat_err_as_bug() {
             return;

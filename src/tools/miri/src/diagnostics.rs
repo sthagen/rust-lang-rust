@@ -3,6 +3,8 @@ use std::num::NonZeroU64;
 
 use log::trace;
 
+use rustc_const_eval::ReportErrorExt;
+use rustc_errors::DiagnosticMessage;
 use rustc_span::{source_map::DUMMY_SP, SpanData, Symbol};
 use rustc_target::abi::{Align, Size};
 
@@ -83,7 +85,25 @@ impl fmt::Display for TerminationInfo {
     }
 }
 
-impl MachineStopType for TerminationInfo {}
+impl fmt::Debug for TerminationInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{self}")
+    }
+}
+
+impl MachineStopType for TerminationInfo {
+    fn diagnostic_message(&self) -> DiagnosticMessage {
+        self.to_string().into()
+    }
+    fn add_args(
+        self: Box<Self>,
+        _: &mut dyn FnMut(
+            std::borrow::Cow<'static, str>,
+            rustc_errors::DiagnosticArgValue<'static>,
+        ),
+    ) {
+    }
+}
 
 /// Miri specific diagnostics
 pub enum NonHaltingDiagnostic {
@@ -302,11 +322,34 @@ pub fn report_error<'tcx, 'mir>(
 
     let stacktrace = ecx.generate_stacktrace();
     let (stacktrace, was_pruned) = prune_stacktrace(stacktrace, &ecx.machine);
-    e.print_backtrace();
-    msg.insert(0, e.to_string());
+    let (e, backtrace) = e.into_parts();
+    backtrace.print_backtrace();
+
+    // We want to dump the allocation if this is `InvalidUninitBytes`. Since `add_args` consumes
+    // the `InterpError`, we extract the variables it before that.
+    let extra = match e {
+        UndefinedBehavior(UndefinedBehaviorInfo::InvalidUninitBytes(Some((alloc_id, access)))) =>
+            Some((alloc_id, access)),
+        _ => None,
+    };
+
+    // FIXME(fee1-dead), HACK: we want to use the error as title therefore we can just extract the
+    // label and arguments from the InterpError.
+    let e = {
+        let handler = &ecx.tcx.sess.parse_sess.span_diagnostic;
+        let mut diag = ecx.tcx.sess.struct_allow("");
+        let msg = e.diagnostic_message();
+        e.add_args(handler, &mut diag);
+        let s = handler.eagerly_translate_to_string(msg, diag.args());
+        diag.cancel();
+        s
+    };
+
+    msg.insert(0, e);
+
     report_msg(
         DiagLevel::Error,
-        &if let Some(title) = title { format!("{title}: {}", msg[0]) } else { msg[0].clone() },
+        if let Some(title) = title { format!("{title}: {}", msg[0]) } else { msg[0].clone() },
         msg,
         vec![],
         helps,
@@ -332,15 +375,12 @@ pub fn report_error<'tcx, 'mir>(
     }
 
     // Extra output to help debug specific issues.
-    match e.kind() {
-        UndefinedBehavior(UndefinedBehaviorInfo::InvalidUninitBytes(Some((alloc_id, access)))) => {
-            eprintln!(
-                "Uninitialized memory occurred at {alloc_id:?}{range:?}, in this allocation:",
-                range = access.uninit,
-            );
-            eprintln!("{:?}", ecx.dump_alloc(*alloc_id));
-        }
-        _ => {}
+    if let Some((alloc_id, access)) = extra {
+        eprintln!(
+            "Uninitialized memory occurred at {alloc_id:?}{range:?}, in this allocation:",
+            range = access.uninit,
+        );
+        eprintln!("{:?}", ecx.dump_alloc(alloc_id));
     }
 
     None
@@ -359,7 +399,7 @@ pub fn report_leaks<'mir, 'tcx>(
         any_pruned |= pruned;
         report_msg(
             DiagLevel::Error,
-            &format!(
+            format!(
                 "memory leaked: {id:?} ({}, size: {:?}, align: {:?}), allocated here:",
                 kind,
                 alloc.size().bytes(),
@@ -386,7 +426,7 @@ pub fn report_leaks<'mir, 'tcx>(
 /// additional `span_label` or `note` call.
 pub fn report_msg<'tcx>(
     diag_level: DiagLevel,
-    title: &str,
+    title: String,
     span_msg: Vec<String>,
     notes: Vec<(Option<SpanData>, String)>,
     helps: Vec<(Option<SpanData>, String)>,
@@ -438,12 +478,15 @@ pub fn report_msg<'tcx>(
         // Add visual separator before backtrace.
         err.note(if extra_span { "BACKTRACE (of the first span):" } else { "BACKTRACE:" });
     }
+
+    let (mut err, handler) = err.into_diagnostic().unwrap();
+
     // Add backtrace
     for (idx, frame_info) in stacktrace.iter().enumerate() {
         let is_local = machine.is_local(frame_info);
         // No span for non-local frames and the first frame (which is the error site).
         if is_local && idx > 0 {
-            err.span_note(frame_info.span, frame_info.to_string());
+            err.eager_subdiagnostic(handler, frame_info.as_note(machine.tcx));
         } else {
             let sm = sess.source_map();
             let span = sm.span_to_embeddable_string(frame_info.span);
@@ -451,7 +494,7 @@ pub fn report_msg<'tcx>(
         }
     }
 
-    err.emit();
+    handler.emit_diagnostic(&mut err);
 }
 
 impl<'mir, 'tcx> MiriMachine<'mir, 'tcx> {
@@ -463,15 +506,16 @@ impl<'mir, 'tcx> MiriMachine<'mir, 'tcx> {
         let (stacktrace, _was_pruned) = prune_stacktrace(stacktrace, self);
 
         let (title, diag_level) = match &e {
-            RejectedIsolatedOp(_) => ("operation rejected by isolation", DiagLevel::Warning),
-            Int2Ptr { .. } => ("integer-to-pointer cast", DiagLevel::Warning),
+            RejectedIsolatedOp(_) =>
+                ("operation rejected by isolation".to_string(), DiagLevel::Warning),
+            Int2Ptr { .. } => ("integer-to-pointer cast".to_string(), DiagLevel::Warning),
             CreatedPointerTag(..)
             | PoppedPointerTag(..)
             | CreatedCallId(..)
             | CreatedAlloc(..)
             | FreedAlloc(..)
             | ProgressReport { .. }
-            | WeakMemoryOutdatedLoad => ("tracking was triggered", DiagLevel::Note),
+            | WeakMemoryOutdatedLoad => ("tracking was triggered".to_string(), DiagLevel::Note),
         };
 
         let msg = match &e {
@@ -571,7 +615,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
         let stacktrace = this.generate_stacktrace();
         report_msg(
             DiagLevel::Note,
-            "the place in the program where the ICE was triggered",
+            "the place in the program where the ICE was triggered".to_string(),
             vec![],
             vec![],
             vec![],

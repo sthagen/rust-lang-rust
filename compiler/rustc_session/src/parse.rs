@@ -84,6 +84,7 @@ impl SymbolGallery {
 
 /// Construct a diagnostic for a language feature error due to the given `span`.
 /// The `feature`'s `Symbol` is the one you used in `active.rs` and `rustc_span::symbols`.
+#[track_caller]
 pub fn feature_err(
     sess: &ParseSess,
     feature: Symbol,
@@ -123,7 +124,7 @@ pub fn feature_err_issue(
 /// Construct a future incompatibility diagnostic for a feature gate.
 ///
 /// This diagnostic is only a warning and *does not cause compilation to fail*.
-pub fn feature_warn(sess: &ParseSess, feature: Symbol, span: Span, explain: &str) {
+pub fn feature_warn(sess: &ParseSess, feature: Symbol, span: Span, explain: &'static str) {
     feature_warn_issue(sess, feature, span, GateIssue::Language, explain);
 }
 
@@ -140,7 +141,7 @@ pub fn feature_warn_issue(
     feature: Symbol,
     span: Span,
     issue: GateIssue,
-    explain: &str,
+    explain: &'static str,
 ) {
     let mut err = sess.span_diagnostic.struct_span_warn(span, explain);
     add_feature_diagnostics_for_issue(&mut err, sess, feature, issue);

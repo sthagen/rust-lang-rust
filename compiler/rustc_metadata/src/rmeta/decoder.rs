@@ -9,7 +9,7 @@ use rustc_data_structures::captures::Captures;
 use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::owned_slice::OwnedSlice;
 use rustc_data_structures::svh::Svh;
-use rustc_data_structures::sync::{AppendOnlyVec, Lock, Lrc, OnceCell};
+use rustc_data_structures::sync::{AppendOnlyVec, AtomicBool, Lock, Lrc, OnceCell};
 use rustc_data_structures::unhash::UnhashMap;
 use rustc_expand::base::{SyntaxExtension, SyntaxExtensionKind};
 use rustc_expand::proc_macro::{AttrProcMacro, BangProcMacro, DeriveProcMacro};
@@ -40,6 +40,7 @@ use proc_macro::bridge::client::ProcMacro;
 use std::iter::TrustedLen;
 use std::num::NonZeroUsize;
 use std::path::Path;
+use std::sync::atomic::Ordering;
 use std::{io, iter, mem};
 
 pub(super) use cstore_impl::provide;
@@ -74,6 +75,7 @@ pub(crate) struct CrateMetadata {
     blob: MetadataBlob,
 
     // --- Some data pre-decoded from the metadata blob, usually for performance ---
+    /// Data about the top-level items in a crate, as well as various crate-level metadata.
     root: CrateRoot,
     /// Trait impl data.
     /// FIXME: Used only from queries and can use query cache,
@@ -111,9 +113,10 @@ pub(crate) struct CrateMetadata {
     dep_kind: Lock<CrateDepKind>,
     /// Filesystem location of this crate.
     source: Lrc<CrateSource>,
-    /// Whether or not this crate should be consider a private dependency
-    /// for purposes of the 'exported_private_dependencies' lint
-    private_dep: bool,
+    /// Whether or not this crate should be consider a private dependency.
+    /// Used by the 'exported_private_dependencies' lint, and for determining
+    /// whether to emit suggestions that reference this crate.
+    private_dep: AtomicBool,
     /// The hash for the host proc macro. Used to support `-Z dual-proc-macro`.
     host_hash: Option<Svh>,
 
@@ -449,7 +452,7 @@ impl<'a, 'tcx> Decodable<DecodeContext<'a, 'tcx>> for SyntaxContext {
                 You need to explicitly pass `(crate_metadata_ref, tcx)` to `decode` instead of just `crate_metadata_ref`.");
         };
 
-        let cname = cdata.root.name;
+        let cname = cdata.root.name();
         rustc_span::hygiene::decode_syntax_context(decoder, &cdata.hygiene_context, |_, id| {
             debug!("SpecializedDecoder<SyntaxContext>: decoding {}", id);
             cdata
@@ -564,7 +567,7 @@ impl<'a, 'tcx> Decodable<DecodeContext<'a, 'tcx>> for Span {
                 let cnum = u32::decode(decoder);
                 panic!(
                     "Decoding of crate {:?} tried to access proc-macro dep {:?}",
-                    decoder.cdata().root.name,
+                    decoder.cdata().root.header.name,
                     cnum
                 );
             }
@@ -671,6 +674,16 @@ impl MetadataBlob {
             .decode(self)
     }
 
+    pub(crate) fn get_header(&self) -> CrateHeader {
+        let slice = &self.blob()[..];
+        let offset = METADATA_HEADER.len();
+
+        let pos_bytes = slice[offset..][..4].try_into().unwrap();
+        let pos = u32::from_be_bytes(pos_bytes) as usize;
+
+        LazyValue::<CrateHeader>::from_position(NonZeroUsize::new(pos).unwrap()).decode(self)
+    }
+
     pub(crate) fn get_root(&self) -> CrateRoot {
         let slice = &self.blob()[..];
         let offset = METADATA_HEADER.len();
@@ -684,18 +697,19 @@ impl MetadataBlob {
     pub(crate) fn list_crate_metadata(&self, out: &mut dyn io::Write) -> io::Result<()> {
         let root = self.get_root();
         writeln!(out, "Crate info:")?;
-        writeln!(out, "name {}{}", root.name, root.extra_filename)?;
-        writeln!(out, "hash {} stable_crate_id {:?}", root.hash, root.stable_crate_id)?;
+        writeln!(out, "name {}{}", root.name(), root.extra_filename)?;
+        writeln!(out, "hash {} stable_crate_id {:?}", root.hash(), root.stable_crate_id)?;
         writeln!(out, "proc_macro {:?}", root.proc_macro_data.is_some())?;
         writeln!(out, "=External Dependencies=")?;
 
         for (i, dep) in root.crate_deps.decode(self).enumerate() {
-            let CrateDep { name, extra_filename, hash, host_hash, kind } = dep;
+            let CrateDep { name, extra_filename, hash, host_hash, kind, is_private } = dep;
             let number = i + 1;
 
             writeln!(
                 out,
-                "{number} {name}{extra_filename} hash {hash} host_hash {host_hash:?} kind {kind:?}"
+                "{number} {name}{extra_filename} hash {hash} host_hash {host_hash:?} kind {kind:?} {privacy}",
+                privacy = if is_private { "private" } else { "public" }
             )?;
         }
         write!(out, "\n")?;
@@ -709,19 +723,15 @@ impl CrateRoot {
     }
 
     pub(crate) fn name(&self) -> Symbol {
-        self.name
+        self.header.name
     }
 
     pub(crate) fn hash(&self) -> Svh {
-        self.hash
+        self.header.hash
     }
 
     pub(crate) fn stable_crate_id(&self) -> StableCrateId {
         self.stable_crate_id
-    }
-
-    pub(crate) fn triple(&self) -> &TargetTriple {
-        &self.triple
     }
 
     pub(crate) fn decode_crate_deps<'a>(
@@ -794,7 +804,7 @@ impl<'a, 'tcx> CrateMetadataRef<'a> {
             bug!(
                 "CrateMetadata::def_kind({:?}): id not found, in crate {:?} with number {}",
                 item_id,
-                self.root.name,
+                self.root.name(),
                 self.cnum,
             )
         })
@@ -851,7 +861,7 @@ impl<'a, 'tcx> CrateMetadataRef<'a> {
         } else {
             tcx.arena.alloc_from_iter(lazy.decode((self, tcx)))
         };
-        ty::EarlyBinder(&*output)
+        ty::EarlyBinder::bind(&*output)
     }
 
     fn get_variant(
@@ -1617,7 +1627,7 @@ impl CrateMetadata {
             dependencies,
             dep_kind: Lock::new(dep_kind),
             source: Lrc::new(source),
-            private_dep,
+            private_dep: AtomicBool::new(private_dep),
             host_hash,
             extern_crate: Lock::new(None),
             hygiene_context: Default::default(),
@@ -1665,6 +1675,10 @@ impl CrateMetadata {
         self.dep_kind.with_lock(|dep_kind| *dep_kind = f(*dep_kind))
     }
 
+    pub(crate) fn update_and_private_dep(&self, private_dep: bool) {
+        self.private_dep.fetch_and(private_dep, Ordering::SeqCst);
+    }
+
     pub(crate) fn required_panic_strategy(&self) -> Option<PanicStrategy> {
         self.root.required_panic_strategy
     }
@@ -1702,11 +1716,11 @@ impl CrateMetadata {
     }
 
     pub(crate) fn name(&self) -> Symbol {
-        self.root.name
+        self.root.header.name
     }
 
     pub(crate) fn hash(&self) -> Svh {
-        self.root.hash
+        self.root.header.hash
     }
 
     fn num_def_ids(&self) -> usize {
