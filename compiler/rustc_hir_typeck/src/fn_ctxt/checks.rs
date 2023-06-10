@@ -1404,7 +1404,17 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             // type of the place it is referencing, and not some
             // supertype thereof.
             let init_ty = self.check_expr_with_needs(init, Needs::maybe_mut_place(m));
-            self.demand_eqtype(init.span, local_ty, init_ty);
+            if let Some(mut diag) = self.demand_eqtype_diag(init.span, local_ty, init_ty) {
+                self.emit_type_mismatch_suggestions(
+                    &mut diag,
+                    init.peel_drop_temps(),
+                    init_ty,
+                    local_ty,
+                    None,
+                    None,
+                );
+                diag.emit();
+            }
             init_ty
         } else {
             self.check_expr_coercible_to_type(init, local_ty, None)
@@ -1640,7 +1650,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                                                 hir::Stmt {
                                                     kind:
                                                         hir::StmtKind::Expr(hir::Expr {
-                                                            kind: hir::ExprKind::Assign(..),
+                                                            kind: hir::ExprKind::Assign(lhs, ..),
                                                             ..
                                                         }),
                                                     ..
@@ -1650,7 +1660,16 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                                     } = blk
                                     {
                                         self.comes_from_while_condition(blk.hir_id, |_| {
-                                            err.downgrade_to_delayed_bug();
+                                            // We cannot suppress the error if the LHS of assignment
+                                            // is a syntactic place expression because E0070 would
+                                            // not be emitted by `check_lhs_assignable`.
+                                            let res = self.typeck_results.borrow().expr_ty_opt(lhs);
+
+                                            if !lhs.is_syntactic_place_expr()
+                                                || res.references_error()
+                                            {
+                                                err.downgrade_to_delayed_bug();
+                                            }
                                         })
                                     }
                                 }
