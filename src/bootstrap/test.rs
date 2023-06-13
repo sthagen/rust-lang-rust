@@ -700,7 +700,7 @@ impl Step for CompiletestTest {
     /// Runs `cargo test` for compiletest.
     fn run(self, builder: &Builder<'_>) {
         let host = self.host;
-        let compiler = builder.compiler(1, host);
+        let compiler = builder.compiler(builder.top_stage, host);
 
         // We need `ToolStd` for the locally-built sysroot because
         // compiletest uses unstable features of the `test` crate.
@@ -1035,7 +1035,7 @@ impl Step for RustdocGUI {
         }
 
         let _time = util::timeit(&builder);
-        crate::render_tests::try_run_tests(builder, &mut cmd);
+        crate::render_tests::try_run_tests(builder, &mut cmd, true);
     }
 }
 
@@ -1537,7 +1537,7 @@ note: if you're sure you want to do this, please open an issue as to why. In the
 
         for exclude in &builder.config.exclude {
             cmd.arg("--skip");
-            cmd.arg(&exclude.path);
+            cmd.arg(&exclude);
         }
 
         // Get paths from cmd args
@@ -1732,7 +1732,7 @@ note: if you're sure you want to do this, please open an issue as to why. In the
             suite, mode, &compiler.host, target
         ));
         let _time = util::timeit(&builder);
-        crate::render_tests::try_run_tests(builder, &mut cmd);
+        crate::render_tests::try_run_tests(builder, &mut cmd, false);
 
         if let Some(compare_mode) = compare_mode {
             cmd.arg("--compare-mode").arg(compare_mode);
@@ -1755,7 +1755,7 @@ note: if you're sure you want to do this, please open an issue as to why. In the
                 suite, mode, compare_mode, &compiler.host, target
             ));
             let _time = util::timeit(&builder);
-            crate::render_tests::try_run_tests(builder, &mut cmd);
+            crate::render_tests::try_run_tests(builder, &mut cmd, false);
         }
     }
 }
