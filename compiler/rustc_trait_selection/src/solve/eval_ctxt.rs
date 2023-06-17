@@ -263,7 +263,10 @@ impl<'a, 'tcx> EvalCtxt<'a, 'tcx> {
             let (_orig_values, canonical_goal) = self.canonicalize_goal(goal);
             let new_canonical_response =
                 EvalCtxt::evaluate_canonical_goal(self.tcx(), self.search_graph, canonical_goal)?;
-            if !new_canonical_response.value.var_values.is_identity() {
+            // We only check for modulo regions as we convert all regions in
+            // the input to new existentials, even if they're expected to be
+            // `'static` or a placeholder region.
+            if !new_canonical_response.value.var_values.is_identity_modulo_regions() {
                 bug!(
                     "unstable result: re-canonicalized goal={canonical_goal:#?} \
                     first_response={canonical_response:#?} \
@@ -709,6 +712,7 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
         scope: Ty<'tcx>,
         assume: rustc_transmute::Assume,
     ) -> Result<Certainty, NoSolution> {
+        use rustc_transmute::Answer;
         // FIXME(transmutability): This really should be returning nested goals for `Answer::If*`
         match rustc_transmute::TransmuteTypeEnv::new(self.infcx).is_transmutable(
             ObligationCause::dummy(),
@@ -716,11 +720,8 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
             scope,
             assume,
         ) {
-            rustc_transmute::Answer::Yes => Ok(Certainty::Yes),
-            rustc_transmute::Answer::No(_)
-            | rustc_transmute::Answer::IfTransmutable { .. }
-            | rustc_transmute::Answer::IfAll(_)
-            | rustc_transmute::Answer::IfAny(_) => Err(NoSolution),
+            Answer::Yes => Ok(Certainty::Yes),
+            Answer::No(_) | Answer::If(_) => Err(NoSolution),
         }
     }
 
