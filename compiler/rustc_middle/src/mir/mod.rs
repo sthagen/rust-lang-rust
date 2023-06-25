@@ -145,7 +145,7 @@ impl MirPhase {
             }
             "analysis" => Self::Analysis(AnalysisPhase::parse(phase)),
             "runtime" => Self::Runtime(RuntimePhase::parse(phase)),
-            _ => panic!("Unknown MIR dialect {}", dialect),
+            _ => bug!("Unknown MIR dialect: '{}'", dialect),
         }
     }
 }
@@ -159,7 +159,7 @@ impl AnalysisPhase {
         match &*phase.to_ascii_lowercase() {
             "initial" => Self::Initial,
             "post_cleanup" | "post-cleanup" | "postcleanup" => Self::PostCleanup,
-            _ => panic!("Unknown analysis phase {}", phase),
+            _ => bug!("Unknown analysis phase: '{}'", phase),
         }
     }
 }
@@ -174,7 +174,7 @@ impl RuntimePhase {
             "initial" => Self::Initial,
             "post_cleanup" | "post-cleanup" | "postcleanup" => Self::PostCleanup,
             "optimized" => Self::Optimized,
-            _ => panic!("Unknown runtime phase {}", phase),
+            _ => bug!("Unknown runtime phase: '{}'", phase),
         }
     }
 }
@@ -2035,23 +2035,19 @@ impl<'tcx> Rvalue<'tcx> {
 impl BorrowKind {
     pub fn mutability(&self) -> Mutability {
         match *self {
-            BorrowKind::Shared | BorrowKind::Shallow | BorrowKind::Unique => Mutability::Not,
+            BorrowKind::Shared | BorrowKind::Shallow => Mutability::Not,
             BorrowKind::Mut { .. } => Mutability::Mut,
         }
     }
 
     pub fn allows_two_phase_borrow(&self) -> bool {
         match *self {
-            BorrowKind::Shared | BorrowKind::Shallow | BorrowKind::Unique => false,
-            BorrowKind::Mut { allow_two_phase_borrow } => allow_two_phase_borrow,
-        }
-    }
-
-    // FIXME: won't be used after diagnostic migration
-    pub fn describe_mutability(&self) -> &str {
-        match *self {
-            BorrowKind::Shared | BorrowKind::Shallow | BorrowKind::Unique => "immutable",
-            BorrowKind::Mut { .. } => "mutable",
+            BorrowKind::Shared
+            | BorrowKind::Shallow
+            | BorrowKind::Mut { kind: MutBorrowKind::Default | MutBorrowKind::ClosureCapture } => {
+                false
+            }
+            BorrowKind::Mut { kind: MutBorrowKind::TwoPhaseBorrow } => true,
         }
     }
 }
@@ -2090,7 +2086,7 @@ impl<'tcx> Debug for Rvalue<'tcx> {
                 let kind_str = match borrow_kind {
                     BorrowKind::Shared => "",
                     BorrowKind::Shallow => "shallow ",
-                    BorrowKind::Mut { .. } | BorrowKind::Unique => "mut ",
+                    BorrowKind::Mut { .. } => "mut ",
                 };
 
                 // When printing regions, add trailing space if necessary.

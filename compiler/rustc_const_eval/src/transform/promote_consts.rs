@@ -14,7 +14,6 @@
 
 use rustc_hir as hir;
 use rustc_middle::mir;
-use rustc_middle::mir::traversal::ReversePostorderIter;
 use rustc_middle::mir::visit::{MutVisitor, MutatingUseContext, PlaceContext, Visitor};
 use rustc_middle::mir::*;
 use rustc_middle::ty::subst::InternalSubsts;
@@ -53,9 +52,8 @@ impl<'tcx> MirPass<'tcx> for PromoteTemps<'tcx> {
             return;
         }
 
-        let mut rpo = traversal::reverse_postorder(body);
         let ccx = ConstCx::new(tcx, body);
-        let (mut temps, all_candidates) = collect_temps_and_candidates(&ccx, &mut rpo);
+        let (mut temps, all_candidates) = collect_temps_and_candidates(&ccx);
 
         let promotable_candidates = validate_candidates(&ccx, &mut temps, &all_candidates);
 
@@ -166,14 +164,13 @@ impl<'tcx> Visitor<'tcx> for Collector<'_, 'tcx> {
 
 pub fn collect_temps_and_candidates<'tcx>(
     ccx: &ConstCx<'_, 'tcx>,
-    rpo: &mut ReversePostorderIter<'_, 'tcx>,
 ) -> (IndexVec<Local, TempState>, Vec<Candidate>) {
     let mut collector = Collector {
         temps: IndexVec::from_elem(TempState::Undefined, &ccx.body.local_decls),
         candidates: vec![],
         ccx,
     };
-    for (bb, data) in rpo {
+    for (bb, data) in traversal::reverse_postorder(ccx.body) {
         collector.visit_basic_block_data(bb, data);
     }
     (collector.temps, collector.candidates)
@@ -457,7 +454,9 @@ impl<'tcx> Validator<'_, 'tcx> {
         match kind {
             // Reject these borrow types just to be safe.
             // FIXME(RalfJung): could we allow them? Should we? No point in it until we have a usecase.
-            BorrowKind::Shallow | BorrowKind::Unique => return Err(Unpromotable),
+            BorrowKind::Shallow | BorrowKind::Mut { kind: MutBorrowKind::ClosureCapture } => {
+                return Err(Unpromotable);
+            }
 
             BorrowKind::Shared => {
                 let has_mut_interior = self.qualif_local::<qualifs::HasMutInterior>(place.local);
@@ -466,7 +465,9 @@ impl<'tcx> Validator<'_, 'tcx> {
                 }
             }
 
-            BorrowKind::Mut { .. } => {
+            // FIXME: consider changing this to only promote &mut [] for default borrows,
+            // also forbidding two phase borrows
+            BorrowKind::Mut { kind: MutBorrowKind::Default | MutBorrowKind::TwoPhaseBorrow } => {
                 let ty = place.ty(self.body, self.tcx).ty;
 
                 // In theory, any zero-sized value could be borrowed
@@ -572,13 +573,18 @@ impl<'tcx> Validator<'_, 'tcx> {
                     | BinOp::Gt
                     | BinOp::Offset
                     | BinOp::Add
+                    | BinOp::AddUnchecked
                     | BinOp::Sub
+                    | BinOp::SubUnchecked
                     | BinOp::Mul
+                    | BinOp::MulUnchecked
                     | BinOp::BitXor
                     | BinOp::BitAnd
                     | BinOp::BitOr
                     | BinOp::Shl
-                    | BinOp::Shr => {}
+                    | BinOp::ShlUnchecked
+                    | BinOp::Shr
+                    | BinOp::ShrUnchecked => {}
                 }
 
                 self.validate_operand(lhs)?;
@@ -795,7 +801,9 @@ impl<'a, 'tcx> Promoter<'a, 'tcx> {
             };
 
             match terminator.kind {
-                TerminatorKind::Call { mut func, mut args, from_hir_call, fn_span, .. } => {
+                TerminatorKind::Call {
+                    mut func, mut args, call_source: desugar, fn_span, ..
+                } => {
                     self.visit_operand(&mut func, loc);
                     for arg in &mut args {
                         self.visit_operand(arg, loc);
@@ -811,7 +819,7 @@ impl<'a, 'tcx> Promoter<'a, 'tcx> {
                             unwind: UnwindAction::Continue,
                             destination: Place::from(new_temp),
                             target: Some(new_target),
-                            from_hir_call,
+                            call_source: desugar,
                             fn_span,
                         },
                         source_info: SourceInfo::outermost(terminator.source_info.span),

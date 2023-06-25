@@ -173,12 +173,22 @@ impl<'tcx> fmt::Debug for ty::Predicate<'tcx> {
 
 impl<'tcx> fmt::Debug for ty::Clause<'tcx> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self.kind())
+    }
+}
+
+impl<'tcx> fmt::Debug for ty::ClauseKind<'tcx> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
-            ty::Clause::ConstArgHasType(ct, ty) => write!(f, "ConstArgHasType({ct:?}, {ty:?})"),
-            ty::Clause::Trait(ref a) => a.fmt(f),
-            ty::Clause::RegionOutlives(ref pair) => pair.fmt(f),
-            ty::Clause::TypeOutlives(ref pair) => pair.fmt(f),
-            ty::Clause::Projection(ref pair) => pair.fmt(f),
+            ty::ClauseKind::ConstArgHasType(ct, ty) => write!(f, "ConstArgHasType({ct:?}, {ty:?})"),
+            ty::ClauseKind::Trait(ref a) => a.fmt(f),
+            ty::ClauseKind::RegionOutlives(ref pair) => pair.fmt(f),
+            ty::ClauseKind::TypeOutlives(ref pair) => pair.fmt(f),
+            ty::ClauseKind::Projection(ref pair) => pair.fmt(f),
+            ty::ClauseKind::WellFormed(ref data) => write!(f, "WellFormed({:?})", data),
+            ty::ClauseKind::ConstEvaluatable(ct) => {
+                write!(f, "ConstEvaluatable({ct:?})")
+            }
         }
     }
 }
@@ -189,15 +199,11 @@ impl<'tcx> fmt::Debug for ty::PredicateKind<'tcx> {
             ty::PredicateKind::Clause(ref a) => a.fmt(f),
             ty::PredicateKind::Subtype(ref pair) => pair.fmt(f),
             ty::PredicateKind::Coerce(ref pair) => pair.fmt(f),
-            ty::PredicateKind::WellFormed(data) => write!(f, "WellFormed({:?})", data),
             ty::PredicateKind::ObjectSafe(trait_def_id) => {
                 write!(f, "ObjectSafe({:?})", trait_def_id)
             }
             ty::PredicateKind::ClosureKind(closure_def_id, closure_substs, kind) => {
                 write!(f, "ClosureKind({:?}, {:?}, {:?})", closure_def_id, closure_substs, kind)
-            }
-            ty::PredicateKind::ConstEvaluatable(ct) => {
-                write!(f, "ConstEvaluatable({ct:?})")
             }
             ty::PredicateKind::ConstEquate(c1, c2) => write!(f, "ConstEquate({:?}, {:?})", c1, c2),
             ty::PredicateKind::TypeWellFormedFromEnv(ty) => {
@@ -654,9 +660,25 @@ impl<'tcx> TypeFoldable<TyCtxt<'tcx>> for ty::Predicate<'tcx> {
     }
 }
 
+// FIXME(clause): This is wonky
+impl<'tcx> TypeFoldable<TyCtxt<'tcx>> for ty::Clause<'tcx> {
+    fn try_fold_with<F: FallibleTypeFolder<TyCtxt<'tcx>>>(
+        self,
+        folder: &mut F,
+    ) -> Result<Self, F::Error> {
+        Ok(folder.try_fold_predicate(self.as_predicate())?.expect_clause())
+    }
+}
+
 impl<'tcx> TypeVisitable<TyCtxt<'tcx>> for ty::Predicate<'tcx> {
     fn visit_with<V: TypeVisitor<TyCtxt<'tcx>>>(&self, visitor: &mut V) -> ControlFlow<V::BreakTy> {
         visitor.visit_predicate(*self)
+    }
+}
+
+impl<'tcx> TypeVisitable<TyCtxt<'tcx>> for ty::Clause<'tcx> {
+    fn visit_with<V: TypeVisitor<TyCtxt<'tcx>>>(&self, visitor: &mut V) -> ControlFlow<V::BreakTy> {
+        visitor.visit_predicate(self.as_predicate())
     }
 }
 
@@ -685,6 +707,15 @@ impl<'tcx> TypeFoldable<TyCtxt<'tcx>> for &'tcx ty::List<ty::Predicate<'tcx>> {
         folder: &mut F,
     ) -> Result<Self, F::Error> {
         ty::util::fold_list(self, folder, |tcx, v| tcx.mk_predicates(v))
+    }
+}
+
+impl<'tcx> TypeFoldable<TyCtxt<'tcx>> for &'tcx ty::List<ty::Clause<'tcx>> {
+    fn try_fold_with<F: FallibleTypeFolder<TyCtxt<'tcx>>>(
+        self,
+        folder: &mut F,
+    ) -> Result<Self, F::Error> {
+        ty::util::fold_list(self, folder, |tcx, v| tcx.mk_clauses(v))
     }
 }
 

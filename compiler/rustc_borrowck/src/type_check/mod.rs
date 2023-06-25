@@ -50,7 +50,6 @@ use rustc_mir_dataflow::impls::MaybeInitializedPlaces;
 use rustc_mir_dataflow::move_paths::MoveData;
 use rustc_mir_dataflow::ResultsCursor;
 
-use crate::renumber::RegionCtxt;
 use crate::session_diagnostics::MoveUnsized;
 use crate::{
     borrow_set::BorrowSet,
@@ -1040,9 +1039,9 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
             .collect();
 
         let renumbered_opaques = self.infcx.tcx.fold_regions(opaques, |_, _| {
-            self.infcx.next_nll_region_var(
+            self.infcx.next_nll_region_var_in_universe(
                 NllRegionVariableOrigin::Existential { from_forall: false },
-                || RegionCtxt::Unknown,
+                ty::UniverseIndex::ROOT,
             )
         });
 
@@ -1065,7 +1064,8 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                         )?;
 
                         ocx.infcx.add_item_bounds_for_hidden_type(
-                            opaque_type_key,
+                            opaque_type_key.def_id.to_def_id(),
+                            opaque_type_key.substs,
                             cause,
                             param_env,
                             hidden_ty.ty,
@@ -1370,7 +1370,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                 }
                 // FIXME: check the values
             }
-            TerminatorKind::Call { func, args, destination, from_hir_call, target, .. } => {
+            TerminatorKind::Call { func, args, destination, call_source, target, .. } => {
                 self.check_operand(func, term_location);
                 for arg in args {
                     self.check_operand(arg, term_location);
@@ -1419,9 +1419,11 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                 //
                 // See #91068 for an example.
                 self.prove_predicates(
-                    sig.inputs_and_output
-                        .iter()
-                        .map(|ty| ty::Binder::dummy(ty::PredicateKind::WellFormed(ty.into()))),
+                    sig.inputs_and_output.iter().map(|ty| {
+                        ty::Binder::dummy(ty::PredicateKind::Clause(ty::ClauseKind::WellFormed(
+                            ty.into(),
+                        )))
+                    }),
                     term_location.to_locations(),
                     ConstraintCategory::Boring,
                 );
@@ -1444,7 +1446,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                         .add_element(region_vid, term_location);
                 }
 
-                self.check_call_inputs(body, term, &sig, args, term_location, *from_hir_call);
+                self.check_call_inputs(body, term, &sig, args, term_location, *call_source);
             }
             TerminatorKind::Assert { cond, msg, .. } => {
                 self.check_operand(cond, term_location);
@@ -1571,7 +1573,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
         sig: &ty::FnSig<'tcx>,
         args: &[Operand<'tcx>],
         term_location: Location,
-        from_hir_call: bool,
+        call_source: CallSource,
     ) {
         debug!("check_call_inputs({:?}, {:?})", sig, args);
         if args.len() < sig.inputs().len() || (args.len() > sig.inputs().len() && !sig.c_variadic) {
@@ -1589,7 +1591,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
             let op_arg_ty = op_arg.ty(body, self.tcx());
 
             let op_arg_ty = self.normalize(op_arg_ty, term_location);
-            let category = if from_hir_call {
+            let category = if call_source.from_hir_call() {
                 ConstraintCategory::CallArgument(self.infcx.tcx.erase_regions(func_ty))
             } else {
                 ConstraintCategory::Boring
@@ -1850,7 +1852,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
 
                 let array_ty = rvalue.ty(body.local_decls(), tcx);
                 self.prove_predicate(
-                    ty::PredicateKind::WellFormed(array_ty.into()),
+                    ty::PredicateKind::Clause(ty::ClauseKind::WellFormed(array_ty.into())),
                     Locations::Single(location),
                     ConstraintCategory::Boring,
                 );
@@ -2023,10 +2025,11 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                             ConstraintCategory::Cast,
                         );
 
-                        let outlives_predicate =
-                            tcx.mk_predicate(Binder::dummy(ty::PredicateKind::Clause(
-                                ty::Clause::TypeOutlives(ty::OutlivesPredicate(self_ty, *region)),
-                            )));
+                        let outlives_predicate = tcx.mk_predicate(Binder::dummy(
+                            ty::PredicateKind::Clause(ty::ClauseKind::TypeOutlives(
+                                ty::OutlivesPredicate(self_ty, *region),
+                            )),
+                        ));
                         self.prove_predicate(
                             outlives_predicate,
                             location.to_locations(),

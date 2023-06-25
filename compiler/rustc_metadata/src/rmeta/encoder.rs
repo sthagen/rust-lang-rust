@@ -1138,8 +1138,8 @@ fn should_encode_type(tcx: TyCtxt<'_>, def_id: LocalDefId, def_kind: DefKind) ->
         | DefKind::InlineConst => true,
 
         DefKind::OpaqueTy => {
-            let opaque = tcx.hir().expect_item(def_id).expect_opaque_ty();
-            if let hir::OpaqueTyOrigin::FnReturn(fn_def_id) | hir::OpaqueTyOrigin::AsyncFn(fn_def_id) = opaque.origin
+            let origin = tcx.opaque_type_origin(def_id);
+            if let hir::OpaqueTyOrigin::FnReturn(fn_def_id) | hir::OpaqueTyOrigin::AsyncFn(fn_def_id) = origin
                 && let hir::Node::TraitItem(trait_item) = tcx.hir().get_by_def_id(fn_def_id)
                 && let (_, hir::TraitFn::Required(..)) = trait_item.expect_fn()
             {
@@ -1520,6 +1520,8 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
             debug!("EntryBuilder::encode_mir({:?})", def_id);
             if encode_opt {
                 record!(self.tables.optimized_mir[def_id.to_def_id()] <- tcx.optimized_mir(def_id));
+                record!(self.tables.closure_saved_names_of_captured_variables[def_id.to_def_id()]
+                    <- tcx.closure_saved_names_of_captured_variables(def_id));
 
                 if tcx.sess.opts.unstable_opts.drop_tracking_mir
                     && let DefKind::Generator = self.tcx.def_kind(def_id)

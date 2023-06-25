@@ -83,6 +83,10 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         }
 
         self.annotate_expected_due_to_let_ty(err, expr, error);
+
+        if self.is_destruct_assignment_desugaring(expr) {
+            return;
+        }
         self.emit_type_mismatch_suggestions(err, expr, expr_ty, expected, expected_ty_expr, error);
         self.note_type_is_not_clone(err, expected, expr_ty, expr);
         self.note_internal_mutation_in_method(err, expr, Some(expected), expr_ty);
@@ -370,13 +374,12 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     // Fudge the receiver, so we can do new inference on it.
                     let possible_rcvr_ty = possible_rcvr_ty.fold_with(&mut fudger);
                     let method = self
-                        .lookup_method(
+                        .lookup_method_for_diagnostic(
                             possible_rcvr_ty,
                             segment,
                             DUMMY_SP,
                             call_expr,
                             binding,
-                            args,
                         )
                         .ok()?;
                     // Unify the method signature with our incompatible arg, to
@@ -435,14 +438,14 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 let Some(rcvr_ty) = self.node_ty_opt(rcvr.hir_id) else { continue; };
                 let rcvr_ty = rcvr_ty.fold_with(&mut fudger);
                 let Ok(method) =
-                    self.lookup_method(rcvr_ty, segment, DUMMY_SP, parent_expr, rcvr, args)
+                    self.lookup_method_for_diagnostic(rcvr_ty, segment, DUMMY_SP, parent_expr, rcvr)
                 else {
                     continue;
                 };
 
                 let ideal_rcvr_ty = rcvr_ty.fold_with(&mut fudger);
                 let ideal_method = self
-                    .lookup_method(ideal_rcvr_ty, segment, DUMMY_SP, parent_expr, rcvr, args)
+                    .lookup_method_for_diagnostic(ideal_rcvr_ty, segment, DUMMY_SP, parent_expr, rcvr)
                     .ok()
                     .and_then(|method| {
                         let _ = self.at(&ObligationCause::dummy(), self.param_env)
@@ -1254,6 +1257,26 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         false
     }
 
+    // Returns whether the given expression is a destruct assignment desugaring.
+    // For example, `(a, b) = (1, &2);`
+    // Here we try to find the pattern binding of the expression,
+    // `default_binding_modes` is false only for destruct assignment desugaring.
+    pub(crate) fn is_destruct_assignment_desugaring(&self, expr: &hir::Expr<'_>) -> bool {
+        if let hir::ExprKind::Path(hir::QPath::Resolved(
+            _,
+            hir::Path { res: hir::def::Res::Local(bind_hir_id), .. },
+        )) = expr.kind
+        {
+            let bind = self.tcx.hir().find(*bind_hir_id);
+            let parent = self.tcx.hir().find(self.tcx.hir().parent_id(*bind_hir_id));
+            if let Some(hir::Node::Pat(hir::Pat { kind: hir::PatKind::Binding(_, _hir_id, _, _), .. })) = bind &&
+                let Some(hir::Node::Pat(hir::Pat { default_binding_modes: false, .. })) = parent {
+                    return true;
+                }
+        }
+        return false;
+    }
+
     /// This function is used to determine potential "simple" improvements or users' errors and
     /// provide them useful help. For example:
     ///
@@ -1444,6 +1467,20 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 _,
                 &ty::Ref(_, checked, _),
             ) if self.can_sub(self.param_env, checked, expected) => {
+                let make_sugg = |start: Span, end: BytePos| {
+                    // skip `(` for tuples such as `(c) = (&123)`.
+                    // make sure we won't suggest like `(c) = 123)` which is incorrect.
+                    let sp = sm.span_extend_while(start.shrink_to_lo(), |c| c == '(' || c.is_whitespace())
+                                .map_or(start, |s| s.shrink_to_hi());
+                    Some((
+                        vec![(sp.with_hi(end), String::new())],
+                        "consider removing the borrow".to_string(),
+                        Applicability::MachineApplicable,
+                        true,
+                        true,
+                    ))
+                };
+
                 // We have `&T`, check if what was expected was `T`. If so,
                 // we may want to suggest removing a `&`.
                 if sm.is_imported(expr.span) {
@@ -1457,24 +1494,12 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                             .find(|&s| sp.contains(s))
                         && sm.is_span_accessible(call_span)
                     {
-                        return Some((
-                            vec![(sp.with_hi(call_span.lo()), String::new())],
-                            "consider removing the borrow".to_string(),
-                            Applicability::MachineApplicable,
-                            true,
-                            true,
-                        ));
+                        return make_sugg(sp, call_span.lo())
                     }
                     return None;
                 }
                 if sp.contains(expr.span) && sm.is_span_accessible(expr.span) {
-                    return Some((
-                        vec![(sp.with_hi(expr.span.lo()), String::new())],
-                        "consider removing the borrow".to_string(),
-                        Applicability::MachineApplicable,
-                        true,
-                        true,
-                    ));
+                    return make_sugg(sp, expr.span.lo())
                 }
             }
             (
