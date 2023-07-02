@@ -125,7 +125,7 @@ impl<'tcx> TraitAliasExpander<'tcx> {
 
         let items = predicates.predicates.iter().rev().filter_map(|(pred, span)| {
             pred.subst_supertrait(tcx, &trait_ref)
-                .to_opt_poly_trait_pred()
+                .as_trait_clause()
                 .map(|trait_ref| item.clone_and_push(trait_ref.map_bound(|t| t.trait_ref), *span))
         });
         debug!("expand_trait_aliases: items={:?}", items.clone().collect::<Vec<_>>());
@@ -182,7 +182,7 @@ impl Iterator for SupertraitDefIds<'_> {
             predicates
                 .predicates
                 .iter()
-                .filter_map(|(pred, _)| pred.to_opt_poly_trait_pred())
+                .filter_map(|(pred, _)| pred.as_trait_clause())
                 .map(|trait_ref| trait_ref.def_id())
                 .filter(|&super_def_id| visited.insert(super_def_id)),
         );
@@ -248,7 +248,7 @@ pub fn get_vtable_index_of_object_method<'tcx, N>(
 ) -> Option<usize> {
     // Count number of methods preceding the one we are selecting and
     // add them to the total offset.
-    tcx.own_existential_vtable_entries(object.upcast_trait_def_id)
+    tcx.own_existential_vtable_entries(tcx.parent(method_def_id))
         .iter()
         .copied()
         .position(|def_id| def_id == method_def_id)

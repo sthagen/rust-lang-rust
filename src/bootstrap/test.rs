@@ -801,7 +801,7 @@ impl Step for Clippy {
         cargo.arg("-p").arg("clippy_dev");
         // clippy_dev gets confused if it can't find `clippy/Cargo.toml`
         cargo.current_dir(&builder.src.join("src").join("tools").join("clippy"));
-        if builder.config.rust_optimize {
+        if builder.config.rust_optimize.is_release() {
             cargo.env("PROFILE", "release");
         } else {
             cargo.env("PROFILE", "debug");
@@ -1319,6 +1319,13 @@ host_test!(RunMakeFullDeps {
 
 default_test!(Assembly { path: "tests/assembly", mode: "assembly", suite: "assembly" });
 
+host_test!(RunCoverage { path: "tests/run-coverage", mode: "run-coverage", suite: "run-coverage" });
+host_test!(RunCoverageRustdoc {
+    path: "tests/run-coverage-rustdoc",
+    mode: "run-coverage",
+    suite: "run-coverage-rustdoc"
+});
+
 // For the mir-opt suite we do not use macros, as we need custom behavior when blessing.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct MirOpt {
@@ -1503,6 +1510,7 @@ note: if you're sure you want to do this, please open an issue as to why. In the
             || (mode == "ui" && is_rustdoc)
             || mode == "js-doc-test"
             || mode == "rustdoc-json"
+            || suite == "run-coverage-rustdoc"
         {
             cmd.arg("--rustdoc-path").arg(builder.rustdoc(compiler));
         }
@@ -1516,7 +1524,7 @@ note: if you're sure you want to do this, please open an issue as to why. In the
                 .arg(builder.ensure(tool::JsonDocLint { compiler: json_compiler, target }));
         }
 
-        if mode == "run-make" {
+        if mode == "run-make" || mode == "run-coverage" {
             let rust_demangler = builder
                 .ensure(tool::RustDemangler {
                     compiler,
@@ -1703,17 +1711,21 @@ note: if you're sure you want to do this, please open an issue as to why. In the
                 add_link_lib_path(vec![llvm_libdir.trim().into()], &mut cmd);
             }
 
-            // Only pass correct values for these flags for the `run-make` suite as it
-            // requires that a C++ compiler was configured which isn't always the case.
-            if !builder.config.dry_run() && matches!(suite, "run-make" | "run-make-fulldeps") {
+            if !builder.config.dry_run()
+                && (matches!(suite, "run-make" | "run-make-fulldeps") || mode == "run-coverage")
+            {
                 // The llvm/bin directory contains many useful cross-platform
                 // tools. Pass the path to run-make tests so they can use them.
+                // (The run-coverage tests also need these tools to process
+                // coverage reports.)
                 let llvm_bin_path = llvm_config
                     .parent()
                     .expect("Expected llvm-config to be contained in directory");
                 assert!(llvm_bin_path.is_dir());
                 cmd.arg("--llvm-bin-dir").arg(llvm_bin_path);
+            }
 
+            if !builder.config.dry_run() && matches!(suite, "run-make" | "run-make-fulldeps") {
                 // If LLD is available, add it to the PATH
                 if builder.config.lld_enabled {
                     let lld_install_root =
@@ -1832,11 +1844,13 @@ note: if you're sure you want to do this, please open an issue as to why. In the
             builder,
         );
 
-        builder.info(&format!(
-            "Check compiletest suite={} mode={} ({} -> {})",
-            suite, mode, &compiler.host, target
-        ));
-        let _time = util::timeit(&builder);
+        let _group = builder.msg(
+            Kind::Test,
+            compiler.stage,
+            &format!("compiletest suite={suite} mode={mode}"),
+            compiler.host,
+            target,
+        );
         crate::render_tests::try_run_tests(builder, &mut cmd, false);
 
         if let Some(compare_mode) = compare_mode {
@@ -2664,7 +2678,12 @@ impl Step for Bootstrap {
     /// Tests the build system itself.
     fn run(self, builder: &Builder<'_>) {
         let mut check_bootstrap = Command::new(&builder.python());
-        check_bootstrap.arg("bootstrap_test.py").current_dir(builder.src.join("src/bootstrap/"));
+        check_bootstrap
+            .args(["-m", "unittest", "bootstrap_test.py"])
+            .env("BUILD_DIR", &builder.out)
+            .env("BUILD_PLATFORM", &builder.build.build.triple)
+            .current_dir(builder.src.join("src/bootstrap/"))
+            .args(builder.config.test_args());
         try_run(builder, &mut check_bootstrap).unwrap();
 
         let host = builder.config.build;

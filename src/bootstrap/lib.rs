@@ -785,7 +785,7 @@ impl Build {
     /// Component directory that Cargo will produce output into (e.g.
     /// release/debug)
     fn cargo_dir(&self) -> &'static str {
-        if self.config.rust_optimize { "release" } else { "debug" }
+        if self.config.rust_optimize.is_release() { "release" } else { "debug" }
     }
 
     fn tools_dir(&self, compiler: Compiler) -> PathBuf {
@@ -1007,6 +1007,15 @@ impl Build {
         target: impl Into<Option<TargetSelection>>,
     ) -> Option<gha::Group> {
         self.msg(Kind::Check, self.config.stage, what, self.config.build, target)
+    }
+
+    fn msg_doc(
+        &self,
+        compiler: Compiler,
+        what: impl Display,
+        target: impl Into<Option<TargetSelection>> + Copy,
+    ) -> Option<gha::Group> {
+        self.msg(Kind::Doc, compiler.stage, what, compiler.host, target.into())
     }
 
     fn msg_build(

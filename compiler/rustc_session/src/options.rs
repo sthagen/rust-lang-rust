@@ -1,9 +1,8 @@
 use crate::config::*;
 
-use crate::early_error;
-use crate::lint;
 use crate::search_paths::SearchPath;
 use crate::utils::NativeLib;
+use crate::{lint, EarlyErrorHandler};
 use rustc_data_structures::profiling::TimePassesFormat;
 use rustc_errors::{LanguageIdentifier, TerminalUrl};
 use rustc_target::spec::{CodeModel, LinkerFlavorCli, MergeFunctions, PanicStrategy, SanitizerSet};
@@ -245,10 +244,10 @@ macro_rules! options {
 
     impl $struct_name {
         pub fn build(
+            handler: &EarlyErrorHandler,
             matches: &getopts::Matches,
-            error_format: ErrorOutputType,
         ) -> $struct_name {
-            build_options(matches, $stat, $prefix, $outputname, error_format)
+            build_options(handler, matches, $stat, $prefix, $outputname)
         }
 
         fn dep_tracking_hash(&self, for_crate_hash: bool, error_format: ErrorOutputType) -> u64 {
@@ -309,11 +308,11 @@ type OptionSetter<O> = fn(&mut O, v: Option<&str>) -> bool;
 type OptionDescrs<O> = &'static [(&'static str, OptionSetter<O>, &'static str, &'static str)];
 
 fn build_options<O: Default>(
+    handler: &EarlyErrorHandler,
     matches: &getopts::Matches,
     descrs: OptionDescrs<O>,
     prefix: &str,
     outputname: &str,
-    error_format: ErrorOutputType,
 ) -> O {
     let mut op = O::default();
     for option in matches.opt_strs(prefix) {
@@ -327,15 +326,13 @@ fn build_options<O: Default>(
             Some((_, setter, type_desc, _)) => {
                 if !setter(&mut op, value) {
                     match value {
-                        None => early_error(
-                            error_format,
+                        None => handler.early_error(
                             format!(
                                 "{0} option `{1}` requires {2} ({3} {1}=<value>)",
                                 outputname, key, type_desc, prefix
                             ),
                         ),
-                        Some(value) => early_error(
-                            error_format,
+                        Some(value) => handler.early_error(
                             format!(
                                 "incorrect value `{value}` for {outputname} option `{key}` - {type_desc} was expected"
                             ),
@@ -343,7 +340,7 @@ fn build_options<O: Default>(
                     }
                 }
             }
-            None => early_error(error_format, format!("unknown {outputname} option: `{key}`")),
+            None => handler.early_error(format!("unknown {outputname} option: `{key}`")),
         }
     }
     return op;
@@ -413,6 +410,8 @@ mod desc {
     pub const parse_split_dwarf_kind: &str =
         "one of supported split dwarf modes (`split` or `single`)";
     pub const parse_gcc_ld: &str = "one of: no value, `lld`";
+    pub const parse_link_self_contained: &str = "one of: `y`, `yes`, `on`, `n`, `no`, `off`, or a list of enabled (`+` prefix) and disabled (`-` prefix) \
+        components: `crto`, `libc`, `unwind`, `linker`, `sanitizers`, `mingw`";
     pub const parse_stack_protector: &str =
         "one of (`none` (default), `basic`, `strong`, or `all`)";
     pub const parse_branch_protection: &str =
@@ -1125,6 +1124,34 @@ mod parse {
         }
     }
 
+    pub(crate) fn parse_link_self_contained(slot: &mut LinkSelfContained, v: Option<&str>) -> bool {
+        // Whenever `-C link-self-contained` is passed without a value, it's an opt-in
+        // just like `parse_opt_bool`, the historical value of this flag.
+        //
+        // 1. Parse historical single bool values
+        let s = v.unwrap_or("y");
+        match s {
+            "y" | "yes" | "on" => {
+                slot.set_all_explicitly(true);
+                return true;
+            }
+            "n" | "no" | "off" => {
+                slot.set_all_explicitly(false);
+                return true;
+            }
+            _ => {}
+        }
+
+        // 2. Parse a list of enabled and disabled components.
+        for comp in s.split(",") {
+            if slot.handle_cli_component(comp).is_err() {
+                return false;
+            }
+        }
+
+        true
+    }
+
     pub(crate) fn parse_wasi_exec_model(slot: &mut Option<WasiExecModel>, v: Option<&str>) -> bool {
         match v {
             Some("command") => *slot = Some(WasiExecModel::Command),
@@ -1268,9 +1295,9 @@ options! {
     #[rustc_lint_opt_deny_field_access("use `Session::link_dead_code` instead of this field")]
     link_dead_code: Option<bool> = (None, parse_opt_bool, [TRACKED],
         "keep dead code at link time (useful for code coverage) (default: no)"),
-    link_self_contained: Option<bool> = (None, parse_opt_bool, [UNTRACKED],
+    link_self_contained: LinkSelfContained = (LinkSelfContained::default(), parse_link_self_contained, [UNTRACKED],
         "control whether to link Rust provided C objects/libraries or rely
-        on C toolchain installed in the system"),
+        on a C toolchain or linker installed in the system"),
     linker: Option<PathBuf> = (None, parse_opt_pathbuf, [UNTRACKED],
         "system linker to link outputs with"),
     linker_flavor: Option<LinkerFlavorCli> = (None, parse_linker_flavor, [UNTRACKED],

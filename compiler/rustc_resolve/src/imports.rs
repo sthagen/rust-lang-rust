@@ -1,13 +1,16 @@
 //! A bunch of methods and structures more or less related to resolving imports.
 
 use crate::diagnostics::{import_candidates, DiagnosticMode, Suggestion};
-use crate::Determinacy::{self, *};
-use crate::Namespace::*;
-use crate::{module_to_string, names_to_string, ImportSuggestion};
-use crate::{
-    AmbiguityError, AmbiguityErrorMisc, AmbiguityKind, BindingKey, ModuleKind, ResolutionError,
-    Resolver, Segment,
+use crate::errors::{
+    CannotBeReexportedCratePublic, CannotBeReexportedCratePublicNS, CannotBeReexportedPrivate,
+    CannotBeReexportedPrivateNS, CannotDetermineImportResolution, CannotGlobImportAllCrates,
+    ConsiderAddingMacroExport, ConsiderMarkingAsPub, IsNotDirectlyImportable,
+    ItemsInTraitsAreNotImportable,
 };
+use crate::Determinacy::{self, *};
+use crate::{fluent_generated as fluent, Namespace::*};
+use crate::{module_to_string, names_to_string, ImportSuggestion};
+use crate::{AmbiguityKind, BindingKey, ModuleKind, ResolutionError, Resolver, Segment};
 use crate::{Finalize, Module, ModuleOrUniformRoot, ParentScope, PerNS, ScopeSet};
 use crate::{NameBinding, NameBindingKind, PathResult};
 
@@ -774,9 +777,9 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
                     }
                     source_binding @ (Ok(..) | Err(Determined)) => {
                         if source_binding.is_ok() {
-                            let msg = format!("`{}` is not directly importable", target);
-                            struct_span_err!(this.tcx.sess, import.span, E0253, "{}", &msg)
-                                .span_label(import.span, "cannot be imported directly")
+                            this.tcx
+                                .sess
+                                .create_err(IsNotDirectlyImportable { span: import.span, target })
                                 .emit();
                         }
                         let key = BindingKey::new(target, ns);
@@ -825,9 +828,10 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
                         span_bug!(import.span, "inconsistent resolution for an import");
                     }
                 } else if self.privacy_errors.is_empty() {
-                    let msg = "cannot determine resolution for the import";
-                    let msg_note = "import resolution is stuck, try simplifying other imports";
-                    self.tcx.sess.struct_span_err(import.span, msg).note(msg_note).emit();
+                    self.tcx
+                        .sess
+                        .create_err(CannotDetermineImportResolution { span: import.span })
+                        .emit();
                 }
 
                 module
@@ -890,8 +894,9 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
                 }
                 return None;
             }
-            PathResult::NonModule(_) => {
-                if no_ambiguity {
+            PathResult::NonModule(partial_res) => {
+                if no_ambiguity && partial_res.full_res() != Some(Res::Err) {
+                    // Check if there are no ambiguities and the result is not dummy.
                     assert!(import.imported_module.get().is_none());
                 }
                 // The error was already reported earlier.
@@ -938,8 +943,7 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
                     && let Some(max_vis) = max_vis.get()
                     && !max_vis.is_at_least(import.expect_vis(), self.tcx)
                 {
-                    let msg = "glob import doesn't reexport anything because no candidate is public enough";
-                    self.lint_buffer.buffer_lint(UNUSED_IMPORTS, id, import.span, msg);
+                    self.lint_buffer.buffer_lint(UNUSED_IMPORTS, id, import.span, fluent::resolve_glob_import_doesnt_reexport);
                 }
                     return None;
                 }
@@ -978,7 +982,7 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
                 match binding {
                     Ok(binding) => {
                         // Consistency checks, analogous to `finalize_macro_resolutions`.
-                        let initial_binding = source_bindings[ns].get().map(|initial_binding| {
+                        let initial_res = source_bindings[ns].get().map(|initial_binding| {
                             all_ns_err = false;
                             if let Some(target_binding) = target_bindings[ns].get() {
                                 if target.name == kw::Underscore
@@ -992,29 +996,21 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
                                     );
                                 }
                             }
-                            initial_binding
+                            initial_binding.res()
                         });
                         let res = binding.res();
-                        if let Ok(initial_binding) = initial_binding {
-                            let initial_res = initial_binding.res();
+                        if let Ok(initial_res) = initial_res {
                             if res != initial_res && this.ambiguity_errors.is_empty() {
-                                this.ambiguity_errors.push(AmbiguityError {
-                                    kind: AmbiguityKind::Import,
-                                    ident,
-                                    b1: initial_binding,
-                                    b2: binding,
-                                    misc1: AmbiguityErrorMisc::None,
-                                    misc2: AmbiguityErrorMisc::None,
-                                });
+                                span_bug!(import.span, "inconsistent resolution for an import");
                             }
                         } else if res != Res::Err
                             && this.ambiguity_errors.is_empty()
                             && this.privacy_errors.is_empty()
                         {
-                            let msg = "cannot determine resolution for the import";
-                            let msg_note =
-                                "import resolution is stuck, try simplifying other imports";
-                            this.tcx.sess.struct_span_err(import.span, msg).note(msg_note).emit();
+                            this.tcx
+                                .sess
+                                .create_err(CannotDetermineImportResolution { span: import.span })
+                                .emit();
                         }
                     }
                     Err(..) => {
@@ -1172,46 +1168,43 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
                     msg,
                 );
             } else {
-                let error_msg = if crate_private_reexport {
-                    format!(
-                        "`{}` is only public within the crate, and cannot be re-exported outside",
-                        ident
-                    )
-                } else {
-                    format!("`{}` is private, and cannot be re-exported", ident)
-                };
-
                 if ns == TypeNS {
-                    let label_msg = if crate_private_reexport {
-                        format!("re-export of crate public `{}`", ident)
+                    let mut err = if crate_private_reexport {
+                        self.tcx.sess.create_err(CannotBeReexportedCratePublicNS {
+                            span: import.span,
+                            ident,
+                        })
                     } else {
-                        format!("re-export of private `{}`", ident)
+                        self.tcx
+                            .sess
+                            .create_err(CannotBeReexportedPrivateNS { span: import.span, ident })
+                    };
+                    err.emit();
+                } else {
+                    let mut err = if crate_private_reexport {
+                        self.tcx
+                            .sess
+                            .create_err(CannotBeReexportedCratePublic { span: import.span, ident })
+                    } else {
+                        self.tcx
+                            .sess
+                            .create_err(CannotBeReexportedPrivate { span: import.span, ident })
                     };
 
-                    struct_span_err!(self.tcx.sess, import.span, E0365, "{}", error_msg)
-                        .span_label(import.span, label_msg)
-                        .note(format!("consider declaring type or module `{}` with `pub`", ident))
-                        .emit();
-                } else {
-                    let mut err =
-                        struct_span_err!(self.tcx.sess, import.span, E0364, "{error_msg}");
                     match binding.kind {
                         NameBindingKind::Res(Res::Def(DefKind::Macro(_), def_id))
                             // exclude decl_macro
                             if self.get_macro_by_def_id(def_id).macro_rules =>
                         {
-                            err.span_help(
-                                binding.span,
-                                "consider adding a `#[macro_export]` to the macro in the imported module",
-                            );
+                            err.subdiagnostic(ConsiderAddingMacroExport {
+                                span: binding.span,
+                            });
                         }
                         _ => {
-                            err.span_note(
-                                import.span,
-                                format!(
-                                    "consider marking `{ident}` as `pub` in the imported module"
-                                ),
-                            );
+                            err.subdiagnostic(ConsiderMarkingAsPub {
+                                span: import.span,
+                                ident,
+                            });
                         }
                     }
                     err.emit();
@@ -1280,7 +1273,7 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
 
                 match this.early_resolve_ident_in_lexical_scope(
                     target,
-                    ScopeSet::All(ns, false),
+                    ScopeSet::All(ns),
                     &import.parent_scope,
                     None,
                     false,
@@ -1317,12 +1310,14 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
         let ImportKind::Glob { id, is_prelude, .. } = import.kind else { unreachable!() };
 
         let ModuleOrUniformRoot::Module(module) = import.imported_module.get().unwrap() else {
-            self.tcx.sess.span_err(import.span, "cannot glob-import all possible crates");
+            self.tcx.sess.create_err(CannotGlobImportAllCrates {
+                span: import.span,
+            }).emit();
             return;
         };
 
         if module.is_trait() {
-            self.tcx.sess.span_err(import.span, "items in traits are not importable");
+            self.tcx.sess.create_err(ItemsInTraitsAreNotImportable { span: import.span }).emit();
             return;
         } else if ptr::eq(module, import.parent_scope.module) {
             return;

@@ -5,14 +5,13 @@ pub use crate::options::*;
 
 use crate::search_paths::SearchPath;
 use crate::utils::{CanonicalizedPath, NativeLib, NativeLibKind};
-use crate::{early_error, early_warn, Session};
 use crate::{lint, HashStableContext};
+use crate::{EarlyErrorHandler, Session};
 
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
-
 use rustc_data_structures::stable_hasher::{StableOrd, ToStableHashKey};
 use rustc_target::abi::Align;
-use rustc_target::spec::{LinkerFlavorCli, PanicStrategy, SanitizerSet, SplitDebuginfo};
+use rustc_target::spec::{PanicStrategy, SanitizerSet, SplitDebuginfo};
 use rustc_target::spec::{Target, TargetTriple, TargetWarnings, TARGETS};
 
 use crate::parse::{CrateCheckConfig, CrateConfig};
@@ -201,6 +200,128 @@ pub enum LinkerPluginLto {
     Disabled,
 }
 
+impl LinkerPluginLto {
+    pub fn enabled(&self) -> bool {
+        match *self {
+            LinkerPluginLto::LinkerPlugin(_) | LinkerPluginLto::LinkerPluginAuto => true,
+            LinkerPluginLto::Disabled => false,
+        }
+    }
+}
+
+/// The different values `-C link-self-contained` can take: a list of individually enabled or
+/// disabled components used during linking, coming from the rustc distribution, instead of being
+/// found somewhere on the host system.
+///
+/// They can be set in bulk via `-C link-self-contained=yes|y|on` or `-C
+/// link-self-contained=no|n|off`, and those boolean values are the historical defaults.
+///
+/// But each component is fine-grained, and can be unstably targeted, to use:
+/// - some CRT objects
+/// - the libc static library
+/// - libgcc/libunwind libraries
+/// - a linker we distribute
+/// - some sanitizer runtime libraries
+/// - all other MinGW libraries and Windows import libs
+///
+#[derive(Default, Clone, PartialEq, Debug)]
+pub struct LinkSelfContained {
+    /// Whether the user explicitly set `-C link-self-contained` on or off, the historical values.
+    /// Used for compatibility with the existing opt-in and target inference.
+    pub explicitly_set: Option<bool>,
+
+    /// The components that are enabled.
+    components: LinkSelfContainedComponents,
+}
+
+bitflags::bitflags! {
+    #[derive(Default)]
+    /// The `-C link-self-contained` components that can individually be enabled or disabled.
+    pub struct LinkSelfContainedComponents: u8 {
+        /// CRT objects (e.g. on `windows-gnu`, `musl`, `wasi` targets)
+        const CRT_OBJECTS = 1 << 0;
+        /// libc static library (e.g. on `musl`, `wasi` targets)
+        const LIBC        = 1 << 1;
+        /// libgcc/libunwind (e.g. on `windows-gnu`, `fuchsia`, `fortanix`, `gnullvm` targets)
+        const UNWIND      = 1 << 2;
+        /// Linker, dlltool, and their necessary libraries (e.g. on `windows-gnu` and for `rust-lld`)
+        const LINKER      = 1 << 3;
+        /// Sanitizer runtime libraries
+        const SANITIZERS  = 1 << 4;
+        /// Other MinGW libs and Windows import libs
+        const MINGW       = 1 << 5;
+    }
+}
+
+impl FromStr for LinkSelfContainedComponents {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "crto" => LinkSelfContainedComponents::CRT_OBJECTS,
+            "libc" => LinkSelfContainedComponents::LIBC,
+            "unwind" => LinkSelfContainedComponents::UNWIND,
+            "linker" => LinkSelfContainedComponents::LINKER,
+            "sanitizers" => LinkSelfContainedComponents::SANITIZERS,
+            "mingw" => LinkSelfContainedComponents::MINGW,
+            _ => return Err(()),
+        })
+    }
+}
+
+impl LinkSelfContained {
+    /// Incorporates an enabled or disabled component as specified on the CLI, if possible.
+    /// For example: `+linker`, and `-crto`.
+    pub(crate) fn handle_cli_component(&mut self, component: &str) -> Result<(), ()> {
+        // Note that for example `-Cself-contained=y -Cself-contained=-linker` is not an explicit
+        // set of all values like `y` or `n` used to be. Therefore, if this flag had previously been
+        // set in bulk with its historical values, then manually setting a component clears that
+        // `explicitly_set` state.
+        if let Some(component_to_enable) = component.strip_prefix("+") {
+            self.explicitly_set = None;
+            self.components.insert(component_to_enable.parse()?);
+            Ok(())
+        } else if let Some(component_to_disable) = component.strip_prefix("-") {
+            self.explicitly_set = None;
+            self.components.remove(component_to_disable.parse()?);
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    /// Turns all components on or off and records that this was done explicitly for compatibility
+    /// purposes.
+    pub(crate) fn set_all_explicitly(&mut self, enabled: bool) {
+        self.explicitly_set = Some(enabled);
+        self.components = if enabled {
+            LinkSelfContainedComponents::all()
+        } else {
+            LinkSelfContainedComponents::empty()
+        };
+    }
+
+    /// Helper creating a fully enabled `LinkSelfContained` instance. Used in tests.
+    pub fn on() -> Self {
+        let mut on = LinkSelfContained::default();
+        on.set_all_explicitly(true);
+        on
+    }
+
+    /// To help checking CLI usage while some of the values are unstable: returns whether one of the
+    /// components was set individually. This would also require the `-Zunstable-options` flag, to
+    /// be allowed.
+    fn are_unstable_variants_set(&self) -> bool {
+        let any_component_set = !self.components.is_empty();
+        self.explicitly_set.is_none() && any_component_set
+    }
+
+    /// Returns whether the self-contained linker component is enabled.
+    pub fn linker(&self) -> bool {
+        self.components.contains(LinkSelfContainedComponents::LINKER)
+    }
+}
+
 /// Used with `-Z assert-incr-state`.
 #[derive(Clone, Copy, PartialEq, Hash, Debug)]
 pub enum IncrementalStateAssertion {
@@ -211,15 +332,6 @@ pub enum IncrementalStateAssertion {
     Loaded,
     /// Did not load an existing session directory.
     NotLoaded,
-}
-
-impl LinkerPluginLto {
-    pub fn enabled(&self) -> bool {
-        match *self {
-            LinkerPluginLto::LinkerPlugin(_) | LinkerPluginLto::LinkerPluginAuto => true,
-            LinkerPluginLto::Disabled => false,
-        }
-    }
 }
 
 /// The different settings that can be enabled via the `-Z location-detail` flag.
@@ -1389,6 +1501,7 @@ pub fn build_configuration(sess: &Session, mut user_cfg: CrateConfig) -> CrateCo
 }
 
 pub(super) fn build_target_config(
+    handler: &EarlyErrorHandler,
     opts: &Options,
     target_override: Option<Target>,
     sysroot: &Path,
@@ -1398,27 +1511,21 @@ pub(super) fn build_target_config(
         |t| Ok((t, TargetWarnings::empty())),
     );
     let (target, target_warnings) = target_result.unwrap_or_else(|e| {
-        early_error(
-            opts.error_format,
-            format!(
-                "Error loading target specification: {}. \
+        handler.early_error(format!(
+            "Error loading target specification: {}. \
                  Run `rustc --print target-list` for a list of built-in targets",
-                e
-            ),
-        )
+            e
+        ))
     });
     for warning in target_warnings.warning_messages() {
-        early_warn(opts.error_format, warning)
+        handler.early_warn(warning)
     }
 
     if !matches!(target.pointer_width, 16 | 32 | 64) {
-        early_error(
-            opts.error_format,
-            format!(
-                "target specification was invalid: unrecognized target-pointer-width {}",
-                target.pointer_width
-            ),
-        )
+        handler.early_error(format!(
+            "target specification was invalid: unrecognized target-pointer-width {}",
+            target.pointer_width
+        ))
     }
 
     target
@@ -1654,8 +1761,8 @@ pub fn rustc_optgroups() -> Vec<RustcOptGroup> {
 }
 
 pub fn get_cmd_lint_options(
+    handler: &EarlyErrorHandler,
     matches: &getopts::Matches,
-    error_format: ErrorOutputType,
 ) -> (Vec<(String, lint::Level)>, bool, Option<lint::Level>) {
     let mut lint_opts_with_position = vec![];
     let mut describe_lints = false;
@@ -1679,14 +1786,14 @@ pub fn get_cmd_lint_options(
 
     let lint_cap = matches.opt_str("cap-lints").map(|cap| {
         lint::Level::from_str(&cap)
-            .unwrap_or_else(|| early_error(error_format, format!("unknown lint level: `{cap}`")))
+            .unwrap_or_else(|| handler.early_error(format!("unknown lint level: `{cap}`")))
     });
 
     (lint_opts, describe_lints, lint_cap)
 }
 
 /// Parses the `--color` flag.
-pub fn parse_color(matches: &getopts::Matches) -> ColorConfig {
+pub fn parse_color(handler: &EarlyErrorHandler, matches: &getopts::Matches) -> ColorConfig {
     match matches.opt_str("color").as_deref() {
         Some("auto") => ColorConfig::Auto,
         Some("always") => ColorConfig::Always,
@@ -1694,13 +1801,10 @@ pub fn parse_color(matches: &getopts::Matches) -> ColorConfig {
 
         None => ColorConfig::Auto,
 
-        Some(arg) => early_error(
-            ErrorOutputType::default(),
-            format!(
-                "argument for `--color` must be auto, \
+        Some(arg) => handler.early_error(format!(
+            "argument for `--color` must be auto, \
                  always or never (instead was `{arg}`)"
-            ),
-        ),
+        )),
     }
 }
 
@@ -1743,7 +1847,7 @@ impl JsonUnusedExterns {
 ///
 /// The first value returned is how to render JSON diagnostics, and the second
 /// is whether or not artifact notifications are enabled.
-pub fn parse_json(matches: &getopts::Matches) -> JsonConfig {
+pub fn parse_json(handler: &EarlyErrorHandler, matches: &getopts::Matches) -> JsonConfig {
     let mut json_rendered: fn(ColorConfig) -> HumanReadableErrorType =
         HumanReadableErrorType::Default;
     let mut json_color = ColorConfig::Never;
@@ -1755,10 +1859,7 @@ pub fn parse_json(matches: &getopts::Matches) -> JsonConfig {
         // won't actually be emitting any colors and anything colorized is
         // embedded in a diagnostic message anyway.
         if matches.opt_str("color").is_some() {
-            early_error(
-                ErrorOutputType::default(),
-                "cannot specify the `--color` option with `--json`",
-            );
+            handler.early_error("cannot specify the `--color` option with `--json`");
         }
 
         for sub_option in option.split(',') {
@@ -1769,10 +1870,7 @@ pub fn parse_json(matches: &getopts::Matches) -> JsonConfig {
                 "unused-externs" => json_unused_externs = JsonUnusedExterns::Loud,
                 "unused-externs-silent" => json_unused_externs = JsonUnusedExterns::Silent,
                 "future-incompat" => json_future_incompat = true,
-                s => early_error(
-                    ErrorOutputType::default(),
-                    format!("unknown `--json` option `{s}`"),
-                ),
+                s => handler.early_error(format!("unknown `--json` option `{s}`")),
             }
         }
     }
@@ -1787,6 +1885,7 @@ pub fn parse_json(matches: &getopts::Matches) -> JsonConfig {
 
 /// Parses the `--error-format` flag.
 pub fn parse_error_format(
+    handler: &mut EarlyErrorHandler,
     matches: &getopts::Matches,
     color: ColorConfig,
     json_rendered: HumanReadableErrorType,
@@ -1807,13 +1906,15 @@ pub fn parse_error_format(
             Some("pretty-json") => ErrorOutputType::Json { pretty: true, json_rendered },
             Some("short") => ErrorOutputType::HumanReadable(HumanReadableErrorType::Short(color)),
 
-            Some(arg) => early_error(
-                ErrorOutputType::HumanReadable(HumanReadableErrorType::Default(color)),
-                format!(
+            Some(arg) => {
+                handler.abort_if_error_and_set_error_format(ErrorOutputType::HumanReadable(
+                    HumanReadableErrorType::Default(color),
+                ));
+                handler.early_error(format!(
                     "argument for `--error-format` must be `human`, `json` or \
                      `short` (instead was `{arg}`)"
-                ),
-            ),
+                ))
+            }
         }
     } else {
         ErrorOutputType::HumanReadable(HumanReadableErrorType::Default(color))
@@ -1826,10 +1927,7 @@ pub fn parse_error_format(
         // `--error-format=json`. This means that `--json` is specified we
         // should actually be emitting JSON blobs.
         _ if !matches.opt_strs("json").is_empty() => {
-            early_error(
-                ErrorOutputType::default(),
-                "using `--json` requires also using `--error-format=json`",
-            );
+            handler.early_error("using `--json` requires also using `--error-format=json`");
         }
 
         _ => {}
@@ -1838,16 +1936,13 @@ pub fn parse_error_format(
     error_format
 }
 
-pub fn parse_crate_edition(matches: &getopts::Matches) -> Edition {
+pub fn parse_crate_edition(handler: &EarlyErrorHandler, matches: &getopts::Matches) -> Edition {
     let edition = match matches.opt_str("edition") {
         Some(arg) => Edition::from_str(&arg).unwrap_or_else(|_| {
-            early_error(
-                ErrorOutputType::default(),
-                format!(
-                    "argument for `--edition` must be one of: \
+            handler.early_error(format!(
+                "argument for `--edition` must be one of: \
                      {EDITION_NAME_LIST}. (instead was `{arg}`)"
-                ),
-            )
+            ))
         }),
         None => DEFAULT_EDITION,
     };
@@ -1862,39 +1957,42 @@ pub fn parse_crate_edition(matches: &getopts::Matches) -> Edition {
         } else {
             format!("edition {edition} is unstable and only available with -Z unstable-options")
         };
-        early_error(ErrorOutputType::default(), msg)
+        handler.early_error(msg)
     }
 
     edition
 }
 
 fn check_error_format_stability(
+    handler: &mut EarlyErrorHandler,
     unstable_opts: &UnstableOptions,
     error_format: ErrorOutputType,
     json_rendered: HumanReadableErrorType,
 ) {
     if !unstable_opts.unstable_options {
         if let ErrorOutputType::Json { pretty: true, json_rendered } = error_format {
-            early_error(
-                ErrorOutputType::Json { pretty: false, json_rendered },
-                "`--error-format=pretty-json` is unstable",
-            );
+            handler.abort_if_error_and_set_error_format(ErrorOutputType::Json {
+                pretty: false,
+                json_rendered,
+            });
+            handler.early_error("`--error-format=pretty-json` is unstable");
         }
         if let ErrorOutputType::HumanReadable(HumanReadableErrorType::AnnotateSnippet(_)) =
             error_format
         {
-            early_error(
-                ErrorOutputType::Json { pretty: false, json_rendered },
-                "`--error-format=human-annotate-rs` is unstable",
-            );
+            handler.abort_if_error_and_set_error_format(ErrorOutputType::Json {
+                pretty: false,
+                json_rendered,
+            });
+            handler.early_error("`--error-format=human-annotate-rs` is unstable");
         }
     }
 }
 
 fn parse_output_types(
+    handler: &EarlyErrorHandler,
     unstable_opts: &UnstableOptions,
     matches: &getopts::Matches,
-    error_format: ErrorOutputType,
 ) -> OutputTypes {
     let mut output_types = BTreeMap::new();
     if !unstable_opts.parse_only {
@@ -1908,13 +2006,10 @@ fn parse_output_types(
                     }
                 };
                 let output_type = OutputType::from_shorthand(shorthand).unwrap_or_else(|| {
-                    early_error(
-                        error_format,
-                        format!(
-                            "unknown emission type: `{shorthand}` - expected one of: {display}",
-                            display = OutputType::shorthands_display(),
-                        ),
-                    )
+                    handler.early_error(format!(
+                        "unknown emission type: `{shorthand}` - expected one of: {display}",
+                        display = OutputType::shorthands_display(),
+                    ))
                 });
                 output_types.insert(output_type, path);
             }
@@ -1927,9 +2022,9 @@ fn parse_output_types(
 }
 
 fn should_override_cgus_and_disable_thinlto(
+    handler: &EarlyErrorHandler,
     output_types: &OutputTypes,
     matches: &getopts::Matches,
-    error_format: ErrorOutputType,
     mut codegen_units: Option<usize>,
 ) -> (bool, Option<usize>) {
     let mut disable_local_thinlto = false;
@@ -1947,15 +2042,12 @@ fn should_override_cgus_and_disable_thinlto(
             Some(n) if n > 1 => {
                 if matches.opt_present("o") {
                     for ot in &incompatible {
-                        early_warn(
-                            error_format,
-                            format!(
-                                "`--emit={ot}` with `-o` incompatible with \
+                        handler.early_warn(format!(
+                            "`--emit={ot}` with `-o` incompatible with \
                                  `-C codegen-units=N` for N > 1",
-                            ),
-                        );
+                        ));
                     }
-                    early_warn(error_format, "resetting to default -C codegen-units=1");
+                    handler.early_warn("resetting to default -C codegen-units=1");
                     codegen_units = Some(1);
                     disable_local_thinlto = true;
                 }
@@ -1968,27 +2060,27 @@ fn should_override_cgus_and_disable_thinlto(
     }
 
     if codegen_units == Some(0) {
-        early_error(error_format, "value for codegen units must be a positive non-zero integer");
+        handler.early_error("value for codegen units must be a positive non-zero integer");
     }
 
     (disable_local_thinlto, codegen_units)
 }
 
-fn check_thread_count(unstable_opts: &UnstableOptions, error_format: ErrorOutputType) {
+fn check_thread_count(handler: &EarlyErrorHandler, unstable_opts: &UnstableOptions) {
     if unstable_opts.threads == 0 {
-        early_error(error_format, "value for threads must be a positive non-zero integer");
+        handler.early_error("value for threads must be a positive non-zero integer");
     }
 
     if unstable_opts.threads > 1 && unstable_opts.fuel.is_some() {
-        early_error(error_format, "optimization fuel is incompatible with multiple threads");
+        handler.early_error("optimization fuel is incompatible with multiple threads");
     }
 }
 
 fn collect_print_requests(
+    handler: &EarlyErrorHandler,
     cg: &mut CodegenOptions,
     unstable_opts: &mut UnstableOptions,
     matches: &getopts::Matches,
-    error_format: ErrorOutputType,
 ) -> Vec<PrintRequest> {
     let mut prints = Vec::<PrintRequest>::new();
     if cg.target_cpu.as_ref().is_some_and(|s| s == "help") {
@@ -2028,8 +2120,7 @@ fn collect_print_requests(
                 if unstable_opts.unstable_options {
                     PrintRequest::TargetSpec
                 } else {
-                    early_error(
-                        error_format,
+                    handler.early_error(
                         "the `-Z unstable-options` flag must also be passed to \
                          enable the target-spec-json print option",
                     );
@@ -2039,8 +2130,7 @@ fn collect_print_requests(
                 if unstable_opts.unstable_options {
                     PrintRequest::AllTargetSpecs
                 } else {
-                    early_error(
-                        error_format,
+                    handler.early_error(
                         "the `-Z unstable-options` flag must also be passed to \
                          enable the all-target-specs-json print option",
                     );
@@ -2051,10 +2141,9 @@ fn collect_print_requests(
                 let prints =
                     PRINT_REQUESTS.iter().map(|(name, _)| format!("`{name}`")).collect::<Vec<_>>();
                 let prints = prints.join(", ");
-                early_error(
-                    error_format,
-                    format!("unknown print request `{req}`. Valid print requests are: {prints}"),
-                );
+                handler.early_error(format!(
+                    "unknown print request `{req}`. Valid print requests are: {prints}"
+                ));
             }
         }
     }));
@@ -2063,14 +2152,14 @@ fn collect_print_requests(
 }
 
 pub fn parse_target_triple(
+    handler: &EarlyErrorHandler,
     matches: &getopts::Matches,
-    error_format: ErrorOutputType,
 ) -> TargetTriple {
     match matches.opt_str("target") {
         Some(target) if target.ends_with(".json") => {
             let path = Path::new(&target);
             TargetTriple::from_path(path).unwrap_or_else(|_| {
-                early_error(error_format, format!("target file {path:?} does not exist"))
+                handler.early_error(format!("target file {path:?} does not exist"))
             })
         }
         Some(target) => TargetTriple::TargetTriple(target),
@@ -2079,9 +2168,9 @@ pub fn parse_target_triple(
 }
 
 fn parse_opt_level(
+    handler: &EarlyErrorHandler,
     matches: &getopts::Matches,
     cg: &CodegenOptions,
-    error_format: ErrorOutputType,
 ) -> OptLevel {
     // The `-O` and `-C opt-level` flags specify the same setting, so we want to be able
     // to use them interchangeably. However, because they're technically different flags,
@@ -2109,13 +2198,10 @@ fn parse_opt_level(
             "s" => OptLevel::Size,
             "z" => OptLevel::SizeMin,
             arg => {
-                early_error(
-                    error_format,
-                    format!(
-                        "optimization level needs to be \
+                handler.early_error(format!(
+                    "optimization level needs to be \
                             between 0-3, s or z (instead was `{arg}`)"
-                    ),
-                );
+                ));
             }
         }
     }
@@ -2135,23 +2221,23 @@ fn select_debuginfo(matches: &getopts::Matches, cg: &CodegenOptions) -> DebugInf
 }
 
 pub(crate) fn parse_assert_incr_state(
+    handler: &EarlyErrorHandler,
     opt_assertion: &Option<String>,
-    error_format: ErrorOutputType,
 ) -> Option<IncrementalStateAssertion> {
     match opt_assertion {
         Some(s) if s.as_str() == "loaded" => Some(IncrementalStateAssertion::Loaded),
         Some(s) if s.as_str() == "not-loaded" => Some(IncrementalStateAssertion::NotLoaded),
         Some(s) => {
-            early_error(error_format, format!("unexpected incremental state assertion value: {s}"))
+            handler.early_error(format!("unexpected incremental state assertion value: {s}"))
         }
         None => None,
     }
 }
 
 fn parse_native_lib_kind(
+    handler: &EarlyErrorHandler,
     matches: &getopts::Matches,
     kind: &str,
-    error_format: ErrorOutputType,
 ) -> (NativeLibKind, Option<bool>) {
     let (kind, modifiers) = match kind.split_once(':') {
         None => (kind, None),
@@ -2169,35 +2255,31 @@ fn parse_native_lib_kind(
                 } else {
                     ", the `-Z unstable-options` flag must also be passed to use it"
                 };
-                early_error(error_format, format!("library kind `link-arg` is unstable{why}"))
+                handler.early_error(format!("library kind `link-arg` is unstable{why}"))
             }
             NativeLibKind::LinkArg
         }
-        _ => early_error(
-            error_format,
-            format!(
-                "unknown library kind `{kind}`, expected one of: static, dylib, framework, link-arg"
-            ),
-        ),
+        _ => handler.early_error(format!(
+            "unknown library kind `{kind}`, expected one of: static, dylib, framework, link-arg"
+        )),
     };
     match modifiers {
         None => (kind, None),
-        Some(modifiers) => parse_native_lib_modifiers(kind, modifiers, error_format, matches),
+        Some(modifiers) => parse_native_lib_modifiers(handler, kind, modifiers, matches),
     }
 }
 
 fn parse_native_lib_modifiers(
+    handler: &EarlyErrorHandler,
     mut kind: NativeLibKind,
     modifiers: &str,
-    error_format: ErrorOutputType,
     matches: &getopts::Matches,
 ) -> (NativeLibKind, Option<bool>) {
     let mut verbatim = None;
     for modifier in modifiers.split(',') {
         let (modifier, value) = match modifier.strip_prefix(['+', '-']) {
             Some(m) => (m, modifier.starts_with('+')),
-            None => early_error(
-                error_format,
+            None => handler.early_error(
                 "invalid linking modifier syntax, expected '+' or '-' prefix \
                  before one of: bundle, verbatim, whole-archive, as-needed",
             ),
@@ -2210,21 +2292,20 @@ fn parse_native_lib_modifiers(
                 } else {
                     ", the `-Z unstable-options` flag must also be passed to use it"
                 };
-                early_error(error_format, format!("linking modifier `{modifier}` is unstable{why}"))
+                handler.early_error(format!("linking modifier `{modifier}` is unstable{why}"))
             }
         };
         let assign_modifier = |dst: &mut Option<bool>| {
             if dst.is_some() {
                 let msg = format!("multiple `{modifier}` modifiers in a single `-l` option");
-                early_error(error_format, msg)
+                handler.early_error(msg)
             } else {
                 *dst = Some(value);
             }
         };
         match (modifier, &mut kind) {
             ("bundle", NativeLibKind::Static { bundle, .. }) => assign_modifier(bundle),
-            ("bundle", _) => early_error(
-                error_format,
+            ("bundle", _) => handler.early_error(
                 "linking modifier `bundle` is only compatible with `static` linking kind",
             ),
 
@@ -2233,8 +2314,7 @@ fn parse_native_lib_modifiers(
             ("whole-archive", NativeLibKind::Static { whole_archive, .. }) => {
                 assign_modifier(whole_archive)
             }
-            ("whole-archive", _) => early_error(
-                error_format,
+            ("whole-archive", _) => handler.early_error(
                 "linking modifier `whole-archive` is only compatible with `static` linking kind",
             ),
 
@@ -2243,28 +2323,24 @@ fn parse_native_lib_modifiers(
                 report_unstable_modifier();
                 assign_modifier(as_needed)
             }
-            ("as-needed", _) => early_error(
-                error_format,
+            ("as-needed", _) => handler.early_error(
                 "linking modifier `as-needed` is only compatible with \
                  `dylib` and `framework` linking kinds",
             ),
 
             // Note: this error also excludes the case with empty modifier
             // string, like `modifiers = ""`.
-            _ => early_error(
-                error_format,
-                format!(
-                    "unknown linking modifier `{modifier}`, expected one \
+            _ => handler.early_error(format!(
+                "unknown linking modifier `{modifier}`, expected one \
                      of: bundle, verbatim, whole-archive, as-needed"
-                ),
-            ),
+            )),
         }
     }
 
     (kind, verbatim)
 }
 
-fn parse_libs(matches: &getopts::Matches, error_format: ErrorOutputType) -> Vec<NativeLib> {
+fn parse_libs(handler: &EarlyErrorHandler, matches: &getopts::Matches) -> Vec<NativeLib> {
     matches
         .opt_strs("l")
         .into_iter()
@@ -2278,7 +2354,7 @@ fn parse_libs(matches: &getopts::Matches, error_format: ErrorOutputType) -> Vec<
             let (name, kind, verbatim) = match s.split_once('=') {
                 None => (s, NativeLibKind::Unspecified, None),
                 Some((kind, name)) => {
-                    let (kind, verbatim) = parse_native_lib_kind(matches, kind, error_format);
+                    let (kind, verbatim) = parse_native_lib_kind(handler, matches, kind);
                     (name.to_string(), kind, verbatim)
                 }
             };
@@ -2288,7 +2364,7 @@ fn parse_libs(matches: &getopts::Matches, error_format: ErrorOutputType) -> Vec<
                 Some((name, new_name)) => (name.to_string(), Some(new_name.to_owned())),
             };
             if name.is_empty() {
-                early_error(error_format, "library name must not be empty");
+                handler.early_error("library name must not be empty");
             }
             NativeLib { name, new_name, kind, verbatim }
         })
@@ -2296,9 +2372,9 @@ fn parse_libs(matches: &getopts::Matches, error_format: ErrorOutputType) -> Vec<
 }
 
 pub fn parse_externs(
+    handler: &EarlyErrorHandler,
     matches: &getopts::Matches,
     unstable_opts: &UnstableOptions,
-    error_format: ErrorOutputType,
 ) -> Externs {
     let is_unstable_enabled = unstable_opts.unstable_options;
     let mut externs: BTreeMap<String, ExternEntry> = BTreeMap::new();
@@ -2362,8 +2438,7 @@ pub fn parse_externs(
         let mut force = false;
         if let Some(opts) = options {
             if !is_unstable_enabled {
-                early_error(
-                    error_format,
+                handler.early_error(
                     "the `-Z unstable-options` flag must also be passed to \
                      enable `--extern` options",
                 );
@@ -2375,15 +2450,14 @@ pub fn parse_externs(
                         if let ExternLocation::ExactPaths(_) = &entry.location {
                             add_prelude = false;
                         } else {
-                            early_error(
-                                error_format,
+                            handler.early_error(
                                 "the `noprelude` --extern option requires a file path",
                             );
                         }
                     }
                     "nounused" => nounused_dep = true,
                     "force" => force = true,
-                    _ => early_error(error_format, format!("unknown --extern option `{opt}`")),
+                    _ => handler.early_error(format!("unknown --extern option `{opt}`")),
                 }
             }
         }
@@ -2402,18 +2476,15 @@ pub fn parse_externs(
 }
 
 fn parse_remap_path_prefix(
+    handler: &EarlyErrorHandler,
     matches: &getopts::Matches,
     unstable_opts: &UnstableOptions,
-    error_format: ErrorOutputType,
 ) -> Vec<(PathBuf, PathBuf)> {
     let mut mapping: Vec<(PathBuf, PathBuf)> = matches
         .opt_strs("remap-path-prefix")
         .into_iter()
         .map(|remap| match remap.rsplit_once('=') {
-            None => early_error(
-                error_format,
-                "--remap-path-prefix must contain '=' between FROM and TO",
-            ),
+            None => handler.early_error("--remap-path-prefix must contain '=' between FROM and TO"),
             Some((from, to)) => (PathBuf::from(from), PathBuf::from(to)),
         })
         .collect();
@@ -2429,86 +2500,75 @@ fn parse_remap_path_prefix(
 
 // JUSTIFICATION: before wrapper fn is available
 #[allow(rustc::bad_opt_access)]
-pub fn build_session_options(matches: &getopts::Matches) -> Options {
-    let color = parse_color(matches);
+pub fn build_session_options(
+    handler: &mut EarlyErrorHandler,
+    matches: &getopts::Matches,
+) -> Options {
+    let color = parse_color(handler, matches);
 
-    let edition = parse_crate_edition(matches);
+    let edition = parse_crate_edition(handler, matches);
 
     let JsonConfig {
         json_rendered,
         json_artifact_notifications,
         json_unused_externs,
         json_future_incompat,
-    } = parse_json(matches);
+    } = parse_json(handler, matches);
 
-    let error_format = parse_error_format(matches, color, json_rendered);
+    let error_format = parse_error_format(handler, matches, color, json_rendered);
 
     let diagnostic_width = matches.opt_get("diagnostic-width").unwrap_or_else(|_| {
-        early_error(error_format, "`--diagnostic-width` must be an positive integer");
+        handler.early_error("`--diagnostic-width` must be an positive integer");
     });
 
     let unparsed_crate_types = matches.opt_strs("crate-type");
     let crate_types = parse_crate_types_from_list(unparsed_crate_types)
-        .unwrap_or_else(|e| early_error(error_format, e));
+        .unwrap_or_else(|e| handler.early_error(e));
 
-    let mut unstable_opts = UnstableOptions::build(matches, error_format);
-    let (lint_opts, describe_lints, lint_cap) = get_cmd_lint_options(matches, error_format);
+    let mut unstable_opts = UnstableOptions::build(handler, matches);
+    let (lint_opts, describe_lints, lint_cap) = get_cmd_lint_options(handler, matches);
 
-    check_error_format_stability(&unstable_opts, error_format, json_rendered);
+    check_error_format_stability(handler, &unstable_opts, error_format, json_rendered);
 
     if !unstable_opts.unstable_options && json_unused_externs.is_enabled() {
-        early_error(
-            error_format,
+        handler.early_error(
             "the `-Z unstable-options` flag must also be passed to enable \
             the flag `--json=unused-externs`",
         );
     }
 
-    let output_types = parse_output_types(&unstable_opts, matches, error_format);
+    let output_types = parse_output_types(handler, &unstable_opts, matches);
 
-    let mut cg = CodegenOptions::build(matches, error_format);
-    let (disable_local_thinlto, mut codegen_units) = should_override_cgus_and_disable_thinlto(
-        &output_types,
-        matches,
-        error_format,
-        cg.codegen_units,
-    );
+    let mut cg = CodegenOptions::build(handler, matches);
+    let (disable_local_thinlto, mut codegen_units) =
+        should_override_cgus_and_disable_thinlto(handler, &output_types, matches, cg.codegen_units);
 
-    check_thread_count(&unstable_opts, error_format);
+    check_thread_count(handler, &unstable_opts);
 
     let incremental = cg.incremental.as_ref().map(PathBuf::from);
 
-    let assert_incr_state = parse_assert_incr_state(&unstable_opts.assert_incr_state, error_format);
+    let assert_incr_state = parse_assert_incr_state(handler, &unstable_opts.assert_incr_state);
 
     if unstable_opts.profile && incremental.is_some() {
-        early_error(
-            error_format,
-            "can't instrument with gcov profiling when compiling incrementally",
-        );
+        handler.early_error("can't instrument with gcov profiling when compiling incrementally");
     }
     if unstable_opts.profile {
         match codegen_units {
             Some(1) => {}
             None => codegen_units = Some(1),
-            Some(_) => early_error(
-                error_format,
-                "can't instrument with gcov profiling with multiple codegen units",
-            ),
+            Some(_) => handler
+                .early_error("can't instrument with gcov profiling with multiple codegen units"),
         }
     }
 
     if cg.profile_generate.enabled() && cg.profile_use.is_some() {
-        early_error(
-            error_format,
-            "options `-C profile-generate` and `-C profile-use` are exclusive",
-        );
+        handler.early_error("options `-C profile-generate` and `-C profile-use` are exclusive");
     }
 
     if unstable_opts.profile_sample_use.is_some()
         && (cg.profile_generate.enabled() || cg.profile_use.is_some())
     {
-        early_error(
-            error_format,
+        handler.early_error(
             "option `-Z profile-sample-use` cannot be used with `-C profile-generate` or `-C profile-use`",
         );
     }
@@ -2517,23 +2577,19 @@ pub fn build_session_options(matches: &getopts::Matches) -> Options {
     // precedence.
     match (cg.symbol_mangling_version, unstable_opts.symbol_mangling_version) {
         (Some(smv_c), Some(smv_z)) if smv_c != smv_z => {
-            early_error(
-                error_format,
+            handler.early_error(
                 "incompatible values passed for `-C symbol-mangling-version` \
                 and `-Z symbol-mangling-version`",
             );
         }
         (Some(SymbolManglingVersion::V0), _) => {}
         (Some(_), _) if !unstable_opts.unstable_options => {
-            early_error(
-                error_format,
-                "`-C symbol-mangling-version=legacy` requires `-Z unstable-options`",
-            );
+            handler
+                .early_error("`-C symbol-mangling-version=legacy` requires `-Z unstable-options`");
         }
         (None, None) => {}
         (None, smv) => {
-            early_warn(
-                error_format,
+            handler.early_warn(
                 "`-Z symbol-mangling-version` is deprecated; use `-C symbol-mangling-version`",
             );
             cg.symbol_mangling_version = smv;
@@ -2545,25 +2601,19 @@ pub fn build_session_options(matches: &getopts::Matches) -> Options {
     // precedence.
     match (cg.instrument_coverage, unstable_opts.instrument_coverage) {
         (Some(ic_c), Some(ic_z)) if ic_c != ic_z => {
-            early_error(
-                error_format,
+            handler.early_error(
                 "incompatible values passed for `-C instrument-coverage` \
                 and `-Z instrument-coverage`",
             );
         }
         (Some(InstrumentCoverage::Off | InstrumentCoverage::All), _) => {}
         (Some(_), _) if !unstable_opts.unstable_options => {
-            early_error(
-                error_format,
-                "`-C instrument-coverage=except-*` requires `-Z unstable-options`",
-            );
+            handler.early_error("`-C instrument-coverage=except-*` requires `-Z unstable-options`");
         }
         (None, None) => {}
         (None, ic) => {
-            early_warn(
-                error_format,
-                "`-Z instrument-coverage` is deprecated; use `-C instrument-coverage`",
-            );
+            handler
+                .early_warn("`-Z instrument-coverage` is deprecated; use `-C instrument-coverage`");
             cg.instrument_coverage = ic;
         }
         _ => {}
@@ -2571,8 +2621,7 @@ pub fn build_session_options(matches: &getopts::Matches) -> Options {
 
     if cg.instrument_coverage.is_some() && cg.instrument_coverage != Some(InstrumentCoverage::Off) {
         if cg.profile_generate.enabled() || cg.profile_use.is_some() {
-            early_error(
-                error_format,
+            handler.early_error(
                 "option `-C instrument-coverage` is not compatible with either `-C profile-use` \
                 or `-C profile-generate`",
             );
@@ -2585,8 +2634,7 @@ pub fn build_session_options(matches: &getopts::Matches) -> Options {
         match cg.symbol_mangling_version {
             None => cg.symbol_mangling_version = Some(SymbolManglingVersion::V0),
             Some(SymbolManglingVersion::Legacy) => {
-                early_warn(
-                    error_format,
+                handler.early_warn(
                     "-C instrument-coverage requires symbol mangling version `v0`, \
                     but `-C symbol-mangling-version=legacy` was specified",
                 );
@@ -2602,33 +2650,44 @@ pub fn build_session_options(matches: &getopts::Matches) -> Options {
     if !cg.embed_bitcode {
         match cg.lto {
             LtoCli::No | LtoCli::Unspecified => {}
-            LtoCli::Yes | LtoCli::NoParam | LtoCli::Thin | LtoCli::Fat => early_error(
-                error_format,
-                "options `-C embed-bitcode=no` and `-C lto` are incompatible",
-            ),
+            LtoCli::Yes | LtoCli::NoParam | LtoCli::Thin | LtoCli::Fat => {
+                handler.early_error("options `-C embed-bitcode=no` and `-C lto` are incompatible")
+            }
         }
     }
 
-    if let Some(flavor) = cg.linker_flavor {
-        if matches!(flavor, LinkerFlavorCli::BpfLinker | LinkerFlavorCli::PtxLinker)
-            && !nightly_options::is_unstable_enabled(matches)
-        {
-            let msg = format!(
-                "linker flavor `{}` is unstable, `-Z unstable-options` \
-                 flag must also be passed to explicitly use it",
-                flavor.desc()
+    // For testing purposes, until we have more feedback about these options: ensure `-Z
+    // unstable-options` is required when using the unstable `-C link-self-contained` options, like
+    // `-C link-self-contained=+linker`, and when using the unstable `-C linker-flavor` options, like
+    // `-C linker-flavor=gnu-lld-cc`.
+    if !nightly_options::is_unstable_enabled(matches) {
+        let uses_unstable_self_contained_option =
+            cg.link_self_contained.are_unstable_variants_set();
+        if uses_unstable_self_contained_option {
+            handler.early_error(
+                "only `-C link-self-contained` values `y`/`yes`/`on`/`n`/`no`/`off` are stable, \
+                the `-Z unstable-options` flag must also be passed to use the unstable values",
             );
-            early_error(error_format, msg);
+        }
+
+        if let Some(flavor) = cg.linker_flavor {
+            if flavor.is_unstable() {
+                handler.early_error(format!(
+                    "the linker flavor `{}` is unstable, the `-Z unstable-options` \
+                        flag must also be passed to use the unstable values",
+                    flavor.desc()
+                ));
+            }
         }
     }
 
-    let prints = collect_print_requests(&mut cg, &mut unstable_opts, matches, error_format);
+    let prints = collect_print_requests(handler, &mut cg, &mut unstable_opts, matches);
 
     let cg = cg;
 
     let sysroot_opt = matches.opt_str("sysroot").map(|m| PathBuf::from(&m));
-    let target_triple = parse_target_triple(matches, error_format);
-    let opt_level = parse_opt_level(matches, &cg, error_format);
+    let target_triple = parse_target_triple(handler, matches);
+    let opt_level = parse_opt_level(handler, matches, &cg);
     // The `-g` and `-C debuginfo` flags specify the same setting, so we want to be able
     // to use them interchangeably. See the note above (regarding `-O` and `-C opt-level`)
     // for more details.
@@ -2637,28 +2696,28 @@ pub fn build_session_options(matches: &getopts::Matches) -> Options {
 
     let mut search_paths = vec![];
     for s in &matches.opt_strs("L") {
-        search_paths.push(SearchPath::from_cli_opt(s, error_format));
+        search_paths.push(SearchPath::from_cli_opt(handler, s));
     }
 
-    let libs = parse_libs(matches, error_format);
+    let libs = parse_libs(handler, matches);
 
     let test = matches.opt_present("test");
 
     if !cg.remark.is_empty() && debuginfo == DebugInfo::None {
-        early_warn(error_format, "-C remark requires \"-C debuginfo=n\" to show source locations");
+        handler.early_warn("-C remark requires \"-C debuginfo=n\" to show source locations");
     }
 
-    let externs = parse_externs(matches, &unstable_opts, error_format);
+    let externs = parse_externs(handler, matches, &unstable_opts);
 
     let crate_name = matches.opt_str("crate-name");
 
-    let remap_path_prefix = parse_remap_path_prefix(matches, &unstable_opts, error_format);
+    let remap_path_prefix = parse_remap_path_prefix(handler, matches, &unstable_opts);
 
-    let pretty = parse_pretty(&unstable_opts, error_format);
+    let pretty = parse_pretty(handler, &unstable_opts);
 
     // query-dep-graph is required if dump-dep-graph is given #106736
     if unstable_opts.dump_dep_graph && !unstable_opts.query_dep_graph {
-        early_error(error_format, "can't dump dependency graph without `-Z query-dep-graph`");
+        handler.early_error("can't dump dependency graph without `-Z query-dep-graph`");
     }
 
     // Try to find a directory containing the Rust `src`, for more details see
@@ -2690,7 +2749,7 @@ pub fn build_session_options(matches: &getopts::Matches) -> Options {
     };
 
     let working_dir = std::env::current_dir().unwrap_or_else(|e| {
-        early_error(error_format, format!("Current directory is invalid: {e}"));
+        handler.early_error(format!("Current directory is invalid: {e}"));
     });
 
     let remap = FilePathMapping::new(remap_path_prefix.clone());
@@ -2741,7 +2800,7 @@ pub fn build_session_options(matches: &getopts::Matches) -> Options {
     }
 }
 
-fn parse_pretty(unstable_opts: &UnstableOptions, efmt: ErrorOutputType) -> Option<PpMode> {
+fn parse_pretty(handler: &EarlyErrorHandler, unstable_opts: &UnstableOptions) -> Option<PpMode> {
     use PpMode::*;
 
     let first = match unstable_opts.unpretty.as_deref()? {
@@ -2760,16 +2819,13 @@ fn parse_pretty(unstable_opts: &UnstableOptions, efmt: ErrorOutputType) -> Optio
         "thir-flat" => ThirFlat,
         "mir" => Mir,
         "mir-cfg" => MirCFG,
-        name => early_error(
-            efmt,
-            format!(
-                "argument to `unpretty` must be one of `normal`, `identified`, \
+        name => handler.early_error(format!(
+            "argument to `unpretty` must be one of `normal`, `identified`, \
                             `expanded`, `expanded,identified`, `expanded,hygiene`, \
                             `ast-tree`, `ast-tree,expanded`, `hir`, `hir,identified`, \
                             `hir,typed`, `hir-tree`, `thir-tree`, `thir-flat`, `mir` or \
                             `mir-cfg`; got {name}"
-            ),
-        ),
+        )),
     };
     debug!("got unpretty option: {first:?}");
     Some(first)
@@ -2809,8 +2865,8 @@ pub fn parse_crate_types_from_list(list_list: Vec<String>) -> Result<Vec<CrateTy
 }
 
 pub mod nightly_options {
-    use super::{ErrorOutputType, OptionStability, RustcOptGroup};
-    use crate::early_error;
+    use super::{OptionStability, RustcOptGroup};
+    use crate::EarlyErrorHandler;
     use rustc_feature::UnstableFeatures;
 
     pub fn is_unstable_enabled(matches: &getopts::Matches) -> bool {
@@ -2826,7 +2882,11 @@ pub mod nightly_options {
         UnstableFeatures::from_environment(krate).is_nightly_build()
     }
 
-    pub fn check_nightly_options(matches: &getopts::Matches, flags: &[RustcOptGroup]) {
+    pub fn check_nightly_options(
+        handler: &EarlyErrorHandler,
+        matches: &getopts::Matches,
+        flags: &[RustcOptGroup],
+    ) {
         let has_z_unstable_option = matches.opt_strs("Z").iter().any(|x| *x == "unstable-options");
         let really_allows_unstable_options = match_is_nightly_build(matches);
 
@@ -2838,14 +2898,11 @@ pub mod nightly_options {
                 continue;
             }
             if opt.name != "Z" && !has_z_unstable_option {
-                early_error(
-                    ErrorOutputType::default(),
-                    format!(
-                        "the `-Z unstable-options` flag must also be passed to enable \
+                handler.early_error(format!(
+                    "the `-Z unstable-options` flag must also be passed to enable \
                          the flag `{}`",
-                        opt.name
-                    ),
-                );
+                    opt.name
+                ));
             }
             if really_allows_unstable_options {
                 continue;
@@ -2856,7 +2913,12 @@ pub mod nightly_options {
                         "the option `{}` is only accepted on the nightly compiler",
                         opt.name
                     );
-                    early_error(ErrorOutputType::default(), msg);
+                    let _ = handler.early_error_no_abort(msg);
+                    handler.early_note("selecting a toolchain with `+toolchain` arguments require a rustup proxy; see <https://rust-lang.github.io/rustup/concepts/index.html>");
+                    handler.early_help(
+                        "consider switching to a nightly toolchain: `rustup default nightly`",
+                    );
+                    handler.early_note("for more information about Rust's stability policy, see <https://doc.rust-lang.org/book/appendix-07-nightly-rust.html#unstable-features>");
                 }
                 OptionStability::Stable => {}
             }

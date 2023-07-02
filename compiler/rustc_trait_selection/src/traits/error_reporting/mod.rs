@@ -5,7 +5,7 @@ pub mod suggestions;
 use super::{
     FulfillmentError, FulfillmentErrorCode, MismatchedProjectionTypes, Obligation, ObligationCause,
     ObligationCauseCode, ObligationCtxt, OutputTypeParameterMismatch, Overflow,
-    PredicateObligation, SelectionContext, SelectionError, TraitNotObjectSafe,
+    PredicateObligation, SelectionError, TraitNotObjectSafe,
 };
 use crate::infer::error_reporting::{TyCategory, TypeAnnotationNeeded as ErrorCode};
 use crate::infer::type_variable::{TypeVariableOrigin, TypeVariableOriginKind};
@@ -377,7 +377,7 @@ impl<'tcx> InferCtxtExt<'tcx> for InferCtxt<'tcx> {
                     param_env,
                     ty.rebind(ty::TraitPredicate { trait_ref, constness, polarity }),
                 );
-                let ocx = ObligationCtxt::new_in_snapshot(self);
+                let ocx = ObligationCtxt::new(self);
                 ocx.register_obligation(obligation);
                 if ocx.select_all_or_error().is_empty() {
                     return Ok((
@@ -1094,10 +1094,12 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
 
                     ty::PredicateKind::Ambiguous => span_bug!(span, "ambiguous"),
 
-                    ty::PredicateKind::TypeWellFormedFromEnv(..) => span_bug!(
-                        span,
-                        "TypeWellFormedFromEnv predicate should only exist in the environment"
-                    ),
+                    ty::PredicateKind::Clause(ty::ClauseKind::TypeWellFormedFromEnv(..)) => {
+                        span_bug!(
+                            span,
+                            "TypeWellFormedFromEnv predicate should only exist in the environment"
+                        )
+                    }
 
                     ty::PredicateKind::AliasRelate(..) => span_bug!(
                         span,
@@ -1597,7 +1599,7 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
         }
 
         self.probe(|_| {
-            let ocx = ObligationCtxt::new_in_snapshot(self);
+            let ocx = ObligationCtxt::new(self);
 
             // try to find the mismatched types to report the error with.
             //
@@ -2270,55 +2272,40 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                     )
                 };
 
-                let obligation = obligation.with(self.tcx, trait_ref);
-                let mut selcx = SelectionContext::new(&self);
-                match selcx.select_from_obligation(&obligation) {
-                    Ok(None) => {
-                        let ambiguities =
-                            ambiguity::recompute_applicable_impls(self.infcx, &obligation);
-                        let has_non_region_infer = trait_ref
-                            .skip_binder()
-                            .substs
-                            .types()
-                            .any(|t| !t.is_ty_or_numeric_infer());
-                        // It doesn't make sense to talk about applicable impls if there are more
-                        // than a handful of them.
-                        if ambiguities.len() > 1 && ambiguities.len() < 10 && has_non_region_infer {
-                            if self.tainted_by_errors().is_some() && subst.is_none() {
-                                // If `subst.is_none()`, then this is probably two param-env
-                                // candidates or impl candidates that are equal modulo lifetimes.
-                                // Therefore, if we've already emitted an error, just skip this
-                                // one, since it's not particularly actionable.
-                                err.cancel();
-                                return;
-                            }
-                            self.annotate_source_of_ambiguity(&mut err, &ambiguities, predicate);
-                        } else {
-                            if self.tainted_by_errors().is_some() {
-                                err.cancel();
-                                return;
-                            }
-                            err.note(format!("cannot satisfy `{}`", predicate));
-                            let impl_candidates = self.find_similar_impl_candidates(
-                                predicate.to_opt_poly_trait_pred().unwrap(),
-                            );
-                            if impl_candidates.len() < 10 {
-                                self.report_similar_impl_candidates(
-                                    impl_candidates.as_slice(),
-                                    trait_ref,
-                                    obligation.cause.body_id,
-                                    &mut err,
-                                    false,
-                                );
-                            }
-                        }
+                let ambiguities = ambiguity::recompute_applicable_impls(
+                    self.infcx,
+                    &obligation.with(self.tcx, trait_ref),
+                );
+                let has_non_region_infer =
+                    trait_ref.skip_binder().substs.types().any(|t| !t.is_ty_or_numeric_infer());
+                // It doesn't make sense to talk about applicable impls if there are more
+                // than a handful of them.
+                if ambiguities.len() > 1 && ambiguities.len() < 10 && has_non_region_infer {
+                    if self.tainted_by_errors().is_some() && subst.is_none() {
+                        // If `subst.is_none()`, then this is probably two param-env
+                        // candidates or impl candidates that are equal modulo lifetimes.
+                        // Therefore, if we've already emitted an error, just skip this
+                        // one, since it's not particularly actionable.
+                        err.cancel();
+                        return;
                     }
-                    _ => {
-                        if self.tainted_by_errors().is_some() {
-                            err.cancel();
-                            return;
-                        }
-                        err.note(format!("cannot satisfy `{}`", predicate));
+                    self.annotate_source_of_ambiguity(&mut err, &ambiguities, predicate);
+                } else {
+                    if self.tainted_by_errors().is_some() {
+                        err.cancel();
+                        return;
+                    }
+                    err.note(format!("cannot satisfy `{}`", predicate));
+                    let impl_candidates = self
+                        .find_similar_impl_candidates(predicate.to_opt_poly_trait_pred().unwrap());
+                    if impl_candidates.len() < 10 {
+                        self.report_similar_impl_candidates(
+                            impl_candidates.as_slice(),
+                            trait_ref,
+                            obligation.cause.body_id,
+                            &mut err,
+                            false,
+                        );
                     }
                 }
 
