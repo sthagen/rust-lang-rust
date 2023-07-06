@@ -108,6 +108,14 @@ impl<'tcx> Interner for TyCtxt<'tcx> {
     type PredicateKind = ty::PredicateKind<'tcx>;
     type AllocId = crate::mir::interpret::AllocId;
 
+    type InferConst = ty::InferConst<'tcx>;
+    type AliasConst = ty::UnevaluatedConst<'tcx>;
+    type ParamConst = ty::ParamConst;
+    type BoundConst = ty::BoundVar;
+    type PlaceholderConst = ty::PlaceholderConst<'tcx>;
+    type ValueConst = ty::ValTree<'tcx>;
+    type ExprConst = ty::Expr<'tcx>;
+
     type EarlyBoundRegion = ty::EarlyBoundRegion;
     type BoundRegion = ty::BoundRegion;
     type FreeRegion = ty::FreeRegion;
@@ -320,6 +328,8 @@ pub struct CommonLifetimes<'tcx> {
 
 pub struct CommonConsts<'tcx> {
     pub unit: Const<'tcx>,
+    pub true_: Const<'tcx>,
+    pub false_: Const<'tcx>,
 }
 
 impl<'tcx> CommonTypes<'tcx> {
@@ -416,6 +426,14 @@ impl<'tcx> CommonConsts<'tcx> {
             unit: mk_const(ty::ConstData {
                 kind: ty::ConstKind::Value(ty::ValTree::zst()),
                 ty: types.unit,
+            }),
+            true_: mk_const(ty::ConstData {
+                kind: ty::ConstKind::Value(ty::ValTree::Leaf(ty::ScalarInt::TRUE)),
+                ty: types.bool,
+            }),
+            false_: mk_const(ty::ConstData {
+                kind: ty::ConstKind::Value(ty::ValTree::Leaf(ty::ScalarInt::FALSE)),
+                ty: types.bool,
             }),
         }
     }
@@ -731,34 +749,6 @@ impl<'tcx> TyCtxt<'tcx> {
     ) -> Ty<'tcx> {
         let reported = self.sess.delay_span_bug(span, msg);
         self.mk_ty_from_kind(Error(reported))
-    }
-
-    /// Like [TyCtxt::ty_error] but for constants, with current `ErrorGuaranteed`
-    #[track_caller]
-    pub fn const_error(self, ty: Ty<'tcx>, reported: ErrorGuaranteed) -> Const<'tcx> {
-        self.mk_const(ty::ConstKind::Error(reported), ty)
-    }
-
-    /// Like [TyCtxt::ty_error] but for constants.
-    #[track_caller]
-    pub fn const_error_misc(self, ty: Ty<'tcx>) -> Const<'tcx> {
-        self.const_error_with_message(
-            ty,
-            DUMMY_SP,
-            "ty::ConstKind::Error constructed but no error reported",
-        )
-    }
-
-    /// Like [TyCtxt::ty_error_with_message] but for constants.
-    #[track_caller]
-    pub fn const_error_with_message<S: Into<MultiSpan>>(
-        self,
-        ty: Ty<'tcx>,
-        span: S,
-        msg: &'static str,
-    ) -> Const<'tcx> {
-        let reported = self.sess.delay_span_bug(span, msg);
-        self.mk_const(ty::ConstKind::Error(reported), ty)
     }
 
     pub fn consider_optimizing<T: Fn() -> String>(self, msg: T) -> bool {
@@ -1924,8 +1914,8 @@ impl<'tcx> TyCtxt<'tcx> {
     }
 
     #[inline]
-    pub fn mk_const(self, kind: impl Into<ty::ConstKind<'tcx>>, ty: Ty<'tcx>) -> Const<'tcx> {
-        self.intern_const(ty::ConstData { kind: kind.into(), ty })
+    pub fn mk_ct_from_kind(self, kind: ty::ConstKind<'tcx>, ty: Ty<'tcx>) -> Const<'tcx> {
+        self.intern_const(ty::ConstData { kind, ty })
     }
 
     #[inline]
@@ -1989,14 +1979,14 @@ impl<'tcx> TyCtxt<'tcx> {
                 ty::Region::new_early_bound(self, param.to_early_bound_region_data()).into()
             }
             GenericParamDefKind::Type { .. } => self.mk_ty_param(param.index, param.name).into(),
-            GenericParamDefKind::Const { .. } => self
-                .mk_const(
-                    ParamConst { index: param.index, name: param.name },
-                    self.type_of(param.def_id)
-                        .no_bound_vars()
-                        .expect("const parameter types cannot be generic"),
-                )
-                .into(),
+            GenericParamDefKind::Const { .. } => ty::Const::new_param(
+                self,
+                ParamConst { index: param.index, name: param.name },
+                self.type_of(param.def_id)
+                    .no_bound_vars()
+                    .expect("const parameter types cannot be generic"),
+            )
+            .into(),
         }
     }
 

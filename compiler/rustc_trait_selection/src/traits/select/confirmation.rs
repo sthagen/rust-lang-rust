@@ -16,7 +16,6 @@ use rustc_middle::ty::{
     self, Binder, GenericParamDefKind, InternalSubsts, SubstsRef, ToPolyTraitRef, ToPredicate,
     TraitPredicate, TraitRef, Ty, TyCtxt, TypeVisitableExt,
 };
-use rustc_session::config::TraitSolver;
 use rustc_span::def_id::DefId;
 
 use crate::traits::project::{normalize_with_depth, normalize_with_depth_to};
@@ -68,7 +67,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             }
 
             AutoImplCandidate => {
-                let data = self.confirm_auto_impl_candidate(obligation);
+                let data = self.confirm_auto_impl_candidate(obligation)?;
                 ImplSource::Builtin(data)
             }
 
@@ -377,12 +376,12 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
     fn confirm_auto_impl_candidate(
         &mut self,
         obligation: &TraitObligation<'tcx>,
-    ) -> Vec<PredicateObligation<'tcx>> {
+    ) -> Result<Vec<PredicateObligation<'tcx>>, SelectionError<'tcx>> {
         debug!(?obligation, "confirm_auto_impl_candidate");
 
         let self_ty = self.infcx.shallow_resolve(obligation.predicate.self_ty());
-        let types = self.constituent_types_for_ty(self_ty);
-        self.vtable_auto_impl(obligation, obligation.predicate.def_id(), types)
+        let types = self.constituent_types_for_ty(self_ty)?;
+        Ok(self.vtable_auto_impl(obligation, obligation.predicate.def_id(), types))
     }
 
     /// See `confirm_auto_impl_candidate`.
@@ -614,11 +613,10 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                             GenericParamDefKind::Const { .. } => {
                                 let bound_var = ty::BoundVariableKind::Const;
                                 bound_vars.push(bound_var);
-                                tcx.mk_const(
-                                    ty::ConstKind::Bound(
-                                        ty::INNERMOST,
-                                        ty::BoundVar::from_usize(bound_vars.len() - 1),
-                                    ),
+                                ty::Const::new_bound(
+                                    tcx,
+                                    ty::INNERMOST,
+                                    ty::BoundVar::from_usize(bound_vars.len() - 1),
                                     tcx.type_of(param.def_id)
                                         .no_bound_vars()
                                         .expect("const parameter types cannot be generic"),
@@ -830,13 +828,10 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
 
         debug!(?closure_def_id, ?trait_ref, ?nested, "confirm closure candidate obligations");
 
-        // FIXME: Chalk
-        if self.tcx().sess.opts.unstable_opts.trait_solver != TraitSolver::Chalk {
-            nested.push(obligation.with(
-                self.tcx(),
-                ty::Binder::dummy(ty::PredicateKind::ClosureKind(closure_def_id, substs, kind)),
-            ));
-        }
+        nested.push(obligation.with(
+            self.tcx(),
+            ty::Binder::dummy(ty::PredicateKind::ClosureKind(closure_def_id, substs, kind)),
+        ));
 
         Ok(nested)
     }

@@ -184,8 +184,7 @@ pub fn predicate_obligations<'tcx>(
         | ty::PredicateKind::Coerce(..)
         | ty::PredicateKind::ConstEquate(..)
         | ty::PredicateKind::Ambiguous
-        | ty::PredicateKind::AliasRelate(..)
-        | ty::PredicateKind::Clause(ty::ClauseKind::TypeWellFormedFromEnv(..)) => {
+        | ty::PredicateKind::AliasRelate(..) => {
             bug!("We should only wf check where clauses, unexpected predicate: {predicate:?}")
         }
     }
@@ -303,6 +302,16 @@ impl<'a, 'tcx> WfPredicates<'a, 'tcx> {
     }
 
     fn normalize(self, infcx: &InferCtxt<'tcx>) -> Vec<traits::PredicateObligation<'tcx>> {
+        // Do not normalize `wf` obligations with the new solver.
+        //
+        // The current deep normalization routine with the new solver does not
+        // handle ambiguity and the new solver correctly deals with unnnormalized goals.
+        // If the user relies on normalized types, e.g. for `fn implied_outlives_bounds`,
+        // it is their responsibility to normalize while avoiding ambiguity.
+        if infcx.next_trait_solver() {
+            return self.out;
+        }
+
         let cause = self.cause(traits::WellFormed(None));
         let param_env = self.param_env;
         let mut obligations = Vec::with_capacity(self.out.len());
@@ -1005,8 +1014,7 @@ pub(crate) fn required_region_bounds<'tcx>(
                 | ty::ClauseKind::Projection(_)
                 | ty::ClauseKind::ConstArgHasType(_, _)
                 | ty::ClauseKind::WellFormed(_)
-                | ty::ClauseKind::ConstEvaluatable(_)
-                | ty::ClauseKind::TypeWellFormedFromEnv(_) => None,
+                | ty::ClauseKind::ConstEvaluatable(_) => None,
             }
         })
         .collect()

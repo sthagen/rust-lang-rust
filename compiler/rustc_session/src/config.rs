@@ -737,12 +737,18 @@ pub enum PrintRequest {
 pub enum TraitSolver {
     /// Classic trait solver in `rustc_trait_selection::traits::select`
     Classic,
-    /// Chalk trait solver
-    Chalk,
     /// Experimental trait solver in `rustc_trait_selection::solve`
     Next,
     /// Use the new trait solver during coherence
     NextCoherence,
+}
+
+#[derive(Default, Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum DumpSolverProofTree {
+    Always,
+    OnError,
+    #[default]
+    Never,
 }
 
 pub enum Input {
@@ -1021,6 +1027,7 @@ impl Default for Options {
             json_future_incompat: false,
             pretty: None,
             working_dir: RealFileName::LocalPath(std::env::current_dir().unwrap()),
+            color: ColorConfig::Auto,
         }
     }
 }
@@ -2707,6 +2714,10 @@ pub fn build_session_options(
         handler.early_warn("-C remark requires \"-C debuginfo=n\" to show source locations");
     }
 
+    if cg.remark.is_empty() && unstable_opts.remark_dir.is_some() {
+        handler.early_warn("using -Z remark-dir without enabling remarks using e.g. -C remark=all");
+    }
+
     let externs = parse_externs(handler, matches, &unstable_opts);
 
     let crate_name = matches.opt_str("crate-name");
@@ -2797,6 +2808,7 @@ pub fn build_session_options(
         json_future_incompat,
         pretty,
         working_dir,
+        color,
     }
 }
 

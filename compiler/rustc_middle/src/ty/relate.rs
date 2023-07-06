@@ -544,17 +544,8 @@ pub fn structurally_relate_tys<'tcx, R: TypeRelation<'tcx>>(
             Ok(tcx.mk_fn_ptr(fty))
         }
 
-        // these two are already handled downstream in case of lazy normalization
-        (&ty::Alias(ty::Projection, a_data), &ty::Alias(ty::Projection, b_data)) => {
-            let projection_ty = relation.relate(a_data, b_data)?;
-            Ok(tcx.mk_projection(projection_ty.def_id, projection_ty.substs))
-        }
-
-        (&ty::Alias(ty::Inherent, a_data), &ty::Alias(ty::Inherent, b_data)) => {
-            let alias_ty = relation.relate(a_data, b_data)?;
-            Ok(tcx.mk_alias(ty::Inherent, tcx.mk_alias_ty(alias_ty.def_id, alias_ty.substs)))
-        }
-
+        // The substs of opaque types may not all be invariant, so we have
+        // to treat them separately from other aliases.
         (
             &ty::Alias(ty::Opaque, ty::AliasTy { def_id: a_def_id, substs: a_substs, .. }),
             &ty::Alias(ty::Opaque, ty::AliasTy { def_id: b_def_id, substs: b_substs, .. }),
@@ -569,6 +560,19 @@ pub fn structurally_relate_tys<'tcx, R: TypeRelation<'tcx>>(
                 false, // do not fetch `type_of(a_def_id)`, as it will cause a cycle
             )?;
             Ok(tcx.mk_opaque(a_def_id, substs))
+        }
+
+        // Alias tend to mostly already be handled downstream due to normalization.
+        (&ty::Alias(a_kind, a_data), &ty::Alias(b_kind, b_data)) => {
+            // FIXME(-Zlower-impl-trait-in-trait-to-assoc-ty): This if can be removed
+            // and the assert uncommented once the new desugaring is stable.
+            if a_kind == b_kind {
+                let alias_ty = relation.relate(a_data, b_data)?;
+                // assert_eq!(a_kind, b_kind);
+                Ok(tcx.mk_alias(a_kind, alias_ty))
+            } else {
+                Err(TypeError::Sorts(expected_found(relation, a, b)))
+            }
         }
 
         _ => Err(TypeError::Sorts(expected_found(relation, a, b))),
@@ -623,7 +627,11 @@ pub fn structurally_relate_consts<'tcx, R: TypeRelation<'tcx>>(
                 au.substs,
                 bu.substs,
             )?;
-            return Ok(tcx.mk_const(ty::UnevaluatedConst { def: au.def, substs }, a.ty()));
+            return Ok(ty::Const::new_unevaluated(
+                tcx,
+                ty::UnevaluatedConst { def: au.def, substs },
+                a.ty(),
+            ));
         }
         // Before calling relate on exprs, it is necessary to ensure that the nested consts
         // have identical types.
@@ -664,8 +672,7 @@ pub fn structurally_relate_consts<'tcx, R: TypeRelation<'tcx>>(
                 }
                 _ => return Err(TypeError::ConstMismatch(expected_found(r, a, b))),
             };
-            let kind = ty::ConstKind::Expr(expr);
-            return Ok(tcx.mk_const(kind, a.ty()));
+            return Ok(ty::Const::new_expr(tcx, expr, a.ty()));
         }
         _ => false,
     };

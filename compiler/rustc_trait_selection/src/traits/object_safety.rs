@@ -101,7 +101,7 @@ pub fn is_vtable_safe_method(tcx: TyCtxt<'_>, trait_def_id: DefId, method: ty::A
     debug_assert!(tcx.generics_of(trait_def_id).has_self);
     debug!("is_vtable_safe_method({:?}, {:?})", trait_def_id, method);
     // Any method that has a `Self: Sized` bound cannot be called.
-    if generics_require_sized_self(tcx, method.def_id) {
+    if tcx.generics_require_sized_self(method.def_id) {
         return false;
     }
 
@@ -311,7 +311,7 @@ fn predicate_references_self<'tcx>(
         | ty::ClauseKind::RegionOutlives(..)
         // FIXME(generic_const_exprs): this can mention `Self`
         | ty::ClauseKind::ConstEvaluatable(..)
-        | ty::ClauseKind::TypeWellFormedFromEnv(_) => None,
+         => None,
     }
 }
 
@@ -331,7 +331,7 @@ fn super_predicates_have_non_lifetime_binders(
 }
 
 fn trait_has_sized_self(tcx: TyCtxt<'_>, trait_def_id: DefId) -> bool {
-    generics_require_sized_self(tcx, trait_def_id)
+    tcx.generics_require_sized_self(trait_def_id)
 }
 
 fn generics_require_sized_self(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
@@ -351,8 +351,7 @@ fn generics_require_sized_self(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
         | ty::ClauseKind::Projection(_)
         | ty::ClauseKind::ConstArgHasType(_, _)
         | ty::ClauseKind::WellFormed(_)
-        | ty::ClauseKind::ConstEvaluatable(_)
-        | ty::ClauseKind::TypeWellFormedFromEnv(_) => false,
+        | ty::ClauseKind::ConstEvaluatable(_) => false,
     })
 }
 
@@ -365,7 +364,7 @@ fn object_safety_violation_for_assoc_item(
 ) -> Option<ObjectSafetyViolation> {
     // Any item that has a `Self : Sized` requisite is otherwise
     // exempt from the regulations.
-    if generics_require_sized_self(tcx, item.def_id) {
+    if tcx.generics_require_sized_self(item.def_id) {
         return None;
     }
 
@@ -923,5 +922,10 @@ pub fn contains_illegal_impl_trait_in_trait<'tcx>(
 }
 
 pub fn provide(providers: &mut Providers) {
-    *providers = Providers { object_safety_violations, check_is_object_safe, ..*providers };
+    *providers = Providers {
+        object_safety_violations,
+        check_is_object_safe,
+        generics_require_sized_self,
+        ..*providers
+    };
 }
