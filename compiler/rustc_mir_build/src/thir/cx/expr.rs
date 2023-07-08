@@ -13,7 +13,7 @@ use rustc_middle::middle::region;
 use rustc_middle::mir::{self, BinOp, BorrowKind, UnOp};
 use rustc_middle::thir::*;
 use rustc_middle::ty::adjustment::{
-    Adjust, Adjustment, AutoBorrow, AutoBorrowMutability, PointerCast,
+    Adjust, Adjustment, AutoBorrow, AutoBorrowMutability, PointerCoercion,
 };
 use rustc_middle::ty::subst::InternalSubsts;
 use rustc_middle::ty::{
@@ -125,11 +125,16 @@ impl<'tcx> Cx<'tcx> {
         };
 
         let kind = match adjustment.kind {
-            Adjust::Pointer(PointerCast::Unsize) => {
+            Adjust::Pointer(PointerCoercion::Unsize) => {
                 adjust_span(&mut expr);
-                ExprKind::Pointer { cast: PointerCast::Unsize, source: self.thir.exprs.push(expr) }
+                ExprKind::PointerCoercion {
+                    cast: PointerCoercion::Unsize,
+                    source: self.thir.exprs.push(expr),
+                }
             }
-            Adjust::Pointer(cast) => ExprKind::Pointer { cast, source: self.thir.exprs.push(expr) },
+            Adjust::Pointer(cast) => {
+                ExprKind::PointerCoercion { cast, source: self.thir.exprs.push(expr) }
+            }
             Adjust::NeverToAny if adjustment.target.is_never() => return expr,
             Adjust::NeverToAny => ExprKind::NeverToAny { source: self.thir.exprs.push(expr) },
             Adjust::Deref(None) => {
@@ -143,9 +148,11 @@ impl<'tcx> Cx<'tcx> {
 
                 expr = Expr {
                     temp_lifetime,
-                    ty: self
-                        .tcx
-                        .mk_ref(deref.region, ty::TypeAndMut { ty: expr.ty, mutbl: deref.mutbl }),
+                    ty: Ty::new_ref(
+                        self.tcx,
+                        deref.region,
+                        ty::TypeAndMut { ty: expr.ty, mutbl: deref.mutbl },
+                    ),
                     span,
                     kind: ExprKind::Borrow {
                         borrow_kind: deref.mutbl.to_borrow_kind(),
@@ -190,9 +197,9 @@ impl<'tcx> Cx<'tcx> {
             // Special cased so that we can type check that the element
             // type of the source matches the pointed to type of the
             // destination.
-            ExprKind::Pointer {
+            ExprKind::PointerCoercion {
                 source: self.mirror_expr(source),
-                cast: PointerCast::ArrayToPointer,
+                cast: PointerCoercion::ArrayToPointer,
             }
         } else {
             // check whether this is casting an enum variant discriminant
@@ -308,7 +315,7 @@ impl<'tcx> Cx<'tcx> {
 
                     let arg_tys = args.iter().map(|e| self.typeck_results().expr_ty_adjusted(e));
                     let tupled_args = Expr {
-                        ty: tcx.mk_tup_from_iter(arg_tys),
+                        ty: Ty::new_tup_from_iter(tcx, arg_tys),
                         temp_lifetime,
                         span: expr.span,
                         kind: ExprKind::Tuple { fields: self.mirror_exprs(args) },
@@ -855,7 +862,11 @@ impl<'tcx> Cx<'tcx> {
                 let user_ty = self.user_substs_applied_to_res(expr.hir_id, Res::Def(kind, def_id));
                 debug!("method_callee: user_ty={:?}", user_ty);
                 (
-                    self.tcx().mk_fn_def(def_id, self.typeck_results().node_substs(expr.hir_id)),
+                    Ty::new_fn_def(
+                        self.tcx(),
+                        def_id,
+                        self.typeck_results().node_substs(expr.hir_id),
+                    ),
                     user_ty,
                 )
             }
@@ -1008,7 +1019,7 @@ impl<'tcx> Cx<'tcx> {
         let ty::Ref(region, _, mutbl) = *self.thir[args[0]].ty.kind() else {
             span_bug!(span, "overloaded_place: receiver is not a reference");
         };
-        let ref_ty = self.tcx.mk_ref(region, ty::TypeAndMut { ty: place_ty, mutbl });
+        let ref_ty = Ty::new_ref(self.tcx, region, ty::TypeAndMut { ty: place_ty, mutbl });
 
         // construct the complete expression `foo()` for the overloaded call,
         // which will yield the &T type

@@ -1913,7 +1913,7 @@ impl<'tcx> Operand<'tcx> {
         substs: impl IntoIterator<Item = GenericArg<'tcx>>,
         span: Span,
     ) -> Self {
-        let ty = tcx.mk_fn_def(def_id, substs);
+        let ty = Ty::new_fn_def(tcx, def_id, substs);
         Operand::Constant(Box::new(Constant {
             span,
             user_ty: None,
@@ -2014,7 +2014,7 @@ impl<'tcx> Rvalue<'tcx> {
                 | CastKind::IntToFloat
                 | CastKind::FnPtrToPtr
                 | CastKind::PtrToPtr
-                | CastKind::Pointer(_)
+                | CastKind::PointerCoercion(_)
                 | CastKind::PointerFromExposedAddress
                 | CastKind::DynStar
                 | CastKind::Transmute,
