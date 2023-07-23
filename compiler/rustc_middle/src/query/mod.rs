@@ -898,6 +898,10 @@ rustc_queries! {
         desc { |tcx| "linting {}", describe_as_module(key, tcx) }
     }
 
+    query check_unused_traits(_: ()) -> () {
+        desc { "checking unused trait imports in crate" }
+    }
+
     /// Checks the attributes in the module.
     query check_mod_attrs(key: LocalDefId) -> () {
         desc { |tcx| "checking attributes in {}", describe_as_module(key, tcx) }
@@ -1579,7 +1583,7 @@ rustc_queries! {
     }
 
     /// Returns a list of all `extern` blocks of a crate.
-    query foreign_modules(_: CrateNum) -> &'tcx FxHashMap<DefId, ForeignModule> {
+    query foreign_modules(_: CrateNum) -> &'tcx FxIndexMap<DefId, ForeignModule> {
         arena_cache
         desc { "looking up the foreign modules of a linked crate" }
         separate_provide_extern

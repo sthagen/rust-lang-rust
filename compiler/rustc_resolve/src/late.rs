@@ -2569,7 +2569,7 @@ impl<'a: 'ast, 'b, 'ast, 'tcx> LateResolutionVisitor<'a, 'b, 'ast, 'tcx> {
             let res = match kind {
                 RibKind::Item(..) | RibKind::AssocItem => Res::Def(def_kind, def_id.to_def_id()),
                 RibKind::Normal => {
-                    if self.r.tcx.sess.features_untracked().non_lifetime_binders {
+                    if self.r.tcx.features().non_lifetime_binders {
                         Res::Def(def_kind, def_id.to_def_id())
                     } else {
                         Res::Err
@@ -3911,8 +3911,9 @@ impl<'a: 'ast, 'b, 'ast, 'tcx> LateResolutionVisitor<'a, 'b, 'ast, 'tcx> {
             && path[0].ident.name != kw::PathRoot
             && path[0].ident.name != kw::DollarCrate
         {
+            let last_segment = *path.last().unwrap();
             let unqualified_result = {
-                match self.resolve_path(&[*path.last().unwrap()], Some(ns), None) {
+                match self.resolve_path(&[last_segment], Some(ns), None) {
                     PathResult::NonModule(path_res) => path_res.expect_full_res(),
                     PathResult::Module(ModuleOrUniformRoot::Module(module)) => {
                         module.res().unwrap()
@@ -3928,8 +3929,7 @@ impl<'a: 'ast, 'b, 'ast, 'tcx> LateResolutionVisitor<'a, 'b, 'ast, 'tcx> {
                     finalize.path_span,
                     "unnecessary qualification",
                     lint::BuiltinLintDiagnostics::UnusedQualifications {
-                        path_span: finalize.path_span,
-                        unqualified_path: path.last().unwrap().ident
+                        removal_span: finalize.path_span.until(last_segment.ident.span),
                     }
                 )
             }

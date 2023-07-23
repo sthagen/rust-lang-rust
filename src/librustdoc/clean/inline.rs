@@ -12,6 +12,7 @@ use rustc_hir::def::{DefKind, Res};
 use rustc_hir::def_id::{DefId, DefIdSet, LocalDefId};
 use rustc_hir::Mutability;
 use rustc_metadata::creader::{CStore, LoadedMacro};
+use rustc_middle::ty::fast_reject::SimplifiedType;
 use rustc_middle::ty::{self, TyCtxt};
 use rustc_span::hygiene::MacroKind;
 use rustc_span::symbol::{kw, sym, Symbol};
@@ -314,9 +315,8 @@ pub(crate) fn build_impls(
     // * https://github.com/rust-lang/rust/pull/99917 — where the feature got used
     // * https://github.com/rust-lang/rust/issues/53487 — overall tracking issue for Error
     if tcx.has_attr(did, sym::rustc_has_incoherent_inherent_impls) {
-        use rustc_middle::ty::fast_reject::SimplifiedType::*;
         let type_ =
-            if tcx.is_trait(did) { TraitSimplifiedType(did) } else { AdtSimplifiedType(did) };
+            if tcx.is_trait(did) { SimplifiedType::Trait(did) } else { SimplifiedType::Adt(did) };
         for &did in tcx.incoherent_impls(type_) {
             build_impl(cx, did, attrs, ret);
         }
@@ -473,7 +473,7 @@ pub(crate) fn build_impl(
                                 associated_trait.def_id,
                             )
                             .unwrap(); // corresponding associated item has to exist
-                        !tcx.is_doc_hidden(trait_item.def_id)
+                        document_hidden || !tcx.is_doc_hidden(trait_item.def_id)
                     } else {
                         item.visibility(tcx).is_public()
                     }
@@ -496,7 +496,7 @@ pub(crate) fn build_impl(
     let mut stack: Vec<&Type> = vec![&for_];
 
     if let Some(did) = trait_.as_ref().map(|t| t.def_id()) {
-        if tcx.is_doc_hidden(did) {
+        if !document_hidden && tcx.is_doc_hidden(did) {
             return;
         }
     }
@@ -505,7 +505,7 @@ pub(crate) fn build_impl(
     }
 
     while let Some(ty) = stack.pop() {
-        if let Some(did) = ty.def_id(&cx.cache) && tcx.is_doc_hidden(did) {
+        if let Some(did) = ty.def_id(&cx.cache) && !document_hidden && tcx.is_doc_hidden(did) {
             return;
         }
         if let Some(generics) = ty.generics() {

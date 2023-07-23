@@ -176,6 +176,7 @@ pub(crate) fn new_handler(
     rustc_errors::Handler::with_emitter_and_flags(
         emitter,
         unstable_opts.diagnostic_handler_flags(true),
+        None,
     )
 }
 
@@ -296,6 +297,7 @@ pub(crate) fn create_config(
         }),
         make_codegen_backend: None,
         registry: rustc_driver::diagnostics_registry(),
+        ice_file: None,
     }
 }
 
@@ -345,7 +347,7 @@ pub(crate) fn run_global_ctxt(
         impl_trait_bounds: Default::default(),
         generated_synthetics: Default::default(),
         auto_traits,
-        cache: Cache::new(render_options.document_private),
+        cache: Cache::new(render_options.document_private, render_options.document_hidden),
         inlined: FxHashSet::default(),
         output_format,
         render_options,
