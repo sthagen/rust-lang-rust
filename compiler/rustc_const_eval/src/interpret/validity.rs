@@ -136,19 +136,19 @@ pub struct RefTracking<T, PATH = ()> {
     pub todo: Vec<(T, PATH)>,
 }
 
-impl<T: Copy + Eq + Hash + std::fmt::Debug, PATH: Default> RefTracking<T, PATH> {
+impl<T: Clone + Eq + Hash + std::fmt::Debug, PATH: Default> RefTracking<T, PATH> {
     pub fn empty() -> Self {
         RefTracking { seen: FxHashSet::default(), todo: vec![] }
     }
     pub fn new(op: T) -> Self {
         let mut ref_tracking_for_consts =
-            RefTracking { seen: FxHashSet::default(), todo: vec![(op, PATH::default())] };
+            RefTracking { seen: FxHashSet::default(), todo: vec![(op.clone(), PATH::default())] };
         ref_tracking_for_consts.seen.insert(op);
         ref_tracking_for_consts
     }
 
     pub fn track(&mut self, op: T, path: impl FnOnce() -> PATH) {
-        if self.seen.insert(op) {
+        if self.seen.insert(op.clone()) {
             trace!("Recursing below ptr {:#?}", op);
             let path = path();
             // Remember to come back to this later.
@@ -164,14 +164,14 @@ fn write_path(out: &mut String, path: &[PathElem]) {
 
     for elem in path.iter() {
         match elem {
-            Field(name) => write!(out, ".{}", name),
+            Field(name) => write!(out, ".{name}"),
             EnumTag => write!(out, ".<enum-tag>"),
-            Variant(name) => write!(out, ".<enum-variant({})>", name),
+            Variant(name) => write!(out, ".<enum-variant({name})>"),
             GeneratorTag => write!(out, ".<generator-tag>"),
             GeneratorState(idx) => write!(out, ".<generator-state({})>", idx.index()),
-            CapturedVar(name) => write!(out, ".<captured-var({})>", name),
-            TupleElem(idx) => write!(out, ".{}", idx),
-            ArrayElem(idx) => write!(out, "[{}]", idx),
+            CapturedVar(name) => write!(out, ".<captured-var({name})>"),
+            TupleElem(idx) => write!(out, ".{idx}"),
+            ArrayElem(idx) => write!(out, "[{idx}]"),
             // `.<deref>` does not match Rust syntax, but it is more readable for long paths -- and
             // some of the other items here also are not Rust syntax. Actually we can't
             // even use the usual syntax because we are just showing the projections,

@@ -156,7 +156,9 @@ impl<'tcx> Stable<'tcx> for mir::Rvalue<'tcx> {
                 ops.0.stable(tables),
                 ops.1.stable(tables),
             ),
-            NullaryOp(_, _) => todo!(),
+            NullaryOp(null_op, ty) => {
+                stable_mir::mir::Rvalue::NullaryOp(null_op.stable(tables), tables.intern_ty(*ty))
+            }
             UnaryOp(un_op, op) => {
                 stable_mir::mir::Rvalue::UnaryOp(un_op.stable(tables), op.stable(tables))
             }
@@ -825,8 +827,10 @@ impl<'tcx> Stable<'tcx> for Ty<'tcx> {
             ty::Alias(alias_kind, alias_ty) => {
                 TyKind::Alias(alias_kind.stable(tables), alias_ty.stable(tables))
             }
-            ty::Param(_) => todo!(),
-            ty::Bound(_, _) => todo!(),
+            ty::Param(param_ty) => TyKind::Param(param_ty.stable(tables)),
+            ty::Bound(debruijn_idx, bound_ty) => {
+                TyKind::Bound(debruijn_idx.as_usize(), bound_ty.stable(tables))
+            }
             ty::Placeholder(..)
             | ty::GeneratorWitness(_)
             | ty::GeneratorWitnessMIR(_, _)
@@ -835,5 +839,21 @@ impl<'tcx> Stable<'tcx> for Ty<'tcx> {
                 unreachable!();
             }
         }
+    }
+}
+
+impl<'tcx> Stable<'tcx> for rustc_middle::ty::ParamTy {
+    type T = stable_mir::ty::ParamTy;
+    fn stable(&self, _: &mut Tables<'tcx>) -> Self::T {
+        use stable_mir::ty::ParamTy;
+        ParamTy { index: self.index, name: self.name.to_string() }
+    }
+}
+
+impl<'tcx> Stable<'tcx> for rustc_middle::ty::BoundTy {
+    type T = stable_mir::ty::BoundTy;
+    fn stable(&self, tables: &mut Tables<'tcx>) -> Self::T {
+        use stable_mir::ty::BoundTy;
+        BoundTy { var: self.var.as_usize(), kind: self.kind.stable(tables) }
     }
 }
