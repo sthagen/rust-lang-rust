@@ -1,19 +1,5 @@
-error: this argument is a mutable reference, but not used mutably
-  --> $DIR/mut_reference.rs:4:33
-   |
-LL | fn takes_a_mutable_reference(a: &mut i32) {}
-   |                                 ^^^^^^^^ help: consider changing to: `&i32`
-   |
-   = note: `-D clippy::needless-pass-by-ref-mut` implied by `-D warnings`
-
-error: this argument is a mutable reference, but not used mutably
-  --> $DIR/mut_reference.rs:11:44
-   |
-LL |     fn takes_a_mutable_reference(&self, a: &mut i32) {}
-   |                                            ^^^^^^^^ help: consider changing to: `&i32`
-
 error: the function `takes_an_immutable_reference` doesn't need a mutable reference
-  --> $DIR/mut_reference.rs:17:34
+  --> $DIR/mut_reference.rs:30:34
    |
 LL |     takes_an_immutable_reference(&mut 42);
    |                                  ^^^^^^^
@@ -21,16 +7,24 @@ LL |     takes_an_immutable_reference(&mut 42);
    = note: `-D clippy::unnecessary-mut-passed` implied by `-D warnings`
 
 error: the function `as_ptr` doesn't need a mutable reference
-  --> $DIR/mut_reference.rs:19:12
+  --> $DIR/mut_reference.rs:32:12
    |
 LL |     as_ptr(&mut 42);
    |            ^^^^^^^
 
 error: the method `takes_an_immutable_reference` doesn't need a mutable reference
-  --> $DIR/mut_reference.rs:23:44
+  --> $DIR/mut_reference.rs:36:44
    |
 LL |     my_struct.takes_an_immutable_reference(&mut 42);
    |                                            ^^^^^^^
 
-error: aborting due to 5 previous errors
+error: this argument is a mutable reference, but not used mutably
+  --> $DIR/mut_reference.rs:24:44
+   |
+LL |     fn takes_a_mutable_reference(&self, a: &mut i32) {}
+   |                                            ^^^^^^^^ help: consider changing to: `&i32`
+   |
+   = note: `-D clippy::needless-pass-by-ref-mut` implied by `-D warnings`
+
+error: aborting due to 4 previous errors
 

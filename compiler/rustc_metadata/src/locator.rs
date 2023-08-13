@@ -222,7 +222,7 @@ use rustc_data_structures::owned_slice::slice_owned;
 use rustc_data_structures::svh::Svh;
 use rustc_errors::{DiagnosticArgValue, FatalError, IntoDiagnosticArg};
 use rustc_fs_util::try_canonicalize;
-use rustc_session::config::{self, CrateType};
+use rustc_session::config;
 use rustc_session::cstore::{CrateSource, MetadataLoader};
 use rustc_session::filesearch::FileSearch;
 use rustc_session::search_paths::PathKind;
@@ -305,14 +305,12 @@ impl<'a> CrateLocator<'a> {
         sess: &'a Session,
         metadata_loader: &'a dyn MetadataLoader,
         crate_name: Symbol,
+        is_rlib: bool,
         hash: Option<Svh>,
         extra_filename: Option<&'a str>,
         is_host: bool,
         path_kind: PathKind,
     ) -> CrateLocator<'a> {
-        // The all loop is because `--crate-type=rlib --crate-type=rlib` is
-        // legal and produces both inside this type.
-        let is_rlib = sess.crate_types().iter().all(|c| *c == CrateType::Rlib);
         let needs_object_code = sess.opts.output_types.should_codegen();
         // If we're producing an rlib, then we don't need object code.
         // Or, if we're not producing object code, then we don't need it either
@@ -883,9 +881,10 @@ fn find_plugin_registrar_impl<'a>(
         sess,
         metadata_loader,
         name,
-        None, // hash
-        None, // extra_filename
-        true, // is_host
+        false, // is_rlib
+        None,  // hash
+        None,  // extra_filename
+        true,  // is_host
         PathKind::Crate,
     );
 
@@ -908,7 +907,7 @@ pub fn list_file_metadata(
     let flavor = get_flavor_from_path(path);
     match get_metadata_section(target, flavor, path, metadata_loader) {
         Ok(metadata) => metadata.list_crate_metadata(out),
-        Err(msg) => write!(out, "{}\n", msg),
+        Err(msg) => write!(out, "{msg}\n"),
     }
 }
 
@@ -1130,6 +1129,7 @@ impl CrateError {
                         is_nightly_build: sess.is_nightly_build(),
                         profiler_runtime: Symbol::intern(&sess.opts.unstable_opts.profiler_runtime),
                         locator_triple: locator.triple,
+                        is_ui_testing: sess.opts.unstable_opts.ui_testing,
                     });
                 }
             }
@@ -1146,6 +1146,7 @@ impl CrateError {
                     is_nightly_build: sess.is_nightly_build(),
                     profiler_runtime: Symbol::intern(&sess.opts.unstable_opts.profiler_runtime),
                     locator_triple: sess.opts.target_triple.clone(),
+                    is_ui_testing: sess.opts.unstable_opts.ui_testing,
                 });
             }
         }

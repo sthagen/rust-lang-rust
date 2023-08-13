@@ -273,6 +273,10 @@ pub fn check_intrinsic_type(tcx: TyCtxt<'_>, it: &hir::ForeignItem<'_>) {
                 ],
                 Ty::new_unit(tcx),
             ),
+            sym::compare_bytes => {
+                let byte_ptr = Ty::new_imm_ptr(tcx, tcx.types.u8);
+                (0, vec![byte_ptr, byte_ptr, tcx.types.usize], tcx.types.i32)
+            }
             sym::write_bytes | sym::volatile_set_memory => (
                 1,
                 vec![
@@ -567,20 +571,6 @@ pub fn check_platform_intrinsic_type(tcx: TyCtxt<'_>, it: &hir::ForeignItem<'_>)
         | sym::simd_reduce_min_nanless
         | sym::simd_reduce_max_nanless => (2, vec![param(0)], param(1)),
         sym::simd_shuffle => (3, vec![param(0), param(0), param(1)], param(2)),
-        name if name.as_str().starts_with("simd_shuffle") => {
-            match name.as_str()["simd_shuffle".len()..].parse() {
-                Ok(n) => {
-                    let params = vec![param(0), param(0), Ty::new_array(tcx, tcx.types.u32, n)];
-                    (2, params, param(1))
-                }
-                Err(_) => {
-                    let msg =
-                        format!("unrecognized platform-specific intrinsic function: `{name}`");
-                    tcx.sess.struct_span_err(it.span, msg).emit();
-                    return;
-                }
-            }
-        }
         _ => {
             let msg = format!("unrecognized platform-specific intrinsic function: `{name}`");
             tcx.sess.struct_span_err(it.span, msg).emit();

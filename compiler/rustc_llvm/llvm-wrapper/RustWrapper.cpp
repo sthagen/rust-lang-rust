@@ -1869,7 +1869,8 @@ extern "C" void LLVMRustContextConfigureDiagnosticHandler(
     LLVMContextRef C, LLVMDiagnosticHandlerTy DiagnosticHandlerCallback,
     void *DiagnosticHandlerContext, bool RemarkAllPasses,
     const char * const * RemarkPasses, size_t RemarkPassesLen,
-    const char * RemarkFilePath
+    const char * RemarkFilePath,
+    bool PGOAvailable
 ) {
 
   class RustDiagnosticHandler final : public DiagnosticHandler {
@@ -1892,12 +1893,19 @@ extern "C" void LLVMRustContextConfigureDiagnosticHandler(
           LlvmRemarkStreamer(std::move(LlvmRemarkStreamer)) {}
 
     virtual bool handleDiagnostics(const DiagnosticInfo &DI) override {
-      if (this->LlvmRemarkStreamer) {
-        if (auto *OptDiagBase = dyn_cast<DiagnosticInfoOptimizationBase>(&DI)) {
-          if (OptDiagBase->isEnabled()) {
+      // If this diagnostic is one of the optimization remark kinds, we can check if it's enabled
+      // before emitting it. This can avoid many short-lived allocations when unpacking the
+      // diagnostic and converting its various C++ strings into rust strings.
+      // FIXME: some diagnostic infos still allocate before we get here, and avoiding that would be
+      // good in the future. That will require changing a few call sites in LLVM.
+      if (auto *OptDiagBase = dyn_cast<DiagnosticInfoOptimizationBase>(&DI)) {
+        if (OptDiagBase->isEnabled()) {
+          if (this->LlvmRemarkStreamer) {
             this->LlvmRemarkStreamer->emit(*OptDiagBase);
             return true;
           }
+        } else {
+          return true;
         }
       }
       if (DiagnosticHandlerCallback) {
@@ -1960,6 +1968,11 @@ extern "C" void LLVMRustContextConfigureDiagnosticHandler(
   std::unique_ptr<LLVMRemarkStreamer> LlvmRemarkStreamer;
 
   if (RemarkFilePath != nullptr) {
+    if (PGOAvailable) {
+      // Enable PGO hotness data for remarks, if available
+      unwrap(C)->setDiagnosticsHotnessRequested(true);
+    }
+
     std::error_code EC;
     RemarkFile = std::make_unique<ToolOutputFile>(
       RemarkFilePath,
@@ -2019,4 +2032,15 @@ extern "C" int32_t LLVMRustGetElementTypeArgIndex(LLVMValueRef CallSite) {
 
 extern "C" bool LLVMRustIsBitcode(char *ptr, size_t len) {
   return identify_magic(StringRef(ptr, len)) == file_magic::bitcode;
+}
+
+extern "C" bool LLVMRustIsNonGVFunctionPointerTy(LLVMValueRef V) {
+  if (unwrap<Value>(V)->getType()->isPointerTy()) {
+    if (auto *GV = dyn_cast<GlobalValue>(unwrap<Value>(V))) {
+      if (GV->getValueType()->isFunctionTy())
+        return false;
+    }
+    return true;
+  }
+  return false;
 }

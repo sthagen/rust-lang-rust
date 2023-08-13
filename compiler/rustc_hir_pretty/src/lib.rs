@@ -626,7 +626,6 @@ impl<'a> State<'a> {
                 unsafety,
                 polarity,
                 defaultness,
-                constness,
                 defaultness_span: _,
                 generics,
                 ref of_trait,
@@ -641,10 +640,6 @@ impl<'a> State<'a> {
                 if !generics.params.is_empty() {
                     self.print_generic_params(generics.params);
                     self.space();
-                }
-
-                if constness == hir::Constness::Const {
-                    self.word_nbsp("const");
                 }
 
                 if let hir::ImplPolarity::Negative(_) = polarity {
@@ -1526,7 +1521,7 @@ impl<'a> State<'a> {
                 self.word(".");
                 self.print_ident(ident);
             }
-            hir::ExprKind::Index(expr, index) => {
+            hir::ExprKind::Index(expr, index, _) => {
                 self.print_expr_maybe_paren(expr, parser::PREC_POSTFIX);
                 self.word("[");
                 self.print_expr(index);
@@ -2419,7 +2414,7 @@ fn contains_exterior_struct_lit(value: &hir::Expr<'_>) -> bool {
         | hir::ExprKind::Cast(x, _)
         | hir::ExprKind::Type(x, _)
         | hir::ExprKind::Field(x, _)
-        | hir::ExprKind::Index(x, _) => {
+        | hir::ExprKind::Index(x, _, _) => {
             // `&X { y: 1 }, X { y: 1 }.y`
             contains_exterior_struct_lit(x)
         }

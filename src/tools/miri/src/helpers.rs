@@ -1,6 +1,5 @@
 pub mod convert;
 
-use std::any::Any;
 use std::cmp;
 use std::iter;
 use std::num::NonZeroUsize;
@@ -24,24 +23,6 @@ use rustc_target::spec::abi::Abi;
 use rand::RngCore;
 
 use crate::*;
-
-/// A trait to work around not having trait object upcasting:
-/// Add `AsAny` as supertrait and your trait objects can be turned into `&dyn Any` on which you can
-/// then call `downcast`.
-pub trait AsAny: Any {
-    fn as_any(&self) -> &dyn Any;
-    fn as_any_mut(&mut self) -> &mut dyn Any;
-}
-impl<T: Any> AsAny for T {
-    #[inline(always)]
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-    #[inline(always)]
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-}
 
 // This mapping should match `decode_error_kind` in
 // <https://github.com/rust-lang/rust/blob/master/library/std/src/sys/unix/mod.rs>.
@@ -337,7 +318,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
     /// Call a function: Push the stack frame and pass the arguments.
     /// For now, arguments must be scalars (so that the caller does not have to know the layout).
     ///
-    /// If you do not provie a return place, a dangling zero-sized place will be created
+    /// If you do not provide a return place, a dangling zero-sized place will be created
     /// for your convenience.
     fn call_function(
         &mut self,
@@ -715,9 +696,9 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
     }
 
     /// Dereference a pointer operand to a place using `layout` instead of the pointer's declared type
-    fn deref_operand_as(
+    fn deref_pointer_as(
         &self,
-        op: &OpTy<'tcx, Provenance>,
+        op: &impl Readable<'tcx, Provenance>,
         layout: TyAndLayout<'tcx>,
     ) -> InterpResult<'tcx, MPlaceTy<'tcx, Provenance>> {
         let this = self.eval_context_ref();
@@ -746,15 +727,15 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
     }
 
     /// Calculates the MPlaceTy given the offset and layout of an access on an operand
-    fn deref_operand_and_offset(
+    fn deref_pointer_and_offset(
         &self,
-        op: &OpTy<'tcx, Provenance>,
+        op: &impl Readable<'tcx, Provenance>,
         offset: u64,
         base_layout: TyAndLayout<'tcx>,
         value_layout: TyAndLayout<'tcx>,
     ) -> InterpResult<'tcx, MPlaceTy<'tcx, Provenance>> {
         let this = self.eval_context_ref();
-        let op_place = this.deref_operand_as(op, base_layout)?;
+        let op_place = this.deref_pointer_as(op, base_layout)?;
         let offset = Size::from_bytes(offset);
 
         // Ensure that the access is within bounds.
@@ -763,28 +744,28 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
         Ok(value_place)
     }
 
-    fn read_scalar_at_offset(
+    fn deref_pointer_and_read(
         &self,
-        op: &OpTy<'tcx, Provenance>,
+        op: &impl Readable<'tcx, Provenance>,
         offset: u64,
         base_layout: TyAndLayout<'tcx>,
         value_layout: TyAndLayout<'tcx>,
     ) -> InterpResult<'tcx, Scalar<Provenance>> {
         let this = self.eval_context_ref();
-        let value_place = this.deref_operand_and_offset(op, offset, base_layout, value_layout)?;
+        let value_place = this.deref_pointer_and_offset(op, offset, base_layout, value_layout)?;
         this.read_scalar(&value_place)
     }
 
-    fn write_scalar_at_offset(
+    fn deref_pointer_and_write(
         &mut self,
-        op: &OpTy<'tcx, Provenance>,
+        op: &impl Readable<'tcx, Provenance>,
         offset: u64,
         value: impl Into<Scalar<Provenance>>,
         base_layout: TyAndLayout<'tcx>,
         value_layout: TyAndLayout<'tcx>,
     ) -> InterpResult<'tcx, ()> {
         let this = self.eval_context_mut();
-        let value_place = this.deref_operand_and_offset(op, offset, base_layout, value_layout)?;
+        let value_place = this.deref_pointer_and_offset(op, offset, base_layout, value_layout)?;
         this.write_scalar(value, &value_place)
     }
 

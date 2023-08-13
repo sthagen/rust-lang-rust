@@ -393,15 +393,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
             ));
             assert_eq!(dest_offset, None);
             // Allocate enough memory to hold `src`.
-            let Some((size, align)) = self.size_and_align_of_mplace(&src)? else {
-                span_bug!(
-                    self.cur_span(),
-                    "unsized fn arg with `extern` type tail should not be allowed"
-                )
-            };
-            let ptr = self.allocate_ptr(size, align, MemoryKind::Stack)?;
-            let dest_place =
-                MPlaceTy::from_aligned_ptr_with_meta(ptr.into(), callee_arg.layout, src.meta);
+            let dest_place = self.allocate_dyn(src.layout, MemoryKind::Stack, src.meta)?;
             // Update the local to be that new place.
             *M::access_local_mut(self, dest_frame, dest_local)? = Operand::Indirect(*dest_place);
         }
@@ -661,7 +653,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
                 let receiver_place = loop {
                     match receiver.layout.ty.kind() {
                         ty::Ref(..) | ty::RawPtr(..) => {
-                            // We do *not* use `deref_operand` here: we don't want to conceptually
+                            // We do *not* use `deref_pointer` here: we don't want to conceptually
                             // create a place that must be dereferenceable, since the receiver might
                             // be a raw pointer and (for `*const dyn Trait`) we don't need to
                             // actually access memory to resolve this method.
@@ -852,10 +844,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         let instance = ty::Instance::resolve_drop_in_place(*self.tcx, place.layout.ty);
         let fn_abi = self.fn_abi_of_instance(instance, ty::List::empty())?;
 
-        let arg = ImmTy::from_immediate(
-            place.to_ref(self),
-            self.layout_of(Ty::new_mut_ptr(self.tcx.tcx, place.layout.ty))?,
-        );
+        let arg = self.mplace_to_ref(&place)?;
         let ret = MPlaceTy::fake_alloc_zst(self.layout_of(self.tcx.types.unit)?);
 
         self.eval_fn_call(

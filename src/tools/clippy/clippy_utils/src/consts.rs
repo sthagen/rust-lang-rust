@@ -329,7 +329,7 @@ pub struct ConstEvalLateContext<'a, 'tcx> {
 }
 
 impl<'a, 'tcx> ConstEvalLateContext<'a, 'tcx> {
-    fn new(lcx: &'a LateContext<'tcx>, typeck_results: &'a ty::TypeckResults<'tcx>) -> Self {
+    pub fn new(lcx: &'a LateContext<'tcx>, typeck_results: &'a ty::TypeckResults<'tcx>) -> Self {
         Self {
             lcx,
             typeck_results,
@@ -394,7 +394,7 @@ impl<'a, 'tcx> ConstEvalLateContext<'a, 'tcx> {
                     }
                 }
             },
-            ExprKind::Index(arr, index) => self.index(arr, index),
+            ExprKind::Index(arr, index, _) => self.index(arr, index),
             ExprKind::AddrOf(_, _, inner) => self.expr(inner).map(|r| Constant::Ref(Box::new(r))),
             ExprKind::Field(local_expr, ref field) => {
                 let result = self.expr(local_expr);

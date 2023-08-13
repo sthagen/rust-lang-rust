@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::convert::TryInto;
@@ -24,7 +25,7 @@ pub struct FileHandle {
     writable: bool,
 }
 
-pub trait FileDescriptor: std::fmt::Debug + helpers::AsAny {
+pub trait FileDescriptor: std::fmt::Debug + Any {
     fn name(&self) -> &'static str;
 
     fn read<'tcx>(
@@ -69,6 +70,18 @@ pub trait FileDescriptor: std::fmt::Debug + helpers::AsAny {
     #[cfg(unix)]
     fn as_unix_host_fd(&self) -> Option<i32> {
         None
+    }
+}
+
+impl dyn FileDescriptor {
+    #[inline(always)]
+    pub fn downcast_ref<T: Any>(&self) -> Option<&T> {
+        (self as &dyn Any).downcast_ref()
+    }
+
+    #[inline(always)]
+    pub fn downcast_mut<T: Any>(&mut self) -> Option<&mut T> {
+        (self as &mut dyn Any).downcast_mut()
     }
 }
 
@@ -344,7 +357,7 @@ trait EvalContextExtPrivate<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx
         let (created_sec, created_nsec) = metadata.created.unwrap_or((0, 0));
         let (modified_sec, modified_nsec) = metadata.modified.unwrap_or((0, 0));
 
-        let buf = this.deref_operand_as(buf_op, this.libc_ty_layout("stat"))?;
+        let buf = this.deref_pointer_as(buf_op, this.libc_ty_layout("stat"))?;
 
         this.write_int_fields_named(
             &[
@@ -689,7 +702,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
             if let Some(file_descriptor) = this.machine.file_handler.handles.get(&fd) {
                 // FIXME: Support fullfsync for all FDs
                 let FileHandle { file, writable } =
-                    file_descriptor.as_any().downcast_ref::<FileHandle>().ok_or_else(|| {
+                    file_descriptor.downcast_ref::<FileHandle>().ok_or_else(|| {
                         err_unsup_format!(
                             "`F_FULLFSYNC` is only supported on file-backed file descriptors"
                         )
@@ -1014,7 +1027,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
             return Ok(-1);
         }
 
-        let statxbuf = this.deref_operand_as(statxbuf_op, this.libc_ty_layout("statx"))?;
+        let statxbuf = this.deref_pointer_as(statxbuf_op, this.libc_ty_layout("statx"))?;
 
         let path = this.read_path_from_c_str(pathname_ptr)?.into_owned();
         // See <https://github.com/rust-lang/rust/pull/79196> for a discussion of argument sizes.
@@ -1420,7 +1433,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
                 //     pub d_name: [c_char; 1024],
                 // }
 
-                let entry_place = this.deref_operand_as(entry_op, this.libc_ty_layout("dirent"))?;
+                let entry_place = this.deref_pointer_as(entry_op, this.libc_ty_layout("dirent"))?;
                 let name_place = this.project_field(&entry_place, 5)?;
 
                 let file_name = dir_entry.file_name(); // not a Path as there are no separators!
@@ -1456,14 +1469,14 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
                     &entry_place,
                 )?;
 
-                let result_place = this.deref_operand(result_op)?;
+                let result_place = this.deref_pointer(result_op)?;
                 this.write_scalar(this.read_scalar(entry_op)?, &result_place)?;
 
                 0
             }
             None => {
                 // end of stream: return 0, assign *result=NULL
-                this.write_null(&this.deref_operand(result_op)?)?;
+                this.write_null(&this.deref_pointer(result_op)?)?;
                 0
             }
             Some(Err(e)) =>
@@ -1522,7 +1535,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
             if let Some(file_descriptor) = this.machine.file_handler.handles.get_mut(&fd) {
                 // FIXME: Support ftruncate64 for all FDs
                 let FileHandle { file, writable } =
-                    file_descriptor.as_any().downcast_ref::<FileHandle>().ok_or_else(|| {
+                    file_descriptor.downcast_ref::<FileHandle>().ok_or_else(|| {
                         err_unsup_format!(
                             "`ftruncate64` is only supported on file-backed file descriptors"
                         )
@@ -1568,7 +1581,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
         if let Some(file_descriptor) = this.machine.file_handler.handles.get(&fd) {
             // FIXME: Support fsync for all FDs
             let FileHandle { file, writable } =
-                file_descriptor.as_any().downcast_ref::<FileHandle>().ok_or_else(|| {
+                file_descriptor.downcast_ref::<FileHandle>().ok_or_else(|| {
                     err_unsup_format!("`fsync` is only supported on file-backed file descriptors")
                 })?;
             let io_result = maybe_sync_file(file, *writable, File::sync_all);
@@ -1593,7 +1606,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
         if let Some(file_descriptor) = this.machine.file_handler.handles.get(&fd) {
             // FIXME: Support fdatasync for all FDs
             let FileHandle { file, writable } =
-                file_descriptor.as_any().downcast_ref::<FileHandle>().ok_or_else(|| {
+                file_descriptor.downcast_ref::<FileHandle>().ok_or_else(|| {
                     err_unsup_format!(
                         "`fdatasync` is only supported on file-backed file descriptors"
                     )
@@ -1643,7 +1656,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
         if let Some(file_descriptor) = this.machine.file_handler.handles.get(&fd) {
             // FIXME: Support sync_data_range for all FDs
             let FileHandle { file, writable } =
-                file_descriptor.as_any().downcast_ref::<FileHandle>().ok_or_else(|| {
+                file_descriptor.downcast_ref::<FileHandle>().ok_or_else(|| {
                     err_unsup_format!(
                         "`sync_data_range` is only supported on file-backed file descriptors"
                     )
@@ -1953,7 +1966,6 @@ impl FileMetadata {
         let file = match option {
             Some(file_descriptor) =>
                 &file_descriptor
-                    .as_any()
                     .downcast_ref::<FileHandle>()
                     .ok_or_else(|| {
                         err_unsup_format!(

@@ -6,7 +6,7 @@
 use hir::def_id::{DefId, LocalDefId};
 use rustc_hir as hir;
 use rustc_hir::def::DefKind;
-use rustc_middle::ty::{self, Ty, TyCtxt};
+use rustc_middle::ty::{self, Ty, TyCtxt, TypeVisitableExt};
 use rustc_middle::ty::{GenericArgKind, GenericArgsRef};
 
 use super::terms::VarianceTerm::*;
@@ -78,6 +78,11 @@ pub fn add_constraints_from_crate<'a, 'tcx>(
                 }
             }
             DefKind::Fn | DefKind::AssocFn => constraint_cx.build_constraints_for_item(def_id),
+            DefKind::TyAlias { lazy }
+                if lazy || tcx.type_of(def_id).instantiate_identity().has_opaque_types() =>
+            {
+                constraint_cx.build_constraints_for_item(def_id)
+            }
             _ => {}
         }
     }
@@ -101,7 +106,18 @@ impl<'a, 'tcx> ConstraintContext<'a, 'tcx> {
 
         let inferred_start = self.terms_cx.inferred_starts[&def_id];
         let current_item = &CurrentItem { inferred_start };
-        match tcx.type_of(def_id).instantiate_identity().kind() {
+        let ty = tcx.type_of(def_id).instantiate_identity();
+
+        // The type as returned by `type_of` is the underlying type and generally not a weak projection.
+        // Therefore we need to check the `DefKind` first.
+        if let DefKind::TyAlias { lazy } = tcx.def_kind(def_id)
+            && (lazy || ty.has_opaque_types())
+        {
+            self.add_constraints_from_ty(current_item, ty, self.covariant);
+            return;
+        }
+
+        match ty.kind() {
             ty::Adt(def, _) => {
                 // Not entirely obvious: constraints on structs/enums do not
                 // affect the variance of their type parameters. See discussion
@@ -127,6 +143,7 @@ impl<'a, 'tcx> ConstraintContext<'a, 'tcx> {
             }
 
             ty::Error(_) => {}
+
             _ => {
                 span_bug!(
                     tcx.def_span(def_id),
@@ -252,8 +269,12 @@ impl<'a, 'tcx> ConstraintContext<'a, 'tcx> {
                 self.add_constraints_from_args(current, def.did(), args, variance);
             }
 
-            ty::Alias(_, ref data) => {
+            ty::Alias(ty::Projection | ty::Inherent | ty::Opaque, ref data) => {
                 self.add_constraints_from_invariant_args(current, data.args, variance);
+            }
+
+            ty::Alias(ty::Weak, ref data) => {
+                self.add_constraints_from_args(current, data.def_id, data.args, variance);
             }
 
             ty::Dynamic(data, r, _) => {

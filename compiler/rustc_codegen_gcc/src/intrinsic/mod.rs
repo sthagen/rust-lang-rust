@@ -12,7 +12,7 @@ use rustc_codegen_ssa::mir::operand::{OperandRef, OperandValue};
 use rustc_codegen_ssa::mir::place::PlaceRef;
 use rustc_codegen_ssa::traits::{ArgAbiMethods, BaseTypeMethods, BuilderMethods, ConstMethods, IntrinsicCallMethods};
 #[cfg(feature="master")]
-use rustc_codegen_ssa::traits::{DerivedTypeMethods, MiscMethods};
+use rustc_codegen_ssa::traits::MiscMethods;
 use rustc_codegen_ssa::errors::InvalidMonomorphization;
 use rustc_middle::bug;
 use rustc_middle::ty::{self, Instance, Ty};
@@ -300,6 +300,21 @@ impl<'a, 'gcc, 'tcx> IntrinsicCallMethods<'tcx> for Builder<'a, 'gcc, 'tcx> {
                         let cmp = self.context.new_call(None, builtin, &[a_ptr, b_ptr, n]);
                         self.icmp(IntPredicate::IntEQ, cmp, self.const_i32(0))
                     }
+                }
+
+                sym::compare_bytes => {
+                    let a = args[0].immediate();
+                    let b = args[1].immediate();
+                    let n = args[2].immediate();
+
+                    let void_ptr_type = self.context.new_type::<*const ()>();
+                    let a_ptr = self.bitcast(a, void_ptr_type);
+                    let b_ptr = self.bitcast(b, void_ptr_type);
+
+                    // Here we assume that the `memcmp` provided by the target is a NOP for size 0.
+                    let builtin = self.context.get_builtin_function("memcmp");
+                    let cmp = self.context.new_call(None, builtin, &[a_ptr, b_ptr, n]);
+                    self.sext(cmp, self.type_ix(32))
                 }
 
                 sym::black_box => {

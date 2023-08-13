@@ -172,9 +172,7 @@ impl fmt::Debug for ty::ParamConst {
 
 impl<'tcx> fmt::Debug for ty::TraitPredicate<'tcx> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let ty::BoundConstness::ConstIfConst = self.constness {
-            write!(f, "~const ")?;
-        }
+        // FIXME(effects) printing?
         write!(f, "TraitPredicate({:?}, polarity:{:?})", self.trait_ref, self.polarity)
     }
 }
@@ -470,10 +468,8 @@ TrivialTypeTraversalAndLiftImpls! {
     ::rustc_hir::Unsafety,
     ::rustc_target::asm::InlineAsmRegOrRegClass,
     ::rustc_target::spec::abi::Abi,
-    crate::mir::coverage::ExpressionOperandId,
-    crate::mir::coverage::CounterValueReference,
-    crate::mir::coverage::InjectedExpressionId,
-    crate::mir::coverage::InjectedExpressionIndex,
+    crate::mir::coverage::CounterId,
+    crate::mir::coverage::ExpressionId,
     crate::mir::coverage::MappedExpressionIndex,
     crate::mir::Local,
     crate::mir::Promoted,

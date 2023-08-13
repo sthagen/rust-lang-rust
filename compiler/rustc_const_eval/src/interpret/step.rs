@@ -208,13 +208,13 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
                     let rest_ptr = first_ptr.offset(elem_size, self)?;
                     // For the alignment of `rest_ptr`, we crucially do *not* use `first.align` as
                     // that place might be more aligned than its type mandates (a `u8` array could
-                    // be 4-aligned if it sits at the right spot in a struct). Instead we use
-                    // `first.layout.align`, i.e., the alignment given by the type.
+                    // be 4-aligned if it sits at the right spot in a struct). We have to also factor
+                    // in element size.
                     self.mem_copy_repeatedly(
                         first_ptr,
-                        first.align,
+                        dest.align,
                         rest_ptr,
-                        first.layout.align.abi,
+                        dest.align.restrict_for_offset(elem_size),
                         elem_size,
                         length - 1,
                         /*nonoverlapping:*/ true,
@@ -224,8 +224,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
 
             Len(place) => {
                 let src = self.eval_place(place)?;
-                let op = self.place_to_op(&src)?;
-                let len = op.len(self)?;
+                let len = src.len(self)?;
                 self.write_scalar(Scalar::from_target_usize(len, self), &dest)?;
             }
 
@@ -248,7 +247,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
 
             AddressOf(_, place) => {
                 // Figure out whether this is an addr_of of an already raw place.
-                let place_base_raw = if place.has_deref() {
+                let place_base_raw = if place.is_indirect_first_projection() {
                     let ty = self.frame().body.local_decls[place.local].ty;
                     ty.is_unsafe_ptr()
                 } else {
@@ -270,12 +269,10 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
                 let ty = self.subst_from_current_frame_and_normalize_erasing_regions(ty)?;
                 let layout = self.layout_of(ty)?;
                 if let mir::NullOp::SizeOf | mir::NullOp::AlignOf = null_op && layout.is_unsized() {
-                    // FIXME: This should be a span_bug (#80742)
-                    self.tcx.sess.delay_span_bug(
+                    span_bug!(
                         self.frame().current_span(),
-                        format!("{null_op:?} MIR operator called for unsized type {ty}"),
+                        "{null_op:?} MIR operator called for unsized type {ty}",
                     );
-                    throw_inval!(SizeOfUnsizedType(ty));
                 }
                 let val = match null_op {
                     mir::NullOp::SizeOf => layout.size.bytes(),

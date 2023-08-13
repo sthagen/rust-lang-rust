@@ -1,4 +1,4 @@
-//! Intrinsics and other functions that the miri engine executes without
+//! Intrinsics and other functions that the interpreter executes without
 //! looking at their MIR. Intrinsics/functions supported here are shared by CTFE
 //! and miri.
 
@@ -144,7 +144,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
             }
 
             sym::min_align_of_val | sym::size_of_val => {
-                // Avoid `deref_operand` -- this is not a deref, the ptr does not have to be
+                // Avoid `deref_pointer` -- this is not a deref, the ptr does not have to be
                 // dereferenceable!
                 let place = self.ref_to_mplace(&self.read_immediate(&args[0])?)?;
                 let (size, align) = self
@@ -225,7 +225,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
                 self.write_scalar(val, dest)?;
             }
             sym::discriminant_value => {
-                let place = self.deref_operand(&args[0])?;
+                let place = self.deref_pointer(&args[0])?;
                 let variant = self.read_discriminant(&place)?;
                 let discr = self.discriminant_for_variant(place.layout, variant)?;
                 self.write_scalar(discr, dest)?;
@@ -260,6 +260,10 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
             }
             sym::write_bytes => {
                 self.write_bytes_intrinsic(&args[0], &args[1], &args[2])?;
+            }
+            sym::compare_bytes => {
+                let result = self.compare_bytes_intrinsic(&args[0], &args[1], &args[2])?;
+                self.write_scalar(result, dest)?;
             }
             sym::arith_offset => {
                 let ptr = self.read_pointer(&args[0])?;
@@ -641,6 +645,24 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
 
         let bytes = std::iter::repeat(byte).take(len.bytes_usize());
         self.write_bytes_ptr(dst, bytes)
+    }
+
+    pub(crate) fn compare_bytes_intrinsic(
+        &mut self,
+        left: &OpTy<'tcx, <M as Machine<'mir, 'tcx>>::Provenance>,
+        right: &OpTy<'tcx, <M as Machine<'mir, 'tcx>>::Provenance>,
+        byte_count: &OpTy<'tcx, <M as Machine<'mir, 'tcx>>::Provenance>,
+    ) -> InterpResult<'tcx, Scalar<M::Provenance>> {
+        let left = self.read_pointer(left)?;
+        let right = self.read_pointer(right)?;
+        let n = Size::from_bytes(self.read_target_usize(byte_count)?);
+
+        let left_bytes = self.read_bytes_ptr_strip_provenance(left, n)?;
+        let right_bytes = self.read_bytes_ptr_strip_provenance(right, n)?;
+
+        // `Ordering`'s discriminants are -1/0/+1, so casting does the right thing.
+        let result = Ord::cmp(left_bytes, right_bytes) as i32;
+        Ok(Scalar::from_i32(result))
     }
 
     pub(crate) fn raw_eq_intrinsic(

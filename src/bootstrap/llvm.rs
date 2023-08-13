@@ -342,12 +342,6 @@ impl Step for Llvm {
         if let Some(path) = builder.config.llvm_profile_use.as_ref() {
             cfg.define("LLVM_PROFDATA_FILE", &path);
         }
-        if builder.config.llvm_bolt_profile_generate
-            || builder.config.llvm_bolt_profile_use.is_some()
-        {
-            // Relocations are required for BOLT to work.
-            ldflags.push_all("-Wl,-q");
-        }
 
         // Disable zstd to avoid a dependency on libzstd.so.
         cfg.define("LLVM_ENABLE_ZSTD", "OFF");
@@ -491,23 +485,48 @@ impl Step for Llvm {
 
         cfg.build();
 
+        // Helper to find the name of LLVM's shared library on darwin and linux.
+        let find_llvm_lib_name = |extension| {
+            let mut cmd = Command::new(&res.llvm_config);
+            let version = output(cmd.arg("--version"));
+            let major = version.split('.').next().unwrap();
+            let lib_name = match &llvm_version_suffix {
+                Some(version_suffix) => format!("libLLVM-{major}{version_suffix}.{extension}"),
+                None => format!("libLLVM-{major}.{extension}"),
+            };
+            lib_name
+        };
+
         // When building LLVM with LLVM_LINK_LLVM_DYLIB for macOS, an unversioned
         // libLLVM.dylib will be built. However, llvm-config will still look
         // for a versioned path like libLLVM-14.dylib. Manually create a symbolic
         // link to make llvm-config happy.
         if builder.llvm_link_shared() && target.contains("apple-darwin") {
-            let mut cmd = Command::new(&res.llvm_config);
-            let version = output(cmd.arg("--version"));
-            let major = version.split('.').next().unwrap();
-            let lib_name = match llvm_version_suffix {
-                Some(s) => format!("libLLVM-{major}{s}.dylib"),
-                None => format!("libLLVM-{major}.dylib"),
-            };
-
+            let lib_name = find_llvm_lib_name("dylib");
             let lib_llvm = out_dir.join("build").join("lib").join(lib_name);
             if !lib_llvm.exists() {
                 t!(builder.symlink_file("libLLVM.dylib", &lib_llvm));
             }
+        }
+
+        // When building LLVM as a shared library on linux, it can contain unexpected debuginfo:
+        // some can come from the C++ standard library. Unless we're explicitly requesting LLVM to
+        // be built with debuginfo, strip it away after the fact, to make dist artifacts smaller.
+        if builder.llvm_link_shared()
+            && builder.config.llvm_optimize
+            && !builder.config.llvm_release_debuginfo
+        {
+            // Find the name of the LLVM shared library that we just built.
+            let lib_name = find_llvm_lib_name("so");
+
+            // If the shared library exists in LLVM's `/build/lib/` or `/lib/` folders, strip its
+            // debuginfo.
+            crate::compile::strip_debug(builder, target, &out_dir.join("lib").join(&lib_name));
+            crate::compile::strip_debug(
+                builder,
+                target,
+                &out_dir.join("build").join("lib").join(&lib_name),
+            );
         }
 
         t!(stamp.write());
@@ -1134,8 +1153,8 @@ impl Step for CrtBeginEnd {
             return out_dir;
         }
 
-        let crtbegin_src = builder.src.join("src/llvm-project/compiler-rt/lib/crt/crtbegin.c");
-        let crtend_src = builder.src.join("src/llvm-project/compiler-rt/lib/crt/crtend.c");
+        let crtbegin_src = builder.src.join("src/llvm-project/compiler-rt/lib/builtins/crtbegin.c");
+        let crtend_src = builder.src.join("src/llvm-project/compiler-rt/lib/builtins/crtend.c");
         if up_to_date(&crtbegin_src, &out_dir.join("crtbegin.o"))
             && up_to_date(&crtend_src, &out_dir.join("crtendS.o"))
         {

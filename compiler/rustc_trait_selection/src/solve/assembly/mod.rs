@@ -1,13 +1,12 @@
 //! Code shared by trait and projection goals for candidate assembly.
 
-use super::search_graph::OverflowHandler;
 use super::{EvalCtxt, SolverMode};
 use crate::traits::coherence;
 use rustc_hir::def_id::DefId;
 use rustc_infer::traits::query::NoSolution;
 use rustc_infer::traits::Reveal;
 use rustc_middle::traits::solve::inspect::CandidateKind;
-use rustc_middle::traits::solve::{CanonicalResponse, Certainty, Goal, MaybeCause, QueryResult};
+use rustc_middle::traits::solve::{CanonicalResponse, Certainty, Goal, QueryResult};
 use rustc_middle::traits::BuiltinImplSource;
 use rustc_middle::ty::fast_reject::{SimplifiedType, TreatParams};
 use rustc_middle::ty::{self, Ty, TyCtxt};
@@ -153,16 +152,12 @@ pub(super) trait GoalKind<'tcx>:
             let ty::Dynamic(bounds, _, _) = *goal.predicate.self_ty().kind() else {
                 bug!("expected object type in `consider_object_bound_candidate`");
             };
-            ecx.add_goals(
-                structural_traits::predicates_for_object_candidate(
-                    &ecx,
-                    goal.param_env,
-                    goal.predicate.trait_ref(tcx),
-                    bounds,
-                )
-                .into_iter()
-                .map(|pred| goal.with(tcx, pred)),
-            );
+            ecx.add_goals(structural_traits::predicates_for_object_candidate(
+                &ecx,
+                goal.param_env,
+                goal.predicate.trait_ref(tcx),
+                bounds,
+            ));
             ecx.evaluate_added_goals_and_make_canonical_response(Certainty::Yes)
         })
     }
@@ -299,7 +294,7 @@ pub(super) trait GoalKind<'tcx>:
     /// for unsize coercion in hir typeck and because it is difficult to
     /// otherwise recompute this for codegen. This is a bit of a mess but the
     /// easiest way to maintain the existing behavior for now.
-    fn consider_builtin_unsize_and_upcast_candidates(
+    fn consider_builtin_unsize_candidates(
         ecx: &mut EvalCtxt<'_, 'tcx>,
         goal: Goal<'tcx, Self>,
     ) -> Vec<(CanonicalResponse<'tcx>, BuiltinImplSource)>;
@@ -315,11 +310,13 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
             return ambig;
         }
 
-        let mut candidates = self.assemble_candidates_via_self_ty(goal);
+        let mut candidates = self.assemble_candidates_via_self_ty(goal, 0);
 
         self.assemble_blanket_impl_candidates(goal, &mut candidates);
 
         self.assemble_param_env_candidates(goal, &mut candidates);
+
+        self.assemble_coherence_unknowable_candidates(goal, &mut candidates);
 
         candidates
     }
@@ -351,6 +348,7 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
     fn assemble_candidates_via_self_ty<G: GoalKind<'tcx>>(
         &mut self,
         goal: Goal<'tcx, G>,
+        num_steps: usize,
     ) -> Vec<Candidate<'tcx>> {
         debug_assert_eq!(goal, self.resolve_vars_if_possible(goal));
         if let Some(ambig) = self.assemble_self_ty_infer_ambiguity_response(goal) {
@@ -367,10 +365,7 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
 
         self.assemble_object_bound_candidates(goal, &mut candidates);
 
-        self.assemble_coherence_unknowable_candidates(goal, &mut candidates);
-
-        self.assemble_candidates_after_normalizing_self_ty(goal, &mut candidates);
-
+        self.assemble_candidates_after_normalizing_self_ty(goal, &mut candidates, num_steps);
         candidates
     }
 
@@ -393,49 +388,40 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
         &mut self,
         goal: Goal<'tcx, G>,
         candidates: &mut Vec<Candidate<'tcx>>,
+        num_steps: usize,
     ) {
         let tcx = self.tcx();
         let &ty::Alias(_, projection_ty) = goal.predicate.self_ty().kind() else { return };
 
-        let normalized_self_candidates: Result<_, NoSolution> =
-            self.probe(|_| CandidateKind::NormalizedSelfTyAssembly).enter(|ecx| {
-                ecx.with_incremented_depth(
-                    |ecx| {
-                        let result = ecx.evaluate_added_goals_and_make_canonical_response(
-                            Certainty::Maybe(MaybeCause::Overflow),
-                        )?;
-                        Ok(vec![Candidate {
-                            source: CandidateSource::BuiltinImpl(BuiltinImplSource::Misc),
-                            result,
-                        }])
-                    },
-                    |ecx| {
-                        let normalized_ty = ecx.next_ty_infer();
-                        let normalizes_to_goal = goal.with(
-                            tcx,
-                            ty::Binder::dummy(ty::ProjectionPredicate {
-                                projection_ty,
-                                term: normalized_ty.into(),
-                            }),
-                        );
-                        ecx.add_goal(normalizes_to_goal);
-                        let _ = ecx.try_evaluate_added_goals().inspect_err(|_| {
-                            debug!("self type normalization failed");
-                        })?;
-                        let normalized_ty = ecx.resolve_vars_if_possible(normalized_ty);
-                        debug!(?normalized_ty, "self type normalized");
-                        // NOTE: Alternatively we could call `evaluate_goal` here and only
-                        // have a `Normalized` candidate. This doesn't work as long as we
-                        // use `CandidateSource` in winnowing.
-                        let goal = goal.with(tcx, goal.predicate.with_self_ty(tcx, normalized_ty));
-                        Ok(ecx.assemble_candidates_via_self_ty(goal))
-                    },
-                )
-            });
-
-        if let Ok(normalized_self_candidates) = normalized_self_candidates {
-            candidates.extend(normalized_self_candidates);
-        }
+        candidates.extend(self.probe(|_| CandidateKind::NormalizedSelfTyAssembly).enter(|ecx| {
+            if num_steps < ecx.local_overflow_limit() {
+                let normalized_ty = ecx.next_ty_infer();
+                let normalizes_to_goal = goal.with(
+                    tcx,
+                    ty::ProjectionPredicate { projection_ty, term: normalized_ty.into() },
+                );
+                ecx.add_goal(normalizes_to_goal);
+                if let Err(NoSolution) = ecx.try_evaluate_added_goals() {
+                    debug!("self type normalization failed");
+                    return vec![];
+                }
+                let normalized_ty = ecx.resolve_vars_if_possible(normalized_ty);
+                debug!(?normalized_ty, "self type normalized");
+                // NOTE: Alternatively we could call `evaluate_goal` here and only
+                // have a `Normalized` candidate. This doesn't work as long as we
+                // use `CandidateSource` in winnowing.
+                let goal = goal.with(tcx, goal.predicate.with_self_ty(tcx, normalized_ty));
+                ecx.assemble_candidates_via_self_ty(goal, num_steps + 1)
+            } else {
+                match ecx.evaluate_added_goals_and_make_canonical_response(Certainty::OVERFLOW) {
+                    Ok(result) => vec![Candidate {
+                        source: CandidateSource::BuiltinImpl(BuiltinImplSource::Misc),
+                        result,
+                    }],
+                    Err(NoSolution) => vec![],
+                }
+            }
+        }));
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -533,7 +519,7 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
             ty::Alias(_, _) | ty::Placeholder(..) | ty::Error(_) => (),
 
             // FIXME: These should ideally not exist as a self type. It would be nice for
-            // the builtin auto trait impls of generators should instead directly recurse
+            // the builtin auto trait impls of generators to instead directly recurse
             // into the witness.
             ty::GeneratorWitness(_) | ty::GeneratorWitnessMIR(_, _) => (),
 
@@ -624,7 +610,7 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
         // There may be multiple unsize candidates for a trait with several supertraits:
         // `trait Foo: Bar<A> + Bar<B>` and `dyn Foo: Unsize<dyn Bar<_>>`
         if lang_items.unsize_trait() == Some(trait_def_id) {
-            for (result, source) in G::consider_builtin_unsize_and_upcast_candidates(self, goal) {
+            for (result, source) in G::consider_builtin_unsize_candidates(self, goal) {
                 candidates.push(Candidate { source: CandidateSource::BuiltinImpl(source), result });
             }
         }
@@ -727,7 +713,6 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
                     self.tcx(),
                     ty::TraitPredicate {
                         trait_ref: self_trait_ref,
-                        constness: ty::BoundConstness::NotConst,
                         polarity: ty::ImplPolarity::Positive,
                     },
                 );
@@ -891,26 +876,43 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
         goal: Goal<'tcx, G>,
         candidates: &mut Vec<Candidate<'tcx>>,
     ) {
+        let tcx = self.tcx();
         match self.solver_mode() {
             SolverMode::Normal => return,
-            SolverMode::Coherence => {
-                let trait_ref = goal.predicate.trait_ref(self.tcx());
-                match coherence::trait_ref_is_knowable(self.tcx(), trait_ref) {
-                    Ok(()) => {}
-                    Err(_) => match self
-                        .evaluate_added_goals_and_make_canonical_response(Certainty::AMBIGUOUS)
-                    {
-                        Ok(result) => candidates.push(Candidate {
-                            source: CandidateSource::BuiltinImpl(BuiltinImplSource::Misc),
-                            result,
-                        }),
-                        // FIXME: This will be reachable at some point if we're in
-                        // `assemble_candidates_after_normalizing_self_ty` and we get a
-                        // universe error. We'll deal with it at this point.
-                        Err(NoSolution) => bug!("coherence candidate resulted in NoSolution"),
-                    },
+            SolverMode::Coherence => {}
+        };
+
+        let result = self.probe_candidate("coherence unknowable").enter(|ecx| {
+            let trait_ref = goal.predicate.trait_ref(tcx);
+
+            #[derive(Debug)]
+            enum FailureKind {
+                Overflow,
+                NoSolution(NoSolution),
+            }
+            let lazily_normalize_ty = |ty| match ecx.try_normalize_ty(goal.param_env, ty) {
+                Ok(Some(ty)) => Ok(ty),
+                Ok(None) => Err(FailureKind::Overflow),
+                Err(e) => Err(FailureKind::NoSolution(e)),
+            };
+
+            match coherence::trait_ref_is_knowable(tcx, trait_ref, lazily_normalize_ty) {
+                Err(FailureKind::Overflow) => {
+                    ecx.evaluate_added_goals_and_make_canonical_response(Certainty::OVERFLOW)
+                }
+                Err(FailureKind::NoSolution(NoSolution)) | Ok(Ok(())) => Err(NoSolution),
+                Ok(Err(_)) => {
+                    ecx.evaluate_added_goals_and_make_canonical_response(Certainty::AMBIGUOUS)
                 }
             }
+        });
+
+        match result {
+            Ok(result) => candidates.push(Candidate {
+                source: CandidateSource::BuiltinImpl(BuiltinImplSource::Misc),
+                result,
+            }),
+            Err(NoSolution) => {}
         }
     }
 

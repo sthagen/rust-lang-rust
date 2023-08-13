@@ -205,7 +205,7 @@ impl CanonicalizeMode for CanonicalizeQueryResponse {
                 // `delay_span_bug` to allow type error over an ICE.
                 canonicalizer.tcx.sess.delay_span_bug(
                     rustc_span::DUMMY_SP,
-                    format!("unexpected region in query response: `{:?}`", r),
+                    format!("unexpected region in query response: `{r:?}`"),
                 );
                 r
             }
@@ -562,15 +562,9 @@ impl<'cx, 'tcx> Canonicalizer<'cx, 'tcx> {
         V: TypeFoldable<TyCtxt<'tcx>>,
     {
         let needs_canonical_flags = if canonicalize_region_mode.any() {
-            TypeFlags::HAS_INFER |
-            TypeFlags::HAS_FREE_REGIONS | // `HAS_RE_PLACEHOLDER` implies `HAS_FREE_REGIONS`
-            TypeFlags::HAS_TY_PLACEHOLDER |
-            TypeFlags::HAS_CT_PLACEHOLDER
+            TypeFlags::HAS_INFER | TypeFlags::HAS_PLACEHOLDER | TypeFlags::HAS_FREE_REGIONS
         } else {
-            TypeFlags::HAS_INFER
-                | TypeFlags::HAS_RE_PLACEHOLDER
-                | TypeFlags::HAS_TY_PLACEHOLDER
-                | TypeFlags::HAS_CT_PLACEHOLDER
+            TypeFlags::HAS_INFER | TypeFlags::HAS_PLACEHOLDER
         };
 
         // Fast path: nothing that needs to be canonicalized.

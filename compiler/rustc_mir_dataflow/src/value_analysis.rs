@@ -839,7 +839,7 @@ impl Map {
         tail_elem: Option<TrackElem>,
         f: &mut impl FnMut(ValueIndex),
     ) {
-        if place.has_deref() {
+        if place.is_indirect_first_projection() {
             // We do not track indirect places.
             return;
         }
@@ -1099,10 +1099,10 @@ fn debug_with_context_rec<V: Debug + Eq>(
         let info_elem = map.places[child].proj_elem.unwrap();
         let child_place_str = match info_elem {
             TrackElem::Discriminant => {
-                format!("discriminant({})", place_str)
+                format!("discriminant({place_str})")
             }
             TrackElem::Variant(idx) => {
-                format!("({} as {:?})", place_str, idx)
+                format!("({place_str} as {idx:?})")
             }
             TrackElem::Field(field) => {
                 if place_str.starts_with('*') {

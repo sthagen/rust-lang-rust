@@ -1,4 +1,4 @@
-#![feature(const_trait_impl, min_specialization, rustc_attrs)]
+#![feature(const_trait_impl, effects, min_specialization, rustc_attrs)]
 
 #[rustc_specialization_trait]
 #[const_trait]
@@ -22,7 +22,7 @@ impl<T: ~const Spec> const A for T {
 
 impl<T: Spec + Sup> A for T {
 //~^ ERROR: cannot specialize
-//~| ERROR: missing `~const` qualifier
+//FIXME(effects) ~| ERROR: missing `~const` qualifier
     fn a() -> u32 {
         3
     }

@@ -100,6 +100,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                         ParamMode::Optional,
                         ParenthesizedGenericArgs::Err,
                         &ImplTraitContext::Disallowed(ImplTraitPosition::Path),
+                        None,
                     ));
                     let receiver = self.lower_expr(receiver);
                     let args =
@@ -240,8 +241,8 @@ impl<'hir> LoweringContext<'_, 'hir> {
                 ExprKind::Field(el, ident) => {
                     hir::ExprKind::Field(self.lower_expr(el), self.lower_ident(*ident))
                 }
-                ExprKind::Index(el, er) => {
-                    hir::ExprKind::Index(self.lower_expr(el), self.lower_expr(er))
+                ExprKind::Index(el, er, brackets_span) => {
+                    hir::ExprKind::Index(self.lower_expr(el), self.lower_expr(er), *brackets_span)
                 }
                 ExprKind::Range(Some(e1), Some(e2), RangeLimits::Closed) => {
                     self.lower_expr_range_closed(e.span, e1, e2)
@@ -260,6 +261,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                         path,
                         ParamMode::Optional,
                         &ImplTraitContext::Disallowed(ImplTraitPosition::Path),
+                        None,
                     );
                     hir::ExprKind::Path(qpath)
                 }
@@ -307,6 +309,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                             &se.path,
                             ParamMode::Optional,
                             &ImplTraitContext::Disallowed(ImplTraitPosition::Path),
+                            None,
                         )),
                         self.arena
                             .alloc_from_iter(se.fields.iter().map(|x| self.lower_expr_field(x))),
@@ -657,14 +660,14 @@ impl<'hir> LoweringContext<'_, 'hir> {
     }
 
     /// Forwards a possible `#[track_caller]` annotation from `outer_hir_id` to
-    /// `inner_hir_id` in case the `closure_track_caller` feature is enabled.
+    /// `inner_hir_id` in case the `async_fn_track_caller` feature is enabled.
     pub(super) fn maybe_forward_track_caller(
         &mut self,
         span: Span,
         outer_hir_id: hir::HirId,
         inner_hir_id: hir::HirId,
     ) {
-        if self.tcx.features().closure_track_caller
+        if self.tcx.features().async_fn_track_caller
             && let Some(attrs) = self.attrs.get(&outer_hir_id.local_id)
             && attrs.into_iter().any(|attr| attr.has_name(sym::track_caller))
         {
@@ -1179,6 +1182,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                         path,
                         ParamMode::Optional,
                         &ImplTraitContext::Disallowed(ImplTraitPosition::Path),
+                        None,
                     );
                     // Destructure like a tuple struct.
                     let tuple_struct_pat = hir::PatKind::TupleStruct(
@@ -1198,6 +1202,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                         path,
                         ParamMode::Optional,
                         &ImplTraitContext::Disallowed(ImplTraitPosition::Path),
+                        None,
                     );
                     // Destructure like a unit struct.
                     let unit_struct_pat = hir::PatKind::Path(qpath);
@@ -1222,6 +1227,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                     &se.path,
                     ParamMode::Optional,
                     &ImplTraitContext::Disallowed(ImplTraitPosition::Path),
+                    None,
                 );
                 let fields_omitted = match &se.rest {
                     StructRest::Base(e) => {

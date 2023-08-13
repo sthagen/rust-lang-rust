@@ -85,16 +85,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     /// to get more type information.
     // FIXME(-Ztrait-solver=next): A lot of the calls to this method should
     // probably be `try_structurally_resolve_type` or `structurally_resolve_type` instead.
-    pub(in super::super) fn resolve_vars_with_obligations(&self, ty: Ty<'tcx>) -> Ty<'tcx> {
-        self.resolve_vars_with_obligations_and_mutate_fulfillment(ty, |_| {})
-    }
-
-    #[instrument(skip(self, mutate_fulfillment_errors), level = "debug", ret)]
-    pub(in super::super) fn resolve_vars_with_obligations_and_mutate_fulfillment(
-        &self,
-        mut ty: Ty<'tcx>,
-        mutate_fulfillment_errors: impl Fn(&mut Vec<traits::FulfillmentError<'tcx>>),
-    ) -> Ty<'tcx> {
+    #[instrument(skip(self), level = "debug", ret)]
+    pub(in super::super) fn resolve_vars_with_obligations(&self, mut ty: Ty<'tcx>) -> Ty<'tcx> {
         // No Infer()? Nothing needs doing.
         if !ty.has_non_region_infer() {
             debug!("no inference var, nothing needs doing");
@@ -112,7 +104,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         // possible. This can help substantially when there are
         // indirect dependencies that don't seem worth tracking
         // precisely.
-        self.select_obligations_where_possible(mutate_fulfillment_errors);
+        self.select_obligations_where_possible(|_| {});
         self.resolve_vars_if_possible(ty)
     }
 
@@ -626,8 +618,6 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
         match *self_ty.kind() {
             ty::Infer(ty::TyVar(found_vid)) => {
-                // FIXME: consider using `sub_root_var` here so we
-                // can see through subtyping.
                 let found_vid = self.root_var(found_vid);
                 debug!("self_type_matches_expected_vid - found_vid={:?}", found_vid);
                 expected_vid == found_vid
@@ -642,8 +632,6 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         self_ty: ty::TyVid,
     ) -> impl DoubleEndedIterator<Item = traits::PredicateObligation<'tcx>> + Captures<'tcx> + 'b
     {
-        // FIXME: consider using `sub_root_var` here so we
-        // can see through subtyping.
         let ty_var_root = self.root_var(self_ty);
         trace!("pending_obligations = {:#?}", self.fulfillment_cx.borrow().pending_obligations());
 
@@ -1349,7 +1337,10 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         }
                     }
                     GenericParamDefKind::Const { has_default } => {
-                        if !infer_args && has_default {
+                        if !infer_args
+                            && has_default
+                            && !tcx.has_attr(param.def_id, sym::rustc_host)
+                        {
                             tcx.const_param_default(param.def_id)
                                 .instantiate(tcx, args.unwrap())
                                 .into()
@@ -1461,10 +1452,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             param_env,
             bounds,
         ) {
-            // N.B. We are remapping all predicates to non-const since we don't know if we just
-            // want them as function pointers or we are calling them from a const-context. The
-            // actual checking will occur in `rustc_const_eval::transform::check_consts`.
-            self.register_predicate(obligation.without_const(self.tcx));
+            self.register_predicate(obligation);
         }
     }
 
@@ -1477,7 +1465,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let ty = self.resolve_vars_with_obligations(ty);
 
         if self.next_trait_solver()
-            && let ty::Alias(ty::Projection, _) = ty.kind()
+            && let ty::Alias(ty::Projection | ty::Inherent | ty::Weak, _) = ty.kind()
         {
             match self
                 .at(&self.misc(sp), self.param_env)

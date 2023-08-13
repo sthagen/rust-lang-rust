@@ -3,10 +3,10 @@ use crate::llvm;
 use crate::abi::Abi;
 use crate::builder::Builder;
 use crate::common::CodegenCx;
-use crate::coverageinfo::map_data::{CounterExpression, FunctionCoverage};
+use crate::coverageinfo::ffi::{CounterExpression, CounterMappingRegion};
+use crate::coverageinfo::map_data::FunctionCoverage;
 
 use libc::c_uint;
-use llvm::coverageinfo::CounterMappingRegion;
 use rustc_codegen_ssa::traits::{
     BaseTypeMethods, BuilderMethods, ConstMethods, CoverageInfoBuilderMethods, MiscMethods,
     StaticMethods,
@@ -16,9 +16,7 @@ use rustc_hir as hir;
 use rustc_hir::def_id::DefId;
 use rustc_llvm::RustString;
 use rustc_middle::bug;
-use rustc_middle::mir::coverage::{
-    CodeRegion, CounterValueReference, CoverageKind, ExpressionOperandId, InjectedExpressionId, Op,
-};
+use rustc_middle::mir::coverage::{CodeRegion, CounterId, CoverageKind, ExpressionId, Op, Operand};
 use rustc_middle::mir::Coverage;
 use rustc_middle::ty;
 use rustc_middle::ty::layout::{FnAbiOf, HasTyCtxt};
@@ -27,13 +25,12 @@ use rustc_middle::ty::Instance;
 use rustc_middle::ty::Ty;
 
 use std::cell::RefCell;
-use std::ffi::CString;
 
-mod ffi;
+pub(crate) mod ffi;
 pub(crate) mod map_data;
 pub mod mapgen;
 
-const UNUSED_FUNCTION_COUNTER_ID: CounterValueReference = CounterValueReference::START;
+const UNUSED_FUNCTION_COUNTER_ID: CounterId = CounterId::START;
 
 const VAR_ALIGN_BYTES: usize = 8;
 
@@ -125,7 +122,7 @@ impl<'tcx> CoverageInfoBuilderMethods<'tcx> for Builder<'_, '_, 'tcx> {
                     let fn_name = bx.get_pgo_func_name_var(instance);
                     let hash = bx.const_u64(function_source_hash);
                     let num_counters = bx.const_u32(coverageinfo.num_counters);
-                    let index = bx.const_u32(id.zero_based_index());
+                    let index = bx.const_u32(id.as_u32());
                     debug!(
                         "codegen intrinsic instrprof.increment(fn_name={:?}, hash={:?}, num_counters={:?}, index={:?})",
                         fn_name, hash, num_counters, index,
@@ -178,7 +175,7 @@ impl<'tcx> Builder<'_, '_, 'tcx> {
     fn add_coverage_counter(
         &mut self,
         instance: Instance<'tcx>,
-        id: CounterValueReference,
+        id: CounterId,
         region: CodeRegion,
     ) -> bool {
         if let Some(coverage_context) = self.coverage_context() {
@@ -202,10 +199,10 @@ impl<'tcx> Builder<'_, '_, 'tcx> {
     fn add_coverage_counter_expression(
         &mut self,
         instance: Instance<'tcx>,
-        id: InjectedExpressionId,
-        lhs: ExpressionOperandId,
+        id: ExpressionId,
+        lhs: Operand,
         op: Op,
-        rhs: ExpressionOperandId,
+        rhs: Operand,
         region: Option<CodeRegion>,
     ) -> bool {
         if let Some(coverage_context) = self.coverage_context() {
@@ -334,21 +331,32 @@ fn create_pgo_func_name_var<'ll, 'tcx>(
     cx: &CodegenCx<'ll, 'tcx>,
     instance: Instance<'tcx>,
 ) -> &'ll llvm::Value {
-    let mangled_fn_name = CString::new(cx.tcx.symbol_name(instance).name)
-        .expect("error converting function name to C string");
+    let mangled_fn_name: &str = cx.tcx.symbol_name(instance).name;
     let llfn = cx.get_fn(instance);
-    unsafe { llvm::LLVMRustCoverageCreatePGOFuncNameVar(llfn, mangled_fn_name.as_ptr()) }
+    unsafe {
+        llvm::LLVMRustCoverageCreatePGOFuncNameVar(
+            llfn,
+            mangled_fn_name.as_ptr().cast(),
+            mangled_fn_name.len(),
+        )
+    }
 }
 
 pub(crate) fn write_filenames_section_to_buffer<'a>(
-    filenames: impl IntoIterator<Item = &'a CString>,
+    filenames: impl IntoIterator<Item = &'a str>,
     buffer: &RustString,
 ) {
-    let c_str_vec = filenames.into_iter().map(|cstring| cstring.as_ptr()).collect::<Vec<_>>();
+    let (pointers, lengths) = filenames
+        .into_iter()
+        .map(|s: &str| (s.as_ptr().cast(), s.len()))
+        .unzip::<_, _, Vec<_>, Vec<_>>();
+
     unsafe {
         llvm::LLVMRustCoverageWriteFilenamesSectionToBuffer(
-            c_str_vec.as_ptr(),
-            c_str_vec.len(),
+            pointers.as_ptr(),
+            pointers.len(),
+            lengths.as_ptr(),
+            lengths.len(),
             buffer,
         );
     }

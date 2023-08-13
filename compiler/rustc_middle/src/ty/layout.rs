@@ -911,7 +911,7 @@ where
                         if i == tag_field {
                             return TyMaybeWithLayout::TyAndLayout(tag_layout(tag));
                         }
-                        TyMaybeWithLayout::Ty(args.as_generator().prefix_tys().nth(i).unwrap())
+                        TyMaybeWithLayout::Ty(args.as_generator().prefix_tys()[i])
                     }
                 },
 
@@ -1239,6 +1239,8 @@ pub fn fn_can_unwind(tcx: TyCtxt<'_>, fn_def_id: Option<DefId>, abi: SpecAbi) ->
         | EfiApi
         | AvrInterrupt
         | AvrNonBlockingInterrupt
+        | RiscvInterruptM
+        | RiscvInterruptS
         | CCmseNonSecureCall
         | Wasm
         | PlatformIntrinsic

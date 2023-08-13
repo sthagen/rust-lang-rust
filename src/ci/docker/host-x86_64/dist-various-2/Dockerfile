@@ -93,6 +93,9 @@ RUN /tmp/build-x86_64-fortanix-unknown-sgx-toolchain.sh
 COPY host-x86_64/dist-various-2/build-wasi-toolchain.sh /tmp/
 RUN /tmp/build-wasi-toolchain.sh
 
+COPY host-x86_64/dist-various-2/build-wasi-threads-toolchain.sh /tmp/
+RUN /tmp/build-wasi-threads-toolchain.sh
+
 COPY scripts/freebsd-toolchain.sh /tmp/
 RUN /tmp/freebsd-toolchain.sh i686
 
@@ -114,6 +117,7 @@ ENV TARGETS=x86_64-unknown-fuchsia
 ENV TARGETS=$TARGETS,aarch64-unknown-fuchsia
 ENV TARGETS=$TARGETS,wasm32-unknown-unknown
 ENV TARGETS=$TARGETS,wasm32-wasi
+ENV TARGETS=$TARGETS,wasm32-wasi-preview1-threads
 ENV TARGETS=$TARGETS,sparcv9-sun-solaris
 ENV TARGETS=$TARGETS,x86_64-pc-solaris
 ENV TARGETS=$TARGETS,x86_64-sun-solaris
@@ -131,11 +135,12 @@ ENV TARGETS=$TARGETS,x86_64-unknown-uefi
 # As per https://bugs.launchpad.net/ubuntu/+source/gcc-defaults/+bug/1300211
 # we need asm in the search path for gcc-9 (for gnux32) but not in the search path of the
 # cross compilers.
-# Luckily one of the folders is /usr/local/include so symlink /usr/include/asm-generic there
-RUN ln -s /usr/include/asm-generic /usr/local/include/asm
+# Luckily one of the folders is /usr/local/include so symlink /usr/include/x86_64-linux-gnu/asm there
+RUN ln -s /usr/include/x86_64-linux-gnu/asm /usr/local/include/asm
 
 ENV RUST_CONFIGURE_ARGS --enable-extended --enable-lld --disable-docs \
   --set target.wasm32-wasi.wasi-root=/wasm32-wasi \
+  --set target.wasm32-wasi-preview1-threads.wasi-root=/wasm32-wasi-preview1-threads \
   --musl-root-armv7=/musl-armv7
 
 ENV SCRIPT python3 ../x.py dist --host='' --target $TARGETS

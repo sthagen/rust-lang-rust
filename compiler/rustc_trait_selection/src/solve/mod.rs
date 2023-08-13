@@ -17,10 +17,11 @@
 use rustc_hir::def_id::DefId;
 use rustc_infer::infer::canonical::{Canonical, CanonicalVarValues};
 use rustc_infer::traits::query::NoSolution;
+use rustc_middle::infer::canonical::CanonicalVarInfos;
 use rustc_middle::traits::solve::{
     CanonicalResponse, Certainty, ExternalConstraintsData, Goal, QueryResult, Response,
 };
-use rustc_middle::ty::{self, Ty, TyCtxt};
+use rustc_middle::ty::{self, Ty, TyCtxt, UniverseIndex};
 use rustc_middle::ty::{
     CoercePredicate, RegionOutlivesPredicate, SubtypePredicate, TypeOutlivesPredicate,
 };
@@ -282,22 +283,54 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
 
         Ok(self.make_ambiguous_response_no_constraints(maybe_cause))
     }
+
+    /// Normalize a type when it is structually matched on.
+    ///
+    /// For self types this is generally already handled through
+    /// `assemble_candidates_after_normalizing_self_ty`, so anything happening
+    /// in [`EvalCtxt::assemble_candidates_via_self_ty`] does not have to normalize
+    /// the self type. It is required when structurally matching on any other
+    /// arguments of a trait goal, e.g. when assembling builtin unsize candidates.
+    fn try_normalize_ty(
+        &mut self,
+        param_env: ty::ParamEnv<'tcx>,
+        mut ty: Ty<'tcx>,
+    ) -> Result<Option<Ty<'tcx>>, NoSolution> {
+        for _ in 0..self.local_overflow_limit() {
+            let ty::Alias(_, projection_ty) = *ty.kind() else {
+                return Ok(Some(ty));
+            };
+
+            let normalized_ty = self.next_ty_infer();
+            let normalizes_to_goal = Goal::new(
+                self.tcx(),
+                param_env,
+                ty::ProjectionPredicate { projection_ty, term: normalized_ty.into() },
+            );
+            self.add_goal(normalizes_to_goal);
+            self.try_evaluate_added_goals()?;
+            ty = self.resolve_vars_if_possible(normalized_ty);
+        }
+
+        Ok(None)
+    }
 }
 
-pub(super) fn response_no_constraints<'tcx>(
+fn response_no_constraints_raw<'tcx>(
     tcx: TyCtxt<'tcx>,
-    goal: Canonical<'tcx, impl Sized>,
+    max_universe: UniverseIndex,
+    variables: CanonicalVarInfos<'tcx>,
     certainty: Certainty,
-) -> QueryResult<'tcx> {
-    Ok(Canonical {
-        max_universe: goal.max_universe,
-        variables: goal.variables,
+) -> CanonicalResponse<'tcx> {
+    Canonical {
+        max_universe,
+        variables,
         value: Response {
-            var_values: CanonicalVarValues::make_identity(tcx, goal.variables),
+            var_values: CanonicalVarValues::make_identity(tcx, variables),
             // FIXME: maybe we should store the "no response" version in tcx, like
             // we do for tcx.types and stuff.
             external_constraints: tcx.mk_external_constraints(ExternalConstraintsData::default()),
             certainty,
         },
-    })
+    }
 }

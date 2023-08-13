@@ -152,14 +152,6 @@ pub struct Session {
     /// Input, input file path and output file path to this compilation process.
     pub io: CompilerIO,
 
-    crate_types: OnceCell<Vec<CrateType>>,
-    /// The `stable_crate_id` is constructed out of the crate name and all the
-    /// `-C metadata` arguments passed to the compiler. Its value forms a unique
-    /// global identifier for the crate. It is used to allow multiple crates
-    /// with the same name to coexist. See the
-    /// `rustc_symbol_mangling` crate for more information.
-    pub stable_crate_id: OnceCell<StableCrateId>,
-
     features: OnceCell<rustc_feature::Features>,
 
     incr_comp_session: OneThread<RefCell<IncrCompSession>>,
@@ -310,53 +302,9 @@ impl Session {
         self.parse_sess.span_diagnostic.emit_future_breakage_report(diags);
     }
 
-    pub fn local_stable_crate_id(&self) -> StableCrateId {
-        self.stable_crate_id.get().copied().unwrap()
-    }
-
-    pub fn crate_types(&self) -> &[CrateType] {
-        self.crate_types.get().unwrap().as_slice()
-    }
-
     /// Returns true if the crate is a testing one.
     pub fn is_test_crate(&self) -> bool {
         self.opts.test
-    }
-
-    pub fn needs_crate_hash(&self) -> bool {
-        // Why is the crate hash needed for these configurations?
-        // - debug_assertions: for the "fingerprint the result" check in
-        //   `rustc_query_system::query::plumbing::execute_job`.
-        // - incremental: for query lookups.
-        // - needs_metadata: for putting into crate metadata.
-        // - instrument_coverage: for putting into coverage data (see
-        //   `hash_mir_source`).
-        cfg!(debug_assertions)
-            || self.opts.incremental.is_some()
-            || self.needs_metadata()
-            || self.instrument_coverage()
-    }
-
-    pub fn metadata_kind(&self) -> MetadataKind {
-        self.crate_types()
-            .iter()
-            .map(|ty| match *ty {
-                CrateType::Executable | CrateType::Staticlib | CrateType::Cdylib => {
-                    MetadataKind::None
-                }
-                CrateType::Rlib => MetadataKind::Uncompressed,
-                CrateType::Dylib | CrateType::ProcMacro => MetadataKind::Compressed,
-            })
-            .max()
-            .unwrap_or(MetadataKind::None)
-    }
-
-    pub fn needs_metadata(&self) -> bool {
-        self.metadata_kind() != MetadataKind::None
-    }
-
-    pub fn init_crate_types(&self, crate_types: Vec<CrateType>) {
-        self.crate_types.set(crate_types).expect("`crate_types` was initialized twice")
     }
 
     #[rustc_lint_diagnostics]
@@ -1350,18 +1298,15 @@ fn default_emitter(
                 );
                 Box::new(emitter.ui_testing(sopts.unstable_opts.ui_testing))
             } else {
-                let emitter = EmitterWriter::stderr(
-                    color_config,
-                    Some(source_map),
-                    bundle,
-                    fallback_bundle,
-                    short,
-                    sopts.unstable_opts.teach,
-                    sopts.diagnostic_width,
-                    macro_backtrace,
-                    track_diagnostics,
-                    terminal_url,
-                );
+                let emitter = EmitterWriter::stderr(color_config, fallback_bundle)
+                    .fluent_bundle(bundle)
+                    .sm(Some(source_map))
+                    .short_message(short)
+                    .teach(sopts.unstable_opts.teach)
+                    .diagnostic_width(sopts.diagnostic_width)
+                    .macro_backtrace(macro_backtrace)
+                    .track_diagnostics(track_diagnostics)
+                    .terminal_url(terminal_url);
                 Box::new(emitter.ui_testing(sopts.unstable_opts.ui_testing))
             }
         }
@@ -1519,8 +1464,6 @@ pub fn build_session(
         parse_sess,
         sysroot,
         io,
-        crate_types: OnceCell::new(),
-        stable_crate_id: OnceCell::new(),
         features: OnceCell::new(),
         incr_comp_session: OneThread::new(RefCell::new(IncrCompSession::NotInitialized)),
         cgu_reuse_tracker,
@@ -1622,11 +1565,17 @@ fn validate_commandline_args_with_session_available(sess: &Session) {
 
     // LLVM CFI requires LTO.
     if sess.is_sanitizer_cfi_enabled()
-        && !(sess.lto() == config::Lto::Fat
-            || sess.lto() == config::Lto::Thin
-            || sess.opts.cg.linker_plugin_lto.enabled())
+        && !(sess.lto() == config::Lto::Fat || sess.opts.cg.linker_plugin_lto.enabled())
     {
         sess.emit_err(errors::SanitizerCfiRequiresLto);
+    }
+
+    // LLVM CFI using rustc LTO requires a single codegen unit.
+    if sess.is_sanitizer_cfi_enabled()
+        && sess.lto() == config::Lto::Fat
+        && !(sess.codegen_units().as_usize() == 1)
+    {
+        sess.emit_err(errors::SanitizerCfiRequiresSingleCodegenUnit);
     }
 
     // LLVM CFI is incompatible with LLVM KCFI.
@@ -1794,18 +1743,7 @@ fn mk_emitter(output: ErrorOutputType) -> Box<dyn Emitter + sync::Send + 'static
     let emitter: Box<dyn Emitter + sync::Send> = match output {
         config::ErrorOutputType::HumanReadable(kind) => {
             let (short, color_config) = kind.unzip();
-            Box::new(EmitterWriter::stderr(
-                color_config,
-                None,
-                None,
-                fallback_bundle,
-                short,
-                false,
-                None,
-                false,
-                false,
-                TerminalUrl::No,
-            ))
+            Box::new(EmitterWriter::stderr(color_config, fallback_bundle).short_message(short))
         }
         config::ErrorOutputType::Json { pretty, json_rendered } => Box::new(JsonEmitter::basic(
             pretty,

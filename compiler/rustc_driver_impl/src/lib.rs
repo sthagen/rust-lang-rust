@@ -27,14 +27,12 @@ use rustc_data_structures::profiling::{
 use rustc_data_structures::sync::SeqCst;
 use rustc_errors::registry::{InvalidErrorCode, Registry};
 use rustc_errors::{markdown, ColorConfig};
-use rustc_errors::{
-    DiagnosticMessage, ErrorGuaranteed, Handler, PResult, SubdiagnosticMessage, TerminalUrl,
-};
+use rustc_errors::{DiagnosticMessage, ErrorGuaranteed, Handler, PResult, SubdiagnosticMessage};
 use rustc_feature::find_gated_cfg;
 use rustc_fluent_macro::fluent_messages;
 use rustc_interface::util::{self, collect_crate_types, get_codegen_backend};
 use rustc_interface::{interface, Queries};
-use rustc_lint::LintStore;
+use rustc_lint::{unerased_lint_store, LintStore};
 use rustc_metadata::locator;
 use rustc_session::config::{nightly_options, CG_OPTIONS, Z_OPTIONS};
 use rustc_session::config::{ErrorOutputType, Input, OutFileName, OutputType, TrimmedDefPaths};
@@ -393,6 +391,10 @@ fn run_compiler(
                         pretty::print_after_hir_lowering(tcx, *ppm);
                         Ok(())
                     })?;
+
+                    // Make sure the `output_filenames` query is run for its side
+                    // effects of writing the dep-info and reporting errors.
+                    queries.global_ctxt()?.enter(|tcx| tcx.output_filenames(()));
                 } else {
                     let krate = queries.parse()?.steal();
                     pretty::print_after_parsing(sess, &krate, *ppm);
@@ -409,15 +411,11 @@ fn run_compiler(
                 return early_exit();
             }
 
-            {
-                let plugins = queries.register_plugins()?;
-                let (.., lint_store) = &*plugins.borrow();
-
-                // Lint plugins are registered; now we can process command line flags.
-                if sess.opts.describe_lints {
-                    describe_lints(sess, lint_store, true);
-                    return early_exit();
-                }
+            if sess.opts.describe_lints {
+                queries
+                    .global_ctxt()?
+                    .enter(|tcx| describe_lints(sess, unerased_lint_store(tcx), true));
+                return early_exit();
             }
 
             // Make sure name resolution and macro expansion is run.
@@ -655,8 +653,6 @@ fn show_md_content_with_pager(content: &str, color: ColorConfig) {
 pub fn try_process_rlink(sess: &Session, compiler: &interface::Compiler) -> Compilation {
     if sess.opts.unstable_opts.link_only {
         if let Input::File(file) = &sess.io.input {
-            // FIXME: #![crate_type] and #![crate_name] support not implemented yet
-            sess.init_crate_types(collect_crate_types(sess, &[]));
             let outputs = compiler.build_output_filenames(sess, &[]);
             let rlink_data = fs::read(file).unwrap_or_else(|err| {
                 sess.emit_fatal(RlinkUnableToRead { err });
@@ -1405,15 +1401,7 @@ pub fn report_ice(info: &panic::PanicInfo<'_>, bug_report_url: &str, extra_info:
         rustc_errors::fallback_fluent_bundle(crate::DEFAULT_LOCALE_RESOURCES.to_vec(), false);
     let emitter = Box::new(rustc_errors::emitter::EmitterWriter::stderr(
         rustc_errors::ColorConfig::Auto,
-        None,
-        None,
         fallback_bundle,
-        false,
-        false,
-        None,
-        false,
-        false,
-        TerminalUrl::No,
     ));
     let handler = rustc_errors::Handler::with_emitter(emitter);
 

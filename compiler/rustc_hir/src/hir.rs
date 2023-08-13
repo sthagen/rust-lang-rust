@@ -1754,7 +1754,7 @@ impl Expr<'_> {
 
             ExprKind::Unary(UnOp::Deref, _) => true,
 
-            ExprKind::Field(ref base, _) | ExprKind::Index(ref base, _) => {
+            ExprKind::Field(ref base, _) | ExprKind::Index(ref base, _, _) => {
                 allow_projections_from(base) || base.is_place_expr(allow_projections_from)
             }
 
@@ -1831,7 +1831,7 @@ impl Expr<'_> {
             ExprKind::Type(base, _)
             | ExprKind::Unary(_, base)
             | ExprKind::Field(base, _)
-            | ExprKind::Index(base, _)
+            | ExprKind::Index(base, _, _)
             | ExprKind::AddrOf(.., base)
             | ExprKind::Cast(base, _) => {
                 // This isn't exactly true for `Index` and all `Unary`, but we are using this
@@ -1843,7 +1843,7 @@ impl Expr<'_> {
                 .iter()
                 .map(|field| field.expr)
                 .chain(init.into_iter())
-                .all(|e| e.can_have_side_effects()),
+                .any(|e| e.can_have_side_effects()),
 
             ExprKind::Array(args)
             | ExprKind::Tup(args)
@@ -1857,7 +1857,7 @@ impl Expr<'_> {
                     ..
                 },
                 args,
-            ) => args.iter().all(|arg| arg.can_have_side_effects()),
+            ) => args.iter().any(|arg| arg.can_have_side_effects()),
             ExprKind::If(..)
             | ExprKind::Match(..)
             | ExprKind::MethodCall(..)
@@ -2015,7 +2015,9 @@ pub enum ExprKind<'hir> {
     /// Access of a named (e.g., `obj.foo`) or unnamed (e.g., `obj.0`) struct or tuple field.
     Field(&'hir Expr<'hir>, Ident),
     /// An indexing operation (`foo[2]`).
-    Index(&'hir Expr<'hir>, &'hir Expr<'hir>),
+    /// Similar to [`ExprKind::MethodCall`], the final `Span` represents the span of the brackets
+    /// and index.
+    Index(&'hir Expr<'hir>, &'hir Expr<'hir>, Span),
 
     /// Path to a definition, possibly containing lifetime or type parameters.
     Path(QPath<'hir>),
@@ -2673,7 +2675,7 @@ pub struct OpaqueTy<'hir> {
     ///
     /// This mapping associated a captured lifetime (first parameter) with the new
     /// early-bound lifetime that was generated for the opaque.
-    pub lifetime_mapping: Option<&'hir [(Lifetime, LocalDefId)]>,
+    pub lifetime_mapping: &'hir [(&'hir Lifetime, LocalDefId)],
     /// Whether the opaque is a return-position impl trait (or async future)
     /// originating from a trait method. This makes it so that the opaque is
     /// lowered as an associated type.
@@ -3357,7 +3359,6 @@ pub struct Impl<'hir> {
     // We do not put a `Span` in `Defaultness` because it breaks foreign crate metadata
     // decoding as `Span`s cannot be decoded when a `Session` is not available.
     pub defaultness_span: Option<Span>,
-    pub constness: Constness,
     pub generics: &'hir Generics<'hir>,
 
     /// The trait being implemented, if any.

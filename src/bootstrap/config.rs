@@ -20,6 +20,7 @@ use std::str::FromStr;
 use crate::cache::{Interned, INTERNER};
 use crate::cc_detect::{ndk_compiler, Language};
 use crate::channel::{self, GitInfo};
+use crate::compile::CODEGEN_BACKEND_PREFIX;
 pub use crate::flags::Subcommand;
 use crate::flags::{Color, Flags, Warnings};
 use crate::util::{exe, output, t};
@@ -50,7 +51,7 @@ pub enum DryRun {
     UserSelected,
 }
 
-#[derive(Copy, Clone, Default)]
+#[derive(Copy, Clone, Default, PartialEq, Eq)]
 pub enum DebuginfoLevel {
     #[default]
     None,
@@ -130,7 +131,7 @@ pub struct Config {
     pub sanitizers: bool,
     pub profiler: bool,
     pub omit_git_hash: bool,
-    pub exclude: Vec<PathBuf>,
+    pub skip: Vec<PathBuf>,
     pub include_default_paths: bool,
     pub rustc_error_format: Option<String>,
     pub json_output: bool,
@@ -232,8 +233,8 @@ pub struct Config {
     pub llvm_profile_use: Option<String>,
     pub llvm_profile_generate: bool,
     pub llvm_libunwind_default: Option<LlvmLibunwind>,
-    pub llvm_bolt_profile_generate: bool,
-    pub llvm_bolt_profile_use: Option<String>,
+
+    pub reproducible_artifacts: Vec<String>,
 
     pub build: TargetSelection,
     pub hosts: Vec<TargetSelection>,
@@ -1112,7 +1113,7 @@ impl Config {
 
         // Set flags.
         config.paths = std::mem::take(&mut flags.paths);
-        config.exclude = flags.exclude;
+        config.skip = flags.skip.into_iter().chain(flags.exclude).collect();
         config.include_default_paths = flags.include_default_paths;
         config.rustc_error_format = flags.rustc_error_format;
         config.json_output = flags.json_output;
@@ -1127,15 +1128,6 @@ impl Config {
         config.free_args = std::mem::take(&mut flags.free_args);
         config.llvm_profile_use = flags.llvm_profile_use;
         config.llvm_profile_generate = flags.llvm_profile_generate;
-        config.llvm_bolt_profile_generate = flags.llvm_bolt_profile_generate;
-        config.llvm_bolt_profile_use = flags.llvm_bolt_profile_use;
-
-        if config.llvm_bolt_profile_generate && config.llvm_bolt_profile_use.is_some() {
-            eprintln!(
-                "Cannot use both `llvm_bolt_profile_generate` and `llvm_bolt_profile_use` at the same time"
-            );
-            exit!(1);
-        }
 
         // Infer the rest of the configuration.
 
@@ -1452,8 +1444,21 @@ impl Config {
                 .map(|v| v.parse().expect("failed to parse rust.llvm-libunwind"));
 
             if let Some(ref backends) = rust.codegen_backends {
-                config.rust_codegen_backends =
-                    backends.iter().map(|s| INTERNER.intern_str(s)).collect();
+                let available_backends = vec!["llvm", "cranelift", "gcc"];
+
+                config.rust_codegen_backends = backends.iter().map(|s| {
+                    if let Some(backend) = s.strip_prefix(CODEGEN_BACKEND_PREFIX) {
+                        if available_backends.contains(&backend) {
+                            panic!("Invalid value '{s}' for 'rust.codegen-backends'. Instead, please use '{backend}'.");
+                        } else {
+                            println!("help: '{s}' for 'rust.codegen-backends' might fail. \
+                                Codegen backends are mostly defined without the '{CODEGEN_BACKEND_PREFIX}' prefix. \
+                                In this case, it would be referred to as '{backend}'.");
+                        }
+                    }
+
+                    INTERNER.intern_str(s)
+                }).collect();
             }
 
             config.rust_codegen_units = rust.codegen_units.map(threads_from_config);
@@ -1470,6 +1475,8 @@ impl Config {
             config.rust_profile_use = flags.rust_profile_use;
             config.rust_profile_generate = flags.rust_profile_generate;
         }
+
+        config.reproducible_artifacts = flags.reproducible_artifact;
 
         // rust_info must be set before is_ci_llvm_available() is called.
         let default = config.channel == "dev";
@@ -2011,7 +2018,8 @@ impl Config {
                 .unwrap();
         if !(source_version == rustc_version
             || (source_version.major == rustc_version.major
-                && source_version.minor == rustc_version.minor + 1))
+                && (source_version.minor == rustc_version.minor
+                    || source_version.minor == rustc_version.minor + 1)))
         {
             let prev_version = format!("{}.{}.x", source_version.major, source_version.minor - 1);
             eprintln!(

@@ -14,7 +14,7 @@
 //! - [`Generics`], [`GenericParam`], [`WhereClause`]: Metadata associated with generic parameters.
 //! - [`EnumDef`] and [`Variant`]: Enum declaration.
 //! - [`MetaItemLit`] and [`LitKind`]: Literal expressions.
-//! - [`MacroDef`], [`MacStmtStyle`], [`MacCall`], [`MacDelimiter`]: Macro definition and invocation.
+//! - [`MacroDef`], [`MacStmtStyle`], [`MacCall`]: Macro definition and invocation.
 //! - [`Attribute`]: Metadata associated with item.
 //! - [`UnOp`], [`BinOp`], and [`BinOpKind`]: Unary and binary operators.
 
@@ -311,6 +311,16 @@ pub enum TraitBoundModifier {
     //
     // This parses but will be rejected during AST validation.
     MaybeConstMaybe,
+}
+
+impl TraitBoundModifier {
+    pub fn to_constness(self) -> Const {
+        match self {
+            // FIXME(effects) span
+            Self::MaybeConst => Const::Yes(DUMMY_SP),
+            _ => Const::No,
+        }
+    }
 }
 
 /// The AST represents all type param bounds as types.
@@ -1462,7 +1472,8 @@ pub enum ExprKind {
     /// Access of a named (e.g., `obj.foo`) or unnamed (e.g., `obj.0`) struct field.
     Field(P<Expr>, Ident),
     /// An indexing operation (e.g., `foo[2]`).
-    Index(P<Expr>, P<Expr>),
+    /// The span represents the span of the `[2]`, including brackets.
+    Index(P<Expr>, P<Expr>, Span),
     /// A range (e.g., `1..2`, `1..`, `..2`, `1..=2`, `..=2`; and `..` in destructuring assignment).
     Range(Option<P<Expr>>, Option<P<Expr>>, RangeLimits),
     /// An underscore, used in destructuring assignment to ignore a value.
@@ -1693,7 +1704,7 @@ where
 #[derive(Clone, Encodable, Decodable, Debug)]
 pub struct DelimArgs {
     pub dspan: DelimSpan,
-    pub delim: MacDelimiter,
+    pub delim: Delimiter, // Note: `Delimiter::Invisible` never occurs
     pub tokens: TokenStream,
 }
 
@@ -1701,7 +1712,7 @@ impl DelimArgs {
     /// Whether a macro with these arguments needs a semicolon
     /// when used as a standalone item or statement.
     pub fn need_semicolon(&self) -> bool {
-        !matches!(self, DelimArgs { delim: MacDelimiter::Brace, .. })
+        !matches!(self, DelimArgs { delim: Delimiter::Brace, .. })
     }
 }
 
@@ -1714,32 +1725,6 @@ where
         dspan.hash_stable(ctx, hasher);
         delim.hash_stable(ctx, hasher);
         tokens.hash_stable(ctx, hasher);
-    }
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, Encodable, Decodable, Debug, HashStable_Generic)]
-pub enum MacDelimiter {
-    Parenthesis,
-    Bracket,
-    Brace,
-}
-
-impl MacDelimiter {
-    pub fn to_token(self) -> Delimiter {
-        match self {
-            MacDelimiter::Parenthesis => Delimiter::Parenthesis,
-            MacDelimiter::Bracket => Delimiter::Bracket,
-            MacDelimiter::Brace => Delimiter::Brace,
-        }
-    }
-
-    pub fn from_token(delim: Delimiter) -> Option<MacDelimiter> {
-        match delim {
-            Delimiter::Parenthesis => Some(MacDelimiter::Parenthesis),
-            Delimiter::Bracket => Some(MacDelimiter::Bracket),
-            Delimiter::Brace => Some(MacDelimiter::Brace),
-            Delimiter::Invisible => None,
-        }
     }
 }
 

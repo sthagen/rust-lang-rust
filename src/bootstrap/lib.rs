@@ -39,7 +39,6 @@ use crate::util::{
     dir_is_empty, exe, libdir, mtime, output, run, run_suppressed, symlink_dir, try_run_suppressed,
 };
 
-mod bolt;
 mod builder;
 mod cache;
 mod cc_detect;
@@ -134,7 +133,7 @@ const EXTRA_CHECK_CFGS: &[(Option<Mode>, &'static str, Option<&[&'static str]>)]
     // #[cfg(bootstrap)]
     (Some(Mode::Std), "target_vendor", Some(&["unikraft"])),
     (Some(Mode::Std), "target_env", Some(&["libnx"])),
-    // (Some(Mode::Std), "target_os", Some(&[])),
+    (Some(Mode::Std), "target_os", Some(&["teeos"])),
     // #[cfg(bootstrap)] mips32r6, mips64r6
     (
         Some(Mode::Std),

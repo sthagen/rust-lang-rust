@@ -101,7 +101,7 @@ where
         let (meta, offset) = if field_layout.is_unsized() {
             if base.layout().is_sized() {
                 // An unsized field of a sized type? Sure...
-                // But const-prop actually feeds us such nonsense MIR!
+                // But const-prop actually feeds us such nonsense MIR! (see test `const_prop/issue-86351.rs`)
                 throw_inval!(ConstPropNonsense);
             }
             let base_meta = base.meta(self)?;
@@ -290,7 +290,7 @@ where
             OpaqueCast(ty) => base.transmute(self.layout_of(ty)?, self)?,
             Field(field, _) => self.project_field(base, field.index())?,
             Downcast(_, variant) => self.project_downcast(base, variant)?,
-            Deref => self.deref_operand(&base.to_op(self)?)?.into(),
+            Deref => self.deref_pointer(&base.to_op(self)?)?.into(),
             Index(local) => {
                 let layout = self.layout_of(self.tcx.types.usize)?;
                 let n = self.local_to_op(self.frame(), local, Some(layout))?;
