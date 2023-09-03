@@ -85,6 +85,15 @@ pub mod pretty;
 #[macro_use]
 mod print;
 mod session_diagnostics;
+#[cfg(all(unix, any(target_env = "gnu", target_os = "macos")))]
+mod signal_handler;
+
+#[cfg(not(all(unix, any(target_env = "gnu", target_os = "macos"))))]
+mod signal_handler {
+    /// On platforms which don't support our signal handler's requirements,
+    /// simply use the default signal handler provided by std.
+    pub(super) fn install() {}
+}
 
 use crate::session_diagnostics::{
     RLinkEmptyVersionNumber, RLinkEncodingVersionMismatch, RLinkRustcVersionMismatch,
@@ -139,12 +148,6 @@ pub const EXIT_FAILURE: i32 = 1;
 
 pub const DEFAULT_BUG_REPORT_URL: &str = "https://github.com/rust-lang/rust/issues/new\
     ?labels=C-bug%2C+I-ICE%2C+T-compiler&template=ice.md";
-
-const ICE_REPORT_COMPILER_FLAGS: &[&str] = &["-Z", "-C", "--crate-type"];
-
-const ICE_REPORT_COMPILER_FLAGS_EXCLUDE: &[&str] = &["metadata", "extra-filename"];
-
-const ICE_REPORT_COMPILER_FLAGS_STRIP_VALUE: &[&str] = &["incremental"];
 
 pub fn abort_on_err<T>(result: Result<T, ErrorGuaranteed>, sess: &Session) -> T {
     match result {
@@ -858,11 +861,9 @@ fn print_crate_info(
                 use rustc_target::spec::current_apple_deployment_target;
 
                 if sess.target.is_like_osx {
-                    println_info!(
-                        "deployment_target={}",
-                        current_apple_deployment_target(&sess.target)
-                            .expect("unknown Apple target OS")
-                    )
+                    let (major, minor) = current_apple_deployment_target(&sess.target)
+                        .expect("unknown Apple target OS");
+                    println_info!("deployment_target={}", format!("{major}.{minor}"))
                 } else {
                     handler
                         .early_error("only Apple targets currently support deployment version info")
@@ -1250,47 +1251,6 @@ fn parse_crate_attrs<'a>(sess: &'a Session) -> PResult<'a, ast::AttrVec> {
     }
 }
 
-/// Gets a list of extra command-line flags provided by the user, as strings.
-///
-/// This function is used during ICEs to show more information useful for
-/// debugging, since some ICEs only happens with non-default compiler flags
-/// (and the users don't always report them).
-fn extra_compiler_flags() -> Option<(Vec<String>, bool)> {
-    let mut args = env::args_os().map(|arg| arg.to_string_lossy().to_string()).peekable();
-
-    let mut result = Vec::new();
-    let mut excluded_cargo_defaults = false;
-    while let Some(arg) = args.next() {
-        if let Some(a) = ICE_REPORT_COMPILER_FLAGS.iter().find(|a| arg.starts_with(*a)) {
-            let content = if arg.len() == a.len() {
-                // A space-separated option, like `-C incremental=foo` or `--crate-type rlib`
-                match args.next() {
-                    Some(arg) => arg.to_string(),
-                    None => continue,
-                }
-            } else if arg.get(a.len()..a.len() + 1) == Some("=") {
-                // An equals option, like `--crate-type=rlib`
-                arg[a.len() + 1..].to_string()
-            } else {
-                // A non-space option, like `-Cincremental=foo`
-                arg[a.len()..].to_string()
-            };
-            let option = content.split_once('=').map(|s| s.0).unwrap_or(&content);
-            if ICE_REPORT_COMPILER_FLAGS_EXCLUDE.iter().any(|exc| option == *exc) {
-                excluded_cargo_defaults = true;
-            } else {
-                result.push(a.to_string());
-                match ICE_REPORT_COMPILER_FLAGS_STRIP_VALUE.iter().find(|s| option == **s) {
-                    Some(s) => result.push(format!("{s}=[REDACTED]")),
-                    None => result.push(content),
-                }
-            }
-        }
-    }
-
-    if !result.is_empty() { Some((result, excluded_cargo_defaults)) } else { None }
-}
-
 /// Runs a closure and catches unwinds triggered by fatal errors.
 ///
 /// The compiler currently unwinds with a special sentinel value to abort
@@ -1449,7 +1409,7 @@ pub fn report_ice(info: &panic::PanicInfo<'_>, bug_report_url: &str, extra_info:
         None
     };
 
-    if let Some((flags, excluded_cargo_defaults)) = extra_compiler_flags() {
+    if let Some((flags, excluded_cargo_defaults)) = rustc_session::utils::extra_compiler_flags() {
         handler.emit_note(session_diagnostics::IceFlags { flags: flags.join(" ") });
         if excluded_cargo_defaults {
             handler.emit_note(session_diagnostics::IceExcludeCargoDefaults);
@@ -1487,72 +1447,6 @@ pub fn init_env_logger(handler: &EarlyErrorHandler, env: &str) {
     if let Err(error) = rustc_log::init_env_logger(env) {
         handler.early_error(error.to_string());
     }
-}
-
-#[cfg(all(unix, any(target_env = "gnu", target_os = "macos")))]
-mod signal_handler {
-    extern "C" {
-        fn backtrace_symbols_fd(
-            buffer: *const *mut libc::c_void,
-            size: libc::c_int,
-            fd: libc::c_int,
-        );
-    }
-
-    extern "C" fn print_stack_trace(_: libc::c_int) {
-        const MAX_FRAMES: usize = 256;
-        static mut STACK_TRACE: [*mut libc::c_void; MAX_FRAMES] =
-            [std::ptr::null_mut(); MAX_FRAMES];
-        unsafe {
-            let depth = libc::backtrace(STACK_TRACE.as_mut_ptr(), MAX_FRAMES as i32);
-            if depth == 0 {
-                return;
-            }
-            backtrace_symbols_fd(STACK_TRACE.as_ptr(), depth, 2);
-        }
-    }
-
-    /// When an error signal (such as SIGABRT or SIGSEGV) is delivered to the
-    /// process, print a stack trace and then exit.
-    pub(super) fn install() {
-        use std::alloc::{alloc, Layout};
-
-        unsafe {
-            let alt_stack_size: usize = min_sigstack_size() + 64 * 1024;
-            let mut alt_stack: libc::stack_t = std::mem::zeroed();
-            alt_stack.ss_sp = alloc(Layout::from_size_align(alt_stack_size, 1).unwrap()).cast();
-            alt_stack.ss_size = alt_stack_size;
-            libc::sigaltstack(&alt_stack, std::ptr::null_mut());
-
-            let mut sa: libc::sigaction = std::mem::zeroed();
-            sa.sa_sigaction = print_stack_trace as libc::sighandler_t;
-            sa.sa_flags = libc::SA_NODEFER | libc::SA_RESETHAND | libc::SA_ONSTACK;
-            libc::sigemptyset(&mut sa.sa_mask);
-            libc::sigaction(libc::SIGSEGV, &sa, std::ptr::null_mut());
-        }
-    }
-
-    /// Modern kernels on modern hardware can have dynamic signal stack sizes.
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    fn min_sigstack_size() -> usize {
-        const AT_MINSIGSTKSZ: core::ffi::c_ulong = 51;
-        let dynamic_sigstksz = unsafe { libc::getauxval(AT_MINSIGSTKSZ) };
-        // If getauxval couldn't find the entry, it returns 0,
-        // so take the higher of the "constant" and auxval.
-        // This transparently supports older kernels which don't provide AT_MINSIGSTKSZ
-        libc::MINSIGSTKSZ.max(dynamic_sigstksz as _)
-    }
-
-    /// Not all OS support hardware where this is needed.
-    #[cfg(not(any(target_os = "linux", target_os = "android")))]
-    fn min_sigstack_size() -> usize {
-        libc::MINSIGSTKSZ
-    }
-}
-
-#[cfg(not(all(unix, any(target_env = "gnu", target_os = "macos"))))]
-mod signal_handler {
-    pub(super) fn install() {}
 }
 
 pub fn main() -> ! {

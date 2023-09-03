@@ -9,6 +9,7 @@ mod amdgpu;
 mod arm;
 mod avr;
 mod bpf;
+mod csky;
 mod hexagon;
 mod loongarch;
 mod m68k;
@@ -578,10 +579,9 @@ pub enum Conv {
     C,
     Rust,
 
-    /// For things unlikely to be called, where smaller caller codegen is
-    /// preferred over raw speed.
-    /// Stronger than just `#[cold]` because `fn` pointers might be incompatible.
-    RustCold,
+    Cold,
+    PreserveMost,
+    PreserveAll,
 
     // Target-specific calling conventions.
     ArmAapcs,
@@ -604,9 +604,7 @@ pub enum Conv {
     AvrInterrupt,
     AvrNonBlockingInterrupt,
 
-    RiscvInterrupt {
-        kind: RiscvInterruptKind,
-    },
+    RiscvInterrupt { kind: RiscvInterruptKind },
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, HashStable_Generic)]
@@ -712,6 +710,7 @@ impl<'a, Ty> FnAbi<'a, Ty> {
             "avr" => avr::compute_abi_info(self),
             "loongarch64" => loongarch::compute_abi_info(cx, self),
             "m68k" => m68k::compute_abi_info(self),
+            "csky" => csky::compute_abi_info(self),
             "mips" | "mips32r6" => mips::compute_abi_info(cx, self),
             "mips64" | "mips64r6" => mips64::compute_abi_info(cx, self),
             "powerpc" => powerpc::compute_abi_info(self),

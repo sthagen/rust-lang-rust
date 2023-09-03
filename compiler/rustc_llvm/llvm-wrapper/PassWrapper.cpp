@@ -105,6 +105,12 @@ extern "C" void LLVMTimeTraceProfilerFinish(const char* FileName) {
 #define SUBTARGET_M68K
 #endif
 
+#ifdef LLVM_COMPONENT_CSKY
+#define SUBTARGET_CSKY SUBTARGET(CSKY)
+#else
+#define SUBTARGET_CSKY
+#endif
+
 #ifdef LLVM_COMPONENT_MIPS
 #define SUBTARGET_MIPS SUBTARGET(Mips)
 #else
@@ -159,6 +165,7 @@ extern "C" void LLVMTimeTraceProfilerFinish(const char* FileName) {
   SUBTARGET_AARCH64                                                            \
   SUBTARGET_AVR                                                                \
   SUBTARGET_M68K                                                               \
+  SUBTARGET_CSKY                                                               \
   SUBTARGET_MIPS                                                               \
   SUBTARGET_PPC                                                                \
   SUBTARGET_SYSTEMZ                                                            \
@@ -314,13 +321,13 @@ extern "C" void LLVMRustPrintTargetCPUs(LLVMTargetMachineRef TM,
                                         PrintBackendInfo Print,
                                         void* Out) {
   const TargetMachine *Target = unwrap(TM);
-  const MCSubtargetInfo *MCInfo = Target->getMCSubtargetInfo();
   const Triple::ArchType HostArch = Triple(sys::getDefaultTargetTriple()).getArch();
   const Triple::ArchType TargetArch = Target->getTargetTriple().getArch();
 
   std::ostringstream Buf;
 
 #if LLVM_VERSION_GE(17, 0)
+  const MCSubtargetInfo *MCInfo = Target->getMCSubtargetInfo();
   const ArrayRef<SubtargetSubTypeKV> CPUTable = MCInfo->getAllProcessorDescriptions();
 #else
   Buf << "Full target CPU help is not supported by this LLVM version.\n\n";

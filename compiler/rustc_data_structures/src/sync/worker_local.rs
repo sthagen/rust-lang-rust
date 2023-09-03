@@ -1,4 +1,4 @@
-use crate::sync::Lock;
+use parking_lot::Mutex;
 use std::cell::Cell;
 use std::cell::OnceCell;
 use std::ops::Deref;
@@ -35,7 +35,7 @@ impl RegistryId {
 
 struct RegistryData {
     thread_limit: usize,
-    threads: Lock<usize>,
+    threads: Mutex<usize>,
 }
 
 /// Represents a list of threads which can access worker locals.
@@ -65,7 +65,7 @@ thread_local! {
 impl Registry {
     /// Creates a registry which can hold up to `thread_limit` threads.
     pub fn new(thread_limit: usize) -> Self {
-        Registry(Arc::new(RegistryData { thread_limit, threads: Lock::new(0) }))
+        Registry(Arc::new(RegistryData { thread_limit, threads: Mutex::new(0) }))
     }
 
     /// Gets the registry associated with the current thread. Panics if there's no such registry.
@@ -169,5 +169,11 @@ impl<T> Deref for WorkerLocal<T> {
         // This is safe because `verify` will only return values less than
         // `self.registry.thread_limit` which is the size of the `self.locals` array.
         unsafe { &self.locals.get_unchecked(self.registry.id().verify()).0 }
+    }
+}
+
+impl<T: Default> Default for WorkerLocal<T> {
+    fn default() -> Self {
+        WorkerLocal::new(|_| T::default())
     }
 }

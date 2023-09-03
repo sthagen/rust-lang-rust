@@ -215,7 +215,7 @@ pub(crate) fn clean_trait_ref_with_bindings<'tcx>(
 ) -> Path {
     let kind = cx.tcx.def_kind(trait_ref.def_id()).into();
     if !matches!(kind, ItemType::Trait | ItemType::TraitAlias) {
-        span_bug!(cx.tcx.def_span(trait_ref.def_id()), "`TraitRef` had unexpected kind {:?}", kind);
+        span_bug!(cx.tcx.def_span(trait_ref.def_id()), "`TraitRef` had unexpected kind {kind:?}");
     }
     inline::record_extern_fqn(cx, trait_ref.def_id(), kind);
     let path =
@@ -304,7 +304,7 @@ pub(crate) fn clean_middle_region<'tcx>(region: ty::Region<'tcx>) -> Option<Life
         | ty::ReError(_)
         | ty::RePlaceholder(..)
         | ty::ReErased => {
-            debug!("cannot clean region {:?}", region);
+            debug!("cannot clean region {region:?}");
             None
         }
     }
@@ -1219,7 +1219,7 @@ fn clean_trait_item<'tcx>(trait_item: &hir::TraitItem<'tcx>, cx: &mut DocContext
                     None,
                 );
                 AssocTypeItem(
-                    Box::new(Typedef {
+                    Box::new(TypeAlias {
                         type_: clean_ty(default, cx),
                         generics,
                         item_type: Some(item_type),
@@ -1264,7 +1264,7 @@ pub(crate) fn clean_impl_item<'tcx>(
                     None,
                 );
                 AssocTypeItem(
-                    Box::new(Typedef { type_, generics, item_type: Some(item_type) }),
+                    Box::new(TypeAlias { type_, generics, item_type: Some(item_type) }),
                     Vec::new(),
                 )
             }
@@ -1461,7 +1461,7 @@ pub(crate) fn clean_middle_assoc_item<'tcx>(
 
                 if tcx.defaultness(assoc_item.def_id).has_value() {
                     AssocTypeItem(
-                        Box::new(Typedef {
+                        Box::new(TypeAlias {
                             type_: clean_middle_ty(
                                 ty::Binder::dummy(
                                     tcx.type_of(assoc_item.def_id).instantiate_identity(),
@@ -1480,7 +1480,7 @@ pub(crate) fn clean_middle_assoc_item<'tcx>(
                 }
             } else {
                 AssocTypeItem(
-                    Box::new(Typedef {
+                    Box::new(TypeAlias {
                         type_: clean_middle_ty(
                             ty::Binder::dummy(
                                 tcx.type_of(assoc_item.def_id).instantiate_identity(),
@@ -1551,7 +1551,7 @@ fn first_non_private<'tcx>(
         }
         [parent, leaf] if parent.ident.name == kw::Super => {
             let parent_mod = cx.tcx.parent_module(hir_id);
-            if let Some(super_parent) = cx.tcx.opt_local_parent(parent_mod) {
+            if let Some(super_parent) = cx.tcx.opt_local_parent(parent_mod.to_local_def_id()) {
                 (super_parent, leaf.ident)
             } else {
                 // If we can't find the parent of the parent, then the parent is already the crate.
@@ -1867,11 +1867,11 @@ fn normalize<'tcx>(
         .map(|resolved| infcx.resolve_vars_if_possible(resolved.value));
     match normalized {
         Ok(normalized_value) => {
-            debug!("normalized {:?} to {:?}", ty, normalized_value);
+            debug!("normalized {ty:?} to {normalized_value:?}");
             Some(normalized_value)
         }
         Err(err) => {
-            debug!("failed to normalize {:?}: {:?}", ty, err);
+            debug!("failed to normalize {ty:?}: {err:?}");
             None
         }
     }
@@ -1959,31 +1959,44 @@ fn can_elide_trait_object_lifetime_bound<'tcx>(
 #[derive(Debug)]
 pub(crate) enum ContainerTy<'tcx> {
     Ref(ty::Region<'tcx>),
-    Regular { ty: DefId, args: ty::Binder<'tcx, &'tcx [ty::GenericArg<'tcx>]>, arg: usize },
+    Regular {
+        ty: DefId,
+        args: ty::Binder<'tcx, &'tcx [ty::GenericArg<'tcx>]>,
+        has_self: bool,
+        arg: usize,
+    },
 }
 
 impl<'tcx> ContainerTy<'tcx> {
     fn object_lifetime_default(self, tcx: TyCtxt<'tcx>) -> ObjectLifetimeDefault<'tcx> {
         match self {
             Self::Ref(region) => ObjectLifetimeDefault::Arg(region),
-            Self::Regular { ty: container, args, arg: index } => {
+            Self::Regular { ty: container, args, has_self, arg: index } => {
                 let (DefKind::Struct
                 | DefKind::Union
                 | DefKind::Enum
                 | DefKind::TyAlias { .. }
-                | DefKind::Trait
-                | DefKind::AssocTy
-                | DefKind::Variant) = tcx.def_kind(container)
+                | DefKind::Trait) = tcx.def_kind(container)
                 else {
                     return ObjectLifetimeDefault::Empty;
                 };
 
                 let generics = tcx.generics_of(container);
-                let param = generics.params[index].def_id;
-                let default = tcx.object_lifetime_default(param);
+                debug_assert_eq!(generics.parent_count, 0);
 
+                // If the container is a trait object type, the arguments won't contain the self type but the
+                // generics of the corresponding trait will. In such a case, offset the index by one.
+                // For comparison, if the container is a trait inside a bound, the arguments do contain the
+                // self type.
+                let offset =
+                    if !has_self && generics.parent.is_none() && generics.has_self { 1 } else { 0 };
+                let param = generics.params[index + offset].def_id;
+
+                let default = tcx.object_lifetime_default(param);
                 match default {
                     rbv::ObjectLifetimeDefault::Param(lifetime) => {
+                        // The index is relative to the parent generics but since we don't have any,
+                        // we don't need to translate it.
                         let index = generics.param_def_id_to_index[&lifetime];
                         let arg = args.skip_binder()[index as usize].expect_region();
                         ObjectLifetimeDefault::Arg(arg)
@@ -2617,7 +2630,11 @@ fn clean_maybe_renamed_item<'tcx>(
                         cx.current_type_aliases.remove(&def_id);
                     }
                 }
-                TypedefItem(Box::new(Typedef { type_: rustdoc_ty, generics, item_type: Some(ty) }))
+                TypeAliasItem(Box::new(TypeAlias {
+                    type_: rustdoc_ty,
+                    generics,
+                    item_type: Some(ty),
+                }))
             }
             ItemKind::Enum(ref def, generics) => EnumItem(Enum {
                 variants: def.variants.iter().map(|v| clean_variant(v, cx)).collect(),
@@ -2828,7 +2845,7 @@ fn clean_use_statement_inner<'tcx>(
     // The parent of the module in which this import resides. This
     // is the same as `current_mod` if that's already the top
     // level module.
-    let parent_mod = cx.tcx.parent_module_from_def_id(current_mod);
+    let parent_mod = cx.tcx.parent_module_from_def_id(current_mod.to_local_def_id());
 
     // This checks if the import can be seen from a higher level module.
     // In other words, it checks if the visibility is the equivalent of

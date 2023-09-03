@@ -267,14 +267,13 @@ impl str {
 
     /// Finds the closest `x` not below `index` where `is_char_boundary(x)` is `true`.
     ///
+    /// If `index` is greater than the length of the string, this returns the length of the string.
+    ///
     /// This method is the natural complement to [`floor_char_boundary`]. See that method
     /// for more details.
     ///
     /// [`floor_char_boundary`]: str::floor_char_boundary
     ///
-    /// # Panics
-    ///
-    /// Panics if `index > self.len()`.
     ///
     /// # Examples
     ///
@@ -292,7 +291,7 @@ impl str {
     #[inline]
     pub fn ceil_char_boundary(&self, index: usize) -> usize {
         if index > self.len() {
-            slice_error_fail(self, index, index)
+            self.len()
         } else {
             let upper_bound = Ord::min(index + 4, self.len());
             self.as_bytes()[index..upper_bound]
@@ -998,7 +997,7 @@ impl str {
 
     /// An iterator over the lines of a string.
     #[stable(feature = "rust1", since = "1.0.0")]
-    #[deprecated(since = "1.4.0", note = "use lines() instead now")]
+    #[deprecated(since = "1.4.0", note = "use lines() instead now", suggestion = "lines")]
     #[inline]
     #[allow(deprecated)]
     pub fn lines_any(&self) -> LinesAny<'_> {
@@ -2323,7 +2322,7 @@ impl str {
     /// assert!(!non_ascii.is_ascii());
     /// ```
     #[stable(feature = "ascii_methods_on_intrinsics", since = "1.23.0")]
-    #[rustc_const_unstable(feature = "const_slice_is_ascii", issue = "111090")]
+    #[rustc_const_stable(feature = "const_slice_is_ascii", since = "CURRENT_RUSTC_VERSION")]
     #[must_use]
     #[inline]
     pub const fn is_ascii(&self) -> bool {

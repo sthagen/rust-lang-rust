@@ -163,10 +163,6 @@ pub(crate) fn type_check<'mir, 'tcx>(
 
     debug!(?normalized_inputs_and_output);
 
-    for u in ty::UniverseIndex::ROOT..=infcx.universe() {
-        constraints.universe_causes.insert(u, UniverseInfo::other());
-    }
-
     let mut borrowck_context = BorrowCheckContext {
         universal_regions,
         location_table,
@@ -1333,8 +1329,8 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
         debug!("terminator kind: {:?}", term.kind);
         match &term.kind {
             TerminatorKind::Goto { .. }
-            | TerminatorKind::Resume
-            | TerminatorKind::Terminate
+            | TerminatorKind::UnwindResume
+            | TerminatorKind::UnwindTerminate(_)
             | TerminatorKind::Return
             | TerminatorKind::GeneratorDrop
             | TerminatorKind::Unreachable
@@ -1608,12 +1604,12 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                     self.assert_iscleanup(body, block_data, *target, is_cleanup);
                 }
             }
-            TerminatorKind::Resume => {
+            TerminatorKind::UnwindResume => {
                 if !is_cleanup {
                     span_mirbug!(self, block_data, "resume on non-cleanup block!")
                 }
             }
-            TerminatorKind::Terminate => {
+            TerminatorKind::UnwindTerminate(_) => {
                 if !is_cleanup {
                     span_mirbug!(self, block_data, "abort on non-cleanup block!")
                 }
@@ -1697,7 +1693,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                     span_mirbug!(self, ctxt, "unwind on cleanup block")
                 }
             }
-            UnwindAction::Unreachable | UnwindAction::Terminate => (),
+            UnwindAction::Unreachable | UnwindAction::Terminate(_) => (),
         }
     }
 

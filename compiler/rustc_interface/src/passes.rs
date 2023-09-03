@@ -8,9 +8,10 @@ use rustc_borrowck as mir_borrowck;
 use rustc_codegen_ssa::traits::CodegenBackend;
 use rustc_data_structures::parallel;
 use rustc_data_structures::steal::Steal;
-use rustc_data_structures::sync::{Lrc, OnceCell, WorkerLocal};
+use rustc_data_structures::sync::{Lrc, OnceLock, WorkerLocal};
 use rustc_errors::PResult;
 use rustc_expand::base::{ExtCtxt, LintStoreExpand};
+use rustc_feature::Features;
 use rustc_fs_util::try_canonicalize;
 use rustc_hir::def_id::{StableCrateId, LOCAL_CRATE};
 use rustc_lint::{unerased_lint_store, BufferedEarlyLint, EarlyCheckNode, LintStore};
@@ -21,7 +22,7 @@ use rustc_middle::query::{ExternProviders, Providers};
 use rustc_middle::ty::{self, GlobalCtxt, RegisteredTools, TyCtxt};
 use rustc_mir_build as mir_build;
 use rustc_parse::{parse_crate_from_file, parse_crate_from_source_str, validate_attr};
-use rustc_passes::{self, hir_stats, layout_test};
+use rustc_passes::{self, abi_test, hir_stats, layout_test};
 use rustc_plugin_impl as plugin;
 use rustc_resolve::Resolver;
 use rustc_session::code_stats::VTableSizeInfo;
@@ -98,6 +99,7 @@ pub(crate) fn create_lint_store(
 
 fn pre_expansion_lint<'a>(
     sess: &Session,
+    features: &Features,
     lint_store: &LintStore,
     registered_tools: &RegisteredTools,
     check_node: impl EarlyCheckNode<'a>,
@@ -107,6 +109,7 @@ fn pre_expansion_lint<'a>(
         || {
             rustc_lint::check_ast_node(
                 sess,
+                features,
                 true,
                 lint_store,
                 registered_tools,
@@ -125,13 +128,14 @@ impl LintStoreExpand for LintStoreExpandImpl<'_> {
     fn pre_expansion_lint(
         &self,
         sess: &Session,
+        features: &Features,
         registered_tools: &RegisteredTools,
         node_id: ast::NodeId,
         attrs: &[ast::Attribute],
         items: &[rustc_ast::ptr::P<ast::Item>],
         name: Symbol,
     ) {
-        pre_expansion_lint(sess, self.0, registered_tools, (node_id, attrs, items), name);
+        pre_expansion_lint(sess, features, self.0, registered_tools, (node_id, attrs, items), name);
     }
 }
 
@@ -147,10 +151,18 @@ fn configure_and_expand(
 ) -> ast::Crate {
     let tcx = resolver.tcx();
     let sess = tcx.sess;
+    let features = tcx.features();
     let lint_store = unerased_lint_store(tcx);
     let crate_name = tcx.crate_name(LOCAL_CRATE);
     let lint_check_node = (&krate, pre_configured_attrs);
-    pre_expansion_lint(sess, lint_store, tcx.registered_tools(()), lint_check_node, crate_name);
+    pre_expansion_lint(
+        sess,
+        features,
+        lint_store,
+        tcx.registered_tools(()),
+        lint_check_node,
+        crate_name,
+    );
     rustc_builtin_macros::register_builtin_macros(resolver);
 
     let num_standard_library_imports = sess.time("crate_injection", || {
@@ -159,6 +171,7 @@ fn configure_and_expand(
             pre_configured_attrs,
             resolver,
             sess,
+            features,
         )
     });
 
@@ -198,16 +211,15 @@ fn configure_and_expand(
         }
 
         // Create the config for macro expansion
-        let features = sess.features_untracked();
         let recursion_limit = get_recursion_limit(pre_configured_attrs, sess);
         let cfg = rustc_expand::expand::ExpansionConfig {
-            features: Some(features),
+            crate_name: crate_name.to_string(),
+            features,
             recursion_limit,
             trace_mac: sess.opts.unstable_opts.trace_macros,
             should_test: sess.is_test_crate(),
             span_debug: sess.opts.unstable_opts.span_debug,
             proc_macro_backtrace: sess.opts.unstable_opts.proc_macro_backtrace,
-            ..rustc_expand::expand::ExpansionConfig::default(crate_name.to_string())
         };
 
         let lint_store = LintStoreExpandImpl(lint_store);
@@ -241,11 +253,16 @@ fn configure_and_expand(
     });
 
     sess.time("maybe_building_test_harness", || {
-        rustc_builtin_macros::test_harness::inject(&mut krate, sess, resolver)
+        rustc_builtin_macros::test_harness::inject(&mut krate, sess, features, resolver)
     });
 
     let has_proc_macro_decls = sess.time("AST_validation", || {
-        rustc_ast_passes::ast_validation::check_crate(sess, &krate, resolver.lint_buffer())
+        rustc_ast_passes::ast_validation::check_crate(
+            sess,
+            features,
+            &krate,
+            resolver.lint_buffer(),
+        )
     });
 
     let crate_types = tcx.crate_types();
@@ -270,6 +287,7 @@ fn configure_and_expand(
         rustc_builtin_macros::proc_macro_harness::inject(
             &mut krate,
             sess,
+            features,
             resolver,
             is_proc_macro_crate,
             has_proc_macro_decls,
@@ -300,7 +318,7 @@ fn early_lint_checks(tcx: TyCtxt<'_>, (): ()) {
 
     // Needs to go *after* expansion to be able to check the results of macro expansion.
     sess.time("complete_gated_feature_checking", || {
-        rustc_ast_passes::feature_gate::check_crate(&krate, sess);
+        rustc_ast_passes::feature_gate::check_crate(&krate, sess, tcx.features());
     });
 
     // Add all buffered lints from the `ParseSess` to the `Session`.
@@ -329,6 +347,7 @@ fn early_lint_checks(tcx: TyCtxt<'_>, (): ()) {
     let lint_store = unerased_lint_store(tcx);
     rustc_lint::check_ast_node(
         sess,
+        tcx.features(),
         false,
         lint_store,
         tcx.registered_tools(()),
@@ -670,7 +689,7 @@ pub fn create_global_ctxt<'tcx>(
     lint_store: Lrc<LintStore>,
     dep_graph: DepGraph,
     untracked: Untracked,
-    gcx_cell: &'tcx OnceCell<GlobalCtxt<'tcx>>,
+    gcx_cell: &'tcx OnceLock<GlobalCtxt<'tcx>>,
     arena: &'tcx WorkerLocal<Arena<'tcx>>,
     hir_arena: &'tcx WorkerLocal<rustc_hir::Arena<'tcx>>,
 ) -> &'tcx GlobalCtxt<'tcx> {
@@ -724,12 +743,11 @@ fn analysis(tcx: TyCtxt<'_>, (): ()) -> Result<()> {
     rustc_passes::hir_id_validator::check_crate(tcx);
 
     let sess = tcx.sess;
-    let mut entry_point = None;
 
     sess.time("misc_checking_1", || {
         parallel!(
             {
-                entry_point = sess.time("looking_for_entry_point", || tcx.entry_fn(()));
+                sess.time("looking_for_entry_point", || tcx.ensure().entry_fn(()));
 
                 sess.time("looking_for_derive_registrar", || {
                     tcx.ensure().proc_macro_decls_static(())
@@ -799,6 +817,7 @@ fn analysis(tcx: TyCtxt<'_>, (): ()) -> Result<()> {
     }
 
     sess.time("layout_testing", || layout_test::test_layout(tcx));
+    sess.time("abi_testing", || abi_test::test_abi(tcx));
 
     // Avoid overwhelming user with errors if borrow checking failed.
     // I'm not sure how helpful this is, to be honest, but it avoids a
@@ -843,7 +862,7 @@ fn analysis(tcx: TyCtxt<'_>, (): ()) -> Result<()> {
 
         // This check has to be run after all lints are done processing. We don't
         // define a lint filter, as all lint checks should have finished at this point.
-        sess.time("check_lint_expectations", || tcx.check_expectations(None));
+        sess.time("check_lint_expectations", || tcx.ensure().check_expectations(None));
     });
 
     if sess.opts.unstable_opts.print_vtable_sizes {

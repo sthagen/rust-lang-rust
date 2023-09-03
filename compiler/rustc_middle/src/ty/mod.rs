@@ -162,8 +162,6 @@ pub struct ResolverOutputs {
 #[derive(Debug)]
 pub struct ResolverGlobalCtxt {
     pub visibilities: FxHashMap<LocalDefId, Visibility>,
-    /// This field is used to decide whether we should make `PRIVATE_IN_PUBLIC` a hard error.
-    pub has_pub_restricted: bool,
     /// Item with a given `LocalDefId` was defined during macro expansion with ID `ExpnId`.
     pub expn_that_defined: FxHashMap<LocalDefId, ExpnId>,
     pub effective_visibilities: EffectiveVisibilities,
@@ -355,8 +353,8 @@ impl TyCtxt<'_> {
 
     #[inline]
     #[track_caller]
-    pub fn local_parent(self, id: LocalDefId) -> LocalDefId {
-        self.parent(id.to_def_id()).expect_local()
+    pub fn local_parent(self, id: impl Into<LocalDefId>) -> LocalDefId {
+        self.parent(id.into().to_def_id()).expect_local()
     }
 
     pub fn is_descendant_of(self, mut descendant: DefId, ancestor: DefId) -> bool {
@@ -2150,6 +2148,7 @@ impl<'tcx> TyCtxt<'tcx> {
         for attr in self.get_attrs(did, sym::repr) {
             for r in attr::parse_repr_attr(&self.sess, attr) {
                 flags.insert(match r {
+                    attr::ReprRust => ReprFlags::empty(),
                     attr::ReprC => ReprFlags::IS_C,
                     attr::ReprPacked(pack) => {
                         let pack = Align::from_bytes(pack as u64).unwrap();

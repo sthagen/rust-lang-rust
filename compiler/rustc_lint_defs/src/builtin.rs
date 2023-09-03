@@ -983,44 +983,6 @@ declare_lint! {
 }
 
 declare_lint! {
-    /// The `private_in_public` lint detects private items in public
-    /// interfaces not caught by the old implementation.
-    ///
-    /// ### Example
-    ///
-    /// ```rust
-    /// # #![allow(unused)]
-    /// struct SemiPriv;
-    ///
-    /// mod m1 {
-    ///     struct Priv;
-    ///     impl super::SemiPriv {
-    ///         pub fn f(_: Priv) {}
-    ///     }
-    /// }
-    /// # fn main() {}
-    /// ```
-    ///
-    /// {{produces}}
-    ///
-    /// ### Explanation
-    ///
-    /// The visibility rules are intended to prevent exposing private items in
-    /// public interfaces. This is a [future-incompatible] lint to transition
-    /// this to a hard error in the future. See [issue #34537] for more
-    /// details.
-    ///
-    /// [issue #34537]: https://github.com/rust-lang/rust/issues/34537
-    /// [future-incompatible]: ../index.md#future-incompatible-lints
-    pub PRIVATE_IN_PUBLIC,
-    Warn,
-    "detect private items in public interfaces not caught by the old implementation",
-    @future_incompatible = FutureIncompatibleInfo {
-        reference: "issue #34537 <https://github.com/rust-lang/rust/issues/34537>",
-    };
-}
-
-declare_lint! {
     /// The `invalid_alignment` lint detects dereferences of misaligned pointers during
     /// constant evaluation.
     ///
@@ -3366,6 +3328,7 @@ declare_lint_pass! {
         BYTE_SLICE_IN_PACKED_STRUCT_WITH_DERIVE,
         CENUM_IMPL_DROP_CAST,
         COHERENCE_LEAK_CHECK,
+        COINDUCTIVE_OVERLAP_IN_COHERENCE,
         CONFLICTING_REPR_HINTS,
         CONST_EVALUATABLE_UNCHECKED,
         CONST_ITEM_MUTATION,
@@ -3375,6 +3338,7 @@ declare_lint_pass! {
         DEPRECATED_IN_FUTURE,
         DEPRECATED_WHERE_CLAUSE_LOCATION,
         DUPLICATE_MACRO_ATTRIBUTES,
+        ELIDED_LIFETIMES_IN_ASSOCIATED_CONSTANT,
         ELIDED_LIFETIMES_IN_PATHS,
         EXPORTED_PRIVATE_DEPENDENCIES,
         FFI_UNWIND_CALLS,
@@ -3413,7 +3377,6 @@ declare_lint_pass! {
         PATTERNS_IN_FNS_WITHOUT_BODY,
         POINTER_STRUCTURAL_MATCH,
         PRIVATE_BOUNDS,
-        PRIVATE_IN_PUBLIC,
         PRIVATE_INTERFACES,
         PROC_MACRO_BACK_COMPAT,
         PROC_MACRO_DERIVE_RESOLUTION_FALLBACK,
@@ -4332,9 +4295,7 @@ declare_lint! {
     /// ### Example
     ///
     /// ```rust,compile_fail
-    /// # #![feature(type_privacy_lints)]
     /// # #![allow(unused)]
-    /// # #![allow(private_in_public)]
     /// #![deny(private_interfaces)]
     /// struct SemiPriv;
     ///
@@ -4355,9 +4316,8 @@ declare_lint! {
     /// Having something private in primary interface guarantees that
     /// the item will be unusable from outer modules due to type privacy.
     pub PRIVATE_INTERFACES,
-    Allow,
+    Warn,
     "private type in primary interface of an item",
-    @feature_gate = sym::type_privacy_lints;
 }
 
 declare_lint! {
@@ -4368,8 +4328,6 @@ declare_lint! {
     /// ### Example
     ///
     /// ```rust,compile_fail
-    /// # #![feature(type_privacy_lints)]
-    /// # #![allow(private_in_public)]
     /// # #![allow(unused)]
     /// #![deny(private_bounds)]
     ///
@@ -4387,9 +4345,8 @@ declare_lint! {
     /// Having private types or traits in item bounds makes it less clear what interface
     /// the item actually provides.
     pub PRIVATE_BOUNDS,
-    Allow,
+    Warn,
     "private type in secondary interface of an item",
-    @feature_gate = sym::type_privacy_lints;
 }
 
 declare_lint! {
@@ -4420,6 +4377,44 @@ declare_lint! {
     Allow,
     "effective visibility of a type is larger than the area in which it can be named",
     @feature_gate = sym::type_privacy_lints;
+}
+
+declare_lint! {
+    /// The `coinductive_overlap_in_coherence` lint detects impls which are currently
+    /// considered not overlapping, but may be considered to overlap if support for
+    /// coinduction is added to the trait solver.
+    ///
+    /// ### Example
+    ///
+    /// ```rust,compile_fail
+    /// #![deny(coinductive_overlap_in_coherence)]
+    ///
+    /// trait CyclicTrait {}
+    /// impl<T: CyclicTrait> CyclicTrait for T {}
+    ///
+    /// trait Trait {}
+    /// impl<T: CyclicTrait> Trait for T {}
+    /// // conflicting impl with the above
+    /// impl Trait for u8 {}
+    /// ```
+    ///
+    /// {{produces}}
+    ///
+    /// ### Explanation
+    ///
+    /// We have two choices for impl which satisfy `u8: Trait`: the blanket impl
+    /// for generic `T`, and the direct impl for `u8`. These two impls nominally
+    /// overlap, since we can infer `T = u8` in the former impl, but since the where
+    /// clause `u8: CyclicTrait` would end up resulting in a cycle (since it depends
+    /// on itself), the blanket impl is not considered to hold for `u8`. This will
+    /// change in a future release.
+    pub COINDUCTIVE_OVERLAP_IN_COHERENCE,
+    Warn,
+    "impls that are not considered to overlap may be considered to \
+    overlap in the future",
+    @future_incompatible = FutureIncompatibleInfo {
+        reference: "issue #114040 <https://github.com/rust-lang/rust/issues/114040>",
+    };
 }
 
 declare_lint! {
@@ -4486,5 +4481,46 @@ declare_lint! {
     @future_incompatible = FutureIncompatibleInfo {
         reason: FutureIncompatibilityReason::FutureReleaseError,
         reference: "issue #114095 <https://github.com/rust-lang/rust/issues/114095>",
+    };
+}
+
+declare_lint! {
+    /// The `elided_lifetimes_in_associated_constant` lint detects elided lifetimes
+    /// that were erroneously allowed in associated constants.
+    ///
+    /// ### Example
+    ///
+    /// ```rust,compile_fail
+    /// #![deny(elided_lifetimes_in_associated_constant)]
+    ///
+    /// struct Foo;
+    ///
+    /// impl Foo {
+    ///     const STR: &str = "hello, world";
+    /// }
+    /// ```
+    ///
+    /// {{produces}}
+    ///
+    /// ### Explanation
+    ///
+    /// Previous version of Rust
+    ///
+    /// Implicit static-in-const behavior was decided [against] for associated
+    /// constants because of ambiguity. This, however, regressed and the compiler
+    /// erroneously treats elided lifetimes in associated constants as lifetime
+    /// parameters on the impl.
+    ///
+    /// This is a [future-incompatible] lint to transition this to a
+    /// hard error in the future.
+    ///
+    /// [against]: https://github.com/rust-lang/rust/issues/38831
+    /// [future-incompatible]: ../index.md#future-incompatible-lints
+    pub ELIDED_LIFETIMES_IN_ASSOCIATED_CONSTANT,
+    Warn,
+    "elided lifetimes cannot be used in associated constants in impls",
+    @future_incompatible = FutureIncompatibleInfo {
+        reason: FutureIncompatibilityReason::FutureReleaseError,
+        reference: "issue #115010 <https://github.com/rust-lang/rust/issues/115010>",
     };
 }

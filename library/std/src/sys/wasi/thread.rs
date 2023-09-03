@@ -20,9 +20,9 @@ cfg_if::cfg_if! {
             // https://github.com/WebAssembly/wasi-libc/blob/a6f871343313220b76009827ed0153586361c0d5/libc-top-half/musl/include/alltypes.h.in#L108
             #[repr(C)]
             union pthread_attr_union {
-                __i: [ffi::c_int; if mem::size_of::<ffi::c_int>() == 8 { 14 } else { 9 }],
-                __vi: [ffi::c_int; if mem::size_of::<ffi::c_int>() == 8 { 14 } else { 9 }],
-                __s: [ffi::c_ulong; if mem::size_of::<ffi::c_int>() == 8 { 7 } else { 9 }],
+                __i: [ffi::c_int; if mem::size_of::<ffi::c_long>() == 8 { 14 } else { 9 }],
+                __vi: [ffi::c_int; if mem::size_of::<ffi::c_long>() == 8 { 14 } else { 9 }],
+                __s: [ffi::c_ulong; if mem::size_of::<ffi::c_long>() == 8 { 7 } else { 9 }],
             }
 
             #[repr(C)]
@@ -47,11 +47,19 @@ cfg_if::cfg_if! {
                     stack_size: libc::size_t,
                 ) -> ffi::c_int;
                 pub fn pthread_attr_destroy(attr: *mut pthread_attr_t) -> ffi::c_int;
+                pub fn pthread_detach(thread: pthread_t) -> ffi::c_int;
             }
         }
 
         pub struct Thread {
             id: libc::pthread_t,
+        }
+
+        impl Drop for Thread {
+            fn drop(&mut self) {
+                let ret = unsafe { libc::pthread_detach(self.id) };
+                debug_assert_eq!(ret, 0);
+            }
         }
     } else {
         pub struct Thread(!);

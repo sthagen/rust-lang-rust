@@ -1,6 +1,6 @@
 //! Module that implements the public interface to the Stable MIR.
 //!
-//! This module shall contain all type definitions and APIs that we expect 3P tools to invoke to
+//! This module shall contain all type definitions and APIs that we expect third-party tools to invoke to
 //! interact with the compiler.
 //!
 //! The goal is to eventually move this module to its own crate which shall be published on
@@ -13,12 +13,14 @@
 
 use std::cell::Cell;
 
+use self::ty::{
+    GenericPredicates, Generics, ImplDef, ImplTrait, Span, TraitDecl, TraitDef, Ty, TyKind,
+};
 use crate::rustc_smir::Tables;
-
-use self::ty::{ImplDef, ImplTrait, TraitDecl, TraitDef, Ty, TyKind};
 
 pub mod mir;
 pub mod ty;
+pub mod visitor;
 
 /// Use String for now but we should replace it.
 pub type Symbol = String;
@@ -27,7 +29,12 @@ pub type Symbol = String;
 pub type CrateNum = usize;
 
 /// A unique identification number for each item accessible for the current compilation unit.
-pub type DefId = usize;
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct DefId(pub(crate) usize);
+
+/// A unique identification number for each provenance
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct AllocId(pub(crate) usize);
 
 /// A list of crate items.
 pub type CrateItems = Vec<CrateItem>;
@@ -85,6 +92,22 @@ pub fn all_local_items() -> CrateItems {
     with(|cx| cx.all_local_items())
 }
 
+pub fn all_trait_decls() -> TraitDecls {
+    with(|cx| cx.all_trait_decls())
+}
+
+pub fn trait_decl(trait_def: &TraitDef) -> TraitDecl {
+    with(|cx| cx.trait_decl(trait_def))
+}
+
+pub fn all_trait_impls() -> ImplTraitDecls {
+    with(|cx| cx.all_trait_impls())
+}
+
+pub fn trait_impl(trait_impl: &ImplDef) -> ImplTrait {
+    with(|cx| cx.trait_impl(trait_impl))
+}
+
 pub trait Context {
     fn entry_fn(&mut self) -> Option<CrateItem>;
     /// Retrieve all items of the local crate that have a MIR associated with them.
@@ -94,6 +117,8 @@ pub trait Context {
     fn trait_decl(&mut self, trait_def: &TraitDef) -> TraitDecl;
     fn all_trait_impls(&mut self) -> ImplTraitDecls;
     fn trait_impl(&mut self, trait_impl: &ImplDef) -> ImplTrait;
+    fn generics_of(&mut self, def_id: DefId) -> Generics;
+    fn predicates_of(&mut self, def_id: DefId) -> GenericPredicates;
     /// Get information about the local crate.
     fn local_crate(&self) -> Crate;
     /// Retrieve a list of all external crates.

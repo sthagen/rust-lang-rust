@@ -17,10 +17,10 @@ use rustc_data_structures::fx::{FxHashMap, FxIndexSet};
 use rustc_data_structures::jobserver::{self, Client};
 use rustc_data_structures::profiling::{duration_to_secs_str, SelfProfiler, SelfProfilerRef};
 use rustc_data_structures::sync::{
-    self, AtomicU64, AtomicUsize, Lock, Lrc, OnceCell, OneThread, Ordering, Ordering::SeqCst,
+    AtomicU64, AtomicUsize, Lock, Lrc, OneThread, Ordering, Ordering::SeqCst,
 };
 use rustc_errors::annotate_snippet_emitter_writer::AnnotateSnippetEmitterWriter;
-use rustc_errors::emitter::{Emitter, EmitterWriter, HumanReadableErrorType};
+use rustc_errors::emitter::{DynEmitter, EmitterWriter, HumanReadableErrorType};
 use rustc_errors::json::JsonEmitter;
 use rustc_errors::registry::Registry;
 use rustc_errors::{
@@ -151,8 +151,6 @@ pub struct Session {
     pub sysroot: PathBuf,
     /// Input, input file path and output file path to this compilation process.
     pub io: CompilerIO,
-
-    features: OnceCell<rustc_feature::Features>,
 
     incr_comp_session: OneThread<RefCell<IncrCompSession>>,
     /// Used for incremental compilation tests. Will only be populated if
@@ -705,21 +703,6 @@ impl Session {
         self.opts.cg.instrument_coverage() == InstrumentCoverage::ExceptUnusedFunctions
     }
 
-    /// Gets the features enabled for the current compilation session.
-    /// DO NOT USE THIS METHOD if there is a TyCtxt available, as it circumvents
-    /// dependency tracking. Use tcx.features() instead.
-    #[inline]
-    pub fn features_untracked(&self) -> &rustc_feature::Features {
-        self.features.get().unwrap()
-    }
-
-    pub fn init_features(&self, features: rustc_feature::Features) {
-        match self.features.set(features) {
-            Ok(()) => {}
-            Err(_) => panic!("`features` was initialized twice"),
-        }
-    }
-
     pub fn is_sanitizer_cfi_enabled(&self) -> bool {
         self.opts.unstable_opts.sanitizer.contains(SanitizerSet::CFI)
     }
@@ -1268,7 +1251,7 @@ fn default_emitter(
     source_map: Lrc<SourceMap>,
     bundle: Option<Lrc<FluentBundle>>,
     fallback_bundle: LazyFallbackBundle,
-) -> Box<dyn Emitter + sync::Send> {
+) -> Box<DynEmitter> {
     let macro_backtrace = sopts.unstable_opts.macro_backtrace;
     let track_diagnostics = sopts.unstable_opts.track_diagnostics;
     let terminal_url = match sopts.unstable_opts.terminal_urls {
@@ -1464,7 +1447,6 @@ pub fn build_session(
         parse_sess,
         sysroot,
         io,
-        features: OnceCell::new(),
         incr_comp_session: OneThread::new(RefCell::new(IncrCompSession::NotInitialized)),
         cgu_reuse_tracker,
         prof,
@@ -1735,12 +1717,12 @@ impl EarlyErrorHandler {
     }
 }
 
-fn mk_emitter(output: ErrorOutputType) -> Box<dyn Emitter + sync::Send + 'static> {
+fn mk_emitter(output: ErrorOutputType) -> Box<DynEmitter> {
     // FIXME(#100717): early errors aren't translated at the moment, so this is fine, but it will
     // need to reference every crate that might emit an early error for translation to work.
     let fallback_bundle =
         fallback_fluent_bundle(vec![rustc_errors::DEFAULT_LOCALE_RESOURCE], false);
-    let emitter: Box<dyn Emitter + sync::Send> = match output {
+    let emitter: Box<DynEmitter> = match output {
         config::ErrorOutputType::HumanReadable(kind) => {
             let (short, color_config) = kind.unzip();
             Box::new(EmitterWriter::stderr(color_config, fallback_bundle).short_message(short))

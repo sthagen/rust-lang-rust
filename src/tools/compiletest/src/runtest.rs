@@ -18,6 +18,7 @@ use crate::ColorConfig;
 use regex::{Captures, Regex};
 use rustfix::{apply_suggestions, get_suggestions_from_json, Filter};
 
+use std::borrow::Cow;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::env;
@@ -664,6 +665,7 @@ impl<'test> TestCx<'test> {
 
     fn normalize_coverage_output(&self, coverage: &str) -> Result<String, String> {
         let normalized = self.normalize_output(coverage, &[]);
+        let normalized = Self::anonymize_coverage_line_numbers(&normalized);
 
         let mut lines = normalized.lines().collect::<Vec<_>>();
 
@@ -672,6 +674,21 @@ impl<'test> TestCx<'test> {
 
         let joined_lines = lines.iter().flat_map(|line| [line, "\n"]).collect::<String>();
         Ok(joined_lines)
+    }
+
+    /// Replace line numbers in coverage reports with the placeholder `LL`,
+    /// so that the tests are less sensitive to lines being added/removed.
+    fn anonymize_coverage_line_numbers(coverage: &str) -> Cow<'_, str> {
+        // The coverage reporter prints line numbers at the start of a line.
+        // They are truncated or left-padded to occupy exactly 5 columns.
+        // (`LineNumberColumnWidth` in `SourceCoverageViewText.cpp`.)
+        // A pipe character `|` appears immediately after the final digit.
+        //
+        // Line numbers that appear inside expansion/instantiation subviews
+        // have an additional prefix of `  |` for each nesting level.
+        static LINE_NUMBER_RE: Lazy<Regex> =
+            Lazy::new(|| Regex::new(r"(?m:^)(?<prefix>(?:  \|)*) *[0-9]+\|").unwrap());
+        LINE_NUMBER_RE.replace_all(coverage, "$prefix   LL|")
     }
 
     /// Coverage reports can describe multiple source files, separated by
@@ -2337,14 +2354,7 @@ impl<'test> TestCx<'test> {
                 // Hide line numbers to reduce churn
                 rustc.arg("-Zui-testing");
                 rustc.arg("-Zdeduplicate-diagnostics=no");
-                // #[cfg(not(bootstrap)] unconditionally pass flag after beta bump
-                // since `ui-fulldeps --stage=1` builds using the stage 0 compiler,
-                // which doesn't have this flag.
-                if !(self.config.stage_id.starts_with("stage1-")
-                    && self.config.suite == "ui-fulldeps")
-                {
-                    rustc.arg("-Zwrite-long-types-to-disk=no");
-                }
+                rustc.arg("-Zwrite-long-types-to-disk=no");
                 // FIXME: use this for other modes too, for perf?
                 rustc.arg("-Cstrip=debuginfo");
             }
@@ -2466,13 +2476,8 @@ impl<'test> TestCx<'test> {
             rustc.args(&["-A", "unused"]);
         }
 
-        // #[cfg(not(bootstrap)] unconditionally pass flag after beta bump
-        // since `ui-fulldeps --stage=1` builds using the stage 0 compiler,
-        // which doesn't have this lint.
-        if !(self.config.stage_id.starts_with("stage1-") && self.config.suite == "ui-fulldeps") {
-            // Allow tests to use internal features.
-            rustc.args(&["-A", "internal_features"]);
-        }
+        // Allow tests to use internal features.
+        rustc.args(&["-A", "internal_features"]);
 
         if self.props.force_host {
             self.maybe_add_external_args(&mut rustc, &self.config.host_rustcflags);
@@ -3617,26 +3622,30 @@ impl<'test> TestCx<'test> {
         let expected_stderr = self.load_expected_output(stderr_kind);
         let expected_stdout = self.load_expected_output(stdout_kind);
 
-        let normalized_stdout = match output_kind {
+        let mut normalized_stdout =
+            self.normalize_output(&proc_res.stdout, &self.props.normalize_stdout);
+        match output_kind {
             TestOutput::Run if self.config.remote_test_client.is_some() => {
                 // When tests are run using the remote-test-client, the string
                 // 'uploaded "$TEST_BUILD_DIR/<test_executable>, waiting for result"'
                 // is printed to stdout by the client and then captured in the ProcRes,
-                // so it needs to be removed when comparing the run-pass test execution output
+                // so it needs to be removed when comparing the run-pass test execution output.
                 static REMOTE_TEST_RE: Lazy<Regex> = Lazy::new(|| {
                     Regex::new(
                         "^uploaded \"\\$TEST_BUILD_DIR(/[[:alnum:]_\\-.]+)+\", waiting for result\n"
                     )
                     .unwrap()
                 });
-                REMOTE_TEST_RE
-                    .replace(
-                        &self.normalize_output(&proc_res.stdout, &self.props.normalize_stdout),
-                        "",
-                    )
-                    .to_string()
+                normalized_stdout = REMOTE_TEST_RE.replace(&normalized_stdout, "").to_string();
+                // When there is a panic, the remote-test-client also prints "died due to signal";
+                // that needs to be removed as well.
+                static SIGNAL_DIED_RE: Lazy<Regex> =
+                    Lazy::new(|| Regex::new("^died due to signal [0-9]+\n").unwrap());
+                normalized_stdout = SIGNAL_DIED_RE.replace(&normalized_stdout, "").to_string();
+                // FIXME: it would be much nicer if we could just tell the remote-test-client to not
+                // print these things.
             }
-            _ => self.normalize_output(&proc_res.stdout, &self.props.normalize_stdout),
+            _ => {}
         };
 
         let stderr = if explicit_format {

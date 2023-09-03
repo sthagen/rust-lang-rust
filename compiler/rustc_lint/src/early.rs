@@ -20,6 +20,7 @@ use rustc_ast::ptr::P;
 use rustc_ast::visit::{self as ast_visit, Visitor};
 use rustc_ast::{self as ast, walk_list, HasAttrs};
 use rustc_data_structures::stack::ensure_sufficient_stack;
+use rustc_feature::Features;
 use rustc_middle::ty::RegisteredTools;
 use rustc_session::lint::{BufferedEarlyLint, LintBuffer, LintPass};
 use rustc_session::Session;
@@ -227,6 +228,7 @@ impl<'a, T: EarlyLintPass> ast_visit::Visitor<'a> for EarlyContextAndPass<'a, T>
             }) => self.check_id(closure_id),
             _ => {}
         }
+        lint_callback!(self, check_expr_post, e);
     }
 
     fn visit_generic_arg(&mut self, arg: &'a ast::GenericArg) {
@@ -381,6 +383,7 @@ impl<'a> EarlyCheckNode<'a> for (ast::NodeId, &'a [ast::Attribute], &'a [P<ast::
 
 pub fn check_ast_node<'a>(
     sess: &Session,
+    features: &Features,
     pre_expansion: bool,
     lint_store: &LintStore,
     registered_tools: &RegisteredTools,
@@ -390,6 +393,7 @@ pub fn check_ast_node<'a>(
 ) {
     let context = EarlyContext::new(
         sess,
+        features,
         !pre_expansion,
         lint_store,
         registered_tools,

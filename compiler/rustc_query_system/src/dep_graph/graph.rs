@@ -1,5 +1,5 @@
 use rustc_data_structures::fingerprint::Fingerprint;
-use rustc_data_structures::fx::{FxHashMap, FxHashSet, FxIndexMap};
+use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_data_structures::profiling::{EventId, QueryInvocationId, SelfProfilerRef};
 use rustc_data_structures::sharded::{self, Sharded};
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
@@ -93,7 +93,7 @@ pub struct DepGraphData<K: DepKind> {
     /// things available to us. If we find that they are not dirty, we
     /// load the path to the file storing those work-products here into
     /// this map. We can later look for and extract that data.
-    previous_work_products: FxIndexMap<WorkProductId, WorkProduct>,
+    previous_work_products: WorkProductMap,
 
     dep_node_debug: Lock<FxHashMap<DepNode<K>, String>>,
 
@@ -116,7 +116,7 @@ impl<K: DepKind> DepGraph<K> {
     pub fn new(
         profiler: &SelfProfilerRef,
         prev_graph: SerializedDepGraph<K>,
-        prev_work_products: FxIndexMap<WorkProductId, WorkProduct>,
+        prev_work_products: WorkProductMap,
         encoder: FileEncoder,
         record_graph: bool,
         record_stats: bool,
@@ -688,7 +688,7 @@ impl<K: DepKind> DepGraph<K> {
 
     /// Access the map of work-products created during the cached run. Only
     /// used during saving of the dep-graph.
-    pub fn previous_work_products(&self) -> &FxIndexMap<WorkProductId, WorkProduct> {
+    pub fn previous_work_products(&self) -> &WorkProductMap {
         &self.data.as_ref().unwrap().previous_work_products
     }
 
@@ -1051,6 +1051,8 @@ pub struct WorkProduct {
     pub saved_files: UnordMap<String, String>,
 }
 
+pub type WorkProductMap = UnordMap<WorkProductId, WorkProduct>;
+
 // Index type for `DepNodeData`'s edges.
 rustc_index::newtype_index! {
     struct EdgeIndex {}
@@ -1164,7 +1166,7 @@ impl<K: DepKind> CurrentDepGraph<K> {
             )),
             new_node_to_index: Sharded::new(|| {
                 FxHashMap::with_capacity_and_hasher(
-                    new_node_count_estimate / sharded::SHARDS,
+                    new_node_count_estimate / sharded::shards(),
                     Default::default(),
                 )
             }),

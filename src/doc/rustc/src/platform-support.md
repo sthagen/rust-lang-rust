@@ -63,8 +63,9 @@ Tools](#tier-1-with-host-tools).
 ## Tier 2 with Host Tools
 
 Tier 2 targets can be thought of as "guaranteed to build". The Rust project
-builds official binary releases for each tier 2 target, and automated builds
-ensure that each tier 2 target builds after each change. Automated tests are
+builds official binary releases of the standard library (or, in some cases,
+only the `core` library) for each tier 2 target, and automated builds
+ensure that each tier 2 target can be used as build target after each change. Automated tests are
 not always run so it's not guaranteed to produce a working build, but tier 2
 targets often work to quite a good degree and patches are always welcome!
 
@@ -103,11 +104,12 @@ target | notes
 `x86_64-unknown-linux-musl` | 64-bit Linux with MUSL
 [`x86_64-unknown-netbsd`](platform-support/netbsd.md) | NetBSD/amd64
 
-## Tier 2
+## Tier 2 without Host Tools
 
 Tier 2 targets can be thought of as "guaranteed to build". The Rust project
-builds official binary releases for each tier 2 target, and automated builds
-ensure that each tier 2 target builds after each change. Automated tests are
+builds official binary releases of the standard library (or, in some cases,
+only the `core` library) for each tier 2 target, and automated builds
+ensure that each tier 2 target can be used as build target after each change. Automated tests are
 not always run so it's not guaranteed to produce a working build, but tier 2
 targets often work to quite a good degree and patches are always welcome! For
 the full requirements, see [Tier 2 target
@@ -176,7 +178,6 @@ target | std | notes
 `thumbv8m.base-none-eabi` | * | Bare ARMv8-M Baseline
 `thumbv8m.main-none-eabi` | * | Bare ARMv8-M Mainline
 `thumbv8m.main-none-eabihf` | * | Bare ARMv8-M Mainline, hardfloat
-[`sparc-unknown-none-elf`](./platform-support/sparc-unknown-none-elf.md) | * | Bare 32-bit SPARC V7+
 `wasm32-unknown-emscripten` | ✓ | WebAssembly via Emscripten
 `wasm32-unknown-unknown` | ✓ | WebAssembly
 `wasm32-wasi` | ✓ | WebAssembly with WASI
@@ -259,6 +260,7 @@ target | std | host | notes
 `avr-unknown-gnu-atmega328` | * |  | AVR. Requires `-Z build-std=core`
 `bpfeb-unknown-none` | * |  | BPF (big endian)
 `bpfel-unknown-none` | * |  | BPF (little endian)
+`csky-unknown-linux-gnuabiv2` | ✓ |  | C-SKY abiv2 Linux(little endian)
 `hexagon-unknown-linux-musl` | ? |  |
 `i386-apple-ios` | ✓ |  | 32-bit x86 iOS
 [`i586-pc-nto-qnx700`](platform-support/nto-qnx.md) | * |  | 32-bit x86 QNX Neutrino 7.0 RTOS |
@@ -270,8 +272,8 @@ target | std | host | notes
 `i686-uwp-windows-gnu` | ? |  |
 `i686-uwp-windows-msvc` | ? |  |
 `i686-wrs-vxworks` | ? |  |
-[`loongarch64-unknown-none`](platform-support/loongarch-none.md) | * | LoongArch64 Bare-metal (LP64D ABI)
-[`loongarch64-unknown-none-softfloat`](platform-support/loongarch-none.md) | * | LoongArch64 Bare-metal (LP64S ABI)
+[`loongarch64-unknown-none`](platform-support/loongarch-none.md) | * |  | LoongArch64 Bare-metal (LP64D ABI)
+[`loongarch64-unknown-none-softfloat`](platform-support/loongarch-none.md) | * |  | LoongArch64 Bare-metal (LP64S ABI)
 [`m68k-unknown-linux-gnu`](platform-support/m68k-unknown-linux-gnu.md) | ? |  | Motorola 680x0 Linux
 `mips-unknown-linux-uclibc` | ✓ |  | MIPS Linux with uClibc
 [`mips64-openwrt-linux-musl`](platform-support/mips64-openwrt-linux-musl.md) | ? |  | MIPS64 for OpenWrt Linux MUSL
@@ -313,6 +315,7 @@ target | std | host | notes
 [`riscv64-linux-android`](platform-support/android.md) |   |   | RISC-V 64-bit Android
 `s390x-unknown-linux-musl` |  |  | S390x Linux (kernel 3.2, MUSL)
 `sparc-unknown-linux-gnu` | ✓ |  | 32-bit SPARC Linux
+[`sparc-unknown-none-elf`](./platform-support/sparc-unknown-none-elf.md) | * |  | Bare 32-bit SPARC V7+
 [`sparc64-unknown-netbsd`](platform-support/netbsd.md) | ✓ | ✓ | NetBSD/sparc64
 [`sparc64-unknown-openbsd`](platform-support/openbsd.md) | ✓ | ✓ | OpenBSD/sparc64
 `thumbv4t-none-eabi` | * |  | Thumb-mode Bare ARMv4T
@@ -320,7 +323,7 @@ target | std | host | notes
 `thumbv7a-pc-windows-msvc` | ? |  |
 `thumbv7a-uwp-windows-msvc` | ✓ |  |
 `thumbv7neon-unknown-linux-musleabihf` | ? |  | Thumb2-mode ARMv7-A Linux with NEON, MUSL
-[`wasm32-wasi-preview1-threads`](platform-support/wasm32-wasi-preview1-threads.md) | ✓ | WebAssembly with WASI Preview 1 and threads
+[`wasm32-wasi-preview1-threads`](platform-support/wasm32-wasi-preview1-threads.md) | ✓ |  | WebAssembly with WASI Preview 1 and threads
 [`wasm64-unknown-unknown`](platform-support/wasm64-unknown-unknown.md) | ? |  | WebAssembly
 `x86_64-apple-ios-macabi` | ✓ |  | Apple Catalyst on x86_64
 [`x86_64-apple-tvos`](platform-support/apple-tvos.md) | ? | | x86 64-bit tvOS

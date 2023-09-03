@@ -171,7 +171,7 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
             return macro_data.clone();
         }
 
-        let load_macro_untracked = self.cstore().load_macro_untracked(def_id, &self.tcx.sess);
+        let load_macro_untracked = self.cstore().load_macro_untracked(def_id, self.tcx);
         let (ext, macro_rules) = match load_macro_untracked {
             LoadedMacro::MacroDef(item, edition) => (
                 Lrc::new(self.compile_macro(&item, edition).0),
@@ -247,8 +247,6 @@ impl<'a, 'b, 'tcx> BuildReducedGraphVisitor<'a, 'b, 'tcx> {
                 })
             }
             ast::VisibilityKind::Restricted { ref path, id, .. } => {
-                // Make `PRIVATE_IN_PUBLIC` lint a hard error.
-                self.r.has_pub_restricted = true;
                 // For visibilities we are not ready to provide correct implementation of "uniform
                 // paths" right now, so on 2018 edition we only allow module-relative paths for now.
                 // On 2015 edition visibilities are resolved as crate-relative by default,
@@ -870,10 +868,7 @@ impl<'a, 'b, 'tcx> BuildReducedGraphVisitor<'a, 'b, 'tcx> {
         let imported_binding = self.r.import(binding, import);
         if parent == self.r.graph_root {
             if let Some(entry) = self.r.extern_prelude.get(&ident.normalize_to_macros_2_0()) {
-                if expansion != LocalExpnId::ROOT
-                    && orig_name.is_some()
-                    && entry.extern_crate_item.is_none()
-                {
+                if expansion != LocalExpnId::ROOT && orig_name.is_some() && !entry.is_import() {
                     let msg = "macro-expanded `extern crate` items cannot \
                                        shadow names passed with `--extern`";
                     self.r.tcx.sess.span_err(item.span, msg);
@@ -884,10 +879,14 @@ impl<'a, 'b, 'tcx> BuildReducedGraphVisitor<'a, 'b, 'tcx> {
                     return;
                 }
             }
-            let entry = self.r.extern_prelude.entry(ident.normalize_to_macros_2_0()).or_insert(
-                ExternPreludeEntry { extern_crate_item: None, introduced_by_item: true },
-            );
-            entry.extern_crate_item = Some(imported_binding);
+            let entry = self
+                .r
+                .extern_prelude
+                .entry(ident.normalize_to_macros_2_0())
+                .or_insert(ExternPreludeEntry { binding: None, introduced_by_item: true });
+            // Binding from `extern crate` item in source code can replace
+            // a binding from `--extern` on command line here.
+            entry.binding = Some(imported_binding);
             if orig_name.is_some() {
                 entry.introduced_by_item = true;
             }

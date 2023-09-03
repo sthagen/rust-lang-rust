@@ -59,8 +59,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             ParamCandidate(param) => {
                 let obligations =
                     self.confirm_param_candidate(obligation, param.map_bound(|t| t.trait_ref));
-                // FIXME(effects)
-                ImplSource::Param(ty::BoundConstness::NotConst, obligations)
+                ImplSource::Param(obligations)
             }
 
             ImplCandidate(impl_def_id) => {
@@ -72,9 +71,9 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 ImplSource::Builtin(BuiltinImplSource::Misc, data)
             }
 
-            ProjectionCandidate(idx, constness) => {
+            ProjectionCandidate(idx, _) => {
                 let obligations = self.confirm_projection_candidate(obligation, idx)?;
-                ImplSource::Param(constness, obligations)
+                ImplSource::Param(obligations)
             }
 
             ObjectCandidate(idx) => self.confirm_object_candidate(obligation, idx)?,
@@ -549,7 +548,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                     obligation.cause.span,
                     "GATs in trait object shouldn't have been considered",
                 );
-                return Err(SelectionError::Unimplemented);
+                return Err(SelectionError::TraitNotObjectSafe(trait_predicate.trait_ref.def_id));
             }
 
             // This maybe belongs in wf, but that can't (doesn't) handle

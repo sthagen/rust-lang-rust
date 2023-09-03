@@ -1,6 +1,6 @@
 #![allow(clippy::if_same_then_else, clippy::no_effect)]
 #![feature(lint_reasons)]
-
+//@no-rustfix
 use std::ptr::NonNull;
 
 fn foo(s: &mut Vec<u32>, b: &u32, x: &mut u32) {
@@ -194,6 +194,41 @@ mod foo {
     fn cfg_warn(s: &mut u32) {}
     //~^ ERROR: this argument is a mutable reference, but not used mutably
     //~| NOTE: this is cfg-gated and may require further changes
+}
+
+// Should not warn.
+async fn inner_async(x: &mut i32, y: &mut u32) {
+    async {
+        *y += 1;
+        *x += 1;
+    }
+    .await;
+}
+
+async fn inner_async2(x: &mut i32, y: &mut u32) {
+    //~^ ERROR: this argument is a mutable reference, but not used mutably
+    async {
+        *x += 1;
+    }
+    .await;
+}
+
+async fn inner_async3(x: &mut i32, y: &mut u32) {
+    //~^ ERROR: this argument is a mutable reference, but not used mutably
+    async {
+        *y += 1;
+    }
+    .await;
+}
+
+// Should not warn.
+async fn async_vec(b: &mut Vec<bool>) {
+    b.append(&mut vec![]);
+}
+
+// Should not warn.
+async fn async_vec2(b: &mut Vec<bool>) {
+    b.push(true);
 }
 
 fn main() {

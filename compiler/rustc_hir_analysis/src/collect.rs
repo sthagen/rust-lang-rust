@@ -22,7 +22,7 @@ use rustc_data_structures::captures::Captures;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_errors::{Applicability, DiagnosticBuilder, ErrorGuaranteed, StashKey};
 use rustc_hir as hir;
-use rustc_hir::def_id::{DefId, LocalDefId};
+use rustc_hir::def_id::{DefId, LocalDefId, LocalModDefId};
 use rustc_hir::intravisit::{self, Visitor};
 use rustc_hir::{GenericParamKind, Node};
 use rustc_infer::infer::{InferCtxt, TyCtxtInferExt};
@@ -38,6 +38,7 @@ use rustc_trait_selection::infer::InferCtxtExt;
 use rustc_trait_selection::traits::error_reporting::suggestions::NextTypeParamName;
 use rustc_trait_selection::traits::ObligationCtxt;
 use std::iter;
+use std::ops::Bound;
 
 mod generics_of;
 mod item_bounds;
@@ -48,7 +49,7 @@ mod type_of;
 ///////////////////////////////////////////////////////////////////////////
 // Main entry point
 
-fn collect_mod_item_types(tcx: TyCtxt<'_>, module_def_id: LocalDefId) {
+fn collect_mod_item_types(tcx: TyCtxt<'_>, module_def_id: LocalModDefId) {
     tcx.hir().visit_item_likes_in_module(module_def_id, &mut CollectItemTypesVisitor { tcx });
 }
 
@@ -56,6 +57,7 @@ pub fn provide(providers: &mut Providers) {
     resolve_bound_vars::provide(providers);
     *providers = Providers {
         type_of: type_of::type_of,
+        type_of_opaque: type_of::type_of_opaque,
         item_bounds: item_bounds::item_bounds,
         explicit_item_bounds: item_bounds::explicit_item_bounds,
         generics_of: generics_of::generics_of,
@@ -1143,15 +1145,15 @@ fn fn_sig(tcx: TyCtxt<'_>, def_id: LocalDefId) -> ty::EarlyBinder<ty::PolyFnSig<
         }
 
         Ctor(data) | Variant(hir::Variant { data, .. }) if data.ctor().is_some() => {
-            let ty = tcx.type_of(tcx.hir().get_parent_item(hir_id)).instantiate_identity();
+            let adt_def_id = tcx.hir().get_parent_item(hir_id).def_id.to_def_id();
+            let ty = tcx.type_of(adt_def_id).instantiate_identity();
             let inputs = data.fields().iter().map(|f| tcx.type_of(f.def_id).instantiate_identity());
-            ty::Binder::dummy(tcx.mk_fn_sig(
-                inputs,
-                ty,
-                false,
-                hir::Unsafety::Normal,
-                abi::Abi::Rust,
-            ))
+            // constructors for structs with `layout_scalar_valid_range` are unsafe to call
+            let safety = match tcx.layout_scalar_valid_range(adt_def_id) {
+                (Bound::Unbounded, Bound::Unbounded) => hir::Unsafety::Normal,
+                _ => hir::Unsafety::Unsafe,
+            };
+            ty::Binder::dummy(tcx.mk_fn_sig(inputs, ty, false, safety, abi::Abi::Rust))
         }
 
         Expr(&hir::Expr { kind: hir::ExprKind::Closure { .. }, .. }) => {

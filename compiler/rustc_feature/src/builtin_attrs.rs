@@ -35,6 +35,7 @@ const GATED_CFGS: &[GatedCfg] = &[
     (sym::target_has_atomic_load_store, sym::cfg_target_has_atomic, cfg_fn!(cfg_target_has_atomic)),
     (sym::sanitize, sym::cfg_sanitize, cfg_fn!(cfg_sanitize)),
     (sym::version, sym::cfg_version, cfg_fn!(cfg_version)),
+    (sym::relocation_model, sym::cfg_relocation_model, cfg_fn!(cfg_relocation_model)),
 ];
 
 /// Find a gated cfg determined by the `pred`icate which is given the cfg's name.
@@ -812,7 +813,9 @@ pub const BUILTIN_ATTRIBUTES: &[BuiltinAttribute] = &[
     rustc_attr!(TEST, rustc_insignificant_dtor, Normal, template!(Word), WarnFollowing),
     rustc_attr!(TEST, rustc_strict_coherence, Normal, template!(Word), WarnFollowing),
     rustc_attr!(TEST, rustc_variance, Normal, template!(Word), WarnFollowing),
+    rustc_attr!(TEST, rustc_variance_of_opaques, Normal, template!(Word), WarnFollowing),
     rustc_attr!(TEST, rustc_layout, Normal, template!(List: "field1, field2, ..."), WarnFollowing),
+    rustc_attr!(TEST, rustc_abi, Normal, template!(List: "field1, field2, ..."), WarnFollowing),
     rustc_attr!(TEST, rustc_regions, Normal, template!(Word), WarnFollowing),
     rustc_attr!(
         TEST, rustc_error, Normal,

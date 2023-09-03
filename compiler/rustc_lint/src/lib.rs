@@ -40,7 +40,7 @@
 #![recursion_limit = "256"]
 #![deny(rustc::untranslatable_diagnostic)]
 #![deny(rustc::diagnostic_outside_of_impl)]
-#![cfg_attr(not(bootstrap), allow(internal_features))]
+#![allow(internal_features)]
 
 #[macro_use]
 extern crate rustc_middle;
@@ -90,7 +90,7 @@ use rustc_ast as ast;
 use rustc_errors::{DiagnosticMessage, SubdiagnosticMessage};
 use rustc_fluent_macro::fluent_messages;
 use rustc_hir as hir;
-use rustc_hir::def_id::LocalDefId;
+use rustc_hir::def_id::{LocalDefId, LocalModDefId};
 use rustc_middle::query::Providers;
 use rustc_middle::ty::TyCtxt;
 use rustc_session::lint::builtin::{
@@ -145,7 +145,7 @@ pub fn provide(providers: &mut Providers) {
     *providers = Providers { lint_mod, ..*providers };
 }
 
-fn lint_mod(tcx: TyCtxt<'_>, module_def_id: LocalDefId) {
+fn lint_mod(tcx: TyCtxt<'_>, module_def_id: LocalModDefId) {
     late_lint_mod(tcx, module_def_id, BuiltinCombinedModuleLateLintPass::new());
 }
 
@@ -499,6 +499,11 @@ fn register_builtins(store: &mut LintStore) {
         "unaligned_references",
         "converted into hard error, see issue #82523 \
          <https://github.com/rust-lang/rust/issues/82523> for more information",
+    );
+    store.register_removed(
+        "private_in_public",
+        "replaced with another group of lints, see RFC \
+         <https://rust-lang.github.io/rfcs/2145-type-privacy.html> for more information",
     );
 }
 

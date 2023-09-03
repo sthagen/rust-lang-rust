@@ -1,7 +1,7 @@
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
-use rustc_data_structures::sync::{self, Lrc};
+use rustc_data_structures::sync::Lrc;
 use rustc_data_structures::unord::UnordSet;
-use rustc_errors::emitter::{Emitter, EmitterWriter};
+use rustc_errors::emitter::{DynEmitter, EmitterWriter};
 use rustc_errors::json::JsonEmitter;
 use rustc_errors::TerminalUrl;
 use rustc_feature::UnstableFeatures;
@@ -133,7 +133,7 @@ pub(crate) fn new_handler(
         rustc_driver::DEFAULT_LOCALE_RESOURCES.to_vec(),
         false,
     );
-    let emitter: Box<dyn Emitter + sync::Send> = match error_format {
+    let emitter: Box<DynEmitter> = match error_format {
         ErrorOutputType::HumanReadable(kind) => {
             let (short, color_config) = kind.unzip();
             Box::new(
@@ -283,7 +283,7 @@ pub(crate) fn create_config(
 
                 let hir = tcx.hir();
                 let body = hir.body(hir.body_owned_by(def_id));
-                debug!("visiting body for {:?}", def_id);
+                debug!("visiting body for {def_id:?}");
                 EmitIgnoredResolutionErrors::new(tcx).visit_body(body);
                 (rustc_interface::DEFAULT_QUERY_PROVIDERS.typeck)(tcx, def_id)
             };
@@ -377,7 +377,7 @@ pub(crate) fn run_global_ctxt(
 
     fn report_deprecated_attr(name: &str, diag: &rustc_errors::Handler, sp: Span) {
         let mut msg =
-            diag.struct_span_warn(sp, format!("the `#![doc({})]` attribute is deprecated", name));
+            diag.struct_span_warn(sp, format!("the `#![doc({name})]` attribute is deprecated"));
         msg.note(
             "see issue #44136 <https://github.com/rust-lang/rust/issues/44136> \
             for more information",
@@ -470,7 +470,7 @@ impl<'tcx> Visitor<'tcx> for EmitIgnoredResolutionErrors<'tcx> {
     }
 
     fn visit_path(&mut self, path: &Path<'tcx>, _id: HirId) {
-        debug!("visiting path {:?}", path);
+        debug!("visiting path {path:?}");
         if path.res == Res::Err {
             // We have less context here than in rustc_resolve,
             // so we can only emit the name and span.
@@ -487,8 +487,7 @@ impl<'tcx> Visitor<'tcx> for EmitIgnoredResolutionErrors<'tcx> {
                 self.tcx.sess,
                 path.span,
                 E0433,
-                "failed to resolve: {}",
-                label
+                "failed to resolve: {label}",
             );
             err.span_label(path.span, label);
             err.note("this error was originally ignored because you are running `rustdoc`");

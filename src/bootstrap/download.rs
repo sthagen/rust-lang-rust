@@ -91,8 +91,8 @@ impl Config {
             // NOTE: this intentionally comes after the Linux check:
             // - patchelf only works with ELF files, so no need to run it on Mac or Windows
             // - On other Unix systems, there is no stable syscall interface, so Nix doesn't manage the global libc.
-            if self.patch_binaries_for_nix {
-                return true;
+            if let Some(explicit_value) = self.patch_binaries_for_nix {
+                return explicit_value;
             }
 
             // Use `/etc/os-release` instead of `/etc/NIXOS`.
@@ -105,7 +105,16 @@ impl Config {
                     matches!(l.trim(), "ID=nixos" | "ID='nixos'" | "ID=\"nixos\"")
                 }),
             };
-            is_nixos && !Path::new("/lib").exists()
+            if !is_nixos {
+                let in_nix_shell = env::var("IN_NIX_SHELL");
+                if let Ok(in_nix_shell) = in_nix_shell {
+                    eprintln!(
+                        "The IN_NIX_SHELL environment variable is `{in_nix_shell}`; \
+                         you may need to set `patch-binaries-for-nix=true` in config.toml"
+                    );
+                }
+            }
+            is_nixos
         });
         if val {
             eprintln!("info: You seem to be using Nix.");
@@ -216,6 +225,8 @@ impl Config {
             "10", // timeout if speed is < 10 bytes/sec for > 30 seconds
             "--connect-timeout",
             "30", // timeout if cannot connect within 30 seconds
+            "-o",
+            tempfile.to_str().unwrap(),
             "--retry",
             "3",
             "-SRf",
@@ -227,8 +238,6 @@ impl Config {
             curl.arg("--progress-bar");
         }
         curl.arg(url);
-        let f = File::create(tempfile).unwrap();
-        curl.stdout(Stdio::from(f));
         if !self.check_run(&mut curl) {
             if self.build.contains("windows-msvc") {
                 eprintln!("Fallback to PowerShell");

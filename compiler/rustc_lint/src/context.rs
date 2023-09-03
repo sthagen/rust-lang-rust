@@ -17,8 +17,8 @@
 use self::TargetLint::*;
 
 use crate::errors::{
-    CheckNameDeprecated, CheckNameUnknown, CheckNameUnknownTool, CheckNameWarning, RequestedLevel,
-    UnsupportedGroup,
+    CheckNameDeprecated, CheckNameRemoved, CheckNameRenamed, CheckNameUnknown,
+    CheckNameUnknownTool, RequestedLevel, UnsupportedGroup,
 };
 use crate::levels::LintLevelsBuilder;
 use crate::passes::{EarlyLintPassObject, LateLintPassObject};
@@ -27,6 +27,7 @@ use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::sync;
 use rustc_errors::{add_elided_lifetime_in_path_suggestion, DiagnosticBuilder, DiagnosticMessage};
 use rustc_errors::{Applicability, DecorateLint, MultiSpan, SuggestionStyle};
+use rustc_feature::Features;
 use rustc_hir as hir;
 use rustc_hir::def::Res;
 use rustc_hir::def_id::{CrateNum, DefId};
@@ -123,9 +124,10 @@ pub enum CheckLintNameResult<'a> {
     NoLint(Option<Symbol>),
     /// The lint refers to a tool that has not been registered.
     NoTool,
-    /// The lint is either renamed or removed. This is the warning
-    /// message, and an optional new name (`None` if removed).
-    Warning(String, Option<String>),
+    /// The lint has been renamed to a new name.
+    Renamed(String),
+    /// The lint has been removed due to the given reason.
+    Removed(String),
     /// The lint is from a tool. If the Option is None, then either
     /// the lint does not exist in the tool or the code was not
     /// compiled with the tool and therefore the lint was never
@@ -341,25 +343,32 @@ impl LintStore {
             sess.emit_err(UnsupportedGroup { lint_group: crate::WARNINGS.name_lower() });
             return;
         }
-        let lint_name = lint_name.to_string();
         match self.check_lint_name(lint_name_only, tool_name, registered_tools) {
-            CheckLintNameResult::Warning(msg, _) => {
-                sess.emit_warning(CheckNameWarning {
-                    msg,
+            CheckLintNameResult::Renamed(replace) => {
+                sess.emit_warning(CheckNameRenamed {
+                    lint_name,
+                    replace: &replace,
+                    sub: RequestedLevel { level, lint_name },
+                });
+            }
+            CheckLintNameResult::Removed(reason) => {
+                sess.emit_warning(CheckNameRemoved {
+                    lint_name,
+                    reason: &reason,
                     sub: RequestedLevel { level, lint_name },
                 });
             }
             CheckLintNameResult::NoLint(suggestion) => {
                 sess.emit_err(CheckNameUnknown {
-                    lint_name: lint_name.clone(),
+                    lint_name,
                     suggestion,
                     sub: RequestedLevel { level, lint_name },
                 });
             }
             CheckLintNameResult::Tool(Err((Some(_), new_name))) => {
                 sess.emit_warning(CheckNameDeprecated {
-                    lint_name: lint_name.clone(),
-                    new_name,
+                    lint_name,
+                    new_name: &new_name,
                     sub: RequestedLevel { level, lint_name },
                 });
             }
@@ -444,14 +453,8 @@ impl LintStore {
             }
         }
         match self.by_name.get(&complete_name) {
-            Some(Renamed(new_name, _)) => CheckLintNameResult::Warning(
-                format!("lint `{complete_name}` has been renamed to `{new_name}`"),
-                Some(new_name.to_owned()),
-            ),
-            Some(Removed(reason)) => CheckLintNameResult::Warning(
-                format!("lint `{complete_name}` has been removed: {reason}"),
-                None,
-            ),
+            Some(Renamed(new_name, _)) => CheckLintNameResult::Renamed(new_name.to_string()),
+            Some(Removed(reason)) => CheckLintNameResult::Removed(reason.to_string()),
             None => match self.lint_groups.get(&*complete_name) {
                 // If neither the lint, nor the lint group exists check if there is a `clippy::`
                 // variant of this lint
@@ -965,6 +968,14 @@ pub trait LintContext: Sized {
                         Applicability::MachineApplicable
                     );
                 }
+                BuiltinLintDiagnostics::AssociatedConstElidedLifetime { elided, span } => {
+                    db.span_suggestion_verbose(
+                        if elided { span.shrink_to_hi() } else { span },
+                        "use the `'static` lifetime",
+                        if elided { "'static " } else { "'static" },
+                        Applicability::MachineApplicable
+                    );
+                }
             }
             // Rewrap `db`, and pass control to the user.
             decorate(db)
@@ -1071,6 +1082,7 @@ pub trait LintContext: Sized {
 impl<'a> EarlyContext<'a> {
     pub(crate) fn new(
         sess: &'a Session,
+        features: &'a Features,
         warn_about_weird_lints: bool,
         lint_store: &'a LintStore,
         registered_tools: &'a RegisteredTools,
@@ -1079,6 +1091,7 @@ impl<'a> EarlyContext<'a> {
         EarlyContext {
             builder: LintLevelsBuilder::new(
                 sess,
+                features,
                 warn_about_weird_lints,
                 lint_store,
                 registered_tools,

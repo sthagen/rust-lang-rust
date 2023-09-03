@@ -4,14 +4,15 @@ use crate::{
     fluent_generated as fluent,
     late::unerased_lint_store,
     lints::{
-        DeprecatedLintName, IgnoredUnlessCrateSpecified, OverruledAttributeLint,
-        RenamedOrRemovedLint, RenamedOrRemovedLintSuggestion, UnknownLint, UnknownLintSuggestion,
+        DeprecatedLintName, IgnoredUnlessCrateSpecified, OverruledAttributeLint, RemovedLint,
+        RenamedLint, RenamedLintSuggestion, UnknownLint, UnknownLintSuggestion,
     },
 };
 use rustc_ast as ast;
 use rustc_ast_pretty::pprust;
 use rustc_data_structures::fx::FxHashMap;
 use rustc_errors::{DecorateLint, DiagnosticBuilder, DiagnosticMessage, MultiSpan};
+use rustc_feature::{Features, GateIssue};
 use rustc_hir as hir;
 use rustc_hir::intravisit::{self, Visitor};
 use rustc_hir::HirId;
@@ -23,12 +24,14 @@ use rustc_middle::lint::{
 };
 use rustc_middle::query::Providers;
 use rustc_middle::ty::{RegisteredTools, TyCtxt};
-use rustc_session::lint::builtin::{RENAMED_AND_REMOVED_LINTS, UNKNOWN_LINTS, UNUSED_ATTRIBUTES};
 use rustc_session::lint::{
-    builtin::{self, FORBIDDEN_LINT_GROUPS, SINGLE_USE_LIFETIMES, UNFULFILLED_LINT_EXPECTATIONS},
+    builtin::{
+        self, FORBIDDEN_LINT_GROUPS, RENAMED_AND_REMOVED_LINTS, SINGLE_USE_LIFETIMES,
+        UNFULFILLED_LINT_EXPECTATIONS, UNKNOWN_LINTS, UNUSED_ATTRIBUTES,
+    },
     Level, Lint, LintExpectationId, LintId,
 };
-use rustc_session::parse::{add_feature_diagnostics, feature_err};
+use rustc_session::parse::feature_err;
 use rustc_session::Session;
 use rustc_span::symbol::{sym, Symbol};
 use rustc_span::{Span, DUMMY_SP};
@@ -119,6 +122,7 @@ fn lint_expectations(tcx: TyCtxt<'_>, (): ()) -> Vec<(LintExpectationId, LintExp
 
     let mut builder = LintLevelsBuilder {
         sess: tcx.sess,
+        features: tcx.features(),
         provider: QueryMapExpectationsWrapper {
             tcx,
             cur: hir::CRATE_HIR_ID,
@@ -148,6 +152,7 @@ fn shallow_lint_levels_on(tcx: TyCtxt<'_>, owner: hir::OwnerId) -> ShallowLintLe
 
     let mut levels = LintLevelsBuilder {
         sess: tcx.sess,
+        features: tcx.features(),
         provider: LintLevelQueryMap {
             tcx,
             cur: owner.into(),
@@ -435,6 +440,7 @@ impl<'tcx> Visitor<'tcx> for LintLevelsBuilder<'_, QueryMapExpectationsWrapper<'
 
 pub struct LintLevelsBuilder<'s, P> {
     sess: &'s Session,
+    features: &'s Features,
     provider: P,
     warn_about_weird_lints: bool,
     store: &'s LintStore,
@@ -448,12 +454,14 @@ pub(crate) struct BuilderPush {
 impl<'s> LintLevelsBuilder<'s, TopDown> {
     pub(crate) fn new(
         sess: &'s Session,
+        features: &'s Features,
         warn_about_weird_lints: bool,
         store: &'s LintStore,
         registered_tools: &'s RegisteredTools,
     ) -> Self {
         let mut builder = LintLevelsBuilder {
             sess,
+            features,
             provider: TopDown { sets: LintLevelSets::new(), cur: COMMAND_LINE },
             warn_about_weird_lints,
             store,
@@ -526,6 +534,10 @@ impl<'s, P: LintLevelsProvider> LintLevelsBuilder<'s, P> {
         self.sess
     }
 
+    pub(crate) fn features(&self) -> &Features {
+        self.features
+    }
+
     pub(crate) fn lint_store(&self) -> &LintStore {
         self.store
     }
@@ -556,7 +568,7 @@ impl<'s, P: LintLevelsProvider> LintLevelsBuilder<'s, P> {
                     continue;
                 }
 
-                if self.check_gated_lint(id, DUMMY_SP) {
+                if self.check_gated_lint(id, DUMMY_SP, true) {
                     let src = LintLevelSource::CommandLine(lint_flag_val, orig_level);
                     self.insert(id, (level, src));
                 }
@@ -716,7 +728,7 @@ impl<'s, P: LintLevelsProvider> LintLevelsBuilder<'s, P> {
                     ast::MetaItemKind::NameValue(ref name_value) => {
                         if item.path == sym::reason {
                             if let ast::LitKind::Str(rationale, _) = name_value.kind {
-                                if !self.sess.features_untracked().lint_reasons {
+                                if !self.features.lint_reasons {
                                     feature_err(
                                         &self.sess.parse_sess,
                                         sym::lint_reasons,
@@ -827,7 +839,7 @@ impl<'s, P: LintLevelsProvider> LintLevelsBuilder<'s, P> {
                             reason,
                         };
                         for &id in *ids {
-                            if self.check_gated_lint(id, attr.span) {
+                            if self.check_gated_lint(id, attr.span, false) {
                                 self.insert_spec(id, (level, src));
                             }
                         }
@@ -844,7 +856,7 @@ impl<'s, P: LintLevelsProvider> LintLevelsBuilder<'s, P> {
                                     reason,
                                 };
                                 for &id in ids {
-                                    if self.check_gated_lint(id, attr.span) {
+                                    if self.check_gated_lint(id, attr.span, false) {
                                         self.insert_spec(id, (level, src));
                                     }
                                 }
@@ -903,18 +915,26 @@ impl<'s, P: LintLevelsProvider> LintLevelsBuilder<'s, P> {
 
                     _ if !self.warn_about_weird_lints => {}
 
-                    CheckLintNameResult::Warning(msg, renamed) => {
+                    CheckLintNameResult::Renamed(new_name) => {
                         let suggestion =
-                            renamed.as_ref().map(|replace| RenamedOrRemovedLintSuggestion {
-                                suggestion: sp,
-                                replace: replace.as_str(),
-                            });
+                            RenamedLintSuggestion { suggestion: sp, replace: new_name.as_str() };
+                        let name = tool_ident.map(|tool| format!("{tool}::{name}")).unwrap_or(name);
                         self.emit_spanned_lint(
                             RENAMED_AND_REMOVED_LINTS,
                             sp.into(),
-                            RenamedOrRemovedLint { msg, suggestion },
+                            RenamedLint { name: name.as_str(), suggestion },
                         );
                     }
+
+                    CheckLintNameResult::Removed(reason) => {
+                        let name = tool_ident.map(|tool| format!("{tool}::{name}")).unwrap_or(name);
+                        self.emit_spanned_lint(
+                            RENAMED_AND_REMOVED_LINTS,
+                            sp.into(),
+                            RemovedLint { name: name.as_str(), reason: reason.as_str() },
+                        );
+                    }
+
                     CheckLintNameResult::NoLint(suggestion) => {
                         let name = if let Some(tool_ident) = tool_ident {
                             format!("{}::{}", tool_ident.name, name)
@@ -933,7 +953,7 @@ impl<'s, P: LintLevelsProvider> LintLevelsBuilder<'s, P> {
                 // If this lint was renamed, apply the new lint instead of ignoring the attribute.
                 // This happens outside of the match because the new lint should be applied even if
                 // we don't warn about the name change.
-                if let CheckLintNameResult::Warning(_, Some(new_name)) = lint_result {
+                if let CheckLintNameResult::Renamed(new_name) = lint_result {
                     // Ignore any errors or warnings that happen because the new name is inaccurate
                     // NOTE: `new_name` already includes the tool name, so we don't have to add it again.
                     if let CheckLintNameResult::Ok(ids) =
@@ -945,7 +965,7 @@ impl<'s, P: LintLevelsProvider> LintLevelsBuilder<'s, P> {
                             reason,
                         };
                         for &id in ids {
-                            if self.check_gated_lint(id, attr.span) {
+                            if self.check_gated_lint(id, attr.span, false) {
                                 self.insert_spec(id, (level, src));
                             }
                         }
@@ -990,9 +1010,9 @@ impl<'s, P: LintLevelsProvider> LintLevelsBuilder<'s, P> {
     // FIXME only emit this once for each attribute, instead of repeating it 4 times for
     // pre-expansion lints, post-expansion lints, `shallow_lint_levels_on` and `lint_expectations`.
     #[track_caller]
-    fn check_gated_lint(&self, lint_id: LintId, span: Span) -> bool {
+    fn check_gated_lint(&self, lint_id: LintId, span: Span, lint_from_cli: bool) -> bool {
         if let Some(feature) = lint_id.lint.feature_gate {
-            if !self.sess.features_untracked().enabled(feature) {
+            if !self.features.enabled(feature) {
                 let lint = builtin::UNKNOWN_LINTS;
                 let (level, src) = self.lint_level(builtin::UNKNOWN_LINTS);
                 struct_lint_level(
@@ -1005,7 +1025,13 @@ impl<'s, P: LintLevelsProvider> LintLevelsBuilder<'s, P> {
                     |lint| {
                         lint.set_arg("name", lint_id.lint.name_lower());
                         lint.note(fluent::lint_note);
-                        add_feature_diagnostics(lint, &self.sess.parse_sess, feature);
+                        rustc_session::parse::add_feature_diagnostics_for_issue(
+                            lint,
+                            &self.sess.parse_sess,
+                            feature,
+                            GateIssue::Language,
+                            lint_from_cli,
+                        );
                         lint
                     },
                 );

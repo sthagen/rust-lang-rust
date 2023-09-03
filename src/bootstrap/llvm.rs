@@ -24,6 +24,7 @@ use crate::util::{self, exe, output, t, up_to_date};
 use crate::{CLang, GitRepo, Kind};
 
 use build_helper::ci::CiEnv;
+use build_helper::git::get_git_merge_base;
 
 #[derive(Clone)]
 pub struct LlvmResult {
@@ -128,13 +129,19 @@ pub fn prebuilt_llvm_config(
 /// This retrieves the LLVM sha we *want* to use, according to git history.
 pub(crate) fn detect_llvm_sha(config: &Config, is_git: bool) -> String {
     let llvm_sha = if is_git {
+        // We proceed in 2 steps. First we get the closest commit that is actually upstream. Then we
+        // walk back further to the last bors merge commit that actually changed LLVM. The first
+        // step will fail on CI because only the `auto` branch exists; we just fall back to `HEAD`
+        // in that case.
+        let closest_upstream =
+            get_git_merge_base(Some(&config.src)).unwrap_or_else(|_| "HEAD".into());
         let mut rev_list = config.git();
         rev_list.args(&[
             PathBuf::from("rev-list"),
             format!("--author={}", config.stage0_metadata.config.git_merge_commit_email).into(),
             "-n1".into(),
             "--first-parent".into(),
-            "HEAD".into(),
+            closest_upstream.into(),
             "--".into(),
             config.src.join("src/llvm-project"),
             config.src.join("src/bootstrap/download-ci-llvm-stamp"),
@@ -299,7 +306,7 @@ impl Step for Llvm {
 
         let llvm_exp_targets = match builder.config.llvm_experimental_targets {
             Some(ref s) => s,
-            None => "AVR;M68k",
+            None => "AVR;M68k;CSKY",
         };
 
         let assertions = if builder.config.llvm_assertions { "ON" } else { "OFF" };
@@ -374,12 +381,12 @@ impl Step for Llvm {
             cfg.define("LLVM_LINK_LLVM_DYLIB", "ON");
         }
 
-        if target.starts_with("riscv")
+        if (target.starts_with("riscv") || target.starts_with("csky"))
             && !target.contains("freebsd")
             && !target.contains("openbsd")
             && !target.contains("netbsd")
         {
-            // RISC-V GCC erroneously requires linking against
+            // RISC-V and CSKY GCC erroneously requires linking against
             // `libatomic` when using 1-byte and 2-byte C++
             // atomics but the LLVM build system check cannot
             // detect this. Therefore it is set manually here.

@@ -15,7 +15,7 @@
 #![feature(box_patterns)]
 #![feature(error_reporter)]
 #![allow(incomplete_features)]
-#![cfg_attr(not(bootstrap), allow(internal_features))]
+#![allow(internal_features)]
 
 #[macro_use]
 extern crate rustc_macros;
@@ -30,11 +30,11 @@ pub use emitter::ColorConfig;
 use rustc_lint_defs::LintExpectationId;
 use Level::*;
 
-use emitter::{is_case_difference, Emitter, EmitterWriter};
+use emitter::{is_case_difference, DynEmitter, Emitter, EmitterWriter};
 use registry::Registry;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet, FxIndexMap, FxIndexSet};
 use rustc_data_structures::stable_hasher::{Hash128, StableHasher};
-use rustc_data_structures::sync::{self, IntoDynSyncSend, Lock, Lrc};
+use rustc_data_structures::sync::{Lock, Lrc};
 use rustc_data_structures::AtomicRef;
 pub use rustc_error_messages::{
     fallback_fluent_bundle, fluent_bundle, DelayDm, DiagnosticMessage, FluentBundle,
@@ -55,7 +55,9 @@ use std::num::NonZeroUsize;
 use std::panic;
 use std::path::{Path, PathBuf};
 
-use termcolor::{Color, ColorSpec};
+// Used by external projects such as `rust-gpu`.
+// See https://github.com/rust-lang/rust/pull/115393.
+pub use termcolor::{Color, ColorSpec, WriteColor};
 
 pub mod annotate_snippet_emitter_writer;
 mod diagnostic;
@@ -197,8 +199,14 @@ impl CodeSuggestion {
 
         use rustc_span::{CharPos, Pos};
 
-        /// Append to a buffer the remainder of the line of existing source code, and return the
-        /// count of lines that have been added for accurate highlighting.
+        /// Extracts a substring from the provided `line_opt` based on the specified low and high indices,
+        /// appends it to the given buffer `buf`, and returns the count of newline characters in the substring
+        /// for accurate highlighting.
+        /// If `line_opt` is `None`, a newline character is appended to the buffer, and 0 is returned.
+        ///
+        /// ## Returns
+        ///
+        /// The count of newline characters in the extracted substring.
         fn push_trailing(
             buf: &mut String,
             line_opt: Option<&Cow<'_, str>>,
@@ -206,22 +214,30 @@ impl CodeSuggestion {
             hi_opt: Option<&Loc>,
         ) -> usize {
             let mut line_count = 0;
+            // Convert CharPos to Usize, as CharPose is character offset
+            // Extract low index and high index
             let (lo, hi_opt) = (lo.col.to_usize(), hi_opt.map(|hi| hi.col.to_usize()));
             if let Some(line) = line_opt {
                 if let Some(lo) = line.char_indices().map(|(i, _)| i).nth(lo) {
+                    // Get high index while account for rare unicode and emoji with char_indices
                     let hi_opt = hi_opt.and_then(|hi| line.char_indices().map(|(i, _)| i).nth(hi));
                     match hi_opt {
+                        // If high index exist, take string from low to high index
                         Some(hi) if hi > lo => {
+                            // count how many '\n' exist
                             line_count = line[lo..hi].matches('\n').count();
                             buf.push_str(&line[lo..hi])
                         }
                         Some(_) => (),
+                        // If high index absence, take string from low index till end string.len
                         None => {
+                            // count how many '\n' exist
                             line_count = line[lo..].matches('\n').count();
                             buf.push_str(&line[lo..])
                         }
                     }
                 }
+                // If high index is None
                 if hi_opt.is_none() {
                     buf.push('\n');
                 }
@@ -414,7 +430,7 @@ struct HandlerInner {
     err_count: usize,
     warn_count: usize,
     deduplicated_err_count: usize,
-    emitter: IntoDynSyncSend<Box<dyn Emitter + sync::Send>>,
+    emitter: Box<DynEmitter>,
     delayed_span_bugs: Vec<DelayedDiagnostic>,
     delayed_good_path_bugs: Vec<DelayedDiagnostic>,
     /// This flag indicates that an expected diagnostic was emitted and suppressed.
@@ -452,11 +468,11 @@ struct HandlerInner {
     /// have been converted.
     check_unstable_expect_diagnostics: bool,
 
-    /// Expected [`Diagnostic`][diagnostic::Diagnostic]s store a [`LintExpectationId`] as part of
+    /// Expected [`Diagnostic`][struct@diagnostic::Diagnostic]s store a [`LintExpectationId`] as part of
     /// the lint level. [`LintExpectationId`]s created early during the compilation
     /// (before `HirId`s have been defined) are not stable and can therefore not be
     /// stored on disk. This buffer stores these diagnostics until the ID has been
-    /// replaced by a stable [`LintExpectationId`]. The [`Diagnostic`][diagnostic::Diagnostic]s are the
+    /// replaced by a stable [`LintExpectationId`]. The [`Diagnostic`][struct@diagnostic::Diagnostic]s are the
     /// submitted for storage and added to the list of fulfilled expectations.
     unstable_expect_diagnostics: Vec<Diagnostic>,
 
@@ -580,7 +596,7 @@ impl Handler {
         self
     }
 
-    pub fn with_emitter(emitter: Box<dyn Emitter + sync::Send>) -> Self {
+    pub fn with_emitter(emitter: Box<DynEmitter>) -> Self {
         Self {
             inner: Lock::new(HandlerInner {
                 flags: HandlerFlags { can_emit_warnings: true, ..Default::default() },
@@ -589,7 +605,7 @@ impl Handler {
                 warn_count: 0,
                 deduplicated_err_count: 0,
                 deduplicated_warn_count: 0,
-                emitter: IntoDynSyncSend(emitter),
+                emitter,
                 delayed_span_bugs: Vec::new(),
                 delayed_good_path_bugs: Vec::new(),
                 suppressed_expected_diag: false,

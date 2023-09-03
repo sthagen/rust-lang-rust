@@ -9,7 +9,7 @@
 //! This includes changes in the stability of the constness.
 //!
 //! In order to make an intrinsic usable at compile-time, one needs to copy the implementation
-//! from <https://github.com/rust-lang/miri/blob/master/src/shims/intrinsics.rs> to
+//! from <https://github.com/rust-lang/miri/blob/master/src/shims/intrinsics> to
 //! <https://github.com/rust-lang/rust/blob/master/compiler/rustc_const_eval/src/interpret/intrinsics.rs> and add a
 //! `#[rustc_const_unstable(feature = "const_such_and_such", issue = "01234")]` to the intrinsic declaration.
 //!
@@ -2399,7 +2399,6 @@ extern "rust-intrinsic" {
     /// that differs.  That allows optimizations that can read in large chunks.
     ///
     /// [valid]: crate::ptr#safety
-    #[cfg(not(bootstrap))]
     #[rustc_const_unstable(feature = "const_intrinsic_compare_bytes", issue = "none")]
     #[rustc_nounwind]
     pub fn compare_bytes(left: *const u8, right: *const u8, bytes: usize) -> i32;
@@ -2568,7 +2567,7 @@ pub(crate) fn is_nonoverlapping<T>(src: *const T, dst: *const T, count: usize) -
     let size = mem::size_of::<T>()
         .checked_mul(count)
         .expect("is_nonoverlapping: `size_of::<T>() * count` overflows a usize");
-    let diff = if src_usize > dst_usize { src_usize - dst_usize } else { dst_usize - src_usize };
+    let diff = src_usize.abs_diff(dst_usize);
     // If the absolute distance between the ptrs is at least as big as the size of the buffer,
     // they do not overlap.
     diff >= size
@@ -2842,20 +2841,5 @@ pub const unsafe fn write_bytes<T>(dst: *mut T, val: u8, count: usize) {
             [T](dst: *mut T) => is_aligned_and_not_null(dst)
         );
         write_bytes(dst, val, count)
-    }
-}
-
-/// Backfill for bootstrap
-#[cfg(bootstrap)]
-pub unsafe fn compare_bytes(left: *const u8, right: *const u8, bytes: usize) -> i32 {
-    extern "C" {
-        fn memcmp(s1: *const u8, s2: *const u8, n: usize) -> crate::ffi::c_int;
-    }
-
-    if bytes != 0 {
-        // SAFETY: Since bytes is non-zero, the caller has met `memcmp`'s requirements.
-        unsafe { memcmp(left, right, bytes).into() }
-    } else {
-        0
     }
 }

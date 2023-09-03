@@ -1001,8 +1001,22 @@ impl EarlyLintPass for UnusedDocComment {
         warn_if_doc(cx, arm_span, "match arms", &arm.attrs);
     }
 
+    fn check_pat(&mut self, cx: &EarlyContext<'_>, pat: &ast::Pat) {
+        if let ast::PatKind::Struct(_, _, fields, _) = &pat.kind {
+            for field in fields {
+                warn_if_doc(cx, field.span, "pattern fields", &field.attrs);
+            }
+        }
+    }
+
     fn check_expr(&mut self, cx: &EarlyContext<'_>, expr: &ast::Expr) {
         warn_if_doc(cx, expr.span, "expressions", &expr.attrs);
+
+        if let ExprKind::Struct(s) = &expr.kind {
+            for field in &s.fields {
+                warn_if_doc(cx, field.span, "expression fields", &field.attrs);
+            }
+        }
     }
 
     fn check_generic_param(&mut self, cx: &EarlyContext<'_>, param: &ast::GenericParam) {
@@ -2237,7 +2251,7 @@ declare_lint_pass!(
 
 impl EarlyLintPass for IncompleteInternalFeatures {
     fn check_crate(&mut self, cx: &EarlyContext<'_>, _: &ast::Crate) {
-        let features = cx.sess().features_untracked();
+        let features = cx.builder.features();
         features
             .declared_lang_features
             .iter()

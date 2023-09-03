@@ -12,6 +12,7 @@ const OPTIONAL_COMPONENTS: &[&str] = &[
     "avr",
     "loongarch",
     "m68k",
+    "csky",
     "mips",
     "powerpc",
     "systemz",
@@ -251,7 +252,10 @@ fn main() {
     } else if target.contains("windows-gnu") {
         println!("cargo:rustc-link-lib=shell32");
         println!("cargo:rustc-link-lib=uuid");
-    } else if target.contains("haiku") || target.contains("darwin") {
+    } else if target.contains("haiku")
+        || target.contains("darwin")
+        || (is_crossed && (target.contains("dragonfly") || target.contains("solaris")))
+    {
         println!("cargo:rustc-link-lib=z");
     } else if target.contains("netbsd") {
         println!("cargo:rustc-link-lib=z");

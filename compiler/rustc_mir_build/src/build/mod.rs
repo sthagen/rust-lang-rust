@@ -56,7 +56,8 @@ pub(crate) fn closure_saved_names_of_captured_variables<'tcx>(
 /// Construct the MIR for a given `DefId`.
 fn mir_build(tcx: TyCtxt<'_>, def: LocalDefId) -> Body<'_> {
     // Ensure unsafeck and abstract const building is ran before we steal the THIR.
-    tcx.ensure_with_value().thir_check_unsafety(def);
+    tcx.ensure_with_value()
+        .thir_check_unsafety(tcx.typeck_root_def_id(def.to_def_id()).expect_local());
     tcx.ensure_with_value().thir_abstract_const(def);
     if let Err(e) = tcx.check_match(def) {
         return construct_error(tcx, def, e);
@@ -820,7 +821,6 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 };
                 self.var_debug_info.push(VarDebugInfo {
                     name,
-                    references: 0,
                     source_info: SourceInfo::outermost(captured_place.var_ident.span),
                     value: VarDebugInfoContents::Place(use_place),
                     argument_index: None,
@@ -851,7 +851,6 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 self.var_debug_info.push(VarDebugInfo {
                     name,
                     source_info,
-                    references: 0,
                     value: VarDebugInfoContents::Place(arg_local.into()),
                     argument_index: Some(argument_index as u16 + 1),
                 });

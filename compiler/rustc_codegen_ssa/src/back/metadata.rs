@@ -16,6 +16,7 @@ use rustc_metadata::fs::METADATA_FILENAME;
 use rustc_metadata::EncodedMetadata;
 use rustc_session::cstore::MetadataLoader;
 use rustc_session::Session;
+use rustc_span::sym;
 use rustc_target::abi::Endian;
 use rustc_target::spec::{ef_avr_arch, RelocModel, Target};
 
@@ -209,6 +210,7 @@ pub(crate) fn create_object_file(sess: &Session) -> Option<write::Object<'static
         "hexagon" => Architecture::Hexagon,
         "bpf" => Architecture::Bpf,
         "loongarch64" => Architecture::LoongArch64,
+        "csky" => Architecture::Csky,
         // Unsupported architecture.
         _ => return None,
     };
@@ -224,9 +226,7 @@ pub(crate) fn create_object_file(sess: &Session) -> Option<write::Object<'static
 
     let mut file = write::Object::new(binary_format, architecture, endianness);
     if sess.target.is_like_osx {
-        if let Some(build_version) = macho_object_build_version_for_target(&sess.target) {
-            file.set_macho_build_version(build_version)
-        }
+        file.set_macho_build_version(macho_object_build_version_for_target(&sess.target))
     }
     let e_flags = match architecture {
         Architecture::Mips => {
@@ -271,41 +271,51 @@ pub(crate) fn create_object_file(sess: &Session) -> Option<write::Object<'static
         Architecture::Riscv32 | Architecture::Riscv64 => {
             // Source: https://github.com/riscv-non-isa/riscv-elf-psabi-doc/blob/079772828bd10933d34121117a222b4cc0ee2200/riscv-elf.adoc
             let mut e_flags: u32 = 0x0;
-            let features = &sess.target.options.features;
+
             // Check if compressed is enabled
-            if features.contains("+c") {
+            // `unstable_target_features` is used here because "c" is gated behind riscv_target_feature.
+            if sess.unstable_target_features.contains(&sym::c) {
                 e_flags |= elf::EF_RISCV_RVC;
             }
 
-            // Select the appropriate floating-point ABI
-            if features.contains("+d") {
-                e_flags |= elf::EF_RISCV_FLOAT_ABI_DOUBLE;
-            } else if features.contains("+f") {
-                e_flags |= elf::EF_RISCV_FLOAT_ABI_SINGLE;
-            } else {
-                e_flags |= elf::EF_RISCV_FLOAT_ABI_SOFT;
+            // Set the appropriate flag based on ABI
+            // This needs to match LLVM `RISCVELFStreamer.cpp`
+            match &*sess.target.llvm_abiname {
+                "" | "ilp32" | "lp64" => (),
+                "ilp32f" | "lp64f" => e_flags |= elf::EF_RISCV_FLOAT_ABI_SINGLE,
+                "ilp32d" | "lp64d" => e_flags |= elf::EF_RISCV_FLOAT_ABI_DOUBLE,
+                "ilp32e" => e_flags |= elf::EF_RISCV_RVE,
+                _ => bug!("unknown RISC-V ABI name"),
             }
+
             e_flags
         }
         Architecture::LoongArch64 => {
             // Source: https://github.com/loongson/la-abi-specs/blob/release/laelf.adoc#e_flags-identifies-abi-type-and-version
             let mut e_flags: u32 = elf::EF_LARCH_OBJABI_V1;
-            let features = &sess.target.options.features;
 
-            // Select the appropriate floating-point ABI
-            if features.contains("+d") {
-                e_flags |= elf::EF_LARCH_ABI_DOUBLE_FLOAT;
-            } else if features.contains("+f") {
-                e_flags |= elf::EF_LARCH_ABI_SINGLE_FLOAT;
-            } else {
-                e_flags |= elf::EF_LARCH_ABI_SOFT_FLOAT;
+            // Set the appropriate flag based on ABI
+            // This needs to match LLVM `LoongArchELFStreamer.cpp`
+            match &*sess.target.llvm_abiname {
+                "ilp32s" | "lp64s" => e_flags |= elf::EF_LARCH_ABI_SOFT_FLOAT,
+                "ilp32f" | "lp64f" => e_flags |= elf::EF_LARCH_ABI_SINGLE_FLOAT,
+                "ilp32d" | "lp64d" => e_flags |= elf::EF_LARCH_ABI_DOUBLE_FLOAT,
+                _ => bug!("unknown RISC-V ABI name"),
             }
+
             e_flags
         }
         Architecture::Avr => {
             // Resolve the ISA revision and set
             // the appropriate EF_AVR_ARCH flag.
             ef_avr_arch(&sess.target.options.cpu)
+        }
+        Architecture::Csky => {
+            let e_flags = match sess.target.options.abi.as_ref() {
+                "abiv2" => elf::EF_CSKY_ABIV2,
+                _ => elf::EF_CSKY_ABIV1,
+            };
+            e_flags
         }
         _ => 0,
     };
@@ -322,31 +332,28 @@ pub(crate) fn create_object_file(sess: &Session) -> Option<write::Object<'static
     Some(file)
 }
 
-/// Apple's LD, when linking for Mac Catalyst, requires object files to
-/// contain information about what they were built for (LC_BUILD_VERSION):
-/// the platform (macOS/watchOS etc), minimum OS version, and SDK version.
-/// This returns a `MachOBuildVersion` if necessary for the target.
-fn macho_object_build_version_for_target(
-    target: &Target,
-) -> Option<object::write::MachOBuildVersion> {
-    if !target.llvm_target.ends_with("-macabi") {
-        return None;
-    }
+/// Since Xcode 15 Apple's LD requires object files to contain information about what they were
+/// built for (LC_BUILD_VERSION): the platform (macOS/watchOS etc), minimum OS version, and SDK
+/// version. This returns a `MachOBuildVersion` for the target.
+fn macho_object_build_version_for_target(target: &Target) -> object::write::MachOBuildVersion {
     /// The `object` crate demands "X.Y.Z encoded in nibbles as xxxx.yy.zz"
     /// e.g. minOS 14.0 = 0x000E0000, or SDK 16.2 = 0x00100200
     fn pack_version((major, minor): (u32, u32)) -> u32 {
         (major << 16) | (minor << 8)
     }
 
-    let platform = object::macho::PLATFORM_MACCATALYST;
-    let min_os = (14, 0);
-    let sdk = (16, 2);
+    let platform =
+        rustc_target::spec::current_apple_platform(target).expect("unknown Apple target OS");
+    let min_os = rustc_target::spec::current_apple_deployment_target(target)
+        .expect("unknown Apple target OS");
+    let sdk =
+        rustc_target::spec::current_apple_sdk_version(platform).expect("unknown Apple target OS");
 
     let mut build_version = object::write::MachOBuildVersion::default();
     build_version.platform = platform;
     build_version.minos = pack_version(min_os);
     build_version.sdk = pack_version(sdk);
-    Some(build_version)
+    build_version
 }
 
 pub enum MetadataPosition {

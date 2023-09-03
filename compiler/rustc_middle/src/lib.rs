@@ -35,7 +35,6 @@
 #![feature(if_let_guard)]
 #![feature(inline_const)]
 #![feature(iter_from_generator)]
-#![feature(local_key_cell_methods)]
 #![feature(negative_impls)]
 #![feature(never_type)]
 #![feature(extern_types)]
@@ -64,7 +63,7 @@
 #![feature(macro_metavar_expr)]
 #![recursion_limit = "512"]
 #![allow(rustc::potential_query_instability)]
-#![cfg_attr(not(bootstrap), allow(internal_features))]
+#![allow(internal_features)]
 
 #[macro_use]
 extern crate bitflags;

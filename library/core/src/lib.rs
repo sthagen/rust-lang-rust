@@ -51,7 +51,7 @@
 #![cfg(not(test))]
 // To run core tests without x.py without ending up with two copies of core, Miri needs to be
 // able to "empty" this crate. See <https://github.com/rust-lang/miri-test-libstd/issues/4>.
-// rustc itself never sets the feature, so this line has no affect there.
+// rustc itself never sets the feature, so this line has no effect there.
 #![cfg(any(not(feature = "miri-test-libstd"), test, doctest))]
 #![stable(feature = "core", since = "1.6.0")]
 #![doc(
@@ -96,7 +96,9 @@
 #![allow(explicit_outlives_requirements)]
 #![allow(incomplete_features)]
 #![warn(multiple_supertrait_upcastable)]
-#![cfg_attr(not(bootstrap), allow(internal_features))]
+#![allow(internal_features)]
+// Do not check link redundancy on bootstraping phase
+#![allow(rustdoc::redundant_explicit_links)]
 //
 // Library features:
 // tidy-alphabetical-start
@@ -150,7 +152,6 @@
 #![feature(const_slice_from_raw_parts_mut)]
 #![feature(const_slice_from_ref)]
 #![feature(const_slice_index)]
-#![feature(const_slice_is_ascii)]
 #![feature(const_slice_ptr_len)]
 #![feature(const_slice_split_at_mut)]
 #![feature(const_str_from_utf8_unchecked_mut)]

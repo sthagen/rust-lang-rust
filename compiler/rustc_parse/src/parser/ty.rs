@@ -136,6 +136,17 @@ impl<'a> Parser<'a> {
         )
     }
 
+    /// Parse a type suitable for a field defintion.
+    /// The difference from `parse_ty` is that this version
+    /// allows anonymous structs and unions.
+    pub fn parse_ty_for_field_def(&mut self) -> PResult<'a, P<Ty>> {
+        if self.can_begin_anon_struct_or_union() {
+            self.parse_anon_struct_or_union()
+        } else {
+            self.parse_ty()
+        }
+    }
+
     /// Parse a type suitable for a function or function pointer parameter.
     /// The difference from `parse_ty` is that this version allows `...`
     /// (`CVarArgs`) at the top level of the type.
@@ -180,7 +191,7 @@ impl<'a> Parser<'a> {
         )
     }
 
-    pub(super) fn parse_no_question_mark_recover(&mut self) -> PResult<'a, P<Ty>> {
+    pub(super) fn parse_ty_no_question_mark_recover(&mut self) -> PResult<'a, P<Ty>> {
         self.parse_ty_common(
             AllowPlus::Yes,
             AllowCVariadic::No,
@@ -334,6 +345,36 @@ impl<'a> Parser<'a> {
             ty = self.maybe_recover_from_question_mark(ty);
         }
         if allow_qpath_recovery { self.maybe_recover_from_bad_qpath(ty) } else { Ok(ty) }
+    }
+
+    /// Parse an anonymous struct or union (only for field definitions):
+    /// ```ignore (feature-not-ready)
+    /// #[repr(C)]
+    /// struct Foo {
+    ///     _: struct { // anonymous struct
+    ///         x: u32,
+    ///         y: f64,
+    ///     }
+    ///     _: union { // anonymous union
+    ///         z: u32,
+    ///         w: f64,
+    ///     }
+    /// }
+    /// ```
+    fn parse_anon_struct_or_union(&mut self) -> PResult<'a, P<Ty>> {
+        assert!(self.token.is_keyword(kw::Union) || self.token.is_keyword(kw::Struct));
+        let is_union = self.token.is_keyword(kw::Union);
+
+        let lo = self.token.span;
+        self.bump();
+
+        let (fields, _recovered) =
+            self.parse_record_struct_body(if is_union { "union" } else { "struct" }, lo, false)?;
+        let span = lo.to(self.prev_token.span);
+        self.sess.gated_spans.gate(sym::unnamed_fields, span);
+        // These can be rejected during AST validation in `deny_anon_struct_or_union`.
+        let kind = if is_union { TyKind::AnonUnion(fields) } else { TyKind::AnonStruct(fields) };
+        Ok(self.mk_ty(span, kind))
     }
 
     /// Parses either:
@@ -696,6 +737,11 @@ impl<'a> Parser<'a> {
         Ok(bounds)
     }
 
+    pub(super) fn can_begin_anon_struct_or_union(&mut self) -> bool {
+        (self.token.is_keyword(kw::Struct) || self.token.is_keyword(kw::Union))
+            && self.look_ahead(1, |t| t == &token::OpenDelim(Delimiter::Brace))
+    }
+
     /// Can the current token begin a bound?
     fn can_begin_bound(&mut self) -> bool {
         // This needs to be synchronized with `TokenKind::can_begin_bound`.
@@ -714,6 +760,7 @@ impl<'a> Parser<'a> {
     /// ```
     fn parse_generic_bound(&mut self) -> PResult<'a, GenericBound> {
         let lo = self.token.span;
+        let leading_token = self.prev_token.clone();
         let has_parens = self.eat(&token::OpenDelim(Delimiter::Parenthesis));
         let inner_lo = self.token.span;
 
@@ -722,7 +769,7 @@ impl<'a> Parser<'a> {
             self.error_lt_bound_with_modifiers(modifiers);
             self.parse_generic_lt_bound(lo, inner_lo, has_parens)?
         } else {
-            self.parse_generic_ty_bound(lo, has_parens, modifiers)?
+            self.parse_generic_ty_bound(lo, has_parens, modifiers, &leading_token)?
         };
 
         Ok(bound)
@@ -827,6 +874,7 @@ impl<'a> Parser<'a> {
         lo: Span,
         has_parens: bool,
         modifiers: BoundModifiers,
+        leading_token: &Token,
     ) -> PResult<'a, GenericBound> {
         let mut lifetime_defs = self.parse_late_bound_lifetime_defs()?;
         let mut path = if self.token.is_keyword(kw::Fn)
@@ -843,18 +891,32 @@ impl<'a> Parser<'a> {
             // that we do not use the try operator when parsing the type because
             // if it fails then we get a parser error which we don't want (we're trying
             // to recover from errors, not make more).
-            let path = if self.may_recover()
-                && matches!(ty.kind, TyKind::Ptr(..) | TyKind::Ref(..))
-                && let TyKind::Path(_, path) = &ty.peel_refs().kind {
-                // Just get the indirection part of the type.
-                let span = ty.span.until(path.span);
+            let path = if self.may_recover() {
+                let (span, message, sugg, path, applicability) = match &ty.kind {
+                    TyKind::Ptr(..) | TyKind::Ref(..) if let TyKind::Path(_, path) = &ty.peel_refs().kind => {
+                        (
+                            ty.span.until(path.span),
+                            "consider removing the indirection",
+                            "",
+                            path,
+                            Applicability::MaybeIncorrect
+                        )
+                    }
+                    TyKind::ImplTrait(_, bounds)
+                        if let [GenericBound::Trait(tr, ..), ..] = bounds.as_slice() =>
+                    {
+                        (
+                            ty.span.until(tr.span),
+                            "use the trait bounds directly",
+                            "",
+                            &tr.trait_ref.path,
+                            Applicability::MachineApplicable
+                        )
+                    }
+                    _ => return Err(err)
+                };
 
-                err.span_suggestion_verbose(
-                    span,
-                    "consider removing the indirection",
-                    "",
-                    Applicability::MaybeIncorrect,
-                );
+                err.span_suggestion_verbose(span, message, sugg, applicability);
 
                 path.clone()
             } else {
@@ -873,18 +935,18 @@ impl<'a> Parser<'a> {
         }
 
         if has_parens {
-            if self.token.is_like_plus() {
-                // Someone has written something like `&dyn (Trait + Other)`. The correct code
-                // would be `&(dyn Trait + Other)`, but we don't have access to the appropriate
-                // span to suggest that. When written as `&dyn Trait + Other`, an appropriate
-                // suggestion is given.
+            // Someone has written something like `&dyn (Trait + Other)`. The correct code
+            // would be `&(dyn Trait + Other)`
+            if self.token.is_like_plus() && leading_token.is_keyword(kw::Dyn) {
                 let bounds = vec![];
                 self.parse_remaining_bounds(bounds, true)?;
                 self.expect(&token::CloseDelim(Delimiter::Parenthesis))?;
-                let sp = vec![lo, self.prev_token.span];
-                self.sess.emit_err(errors::IncorrectBracesTraitBounds {
-                    span: sp,
-                    sugg: errors::IncorrectBracesTraitBoundsSugg { l: lo, r: self.prev_token.span },
+                self.sess.emit_err(errors::IncorrectParensTraitBounds {
+                    span: vec![lo, self.prev_token.span],
+                    sugg: errors::IncorrectParensTraitBoundsSugg {
+                        wrong_span: leading_token.span.shrink_to_hi().to(lo),
+                        new_span: leading_token.span.shrink_to_lo(),
+                    },
                 });
             } else {
                 self.expect(&token::CloseDelim(Delimiter::Parenthesis))?;

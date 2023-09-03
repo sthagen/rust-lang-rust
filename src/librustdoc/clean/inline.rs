@@ -9,7 +9,7 @@ use rustc_ast as ast;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_hir as hir;
 use rustc_hir::def::{DefKind, Res};
-use rustc_hir::def_id::{DefId, DefIdSet, LocalDefId};
+use rustc_hir::def_id::{DefId, DefIdSet, LocalModDefId};
 use rustc_hir::Mutability;
 use rustc_metadata::creader::{CStore, LoadedMacro};
 use rustc_middle::ty::fast_reject::SimplifiedType;
@@ -50,7 +50,7 @@ pub(crate) fn try_inline(
     }
     let mut ret = Vec::new();
 
-    debug!("attrs={:?}", attrs);
+    debug!("attrs={attrs:?}");
 
     let attrs_without_docs = attrs.map(|(attrs, def_id)| {
         (attrs.into_iter().filter(|a| a.doc_str().is_none()).cloned().collect::<Vec<_>>(), def_id)
@@ -80,9 +80,9 @@ pub(crate) fn try_inline(
             clean::UnionItem(build_union(cx, did))
         }
         Res::Def(DefKind::TyAlias { .. }, did) => {
-            record_extern_fqn(cx, did, ItemType::Typedef);
+            record_extern_fqn(cx, did, ItemType::TypeAlias);
             build_impls(cx, did, attrs_without_docs, &mut ret);
-            clean::TypedefItem(build_type_alias(cx, did))
+            clean::TypeAliasItem(build_type_alias(cx, did))
         }
         Res::Def(DefKind::Enum, did) => {
             record_extern_fqn(cx, did, ItemType::Enum);
@@ -138,7 +138,7 @@ pub(crate) fn try_inline(
 pub(crate) fn try_inline_glob(
     cx: &mut DocContext<'_>,
     res: Res,
-    current_mod: LocalDefId,
+    current_mod: LocalModDefId,
     visited: &mut DefIdSet,
     inlined_names: &mut FxHashSet<(ItemType, Symbol)>,
     import: &hir::Item<'_>,
@@ -154,7 +154,7 @@ pub(crate) fn try_inline_glob(
             // reexported by the glob, e.g. because they are shadowed by something else.
             let reexports = cx
                 .tcx
-                .module_children_local(current_mod)
+                .module_children_local(current_mod.to_local_def_id())
                 .iter()
                 .filter(|child| !child.reexport_chain.is_empty())
                 .filter_map(|child| child.res.opt_def_id())
@@ -200,7 +200,7 @@ pub(crate) fn record_extern_fqn(cx: &mut DocContext<'_>, did: DefId, kind: ItemT
     let fqn = if let ItemType::Macro = kind {
         // Check to see if it is a macro 2.0 or built-in macro
         if matches!(
-            CStore::from_tcx(cx.tcx).load_macro_untracked(did, cx.sess()),
+            CStore::from_tcx(cx.tcx).load_macro_untracked(did, cx.tcx),
             LoadedMacro::MacroDef(def, _)
                 if matches!(&def.kind, ast::ItemKind::MacroDef(ast_def)
                     if !ast_def.macro_rules)
@@ -287,7 +287,7 @@ fn build_union(cx: &mut DocContext<'_>, did: DefId) -> clean::Union {
     clean::Union { generics, fields }
 }
 
-fn build_type_alias(cx: &mut DocContext<'_>, did: DefId) -> Box<clean::Typedef> {
+fn build_type_alias(cx: &mut DocContext<'_>, did: DefId) -> Box<clean::TypeAlias> {
     let predicates = cx.tcx.explicit_predicates_of(did);
     let type_ = clean_middle_ty(
         ty::Binder::dummy(cx.tcx.type_of(did).instantiate_identity()),
@@ -296,7 +296,7 @@ fn build_type_alias(cx: &mut DocContext<'_>, did: DefId) -> Box<clean::Typedef> 
         None,
     );
 
-    Box::new(clean::Typedef {
+    Box::new(clean::TypeAlias {
         type_,
         generics: clean_ty_generics(cx, cx.tcx.generics_of(did), predicates),
         item_type: None,
@@ -529,7 +529,7 @@ pub(crate) fn build_impl(
     }
 
     let (merged_attrs, cfg) = merge_attrs(cx, load_attrs(cx, did), attrs);
-    trace!("merged_attrs={:?}", merged_attrs);
+    trace!("merged_attrs={merged_attrs:?}");
 
     trace!(
         "build_impl: impl {:?} for {:?}",
@@ -680,7 +680,7 @@ fn build_macro(
     import_def_id: Option<DefId>,
     macro_kind: MacroKind,
 ) -> clean::ItemKind {
-    match CStore::from_tcx(cx.tcx).load_macro_untracked(def_id, cx.sess()) {
+    match CStore::from_tcx(cx.tcx).load_macro_untracked(def_id, cx.tcx) {
         LoadedMacro::MacroDef(item_def, _) => match macro_kind {
             MacroKind::Bang => {
                 if let ast::ItemKind::MacroDef(ref def) = item_def.kind {
@@ -781,7 +781,7 @@ pub(crate) fn record_extern_trait(cx: &mut DocContext<'_>, did: DefId) {
         cx.active_extern_traits.insert(did);
     }
 
-    debug!("record_extern_trait: {:?}", did);
+    debug!("record_extern_trait: {did:?}");
     let trait_ = build_external_trait(cx, did);
 
     cx.external_traits.borrow_mut().insert(did, trait_);

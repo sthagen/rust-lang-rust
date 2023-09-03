@@ -1,6 +1,6 @@
 use crate::FnCtxt;
 use rustc_hir as hir;
-use rustc_hir::def::Res;
+use rustc_hir::def::{DefKind, Res};
 use rustc_hir::def_id::DefId;
 use rustc_infer::{infer::type_variable::TypeVariableOriginKind, traits::ObligationCauseCode};
 use rustc_middle::ty::{self, Ty, TyCtxt, TypeSuperVisitable, TypeVisitable, TypeVisitor};
@@ -18,10 +18,6 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         | traits::ExprBindingObligation(def_id, _, hir_id, idx)) =
             *error.obligation.cause.code().peel_derives()
         else {
-            return false;
-        };
-        let hir = self.tcx.hir();
-        let hir::Node::Expr(expr) = hir.get(hir_id) else {
             return false;
         };
 
@@ -47,6 +43,17 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             _ => return false,
         };
 
+        let direct_param = if let ty::ClauseKind::Trait(pred) = unsubstituted_pred.kind().skip_binder()
+            && let ty = pred.trait_ref.self_ty()
+            && let ty::Param(_param) = ty.kind()
+            && let Some(arg) = predicate_args.get(0)
+            && let ty::GenericArgKind::Type(arg_ty) = arg.unpack()
+            && arg_ty == ty
+        {
+            Some(*arg)
+        } else {
+            None
+        };
         let find_param_matching = |matches: &dyn Fn(ty::ParamTerm) -> bool| {
             predicate_args.iter().find_map(|arg| {
                 arg.walk().find_map(|arg| {
@@ -96,55 +103,83 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 self.find_ambiguous_parameter_in(def_id, error.root_obligation.predicate);
         }
 
-        if self.closure_span_overlaps_error(error, expr.span) {
-            return false;
-        }
-
-        match &expr.kind {
-            hir::ExprKind::Path(qpath) => {
-                if let hir::Node::Expr(hir::Expr {
-                    kind: hir::ExprKind::Call(callee, args),
-                    hir_id: call_hir_id,
-                    span: call_span,
-                    ..
-                }) = hir.get_parent(expr.hir_id)
-                    && callee.hir_id == expr.hir_id
-                {
-                    if self.closure_span_overlaps_error(error, *call_span) {
-                        return false;
-                    }
-
-                    for param in
-                        [param_to_point_at, fallback_param_to_point_at, self_param_to_point_at]
-                        .into_iter()
-                        .flatten()
-                    {
-                        if self.blame_specific_arg_if_possible(
-                                error,
-                                def_id,
-                                param,
-                                *call_hir_id,
-                                callee.span,
-                                None,
-                                args,
-                            )
-                        {
-                            return true;
-                        }
-                    }
+        let hir = self.tcx.hir();
+        let (expr, qpath) = match hir.get(hir_id) {
+            hir::Node::Expr(expr) => {
+                if self.closure_span_overlaps_error(error, expr.span) {
+                    return false;
                 }
-                // Notably, we only point to params that are local to the
-                // item we're checking, since those are the ones we are able
-                // to look in the final `hir::PathSegment` for. Everything else
-                // would require a deeper search into the `qpath` than I think
-                // is worthwhile.
-                if let Some(param_to_point_at) = param_to_point_at
-                    && self.point_at_path_if_possible(error, def_id, param_to_point_at, qpath)
-                {
+                let qpath =
+                    if let hir::ExprKind::Path(qpath) = expr.kind { Some(qpath) } else { None };
+
+                (Some(*expr), qpath)
+            }
+            hir::Node::Ty(hir::Ty { kind: hir::TyKind::Path(qpath), .. }) => (None, Some(*qpath)),
+            _ => return false,
+        };
+
+        if let Some(qpath) = qpath {
+            if let Some(param) = direct_param {
+                if self.point_at_path_if_possible(error, def_id, param, &qpath) {
                     return true;
                 }
             }
-            hir::ExprKind::MethodCall(segment, receiver, args, ..) => {
+            if let hir::Node::Expr(hir::Expr {
+                kind: hir::ExprKind::Call(callee, args),
+                hir_id: call_hir_id,
+                span: call_span,
+                ..
+            }) = hir.get_parent(hir_id)
+                && callee.hir_id == hir_id
+            {
+                if self.closure_span_overlaps_error(error, *call_span) {
+                    return false;
+                }
+
+                for param in
+                    [param_to_point_at, fallback_param_to_point_at, self_param_to_point_at]
+                    .into_iter()
+                    .flatten()
+                {
+                    if self.blame_specific_arg_if_possible(
+                            error,
+                            def_id,
+                            param,
+                            *call_hir_id,
+                            callee.span,
+                            None,
+                            args,
+                        )
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            for param in [param_to_point_at, fallback_param_to_point_at, self_param_to_point_at]
+                .into_iter()
+                .flatten()
+            {
+                if self.point_at_path_if_possible(error, def_id, param, &qpath) {
+                    return true;
+                }
+            }
+        }
+
+        match expr.map(|e| e.kind) {
+            Some(hir::ExprKind::MethodCall(segment, receiver, args, ..)) => {
+                if let Some(param) = direct_param
+                    && self.point_at_generic_if_possible(error, def_id, param, segment)
+                {
+                    error.obligation.cause.map_code(|parent_code| {
+                        ObligationCauseCode::FunctionArgumentObligation {
+                            arg_hir_id: receiver.hir_id,
+                            call_hir_id: hir_id,
+                            parent_code,
+                        }
+                    });
+                    return true;
+                }
                 for param in [param_to_point_at, fallback_param_to_point_at, self_param_to_point_at]
                     .into_iter()
                     .flatten()
@@ -166,12 +201,19 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 {
                     return true;
                 }
+                // Handle `Self` param specifically, since it's separated in
+                // the method call representation
+                if self_param_to_point_at.is_some() {
+                    error.obligation.cause.span = receiver
+                        .span
+                        .find_ancestor_in_same_ctxt(error.obligation.cause.span)
+                        .unwrap_or(receiver.span);
+                    return true;
+                }
             }
-            hir::ExprKind::Struct(qpath, fields, ..) => {
-                if let Res::Def(
-                    hir::def::DefKind::Struct | hir::def::DefKind::Variant,
-                    variant_def_id,
-                ) = self.typeck_results.borrow().qpath_res(qpath, hir_id)
+            Some(hir::ExprKind::Struct(qpath, fields, ..)) => {
+                if let Res::Def(DefKind::Struct | DefKind::Variant, variant_def_id) =
+                    self.typeck_results.borrow().qpath_res(qpath, hir_id)
                 {
                     for param in
                         [param_to_point_at, fallback_param_to_point_at, self_param_to_point_at]
@@ -193,10 +235,19 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         }
                     }
                 }
-                if let Some(param_to_point_at) = param_to_point_at
-                    && self.point_at_path_if_possible(error, def_id, param_to_point_at, qpath)
+
+                for param in [
+                    direct_param,
+                    param_to_point_at,
+                    fallback_param_to_point_at,
+                    self_param_to_point_at,
+                ]
+                .into_iter()
+                .flatten()
                 {
-                    return true;
+                    if self.point_at_path_if_possible(error, def_id, param, qpath) {
+                        return true;
+                    }
                 }
             }
             _ => {}
@@ -213,15 +264,41 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         qpath: &hir::QPath<'tcx>,
     ) -> bool {
         match qpath {
-            hir::QPath::Resolved(_, path) => {
-                if let Some(segment) = path.segments.last()
-                    && self.point_at_generic_if_possible(error, def_id, param, segment)
+            hir::QPath::Resolved(self_ty, path) => {
+                for segment in path.segments.iter().rev() {
+                    if let Res::Def(kind, def_id) = segment.res
+                        && !matches!(kind, DefKind::Mod | DefKind::ForeignMod)
+                        && self.point_at_generic_if_possible(error, def_id, param, segment)
+                    {
+                        return true;
+                    }
+                }
+                // Handle `Self` param specifically, since it's separated in
+                // the path representation
+                if let Some(self_ty) = self_ty
+                    && let ty::GenericArgKind::Type(ty) = param.unpack()
+                    && ty == self.tcx.types.self_param
                 {
+                    error.obligation.cause.span = self_ty
+                        .span
+                        .find_ancestor_in_same_ctxt(error.obligation.cause.span)
+                        .unwrap_or(self_ty.span);
                     return true;
                 }
             }
-            hir::QPath::TypeRelative(_, segment) => {
+            hir::QPath::TypeRelative(self_ty, segment) => {
                 if self.point_at_generic_if_possible(error, def_id, param, segment) {
+                    return true;
+                }
+                // Handle `Self` param specifically, since it's separated in
+                // the path representation
+                if let ty::GenericArgKind::Type(ty) = param.unpack()
+                    && ty == self.tcx.types.self_param
+                {
+                    error.obligation.cause.span = self_ty
+                        .span
+                        .find_ancestor_in_same_ctxt(error.obligation.cause.span)
+                        .unwrap_or(self_ty.span);
                     return true;
                 }
             }
@@ -398,7 +475,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     }
 
     /**
-     * Recursively searches for the most-specific blamable expression.
+     * Recursively searches for the most-specific blameable expression.
      * For example, if you have a chain of constraints like:
      * - want `Vec<i32>: Copy`
      * - because `Option<Vec<i32>>: Copy` needs `Vec<i32>: Copy` because `impl <T: Copy> Copy for Option<T>`
@@ -618,14 +695,14 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             };
 
             let variant_def_id = match expr_struct_def_kind {
-                hir::def::DefKind::Struct => {
+                DefKind::Struct => {
                     if in_ty_adt.did() != expr_struct_def_id {
                         // FIXME: Deal with type aliases?
                         return Err(expr);
                     }
                     expr_struct_def_id
                 }
-                hir::def::DefKind::Variant => {
+                DefKind::Variant => {
                     // If this is a variant, its parent is the type definition.
                     if in_ty_adt.did() != self.tcx.parent(expr_struct_def_id) {
                         // FIXME: Deal with type aliases?
@@ -727,14 +804,14 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             };
 
             let variant_def_id = match expr_struct_def_kind {
-                hir::def::DefKind::Ctor(hir::def::CtorOf::Struct, hir::def::CtorKind::Fn) => {
+                DefKind::Ctor(hir::def::CtorOf::Struct, hir::def::CtorKind::Fn) => {
                     if in_ty_adt.did() != self.tcx.parent(expr_ctor_def_id) {
                         // FIXME: Deal with type aliases?
                         return Err(expr);
                     }
                     self.tcx.parent(expr_ctor_def_id)
                 }
-                hir::def::DefKind::Ctor(hir::def::CtorOf::Variant, hir::def::CtorKind::Fn) => {
+                DefKind::Ctor(hir::def::CtorOf::Variant, hir::def::CtorKind::Fn) => {
                     // For a typical enum like
                     // `enum Blah<T> { Variant(T) }`
                     // we get the following resolutions:

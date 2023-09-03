@@ -22,6 +22,7 @@ use rustc_hir::lang_items::LangItem;
 use rustc_hir::{BodyId, Mutability};
 use rustc_hir_analysis::check::intrinsic::intrinsic_operation_unsafety;
 use rustc_index::IndexVec;
+use rustc_metadata::rendered_const;
 use rustc_middle::ty::fast_reject::SimplifiedType;
 use rustc_middle::ty::{self, TyCtxt, Visibility};
 use rustc_resolve::rustdoc::{add_doc_fragment, attrs_to_doc_fragments, inner_docs, DocFragment};
@@ -35,7 +36,7 @@ use rustc_target::spec::abi::Abi;
 use crate::clean::cfg::Cfg;
 use crate::clean::external_path;
 use crate::clean::inline::{self, print_inlined_const};
-use crate::clean::utils::{is_literal_expr, print_const_expr, print_evaluated_const};
+use crate::clean::utils::{is_literal_expr, print_evaluated_const};
 use crate::core::DocContext;
 use crate::formats::cache::Cache;
 use crate::formats::item_type::ItemType;
@@ -78,7 +79,7 @@ impl ItemId {
     #[track_caller]
     pub(crate) fn expect_def_id(self) -> DefId {
         self.as_def_id()
-            .unwrap_or_else(|| panic!("ItemId::expect_def_id: `{:?}` isn't a DefId", self))
+            .unwrap_or_else(|| panic!("ItemId::expect_def_id: `{self:?}` isn't a DefId"))
     }
 
     #[inline]
@@ -352,7 +353,7 @@ fn is_field_vis_inherited(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
     match tcx.def_kind(parent) {
         DefKind::Struct | DefKind::Union => false,
         DefKind::Variant => true,
-        parent_kind => panic!("unexpected parent kind: {:?}", parent_kind),
+        parent_kind => panic!("unexpected parent kind: {parent_kind:?}"),
     }
 }
 
@@ -436,7 +437,7 @@ impl Item {
         attrs: Box<Attributes>,
         cfg: Option<Arc<Cfg>>,
     ) -> Item {
-        trace!("name={:?}, def_id={:?} cfg={:?}", name, def_id, cfg);
+        trace!("name={name:?}, def_id={def_id:?} cfg={cfg:?}");
 
         Item {
             item_id: def_id.into(),
@@ -530,8 +531,8 @@ impl Item {
     pub(crate) fn is_ty_method(&self) -> bool {
         self.type_() == ItemType::TyMethod
     }
-    pub(crate) fn is_typedef(&self) -> bool {
-        self.type_() == ItemType::Typedef
+    pub(crate) fn is_type_alias(&self) -> bool {
+        self.type_() == ItemType::TypeAlias
     }
     pub(crate) fn is_primitive(&self) -> bool {
         self.type_() == ItemType::Primitive
@@ -799,7 +800,7 @@ pub(crate) enum ItemKind {
     EnumItem(Enum),
     FunctionItem(Box<Function>),
     ModuleItem(Module),
-    TypedefItem(Box<Typedef>),
+    TypeAliasItem(Box<TypeAlias>),
     OpaqueTyItem(OpaqueTy),
     StaticItem(Static),
     ConstantItem(Constant),
@@ -832,7 +833,7 @@ pub(crate) enum ItemKind {
     /// The bounds may be non-empty if there is a `where` clause.
     TyAssocTypeItem(Generics, Vec<GenericBound>),
     /// An associated type in a trait impl or a provided one in a trait declaration.
-    AssocTypeItem(Box<Typedef>, Vec<GenericBound>),
+    AssocTypeItem(Box<TypeAlias>, Vec<GenericBound>),
     /// An item that has been stripped by a rustdoc pass
     StrippedItem(Box<ItemKind>),
     KeywordItem,
@@ -857,7 +858,7 @@ impl ItemKind {
             ExternCrateItem { .. }
             | ImportItem(_)
             | FunctionItem(_)
-            | TypedefItem(_)
+            | TypeAliasItem(_)
             | OpaqueTyItem(_)
             | StaticItem(_)
             | ConstantItem(_)
@@ -891,7 +892,7 @@ impl ItemKind {
                 | ModuleItem(_)
                 | ExternCrateItem { .. }
                 | FunctionItem(_)
-                | TypedefItem(_)
+                | TypeAliasItem(_)
                 | OpaqueTyItem(_)
                 | StaticItem(_)
                 | ConstantItem(_)
@@ -2086,7 +2087,7 @@ impl Discriminant {
     /// Will be `None` in the case of cross-crate reexports, and may be
     /// simplified
     pub(crate) fn expr(&self, tcx: TyCtxt<'_>) -> Option<String> {
-        self.expr.map(|body| print_const_expr(tcx, body))
+        self.expr.map(|body| rendered_const(tcx, body))
     }
     /// Will always be a machine readable number, without underscores or suffixes.
     pub(crate) fn value(&self, tcx: TyCtxt<'_>) -> String {
@@ -2230,7 +2231,7 @@ pub(crate) struct PathSegment {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct Typedef {
+pub(crate) struct TypeAlias {
     pub(crate) type_: Type,
     pub(crate) generics: Generics,
     /// `type_` can come from either the HIR or from metadata. If it comes from HIR, it may be a type
@@ -2326,7 +2327,7 @@ impl ConstantKind {
             ConstantKind::TyConst { ref expr } => expr.to_string(),
             ConstantKind::Extern { def_id } => print_inlined_const(tcx, def_id),
             ConstantKind::Local { body, .. } | ConstantKind::Anonymous { body } => {
-                print_const_expr(tcx, body)
+                rendered_const(tcx, body)
             }
         }
     }

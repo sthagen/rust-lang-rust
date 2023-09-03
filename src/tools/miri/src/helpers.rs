@@ -13,11 +13,11 @@ use rustc_index::IndexVec;
 use rustc_middle::mir;
 use rustc_middle::ty::{
     self,
-    layout::{LayoutOf, TyAndLayout},
-    List, TyCtxt,
+    layout::{IntegerExt as _, LayoutOf, TyAndLayout},
+    Ty, TyCtxt,
 };
 use rustc_span::{def_id::CrateNum, sym, Span, Symbol};
-use rustc_target::abi::{Align, FieldIdx, FieldsShape, Size, Variants};
+use rustc_target::abi::{Align, FieldIdx, FieldsShape, Integer, Size, Variants};
 use rustc_target::spec::abi::Abi;
 
 use rand::RngCore;
@@ -282,13 +282,6 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
         Ok(ptr.addr().bytes() == 0)
     }
 
-    /// Get the `Place` for a local
-    fn local_place(&self, local: mir::Local) -> InterpResult<'tcx, PlaceTy<'tcx, Provenance>> {
-        let this = self.eval_context_ref();
-        let place = mir::Place { local, projection: List::empty() };
-        this.eval_place(place)
-    }
-
     /// Generate some random bytes, and write them to `dest`.
     fn gen_random(&mut self, ptr: Pointer<Option<Provenance>>, len: u64) -> InterpResult<'tcx> {
         // Some programs pass in a null pointer and a length of 0
@@ -350,16 +343,20 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
         // Initialize arguments.
         let mut callee_args = this.frame().body.args_iter();
         for arg in args {
-            let callee_arg = this.local_place(
-                callee_args
-                    .next()
-                    .ok_or_else(|| err_ub_format!("callee has fewer arguments than expected"))?,
-            )?;
+            let local = callee_args
+                .next()
+                .ok_or_else(|| err_ub_format!("callee has fewer arguments than expected"))?;
+            // Make the local live, and insert the initial value.
+            this.storage_live(local)?;
+            let callee_arg = this.local_to_place(this.frame_idx(), local)?;
             this.write_immediate(*arg, &callee_arg)?;
         }
         if callee_args.next().is_some() {
             throw_ub_format!("callee has more arguments than expected");
         }
+
+        // Initialize remaining locals.
+        this.storage_live_for_always_live_locals()?;
 
         Ok(())
     }
@@ -1009,6 +1006,65 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
         match tcx.get_attrs(def_id, sym::link_name).filter_map(|a| a.value_str()).next() {
             Some(name) => name,
             None => tcx.item_name(def_id),
+        }
+    }
+
+    /// Converts `f` to integer type `dest_ty` after rounding with mode `round`.
+    /// Returns `None` if `f` is NaN or out of range.
+    fn float_to_int_checked<F>(
+        &self,
+        f: F,
+        dest_ty: Ty<'tcx>,
+        round: rustc_apfloat::Round,
+    ) -> Option<Scalar<Provenance>>
+    where
+        F: rustc_apfloat::Float + Into<Scalar<Provenance>>,
+    {
+        let this = self.eval_context_ref();
+
+        match dest_ty.kind() {
+            // Unsigned
+            ty::Uint(t) => {
+                let size = Integer::from_uint_ty(this, *t).size();
+                let res = f.to_u128_r(size.bits_usize(), round, &mut false);
+                if res.status.intersects(
+                    rustc_apfloat::Status::INVALID_OP
+                        | rustc_apfloat::Status::OVERFLOW
+                        | rustc_apfloat::Status::UNDERFLOW,
+                ) {
+                    // Floating point value is NaN (flagged with INVALID_OP) or outside the range
+                    // of values of the integer type (flagged with OVERFLOW or UNDERFLOW).
+                    None
+                } else {
+                    // Floating point value can be represented by the integer type after rounding.
+                    // The INEXACT flag is ignored on purpose to allow rounding.
+                    Some(Scalar::from_uint(res.value, size))
+                }
+            }
+            // Signed
+            ty::Int(t) => {
+                let size = Integer::from_int_ty(this, *t).size();
+                let res = f.to_i128_r(size.bits_usize(), round, &mut false);
+                if res.status.intersects(
+                    rustc_apfloat::Status::INVALID_OP
+                        | rustc_apfloat::Status::OVERFLOW
+                        | rustc_apfloat::Status::UNDERFLOW,
+                ) {
+                    // Floating point value is NaN (flagged with INVALID_OP) or outside the range
+                    // of values of the integer type (flagged with OVERFLOW or UNDERFLOW).
+                    None
+                } else {
+                    // Floating point value can be represented by the integer type after rounding.
+                    // The INEXACT flag is ignored on purpose to allow rounding.
+                    Some(Scalar::from_int(res.value, size))
+                }
+            }
+            // Nothing else
+            _ =>
+                span_bug!(
+                    this.cur_span(),
+                    "attempted float-to-int conversion with non-int output type {dest_ty:?}"
+                ),
         }
     }
 }
