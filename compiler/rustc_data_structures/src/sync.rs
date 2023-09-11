@@ -49,7 +49,7 @@ use std::ops::{Deref, DerefMut};
 use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
 
 mod lock;
-pub use lock::{Lock, LockGuard};
+pub use lock::{Lock, LockGuard, Mode};
 
 mod worker_local;
 pub use worker_local::{Registry, WorkerLocal};
@@ -60,6 +60,9 @@ pub use std::sync::atomic::Ordering::SeqCst;
 pub use vec::{AppendOnlyIndexVec, AppendOnlyVec};
 
 mod vec;
+
+mod freeze;
+pub use freeze::{FreezeLock, FreezeReadGuard, FreezeWriteGuard};
 
 mod mode {
     use super::Ordering;
@@ -83,7 +86,6 @@ mod mode {
 
     // Whether thread safety might be enabled.
     #[inline]
-    #[cfg(parallel_compiler)]
     pub fn might_be_dyn_thread_safe() -> bool {
         DYN_THREAD_SAFE_MODE.load(Ordering::Relaxed) != DYN_NOT_THREAD_SAFE
     }

@@ -7,7 +7,7 @@ use rustc_codegen_ssa::traits::CodegenBackend;
 use rustc_codegen_ssa::CodegenResults;
 use rustc_data_structures::steal::Steal;
 use rustc_data_structures::svh::Svh;
-use rustc_data_structures::sync::{AppendOnlyIndexVec, Lrc, OnceLock, RwLock, WorkerLocal};
+use rustc_data_structures::sync::{AppendOnlyIndexVec, FreezeLock, Lrc, OnceLock, WorkerLocal};
 use rustc_hir::def_id::{StableCrateId, CRATE_DEF_ID, LOCAL_CRATE};
 use rustc_hir::definitions::Definitions;
 use rustc_incremental::DepGraphFuture;
@@ -193,11 +193,11 @@ impl<'tcx> Queries<'tcx> {
                 self.compiler.register_lints.as_deref(),
                 &pre_configured_attrs,
             ));
-            let cstore = RwLock::new(Box::new(CStore::new(
+            let cstore = FreezeLock::new(Box::new(CStore::new(
                 self.codegen_backend().metadata_loader(),
                 stable_crate_id,
             )) as _);
-            let definitions = RwLock::new(Definitions::new(stable_crate_id));
+            let definitions = FreezeLock::new(Definitions::new(stable_crate_id));
             let source_span = AppendOnlyIndexVec::new();
             let _id = source_span.push(krate.spans.inner_span);
             debug_assert_eq!(_id, CRATE_DEF_ID);

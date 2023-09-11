@@ -12,12 +12,15 @@
 //! If you need an internal construct, consider using `rustc_internal` or `rustc_smir`.
 
 use std::cell::Cell;
+use std::fmt;
+use std::fmt::Debug;
 
 use self::ty::{
     GenericPredicates, Generics, ImplDef, ImplTrait, Span, TraitDecl, TraitDef, Ty, TyKind,
 };
 use crate::rustc_smir::Tables;
 
+pub mod fold;
 pub mod mir;
 pub mod ty;
 pub mod visitor;
@@ -29,8 +32,17 @@ pub type Symbol = String;
 pub type CrateNum = usize;
 
 /// A unique identification number for each item accessible for the current compilation unit.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct DefId(pub(crate) usize);
+
+impl Debug for DefId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DefId:")
+            .field("id", &self.0)
+            .field("name", &with(|cx| cx.name_of_def_id(*self)))
+            .finish()
+    }
+}
 
 /// A unique identification number for each provenance
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -44,6 +56,20 @@ pub type TraitDecls = Vec<TraitDef>;
 
 /// A list of impl trait decls.
 pub type ImplTraitDecls = Vec<ImplDef>;
+
+/// An error type used to represent an error that has already been reported by the compiler.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompilerError<T> {
+    /// Internal compiler error (I.e.: Compiler crashed).
+    ICE,
+    /// Compilation failed.
+    CompilationFailed,
+    /// Compilation was interrupted.
+    Interrupted(T),
+    /// Compilation skipped. This happens when users invoke rustc to retrieve information such as
+    /// --version.
+    Skipped,
+}
 
 /// Holds information about a crate.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -61,7 +87,11 @@ pub struct CrateItem(pub(crate) DefId);
 
 impl CrateItem {
     pub fn body(&self) -> mir::Body {
-        with(|cx| cx.mir_body(self))
+        with(|cx| cx.mir_body(self.0))
+    }
+
+    pub fn span(&self) -> ty::Span {
+        with(|cx| cx.span_of_an_item(self.0))
     }
 }
 
@@ -112,7 +142,7 @@ pub trait Context {
     fn entry_fn(&mut self) -> Option<CrateItem>;
     /// Retrieve all items of the local crate that have a MIR associated with them.
     fn all_local_items(&mut self) -> CrateItems;
-    fn mir_body(&mut self, item: &CrateItem) -> mir::Body;
+    fn mir_body(&mut self, item: DefId) -> mir::Body;
     fn all_trait_decls(&mut self) -> TraitDecls;
     fn trait_decl(&mut self, trait_def: &TraitDef) -> TraitDecl;
     fn all_trait_impls(&mut self) -> ImplTraitDecls;
@@ -127,8 +157,17 @@ pub trait Context {
     /// Find a crate with the given name.
     fn find_crate(&self, name: &str) -> Option<Crate>;
 
+    /// Prints the name of given `DefId`
+    fn name_of_def_id(&self, def_id: DefId) -> String;
+
+    /// `Span` of an item
+    fn span_of_an_item(&mut self, def_id: DefId) -> Span;
+
     /// Obtain the representation of a type.
     fn ty_kind(&mut self, ty: Ty) -> TyKind;
+
+    /// Create a new `Ty` from scratch without information from rustc.
+    fn mk_ty(&mut self, kind: TyKind) -> Ty;
 
     /// HACK: Until we have fully stable consumers, we need an escape hatch
     /// to get `DefId`s out of `CrateItem`s.
