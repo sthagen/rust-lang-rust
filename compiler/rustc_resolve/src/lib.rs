@@ -186,8 +186,8 @@ struct BindingError {
 
 #[derive(Debug)]
 enum ResolutionError<'a> {
-    /// Error E0401: can't use type or const parameters from outer function.
-    GenericParamsFromOuterFunction(Res, HasGenericParams),
+    /// Error E0401: can't use type or const parameters from outer item.
+    GenericParamsFromOuterItem(Res, HasGenericParams),
     /// Error E0403: the name is already used for a type or const parameter in this generic
     /// parameter list.
     NameAlreadyUsedInParameterList(Symbol, Span),
@@ -880,6 +880,19 @@ impl<'a> NameBindingData<'a> {
         let certainly_before_invoc_or_simultaneously =
             invoc_parent_expansion.is_descendant_of(self_parent_expansion);
         !(certainly_before_other_or_simultaneously || certainly_before_invoc_or_simultaneously)
+    }
+
+    // Its purpose is to postpone the determination of a single binding because
+    // we can't predict whether it will be overwritten by recently expanded macros.
+    // FIXME: How can we integrate it with the `update_resolution`?
+    fn determined(&self) -> bool {
+        match &self.kind {
+            NameBindingKind::Import { binding, import, .. } if import.is_glob() => {
+                import.parent_scope.module.unexpanded_invocations.borrow().is_empty()
+                    && binding.determined()
+            }
+            _ => true,
+        }
     }
 }
 

@@ -1086,7 +1086,7 @@ impl Options {
     /// Returns `true` if there will be an output file generated.
     pub fn will_create_output_file(&self) -> bool {
         !self.unstable_opts.parse_only && // The file is just being parsed
-            !self.unstable_opts.ls // The file is just being queried
+            self.unstable_opts.ls.is_empty() // The file is just being queried
     }
 
     #[inline]
@@ -1102,12 +1102,6 @@ impl Options {
 
     pub fn get_symbol_mangling_version(&self) -> SymbolManglingVersion {
         self.cg.symbol_mangling_version.unwrap_or(SymbolManglingVersion::Legacy)
-    }
-
-    #[allow(rustc::bad_opt_access)]
-    pub fn incremental_relative_spans(&self) -> bool {
-        self.unstable_opts.incremental_relative_spans
-            || (self.unstable_features.is_nightly_build() && self.incremental.is_some())
     }
 }
 
