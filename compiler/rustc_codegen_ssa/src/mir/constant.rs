@@ -2,7 +2,7 @@ use crate::errors;
 use crate::mir::operand::OperandRef;
 use crate::traits::*;
 use rustc_middle::mir;
-use rustc_middle::mir::interpret::{ConstValue, ErrorHandled};
+use rustc_middle::mir::interpret::ErrorHandled;
 use rustc_middle::ty::layout::HasTyCtxt;
 use rustc_middle::ty::{self, Ty};
 use rustc_target::abi::Abi;
@@ -14,34 +14,16 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
         &self,
         bx: &mut Bx,
         constant: &mir::Constant<'tcx>,
-    ) -> Result<OperandRef<'tcx, Bx::Value>, ErrorHandled> {
-        let val = self.eval_mir_constant(constant)?;
+    ) -> OperandRef<'tcx, Bx::Value> {
+        let val = self.eval_mir_constant(constant);
         let ty = self.monomorphize(constant.ty());
-        Ok(OperandRef::from_const(bx, val, ty))
+        OperandRef::from_const(bx, val, ty)
     }
 
-    pub fn eval_mir_constant(
-        &self,
-        constant: &mir::Constant<'tcx>,
-    ) -> Result<ConstValue<'tcx>, ErrorHandled> {
+    pub fn eval_mir_constant(&self, constant: &mir::Constant<'tcx>) -> mir::ConstValue<'tcx> {
         self.monomorphize(constant.literal)
             .eval(self.cx.tcx(), ty::ParamEnv::reveal_all(), Some(constant.span))
-            .map_err(|err| {
-                match err {
-                    ErrorHandled::Reported(_) => {
-                        self.cx
-                            .tcx()
-                            .sess
-                            .emit_err(errors::ErroneousConstant { span: constant.span });
-                    }
-                    ErrorHandled::TooGeneric => {
-                        self.cx.tcx().sess.diagnostic().emit_bug(
-                            errors::PolymorphicConstantTooGeneric { span: constant.span },
-                        );
-                    }
-                }
-                err
-            })
+            .expect("erroneous constant not captured by required_consts")
     }
 
     /// This is a convenience helper for `simd_shuffle_indices`. It has the precondition

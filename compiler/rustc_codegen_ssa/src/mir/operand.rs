@@ -6,8 +6,8 @@ use crate::glue;
 use crate::traits::*;
 use crate::MemFlags;
 
-use rustc_middle::mir;
-use rustc_middle::mir::interpret::{alloc_range, ConstValue, Pointer, Scalar};
+use rustc_middle::mir::interpret::{alloc_range, Pointer, Scalar};
+use rustc_middle::mir::{self, ConstValue};
 use rustc_middle::ty::layout::{LayoutOf, TyAndLayout};
 use rustc_middle::ty::Ty;
 use rustc_target::abi::{self, Abi, Align, Size};
@@ -86,7 +86,7 @@ impl<'a, 'tcx, V: CodegenObject> OperandRef<'tcx, V> {
 
     pub fn from_const<Bx: BuilderMethods<'a, 'tcx, Value = V>>(
         bx: &mut Bx,
-        val: ConstValue<'tcx>,
+        val: mir::ConstValue<'tcx>,
         ty: Ty<'tcx>,
     ) -> Self {
         let layout = bx.layout_of(ty);
@@ -575,12 +575,7 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
                 self.codegen_consume(bx, place.as_ref())
             }
 
-            mir::Operand::Constant(ref constant) => {
-                // This cannot fail because we checked all required_consts in advance.
-                self.eval_mir_constant_to_operand(bx, constant).unwrap_or_else(|_err| {
-                    span_bug!(constant.span, "erroneous constant not captured by required_consts")
-                })
-            }
+            mir::Operand::Constant(ref constant) => self.eval_mir_constant_to_operand(bx, constant),
         }
     }
 }
