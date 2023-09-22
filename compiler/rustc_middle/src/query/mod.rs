@@ -7,7 +7,6 @@
 #![allow(unused_parens)]
 
 use crate::dep_graph;
-use crate::dep_graph::DepKind;
 use crate::infer::canonical::{self, Canonical};
 use crate::lint::LintExpectation;
 use crate::metadata::ModChild;
@@ -731,7 +730,7 @@ rustc_queries! {
         separate_provide_extern
     }
 
-    query asyncness(key: DefId) -> hir::IsAsync {
+    query asyncness(key: DefId) -> ty::Asyncness {
         desc { |tcx| "checking if the function is async: `{}`", tcx.def_path_str(key) }
         separate_provide_extern
     }
