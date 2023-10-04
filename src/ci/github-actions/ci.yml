@@ -281,6 +281,8 @@ on:
       - auto
       - try
       - try-perf
+      - automation/bors/try
+      - automation/bors/try-merge
       - master
   pull_request:
     branches:
@@ -425,9 +427,6 @@ jobs:
             <<: *job-linux-4c
 
           - name: test-various
-            <<: *job-linux-8c
-
-          - name: wasm32
             <<: *job-linux-8c
 
           - name: x86_64-gnu
