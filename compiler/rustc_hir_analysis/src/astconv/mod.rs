@@ -1062,6 +1062,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                 )
             },
             param_name,
+            Some(ty_param_def_id),
             assoc_name,
             span,
             None,
@@ -1075,6 +1076,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         &self,
         all_candidates: impl Fn() -> I,
         ty_param_name: impl Display,
+        ty_param_def_id: Option<LocalDefId>,
         assoc_name: Ident,
         span: Span,
         is_equality: Option<ty::Term<'tcx>>,
@@ -1089,13 +1091,15 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
             self.trait_defines_associated_item_named(r.def_id(), ty::AssocKind::Const, assoc_name)
         });
 
-        let (bound, next_cand) = match (matching_candidates.next(), const_candidates.next()) {
+        let (mut bound, mut next_cand) = match (matching_candidates.next(), const_candidates.next())
+        {
             (Some(bound), _) => (bound, matching_candidates.next()),
             (None, Some(bound)) => (bound, const_candidates.next()),
             (None, None) => {
                 let reported = self.complain_about_assoc_type_not_found(
                     all_candidates,
                     &ty_param_name.to_string(),
+                    ty_param_def_id,
                     assoc_name,
                     span,
                 );
@@ -1103,6 +1107,37 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
             }
         };
         debug!(?bound);
+
+        // look for a candidate that is not the same as our first bound, disregarding
+        // whether the bound is const.
+        while let Some(mut bound2) = next_cand {
+            debug!(?bound2);
+            let tcx = self.tcx();
+            if bound2.bound_vars() != bound.bound_vars() {
+                break;
+            }
+
+            let generics = tcx.generics_of(bound.def_id());
+            let Some(host_index) = generics.host_effect_index else { break };
+
+            // always return the bound that contains the host param.
+            if let ty::ConstKind::Param(_) = bound2.skip_binder().args.const_at(host_index).kind() {
+                (bound, bound2) = (bound2, bound);
+            }
+
+            let unconsted_args = bound
+                .skip_binder()
+                .args
+                .iter()
+                .enumerate()
+                .map(|(n, arg)| if host_index == n { tcx.consts.true_.into() } else { arg });
+
+            if unconsted_args.eq(bound2.skip_binder().args.iter()) {
+                next_cand = matching_candidates.next().or_else(|| const_candidates.next());
+            } else {
+                break;
+            }
+        }
 
         if let Some(bound2) = next_cand {
             debug!(?bound2);
@@ -1143,30 +1178,26 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                     err.span_label(
                         bound_span,
                         format!(
-                            "ambiguous `{}` from `{}`",
-                            assoc_name,
+                            "ambiguous `{assoc_name}` from `{}`",
                             bound.print_only_trait_path(),
                         ),
                     );
                     if let Some(constraint) = &is_equality {
                         where_bounds.push(format!(
-                            "        T: {trait}::{assoc} = {constraint}",
+                            "        T: {trait}::{assoc_name} = {constraint}",
                             trait=bound.print_only_trait_path(),
-                            assoc=assoc_name,
-                            constraint=constraint,
                         ));
                     } else {
                         err.span_suggestion_verbose(
                             span.with_hi(assoc_name.span.lo()),
                             "use fully qualified syntax to disambiguate",
-                            format!("<{} as {}>::", ty_param_name, bound.print_only_trait_path()),
+                            format!("<{ty_param_name} as {}>::", bound.print_only_trait_path()),
                             Applicability::MaybeIncorrect,
                         );
                     }
                 } else {
                     err.note(format!(
-                        "associated type `{}` could derive from `{}`",
-                        ty_param_name,
+                        "associated type `{ty_param_name}` could derive from `{}`",
                         bound.print_only_trait_path(),
                     ));
                 }
@@ -1174,8 +1205,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
             if !where_bounds.is_empty() {
                 err.help(format!(
                     "consider introducing a new type parameter `T` and adding `where` constraints:\
-                     \n    where\n        T: {},\n{}",
-                    ty_param_name,
+                     \n    where\n        T: {ty_param_name},\n{}",
                     where_bounds.join(",\n"),
                 ));
             }
@@ -1397,6 +1427,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                         )
                     },
                     kw::SelfUpper,
+                    None,
                     assoc_ident,
                     span,
                     None,
