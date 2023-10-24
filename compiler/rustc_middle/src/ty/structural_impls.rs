@@ -10,7 +10,7 @@ use crate::ty::visit::{TypeSuperVisitable, TypeVisitable, TypeVisitor};
 use crate::ty::{self, AliasTy, InferConst, Lift, Term, TermKind, Ty, TyCtxt};
 use rustc_hir::def::Namespace;
 use rustc_target::abi::TyAndLayout;
-use rustc_type_ir::{ConstKind, DebugWithInfcx, InferCtxtLike, OptWithInfcx};
+use rustc_type_ir::{ConstKind, DebugWithInfcx, InferCtxtLike, WithInfcx};
 
 use std::fmt::{self, Debug};
 use std::ops::ControlFlow;
@@ -22,11 +22,10 @@ impl fmt::Debug for ty::TraitDef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         ty::tls::with(|tcx| {
             with_no_trimmed_paths!({
-                f.write_str(
-                    &FmtPrinter::new(tcx, Namespace::TypeNS)
-                        .print_def_path(self.def_id, &[])?
-                        .into_buffer(),
-                )
+                let s = FmtPrinter::print_string(tcx, Namespace::TypeNS, |cx| {
+                    cx.print_def_path(self.def_id, &[])
+                })?;
+                f.write_str(&s)
             })
         })
     }
@@ -36,11 +35,10 @@ impl<'tcx> fmt::Debug for ty::AdtDef<'tcx> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         ty::tls::with(|tcx| {
             with_no_trimmed_paths!({
-                f.write_str(
-                    &FmtPrinter::new(tcx, Namespace::TypeNS)
-                        .print_def_path(self.did(), &[])?
-                        .into_buffer(),
-                )
+                let s = FmtPrinter::print_string(tcx, Namespace::TypeNS, |cx| {
+                    cx.print_def_path(self.did(), &[])
+                })?;
+                f.write_str(&s)
             })
         })
     }
@@ -89,12 +87,12 @@ impl fmt::Debug for ty::FreeRegion {
 
 impl<'tcx> fmt::Debug for ty::FnSig<'tcx> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        OptWithInfcx::new_no_ctx(self).fmt(f)
+        WithInfcx::with_no_infcx(self).fmt(f)
     }
 }
 impl<'tcx> DebugWithInfcx<TyCtxt<'tcx>> for ty::FnSig<'tcx> {
-    fn fmt<InfCtx: InferCtxtLike<TyCtxt<'tcx>>>(
-        this: OptWithInfcx<'_, TyCtxt<'tcx>, InfCtx, &Self>,
+    fn fmt<Infcx: InferCtxtLike<Interner = TyCtxt<'tcx>>>(
+        this: WithInfcx<'_, Infcx, &Self>,
         f: &mut core::fmt::Formatter<'_>,
     ) -> core::fmt::Result {
         let sig = this.data;
@@ -149,8 +147,8 @@ impl<'tcx> fmt::Debug for ty::TraitRef<'tcx> {
 }
 
 impl<'tcx> ty::DebugWithInfcx<TyCtxt<'tcx>> for Ty<'tcx> {
-    fn fmt<InfCtx: InferCtxtLike<TyCtxt<'tcx>>>(
-        this: OptWithInfcx<'_, TyCtxt<'tcx>, InfCtx, &Self>,
+    fn fmt<Infcx: InferCtxtLike<Interner = TyCtxt<'tcx>>>(
+        this: WithInfcx<'_, Infcx, &Self>,
         f: &mut core::fmt::Formatter<'_>,
     ) -> core::fmt::Result {
         this.data.fmt(f)
@@ -238,12 +236,12 @@ impl<'tcx> fmt::Debug for ty::PredicateKind<'tcx> {
 
 impl<'tcx> fmt::Debug for AliasTy<'tcx> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        OptWithInfcx::new_no_ctx(self).fmt(f)
+        WithInfcx::with_no_infcx(self).fmt(f)
     }
 }
 impl<'tcx> DebugWithInfcx<TyCtxt<'tcx>> for AliasTy<'tcx> {
-    fn fmt<InfCtx: InferCtxtLike<TyCtxt<'tcx>>>(
-        this: OptWithInfcx<'_, TyCtxt<'tcx>, InfCtx, &Self>,
+    fn fmt<Infcx: InferCtxtLike<Interner = TyCtxt<'tcx>>>(
+        this: WithInfcx<'_, Infcx, &Self>,
         f: &mut core::fmt::Formatter<'_>,
     ) -> core::fmt::Result {
         f.debug_struct("AliasTy")
@@ -263,12 +261,12 @@ impl<'tcx> fmt::Debug for ty::InferConst<'tcx> {
     }
 }
 impl<'tcx> DebugWithInfcx<TyCtxt<'tcx>> for ty::InferConst<'tcx> {
-    fn fmt<InfCtx: InferCtxtLike<TyCtxt<'tcx>>>(
-        this: OptWithInfcx<'_, TyCtxt<'tcx>, InfCtx, &Self>,
+    fn fmt<Infcx: InferCtxtLike<Interner = TyCtxt<'tcx>>>(
+        this: WithInfcx<'_, Infcx, &Self>,
         f: &mut core::fmt::Formatter<'_>,
     ) -> core::fmt::Result {
         use ty::InferConst::*;
-        match this.infcx.and_then(|infcx| infcx.universe_of_ct(*this.data)) {
+        match this.infcx.universe_of_ct(*this.data) {
             None => write!(f, "{:?}", this.data),
             Some(universe) => match *this.data {
                 Var(vid) => write!(f, "?{}_{}c", vid.index, universe.index()),
@@ -283,12 +281,12 @@ impl<'tcx> DebugWithInfcx<TyCtxt<'tcx>> for ty::InferConst<'tcx> {
 
 impl<'tcx> fmt::Debug for ty::consts::Expr<'tcx> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        OptWithInfcx::new_no_ctx(self).fmt(f)
+        WithInfcx::with_no_infcx(self).fmt(f)
     }
 }
 impl<'tcx> DebugWithInfcx<TyCtxt<'tcx>> for ty::consts::Expr<'tcx> {
-    fn fmt<InfCtx: InferCtxtLike<TyCtxt<'tcx>>>(
-        this: OptWithInfcx<'_, TyCtxt<'tcx>, InfCtx, &Self>,
+    fn fmt<Infcx: InferCtxtLike<Interner = TyCtxt<'tcx>>>(
+        this: WithInfcx<'_, Infcx, &Self>,
         f: &mut core::fmt::Formatter<'_>,
     ) -> core::fmt::Result {
         match this.data {
@@ -316,12 +314,12 @@ impl<'tcx> DebugWithInfcx<TyCtxt<'tcx>> for ty::consts::Expr<'tcx> {
 
 impl<'tcx> fmt::Debug for ty::UnevaluatedConst<'tcx> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        OptWithInfcx::new_no_ctx(self).fmt(f)
+        WithInfcx::with_no_infcx(self).fmt(f)
     }
 }
 impl<'tcx> DebugWithInfcx<TyCtxt<'tcx>> for ty::UnevaluatedConst<'tcx> {
-    fn fmt<InfCtx: InferCtxtLike<TyCtxt<'tcx>>>(
-        this: OptWithInfcx<'_, TyCtxt<'tcx>, InfCtx, &Self>,
+    fn fmt<Infcx: InferCtxtLike<Interner = TyCtxt<'tcx>>>(
+        this: WithInfcx<'_, Infcx, &Self>,
         f: &mut core::fmt::Formatter<'_>,
     ) -> core::fmt::Result {
         f.debug_struct("UnevaluatedConst")
@@ -333,12 +331,12 @@ impl<'tcx> DebugWithInfcx<TyCtxt<'tcx>> for ty::UnevaluatedConst<'tcx> {
 
 impl<'tcx> fmt::Debug for ty::Const<'tcx> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        OptWithInfcx::new_no_ctx(self).fmt(f)
+        WithInfcx::with_no_infcx(self).fmt(f)
     }
 }
 impl<'tcx> DebugWithInfcx<TyCtxt<'tcx>> for ty::Const<'tcx> {
-    fn fmt<InfCtx: InferCtxtLike<TyCtxt<'tcx>>>(
-        this: OptWithInfcx<'_, TyCtxt<'tcx>, InfCtx, &Self>,
+    fn fmt<Infcx: InferCtxtLike<Interner = TyCtxt<'tcx>>>(
+        this: WithInfcx<'_, Infcx, &Self>,
         f: &mut core::fmt::Formatter<'_>,
     ) -> core::fmt::Result {
         // If this is a value, we spend some effort to make it look nice.
@@ -350,9 +348,8 @@ impl<'tcx> DebugWithInfcx<TyCtxt<'tcx>> for ty::Const<'tcx> {
                 let ConstKind::Value(valtree) = lifted.kind() else {
                     bug!("we checked that this is a valtree")
                 };
-                let cx = FmtPrinter::new(tcx, Namespace::ValueNS);
-                let cx =
-                    cx.pretty_print_const_valtree(valtree, lifted.ty(), /*print_ty*/ true)?;
+                let mut cx = FmtPrinter::new(tcx, Namespace::ValueNS);
+                cx.pretty_print_const_valtree(valtree, lifted.ty(), /*print_ty*/ true)?;
                 f.write_str(&cx.into_buffer())
             });
         }
@@ -395,8 +392,8 @@ impl<'tcx> fmt::Debug for GenericArg<'tcx> {
     }
 }
 impl<'tcx> DebugWithInfcx<TyCtxt<'tcx>> for GenericArg<'tcx> {
-    fn fmt<InfCtx: InferCtxtLike<TyCtxt<'tcx>>>(
-        this: OptWithInfcx<'_, TyCtxt<'tcx>, InfCtx, &Self>,
+    fn fmt<Infcx: InferCtxtLike<Interner = TyCtxt<'tcx>>>(
+        this: WithInfcx<'_, Infcx, &Self>,
         f: &mut core::fmt::Formatter<'_>,
     ) -> core::fmt::Result {
         match this.data.unpack() {
@@ -413,8 +410,8 @@ impl<'tcx> fmt::Debug for Region<'tcx> {
     }
 }
 impl<'tcx> DebugWithInfcx<TyCtxt<'tcx>> for Region<'tcx> {
-    fn fmt<InfCtx: InferCtxtLike<TyCtxt<'tcx>>>(
-        this: OptWithInfcx<'_, TyCtxt<'tcx>, InfCtx, &Self>,
+    fn fmt<Infcx: InferCtxtLike<Interner = TyCtxt<'tcx>>>(
+        this: WithInfcx<'_, Infcx, &Self>,
         f: &mut core::fmt::Formatter<'_>,
     ) -> core::fmt::Result {
         write!(f, "{:?}", &this.map(|data| data.kind()))
@@ -422,11 +419,11 @@ impl<'tcx> DebugWithInfcx<TyCtxt<'tcx>> for Region<'tcx> {
 }
 
 impl<'tcx> DebugWithInfcx<TyCtxt<'tcx>> for ty::RegionVid {
-    fn fmt<InfCtx: InferCtxtLike<TyCtxt<'tcx>>>(
-        this: OptWithInfcx<'_, TyCtxt<'tcx>, InfCtx, &Self>,
+    fn fmt<Infcx: InferCtxtLike<Interner = TyCtxt<'tcx>>>(
+        this: WithInfcx<'_, Infcx, &Self>,
         f: &mut core::fmt::Formatter<'_>,
     ) -> core::fmt::Result {
-        match this.infcx.and_then(|infcx| infcx.universe_of_lt(*this.data)) {
+        match this.infcx.universe_of_lt(*this.data) {
             Some(universe) => write!(f, "'?{}_{}", this.data.index(), universe.index()),
             None => write!(f, "{:?}", this.data),
         }
@@ -434,8 +431,8 @@ impl<'tcx> DebugWithInfcx<TyCtxt<'tcx>> for ty::RegionVid {
 }
 
 impl<'tcx, T: DebugWithInfcx<TyCtxt<'tcx>>> DebugWithInfcx<TyCtxt<'tcx>> for ty::Binder<'tcx, T> {
-    fn fmt<InfCtx: InferCtxtLike<TyCtxt<'tcx>>>(
-        this: OptWithInfcx<'_, TyCtxt<'tcx>, InfCtx, &Self>,
+    fn fmt<Infcx: InferCtxtLike<Interner = TyCtxt<'tcx>>>(
+        this: WithInfcx<'_, Infcx, &Self>,
         f: &mut core::fmt::Formatter<'_>,
     ) -> core::fmt::Result {
         f.debug_tuple("Binder")
