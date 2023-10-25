@@ -128,18 +128,6 @@ impl<'tcx> DebugWithInfcx<TyCtxt<'tcx>> for ty::FnSig<'tcx> {
     }
 }
 
-impl<'tcx> fmt::Debug for ty::ConstVid<'tcx> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "?{}c", self.index)
-    }
-}
-
-impl fmt::Debug for ty::EffectVid<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "?{}e", self.index)
-    }
-}
-
 impl<'tcx> fmt::Debug for ty::TraitRef<'tcx> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         with_no_trimmed_paths!(fmt::Display::fmt(self, f))
@@ -197,43 +185,6 @@ impl<'tcx> fmt::Debug for ty::Clause<'tcx> {
     }
 }
 
-impl<'tcx> fmt::Debug for ty::ClauseKind<'tcx> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {
-            ty::ClauseKind::ConstArgHasType(ct, ty) => write!(f, "ConstArgHasType({ct:?}, {ty:?})"),
-            ty::ClauseKind::Trait(ref a) => a.fmt(f),
-            ty::ClauseKind::RegionOutlives(ref pair) => pair.fmt(f),
-            ty::ClauseKind::TypeOutlives(ref pair) => pair.fmt(f),
-            ty::ClauseKind::Projection(ref pair) => pair.fmt(f),
-            ty::ClauseKind::WellFormed(ref data) => write!(f, "WellFormed({data:?})"),
-            ty::ClauseKind::ConstEvaluatable(ct) => {
-                write!(f, "ConstEvaluatable({ct:?})")
-            }
-        }
-    }
-}
-
-impl<'tcx> fmt::Debug for ty::PredicateKind<'tcx> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {
-            ty::PredicateKind::Clause(ref a) => a.fmt(f),
-            ty::PredicateKind::Subtype(ref pair) => pair.fmt(f),
-            ty::PredicateKind::Coerce(ref pair) => pair.fmt(f),
-            ty::PredicateKind::ObjectSafe(trait_def_id) => {
-                write!(f, "ObjectSafe({trait_def_id:?})")
-            }
-            ty::PredicateKind::ClosureKind(closure_def_id, closure_args, kind) => {
-                write!(f, "ClosureKind({closure_def_id:?}, {closure_args:?}, {kind:?})")
-            }
-            ty::PredicateKind::ConstEquate(c1, c2) => write!(f, "ConstEquate({c1:?}, {c2:?})"),
-            ty::PredicateKind::Ambiguous => write!(f, "Ambiguous"),
-            ty::PredicateKind::AliasRelate(t1, t2, dir) => {
-                write!(f, "AliasRelate({t1:?}, {dir:?}, {t2:?})")
-            }
-        }
-    }
-}
-
 impl<'tcx> fmt::Debug for AliasTy<'tcx> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         WithInfcx::with_no_infcx(self).fmt(f)
@@ -251,7 +202,7 @@ impl<'tcx> DebugWithInfcx<TyCtxt<'tcx>> for AliasTy<'tcx> {
     }
 }
 
-impl<'tcx> fmt::Debug for ty::InferConst<'tcx> {
+impl fmt::Debug for ty::InferConst {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             InferConst::Var(var) => write!(f, "{var:?}"),
@@ -260,7 +211,7 @@ impl<'tcx> fmt::Debug for ty::InferConst<'tcx> {
         }
     }
 }
-impl<'tcx> DebugWithInfcx<TyCtxt<'tcx>> for ty::InferConst<'tcx> {
+impl<'tcx> DebugWithInfcx<TyCtxt<'tcx>> for ty::InferConst {
     fn fmt<Infcx: InferCtxtLike<Interner = TyCtxt<'tcx>>>(
         this: WithInfcx<'_, Infcx, &Self>,
         f: &mut core::fmt::Formatter<'_>,
@@ -269,8 +220,8 @@ impl<'tcx> DebugWithInfcx<TyCtxt<'tcx>> for ty::InferConst<'tcx> {
         match this.infcx.universe_of_ct(*this.data) {
             None => write!(f, "{:?}", this.data),
             Some(universe) => match *this.data {
-                Var(vid) => write!(f, "?{}_{}c", vid.index, universe.index()),
-                EffectVar(vid) => write!(f, "?{}_{}e", vid.index, universe.index()),
+                Var(vid) => write!(f, "?{}_{}c", vid.index(), universe.index()),
+                EffectVar(vid) => write!(f, "?{}_{}e", vid.index(), universe.index()),
                 Fresh(_) => {
                     unreachable!()
                 }
@@ -515,7 +466,6 @@ TrivialTypeTraversalAndLiftImpls! {
     ::rustc_hir::Mutability,
     ::rustc_hir::Unsafety,
     ::rustc_target::spec::abi::Abi,
-    crate::ty::AliasRelationDirection,
     crate::ty::ClosureKind,
     crate::ty::ParamConst,
     crate::ty::ParamTy,
@@ -862,7 +812,7 @@ impl<'tcx> TypeSuperVisitable<TyCtxt<'tcx>> for ty::Const<'tcx> {
     }
 }
 
-impl<'tcx> TypeFoldable<TyCtxt<'tcx>> for InferConst<'tcx> {
+impl<'tcx> TypeFoldable<TyCtxt<'tcx>> for InferConst {
     fn try_fold_with<F: FallibleTypeFolder<TyCtxt<'tcx>>>(
         self,
         _folder: &mut F,
@@ -871,7 +821,7 @@ impl<'tcx> TypeFoldable<TyCtxt<'tcx>> for InferConst<'tcx> {
     }
 }
 
-impl<'tcx> TypeVisitable<TyCtxt<'tcx>> for InferConst<'tcx> {
+impl<'tcx> TypeVisitable<TyCtxt<'tcx>> for InferConst {
     fn visit_with<V: TypeVisitor<TyCtxt<'tcx>>>(
         &self,
         _visitor: &mut V,
