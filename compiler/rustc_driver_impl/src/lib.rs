@@ -136,7 +136,6 @@ pub static DEFAULT_LOCALE_RESOURCES: &[&str] = &[
     rustc_query_system::DEFAULT_LOCALE_RESOURCE,
     rustc_resolve::DEFAULT_LOCALE_RESOURCE,
     rustc_session::DEFAULT_LOCALE_RESOURCE,
-    rustc_symbol_mangling::DEFAULT_LOCALE_RESOURCE,
     rustc_trait_selection::DEFAULT_LOCALE_RESOURCE,
     rustc_ty_utils::DEFAULT_LOCALE_RESOURCE,
     // tidy-alphabetical-end
@@ -318,7 +317,7 @@ fn run_compiler(
         return Ok(());
     }
 
-    let cfg = interface::parse_cfgspecs(&early_error_handler, matches.opt_strs("cfg"));
+    let cfg = interface::parse_cfg(&early_error_handler, matches.opt_strs("cfg"));
     let check_cfg = interface::parse_check_cfg(&early_error_handler, matches.opt_strs("check-cfg"));
     let (odir, ofile) = make_output(&matches);
     let mut config = interface::Config {

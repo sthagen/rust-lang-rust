@@ -630,7 +630,7 @@ impl Step for Miri {
             SourceType::InTree,
             &[],
         );
-        let _guard = builder.msg_sysroot_tool(Kind::Test, compiler.stage, "miri", host, host);
+        let _guard = builder.msg_sysroot_tool(Kind::Test, compiler.stage, "miri", host, target);
 
         cargo.add_rustc_lib_path(builder, compiler);
 
@@ -1567,10 +1567,12 @@ note: if you're sure you want to do this, please open an issue as to why. In the
             cmd.arg("--coverage-dump-path").arg(coverage_dump);
         }
 
-        if mode == "run-make" || mode == "run-coverage" {
+        if mode == "run-coverage" {
+            // The demangler doesn't need the current compiler, so we can avoid
+            // unnecessary rebuilds by using the bootstrap compiler instead.
             let rust_demangler = builder
                 .ensure(tool::RustDemangler {
-                    compiler,
+                    compiler: compiler.with_stage(0),
                     target: compiler.host,
                     extra_features: Vec::new(),
                 })
