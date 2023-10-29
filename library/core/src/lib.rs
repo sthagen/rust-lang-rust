@@ -125,7 +125,6 @@
 #![feature(const_caller_location)]
 #![feature(const_cell_into_inner)]
 #![feature(const_char_from_u32_unchecked)]
-#![feature(const_discriminant)]
 #![feature(const_eval_select)]
 #![feature(const_exact_div)]
 #![feature(const_float_bits_conv)]
@@ -290,6 +289,9 @@ pub mod assert_matches {
     #[unstable(feature = "assert_matches", issue = "82775")]
     pub use crate::macros::{assert_matches, debug_assert_matches};
 }
+
+#[unstable(feature = "cfg_match", issue = "115585")]
+pub use crate::macros::cfg_match;
 
 #[macro_use]
 mod internal_macros;
