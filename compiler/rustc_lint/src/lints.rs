@@ -250,7 +250,7 @@ impl<'a> DecorateLint<'a, ()> for BuiltinUngatedAsyncFnTrackCaller<'_> {
         diag.span_label(self.label, fluent::lint_label);
         rustc_session::parse::add_feature_diagnostics(
             diag,
-            &self.parse_sess,
+            self.parse_sess,
             sym::async_fn_track_caller,
         );
         diag
@@ -1829,4 +1829,11 @@ impl<'a> DecorateLint<'a, ()> for AsyncFnInTraitDiag {
     fn msg(&self) -> rustc_errors::DiagnosticMessage {
         fluent::lint_async_fn_in_trait
     }
+}
+
+#[derive(LintDiagnostic)]
+#[diag(lint_unit_bindings)]
+pub struct UnitBindingsDiag {
+    #[label]
+    pub label: Span,
 }
