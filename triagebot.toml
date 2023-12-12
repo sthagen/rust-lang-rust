@@ -480,6 +480,10 @@ cc = ["@GuillaumeGomez"]
 message = "Some changes might have occurred in exhaustiveness checking"
 cc = ["@Nadrieril"]
 
+[mentions."compiler/rustc_pattern_analysis"]
+message = "Some changes might have occurred in exhaustiveness checking"
+cc = ["@Nadrieril"]
+
 [mentions."library/portable-simd"]
 message = """
 Portable SIMD is developed in its own repository. If possible, consider \
@@ -627,7 +631,7 @@ cc = ["@nnethercote"]
 [assign]
 warn_non_default_branch = true
 contributing_url = "https://rustc-dev-guide.rust-lang.org/getting-started.html"
-users_on_vacation = ["jyn514", "oli-obk", "wesleywiser"]
+users_on_vacation = ["jyn514", "oli-obk"]
 
 [assign.adhoc_groups]
 compiler-team = [
