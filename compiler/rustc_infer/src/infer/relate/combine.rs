@@ -3,7 +3,7 @@
 //! combining two instances of various things and yielding a new instance.
 //! These combiner methods always yield a `Result<T>`. To relate two
 //! types, you can use `infcx.at(cause, param_env)` which then allows
-//! you to use the relevant methods of [At](super::at::At).
+//! you to use the relevant methods of [At](crate::infer::at::At).
 //!
 //! Combiners mostly do their specific behavior and then hand off the
 //! bulk of the work to [InferCtxt::super_combine_tys] and
@@ -23,11 +23,11 @@
 //! this should be correctly updated.
 
 use super::equate::Equate;
+use super::generalize::{self, CombineDelegate, Generalization};
 use super::glb::Glb;
 use super::lub::Lub;
 use super::sub::Sub;
-use super::{DefineOpaqueTypes, InferCtxt, TypeTrace};
-use crate::infer::generalize::{self, CombineDelegate, Generalization};
+use crate::infer::{DefineOpaqueTypes, InferCtxt, TypeTrace};
 use crate::traits::{Obligation, PredicateObligations};
 use rustc_middle::infer::canonical::OriginalQueryValues;
 use rustc_middle::infer::unify_key::{ConstVarValue, ConstVariableValue, EffectVarValue};
@@ -103,15 +103,19 @@ impl<'tcx> InferCtxt<'tcx> {
             }
 
             // We don't expect `TyVar` or `Fresh*` vars at this point with lazy norm.
-            (
-                ty::Alias(..),
-                ty::Infer(ty::TyVar(_) | ty::FreshTy(_) | ty::FreshIntTy(_) | ty::FreshFloatTy(_)),
-            )
-            | (
-                ty::Infer(ty::TyVar(_) | ty::FreshTy(_) | ty::FreshIntTy(_) | ty::FreshFloatTy(_)),
-                ty::Alias(..),
-            ) if self.next_trait_solver() => {
-                bug!()
+            (ty::Alias(..), ty::Infer(ty::TyVar(_))) | (ty::Infer(ty::TyVar(_)), ty::Alias(..))
+                if self.next_trait_solver() =>
+            {
+                bug!(
+                    "We do not expect to encounter `TyVar` this late in combine \
+                    -- they should have been handled earlier"
+                )
+            }
+            (_, ty::Infer(ty::FreshTy(_) | ty::FreshIntTy(_) | ty::FreshFloatTy(_)))
+            | (ty::Infer(ty::FreshTy(_) | ty::FreshIntTy(_) | ty::FreshFloatTy(_)), _)
+                if self.next_trait_solver() =>
+            {
+                bug!("We do not expect to encounter `Fresh` variables in the new solver")
             }
 
             (_, ty::Alias(..)) | (ty::Alias(..), _) if self.next_trait_solver() => {
