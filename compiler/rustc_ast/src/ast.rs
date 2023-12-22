@@ -286,41 +286,16 @@ impl ParenthesizedArgs {
 
 pub use crate::node_id::{NodeId, CRATE_NODE_ID, DUMMY_NODE_ID};
 
-/// A modifier on a bound, e.g., `?Trait` or `~const Trait`.
-///
-/// Negative bounds should also be handled here.
+/// Modifiers on a trait bound like `~const`, `?` and `!`.
 #[derive(Copy, Clone, PartialEq, Eq, Encodable, Decodable, Debug)]
-pub enum TraitBoundModifier {
-    /// No modifiers
-    None,
-
-    /// `!Trait`
-    Negative,
-
-    /// `?Trait`
-    Maybe,
-
-    /// `~const Trait`
-    MaybeConst(Span),
-
-    /// `~const !Trait`
-    //
-    // This parses but will be rejected during AST validation.
-    MaybeConstNegative,
-
-    /// `~const ?Trait`
-    //
-    // This parses but will be rejected during AST validation.
-    MaybeConstMaybe,
+pub struct TraitBoundModifiers {
+    pub constness: BoundConstness,
+    pub polarity: BoundPolarity,
 }
 
-impl TraitBoundModifier {
-    pub fn to_constness(self) -> Const {
-        match self {
-            Self::MaybeConst(span) => Const::Yes(span),
-            _ => Const::No,
-        }
-    }
+impl TraitBoundModifiers {
+    pub const NONE: Self =
+        Self { constness: BoundConstness::Never, polarity: BoundPolarity::Positive };
 }
 
 /// The AST represents all type param bounds as types.
@@ -329,7 +304,7 @@ impl TraitBoundModifier {
 /// detects `Copy`, `Send` and `Sync`.
 #[derive(Clone, Encodable, Decodable, Debug)]
 pub enum GenericBound {
-    Trait(PolyTraitRef, TraitBoundModifier),
+    Trait(PolyTraitRef, TraitBoundModifiers),
     Outlives(Lifetime),
 }
 
@@ -1193,7 +1168,7 @@ impl Expr {
         match &self.kind {
             ExprKind::Path(None, path) => Some(GenericBound::Trait(
                 PolyTraitRef::new(ThinVec::new(), path.clone(), self.span),
-                TraitBoundModifier::None,
+                TraitBoundModifiers::NONE,
             )),
             _ => None,
         }
@@ -1274,7 +1249,7 @@ impl Expr {
             ExprKind::Let(..) => ExprPrecedence::Let,
             ExprKind::If(..) => ExprPrecedence::If,
             ExprKind::While(..) => ExprPrecedence::While,
-            ExprKind::ForLoop(..) => ExprPrecedence::ForLoop,
+            ExprKind::ForLoop { .. } => ExprPrecedence::ForLoop,
             ExprKind::Loop(..) => ExprPrecedence::Loop,
             ExprKind::Match(..) => ExprPrecedence::Match,
             ExprKind::Closure(..) => ExprPrecedence::Closure,
@@ -1436,10 +1411,10 @@ pub enum ExprKind {
     While(P<Expr>, P<Block>, Option<Label>),
     /// A `for` loop, with an optional label.
     ///
-    /// `'label: for pat in expr { block }`
+    /// `'label: for await? pat in iter { block }`
     ///
     /// This is desugared to a combination of `loop` and `match` expressions.
-    ForLoop(P<Pat>, P<Expr>, P<Block>, Option<Label>),
+    ForLoop { pat: P<Pat>, iter: P<Expr>, body: P<Block>, label: Option<Label>, kind: ForLoopKind },
     /// Conditionless loop (can be exited with `break`, `continue`, or `return`).
     ///
     /// `'label: loop { block }`
@@ -1540,6 +1515,13 @@ pub enum ExprKind {
 
     /// Placeholder for an expression that wasn't syntactically well formed in some way.
     Err,
+}
+
+/// Used to differentiate between `for` loops and `for await` loops.
+#[derive(Clone, Copy, Encodable, Decodable, Debug, PartialEq, Eq)]
+pub enum ForLoopKind {
+    For,
+    ForAwait,
 }
 
 /// Used to differentiate between `async {}` blocks and `gen {}` blocks.
@@ -2491,6 +2473,15 @@ pub enum Const {
     No,
 }
 
+impl From<BoundConstness> for Const {
+    fn from(constness: BoundConstness) -> Self {
+        match constness {
+            BoundConstness::Maybe(span) => Self::Yes(span),
+            BoundConstness::Never => Self::No,
+        }
+    }
+}
+
 /// Item defaultness.
 /// For details see the [RFC #2532](https://github.com/rust-lang/rfcs/pull/2532).
 #[derive(Copy, Clone, PartialEq, Encodable, Decodable, Debug, HashStable_Generic)]
@@ -2516,7 +2507,9 @@ impl fmt::Debug for ImplPolarity {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Encodable, Decodable, HashStable_Generic)]
+/// The polarity of a trait bound.
+#[derive(Copy, Clone, PartialEq, Eq, Encodable, Decodable, Debug)]
+#[derive(HashStable_Generic)]
 pub enum BoundPolarity {
     /// `Type: Trait`
     Positive,
@@ -2524,6 +2517,35 @@ pub enum BoundPolarity {
     Negative(Span),
     /// `Type: ?Trait`
     Maybe(Span),
+}
+
+impl BoundPolarity {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Positive => "",
+            Self::Negative(_) => "!",
+            Self::Maybe(_) => "?",
+        }
+    }
+}
+
+/// The constness of a trait bound.
+#[derive(Copy, Clone, PartialEq, Eq, Encodable, Decodable, Debug)]
+#[derive(HashStable_Generic)]
+pub enum BoundConstness {
+    /// `Type: Trait`
+    Never,
+    /// `Type: ~const Trait`
+    Maybe(Span),
+}
+
+impl BoundConstness {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Never => "",
+            Self::Maybe(_) => "~const",
+        }
+    }
 }
 
 #[derive(Clone, Encodable, Decodable, Debug)]
@@ -3259,7 +3281,7 @@ mod size_asserts {
     static_assert_size!(ForeignItem, 96);
     static_assert_size!(ForeignItemKind, 24);
     static_assert_size!(GenericArg, 24);
-    static_assert_size!(GenericBound, 64);
+    static_assert_size!(GenericBound, 72);
     static_assert_size!(Generics, 40);
     static_assert_size!(Impl, 136);
     static_assert_size!(Item, 136);
