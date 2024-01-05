@@ -869,15 +869,14 @@ rustc_queries! {
         desc { |tcx| "collecting all inherent impls for `{:?}`", key }
     }
 
-    /// The result of unsafety-checking this `LocalDefId`.
-    query unsafety_check_result(key: LocalDefId) -> &'tcx mir::UnsafetyCheckResult {
+    /// The result of unsafety-checking this `LocalDefId` with the old checker.
+    query mir_unsafety_check_result(key: LocalDefId) -> &'tcx mir::UnsafetyCheckResult {
         desc { |tcx| "unsafety-checking `{}`", tcx.def_path_str(key) }
         cache_on_disk_if { true }
     }
 
-    /// Unsafety-check this `LocalDefId` with THIR unsafeck. This should be
-    /// used with `-Zthir-unsafeck`.
-    query thir_check_unsafety(key: LocalDefId) {
+    /// Unsafety-check this `LocalDefId`.
+    query check_unsafety(key: LocalDefId) {
         desc { |tcx| "unsafety-checking `{}`", tcx.def_path_str(key) }
         cache_on_disk_if { true }
     }
@@ -936,10 +935,6 @@ rustc_queries! {
 
     query check_mod_naked_functions(key: LocalModDefId) -> () {
         desc { |tcx| "checking naked functions in {}", describe_as_module(key, tcx) }
-    }
-
-    query check_mod_item_types(key: LocalModDefId) -> () {
-        desc { |tcx| "checking item types in {}", describe_as_module(key, tcx) }
     }
 
     query check_mod_privacy(key: LocalModDefId) -> () {

@@ -55,7 +55,6 @@ pub mod mono;
 pub mod patch;
 pub mod pretty;
 mod query;
-pub mod spanview;
 mod statement;
 mod syntax;
 pub mod tcx;
@@ -720,7 +719,7 @@ pub struct SourceInfo {
     pub span: Span,
 
     /// The source scope, keeping track of which bindings can be
-    /// seen by debuginfo, active lint levels, `unsafe {...}`, etc.
+    /// seen by debuginfo, active lint levels, etc.
     pub scope: SourceScope,
 }
 
@@ -942,7 +941,7 @@ pub struct LocalDecl<'tcx> {
 
 /// Extra information about a some locals that's used for diagnostics and for
 /// classifying variables into local variables, statics, etc, which is needed e.g.
-/// for unsafety checking.
+/// for borrow checking.
 ///
 /// Not used for non-StaticRef temporaries, the return place, or anonymous
 /// function parameters.
