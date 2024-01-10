@@ -1553,9 +1553,6 @@ options! {
     dep_info_omit_d_target: bool = (false, parse_bool, [TRACKED],
         "in dep-info output, omit targets for tracking dependencies of the dep-info files \
         themselves (default: no)"),
-    dont_buffer_diagnostics: bool = (false, parse_bool, [UNTRACKED],
-        "emit diagnostics rather than buffering (breaks NLL error downgrading, sorting) \
-        (default: no)"),
     dual_proc_macros: bool = (false, parse_bool, [TRACKED],
         "load proc macros for both target and host, but only link to the target (default: no)"),
     dump_dep_graph: bool = (false, parse_bool, [UNTRACKED],
@@ -1844,6 +1841,8 @@ written to standard error output)"),
                      query-blocked, incr-cache-load, incr-result-hashing, query-keys, function-args, args, llvm, artifact-sizes"),
     share_generics: Option<bool> = (None, parse_opt_bool, [TRACKED],
         "make the current crate share its generic instantiations"),
+    shell_argfiles: bool = (false, parse_bool, [UNTRACKED],
+        "allow argument files to be specified with POSIX \"shell-style\" argument quoting"),
     show_span: Option<String> = (None, parse_opt_string, [TRACKED],
         "show spans for compiler debugging (expr|pat|ty)"),
     simulate_remapped_rust_src_base: Option<PathBuf> = (None, parse_opt_pathbuf, [TRACKED],
