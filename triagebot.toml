@@ -364,7 +364,8 @@ new_pr = true
 [autolabel."needs-triage"]
 new_issue = true
 exclude_labels = [
-    "C-tracking-issue"
+    "C-tracking-issue",
+    "A-diagnostics",
 ]
 
 [autolabel."WG-trait-system-refactor"]
@@ -644,7 +645,6 @@ compiler-team = [
 ]
 compiler-team-contributors = [
     "@TaKO8Ki",
-    "@WaffleLapkin",
     "@b-naber",
 ]
 compiler = [
