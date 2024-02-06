@@ -340,14 +340,19 @@ impl<'hir> LoweringContext<'_, 'hir> {
                 let itctx = ImplTraitContext::Universal;
                 let (generics, (trait_ref, lowered_ty)) =
                     self.lower_generics(ast_generics, *constness, id, &itctx, |this| {
-                        let constness = match *constness {
-                            Const::Yes(span) => BoundConstness::Maybe(span),
-                            Const::No => BoundConstness::Never,
+                        let modifiers = TraitBoundModifiers {
+                            constness: match *constness {
+                                Const::Yes(span) => BoundConstness::Maybe(span),
+                                Const::No => BoundConstness::Never,
+                            },
+                            asyncness: BoundAsyncness::Normal,
+                            // we don't use this in bound lowering
+                            polarity: BoundPolarity::Positive,
                         };
 
                         let trait_ref = trait_ref.as_ref().map(|trait_ref| {
                             this.lower_trait_ref(
-                                constness,
+                                modifiers,
                                 trait_ref,
                                 &ImplTraitContext::Disallowed(ImplTraitPosition::Trait),
                             )
@@ -1086,7 +1091,6 @@ impl<'hir> LoweringContext<'_, 'hir> {
                 body.span,
                 coroutine_kind,
                 hir::CoroutineSource::Fn,
-                None,
             );
 
             // FIXME(async_fn_track_caller): Can this be moved above?
@@ -1108,7 +1112,6 @@ impl<'hir> LoweringContext<'_, 'hir> {
         body_span: Span,
         coroutine_kind: CoroutineKind,
         coroutine_source: hir::CoroutineSource,
-        return_type_hint: Option<hir::FnRetTy<'hir>>,
     ) -> (&'hir [hir::Param<'hir>], hir::Expr<'hir>) {
         let mut parameters: Vec<hir::Param<'_>> = Vec::new();
         let mut statements: Vec<hir::Stmt<'_>> = Vec::new();
@@ -1278,12 +1281,13 @@ impl<'hir> LoweringContext<'_, 'hir> {
         };
         let closure_id = coroutine_kind.closure_id();
         let coroutine_expr = self.make_desugared_coroutine_expr(
-            // FIXME(async_closures): This should only move locals,
-            // and not upvars. Capturing closure upvars by ref doesn't
-            // work right now anyways, so whatever.
-            CaptureBy::Value { move_kw: rustc_span::DUMMY_SP },
+            // The default capture mode here is by-ref. Later on during upvar analysis,
+            // we will force the captured arguments to by-move, but for async closures,
+            // we want to make sure that we avoid unnecessarily moving captures, or else
+            // all async closures would default to `FnOnce` as their calling mode.
+            CaptureBy::Ref,
             closure_id,
-            return_type_hint,
+            None,
             body_span,
             desugaring_kind,
             coroutine_source,
