@@ -1073,12 +1073,6 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                                         // for instance
                                         self.tcx.at(span).type_of(*def_id).instantiate_identity()
                                             != rcvr_ty
-                                            && self
-                                                .tcx
-                                                .at(span)
-                                                .type_of(*def_id)
-                                                .instantiate_identity()
-                                                != rcvr_ty
                                     }
                                     (Mode::Path, false, _) => true,
                                     _ => false,
@@ -1092,7 +1086,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         inherent_impls_candidate.sort();
                         inherent_impls_candidate.dedup();
 
-                        // number of type to shows at most.
+                        // number of types to show at most
                         let limit = if inherent_impls_candidate.len() == 5 { 5 } else { 4 };
                         let type_candidates = inherent_impls_candidate
                             .iter()
@@ -3134,12 +3128,16 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     if self
                         .tcx
                         .all_impls(candidate.def_id)
-                        .filter(|imp_did| {
-                            self.tcx.impl_polarity(*imp_did) == ty::ImplPolarity::Negative
+                        .map(|imp_did| {
+                            self.tcx.impl_trait_header(imp_did).expect(
+                                "inherent impls can't be candidates, only trait impls can be",
+                            )
                         })
-                        .any(|imp_did| {
-                            let imp =
-                                self.tcx.impl_trait_ref(imp_did).unwrap().instantiate_identity();
+                        .filter(|header| {
+                            header.skip_binder().polarity == ty::ImplPolarity::Negative
+                        })
+                        .any(|header| {
+                            let imp = header.instantiate_identity().trait_ref;
                             let imp_simp =
                                 simplify_type(self.tcx, imp.self_ty(), TreatParams::ForLookup);
                             imp_simp.is_some_and(|s| s == simp_rcvr_ty)

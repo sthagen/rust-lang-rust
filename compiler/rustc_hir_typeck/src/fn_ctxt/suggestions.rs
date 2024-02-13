@@ -827,6 +827,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             }
             hir::FnRetTy::Return(hir_ty) => {
                 if let hir::TyKind::OpaqueDef(item_id, ..) = hir_ty.kind
+                    // FIXME: account for RPITIT.
                     && let hir::Node::Item(hir::Item {
                         kind: hir::ItemKind::OpaqueTy(op_ty), ..
                     }) = self.tcx.hir_node(item_id.hir_id())
@@ -1038,33 +1039,62 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             return;
         }
 
-        if let hir::FnRetTy::Return(ty) = fn_decl.output {
-            let ty = self.astconv().ast_ty_to_ty(ty);
-            let bound_vars = self.tcx.late_bound_vars(fn_id);
-            let ty = self
-                .tcx
-                .instantiate_bound_regions_with_erased(Binder::bind_with_vars(ty, bound_vars));
-            let ty = match self.tcx.asyncness(fn_id.owner) {
-                ty::Asyncness::Yes => self.get_impl_future_output_ty(ty).unwrap_or_else(|| {
-                    span_bug!(fn_decl.output.span(), "failed to get output type of async function")
-                }),
-                ty::Asyncness::No => ty,
-            };
-            let ty = self.normalize(expr.span, ty);
-            if self.can_coerce(found, ty) {
-                if let Some(owner_node) = self.tcx.hir_node(fn_id).as_owner()
-                    && let Some(span) = expr.span.find_ancestor_inside(*owner_node.span())
-                {
-                    err.multipart_suggestion(
-                        "you might have meant to return this value",
-                        vec![
-                            (span.shrink_to_lo(), "return ".to_string()),
-                            (span.shrink_to_hi(), ";".to_string()),
-                        ],
-                        Applicability::MaybeIncorrect,
-                    );
-                }
+        let scope = self
+            .tcx
+            .hir()
+            .parent_iter(id)
+            .filter(|(_, node)| {
+                matches!(
+                    node,
+                    Node::Expr(Expr { kind: ExprKind::Closure(..), .. })
+                        | Node::Item(_)
+                        | Node::TraitItem(_)
+                        | Node::ImplItem(_)
+                )
+            })
+            .next();
+        let in_closure =
+            matches!(scope, Some((_, Node::Expr(Expr { kind: ExprKind::Closure(..), .. }))));
+
+        let can_return = match fn_decl.output {
+            hir::FnRetTy::Return(ty) => {
+                let ty = self.astconv().ast_ty_to_ty(ty);
+                let bound_vars = self.tcx.late_bound_vars(fn_id);
+                let ty = self
+                    .tcx
+                    .instantiate_bound_regions_with_erased(Binder::bind_with_vars(ty, bound_vars));
+                let ty = match self.tcx.asyncness(fn_id.owner) {
+                    ty::Asyncness::Yes => self.get_impl_future_output_ty(ty).unwrap_or_else(|| {
+                        span_bug!(
+                            fn_decl.output.span(),
+                            "failed to get output type of async function"
+                        )
+                    }),
+                    ty::Asyncness::No => ty,
+                };
+                let ty = self.normalize(expr.span, ty);
+                self.can_coerce(found, ty)
             }
+            hir::FnRetTy::DefaultReturn(_) if in_closure => {
+                self.ret_coercion.as_ref().map_or(false, |ret| {
+                    let ret_ty = ret.borrow().expected_ty();
+                    self.can_coerce(found, ret_ty)
+                })
+            }
+            _ => false,
+        };
+        if can_return
+            && let Some(owner_node) = self.tcx.hir_node(fn_id).as_owner()
+            && let Some(span) = expr.span.find_ancestor_inside(*owner_node.span())
+        {
+            err.multipart_suggestion(
+                "you might have meant to return this value",
+                vec![
+                    (span.shrink_to_lo(), "return ".to_string()),
+                    (span.shrink_to_hi(), ";".to_string()),
+                ],
+                Applicability::MaybeIncorrect,
+            );
         }
     }
 
@@ -2133,17 +2163,17 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         expr_ty: Ty<'tcx>,
     ) -> bool {
         let tcx = self.tcx;
-        let (adt, substs, unwrap) = match expected.kind() {
+        let (adt, args, unwrap) = match expected.kind() {
             // In case Option<NonZero*> is wanted, but * is provided, suggest calling new
-            ty::Adt(adt, substs) if tcx.is_diagnostic_item(sym::Option, adt.did()) => {
-                let nonzero_type = substs.type_at(0); // Unwrap option type.
-                let ty::Adt(adt, substs) = nonzero_type.kind() else {
+            ty::Adt(adt, args) if tcx.is_diagnostic_item(sym::Option, adt.did()) => {
+                let nonzero_type = args.type_at(0); // Unwrap option type.
+                let ty::Adt(adt, args) = nonzero_type.kind() else {
                     return false;
                 };
-                (adt, substs, "")
+                (adt, args, "")
             }
             // In case `NonZero<*>` is wanted but `*` is provided, also add `.unwrap()` to satisfy types.
-            ty::Adt(adt, substs) => (adt, substs, ".unwrap()"),
+            ty::Adt(adt, args) => (adt, args, ".unwrap()"),
             _ => return false,
         };
 
@@ -2165,7 +2195,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             ("NonZeroI128", tcx.types.i128),
         ];
 
-        let int_type = substs.type_at(0);
+        let int_type = args.type_at(0);
 
         let Some(nonzero_alias) = coercable_types.iter().find_map(|(nonzero_alias, t)| {
             if *t == int_type && self.can_coerce(expr_ty, *t) { Some(nonzero_alias) } else { None }

@@ -846,15 +846,11 @@ rustc_queries! {
         cache_on_disk_if { true }
     }
 
-    /// Given an `impl_id`, return the trait it implements.
+    /// Given an `impl_id`, return the trait it implements along with some header information.
     /// Return `None` if this is an inherent impl.
-    query impl_trait_ref(impl_id: DefId) -> Option<ty::EarlyBinder<ty::TraitRef<'tcx>>> {
+    query impl_trait_header(impl_id: DefId) -> Option<ty::EarlyBinder<ty::ImplTraitHeader<'tcx>>> {
         desc { |tcx| "computing trait implemented by `{}`", tcx.def_path_str(impl_id) }
         cache_on_disk_if { impl_id.is_local() }
-        separate_provide_extern
-    }
-    query impl_polarity(impl_id: DefId) -> ty::ImplPolarity {
-        desc { |tcx| "computing implementation polarity of `{}`", tcx.def_path_str(impl_id) }
         separate_provide_extern
     }
 
@@ -2078,9 +2074,9 @@ rustc_queries! {
         desc { "normalizing `{:?}`", goal.value.value.value }
     }
 
-    query subst_and_check_impossible_predicates(key: (DefId, GenericArgsRef<'tcx>)) -> bool {
+    query instantiate_and_check_impossible_predicates(key: (DefId, GenericArgsRef<'tcx>)) -> bool {
         desc { |tcx|
-            "checking impossible substituted predicates: `{}`",
+            "checking impossible instantiated predicates: `{}`",
             tcx.def_path_str(key.0)
         }
     }
