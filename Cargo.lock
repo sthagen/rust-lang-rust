@@ -2524,14 +2524,12 @@ dependencies = [
  "aes",
  "colored",
  "ctrlc",
- "env_logger 0.10.2",
  "getrandom",
  "jemalloc-sys",
  "lazy_static",
  "libc",
  "libffi",
  "libloading",
- "log",
  "measureme",
  "rand",
  "regex",
@@ -2543,9 +2541,6 @@ dependencies = [
 [[package]]
 name = "miropt-test-tools"
 version = "0.1.0"
-dependencies = [
- "regex",
-]
 
 [[package]]
 name = "native-tls"
