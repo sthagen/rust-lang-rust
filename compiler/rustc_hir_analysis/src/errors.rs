@@ -662,6 +662,13 @@ pub(crate) struct InvalidUnionField {
 }
 
 #[derive(Diagnostic)]
+#[diag(hir_analysis_invalid_unnamed_field_ty)]
+pub struct InvalidUnnamedFieldTy {
+    #[primary_span]
+    pub span: Span,
+}
+
+#[derive(Diagnostic)]
 #[diag(hir_analysis_return_type_notation_on_non_rpitit)]
 pub(crate) struct ReturnTypeNotationOnNonRpitit<'tcx> {
     #[primary_span]
@@ -1455,12 +1462,13 @@ pub struct OnlyCurrentTraitsPointerSugg<'a> {
 #[derive(Diagnostic)]
 #[diag(hir_analysis_static_mut_ref, code = E0796)]
 #[note]
-pub struct StaticMutRef {
+pub struct StaticMutRef<'a> {
     #[primary_span]
     #[label]
     pub span: Span,
     #[subdiagnostic]
     pub sugg: StaticMutRefSugg,
+    pub shared: &'a str,
 }
 
 #[derive(Subdiagnostic)]
@@ -1491,30 +1499,15 @@ pub enum StaticMutRefSugg {
 
 // STATIC_MUT_REF lint
 #[derive(LintDiagnostic)]
-#[diag(hir_analysis_static_mut_ref_lint)]
+#[diag(hir_analysis_static_mut_refs_lint)]
 #[note]
+#[note(hir_analysis_why_note)]
 pub struct RefOfMutStatic<'a> {
-    pub shared: &'a str,
-    #[note(hir_analysis_why_note)]
-    pub why_note: (),
-    #[subdiagnostic]
-    pub label: RefOfMutStaticLabel,
+    #[label]
+    pub span: Span,
     #[subdiagnostic]
     pub sugg: RefOfMutStaticSugg,
-}
-
-#[derive(Subdiagnostic)]
-pub enum RefOfMutStaticLabel {
-    #[label(hir_analysis_label)]
-    Shared {
-        #[primary_span]
-        span: Span,
-    },
-    #[label(hir_analysis_label_mut)]
-    Mut {
-        #[primary_span]
-        span: Span,
-    },
+    pub shared: &'a str,
 }
 
 #[derive(Subdiagnostic)]
