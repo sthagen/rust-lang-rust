@@ -405,7 +405,7 @@ impl<'tcx> InferCtxt<'tcx> {
     /// will instantiate fresh inference variables for each canonical
     /// variable instead. Therefore, the result of this method must be
     /// properly unified
-    #[instrument(level = "debug", skip(self, cause, param_env))]
+    #[instrument(level = "debug", skip(self, param_env))]
     fn query_response_instantiation_guess<R>(
         &self,
         cause: &ObligationCause<'tcx>,
@@ -729,13 +729,6 @@ impl<'tcx> TypeRelatingDelegate<'tcx> for QueryTypeRelatingDelegate<'_, 'tcx> {
 
     fn next_placeholder_region(&mut self, placeholder: ty::PlaceholderRegion) -> ty::Region<'tcx> {
         ty::Region::new_placeholder(self.infcx.tcx, placeholder)
-    }
-
-    fn generalize_existential(&mut self, universe: ty::UniverseIndex) -> ty::Region<'tcx> {
-        self.infcx.next_nll_region_var_in_universe(
-            NllRegionVariableOrigin::Existential { from_forall: false },
-            universe,
-        )
     }
 
     fn push_outlives(
