@@ -760,7 +760,7 @@ fn convert_enum_variant_types(tcx: TyCtxt<'_>, def_id: DefId) {
         let wrapped_discr = prev_discr.map_or(initial, |d| d.wrap_incr(tcx));
         prev_discr = Some(
             if let ty::VariantDiscr::Explicit(const_def_id) = variant.discr {
-                def.eval_explicit_discr(tcx, const_def_id)
+                def.eval_explicit_discr(tcx, const_def_id).ok()
             } else if let Some(discr) = repr_type.disr_incr(tcx, prev_discr) {
                 Some(discr)
             } else {
@@ -1677,10 +1677,7 @@ fn compute_sig_of_foreign_fn_decl<'tcx>(
 
     // Feature gate SIMD types in FFI, since I am not sure that the
     // ABIs are handled at all correctly. -huonw
-    if abi != abi::Abi::RustIntrinsic
-        && abi != abi::Abi::PlatformIntrinsic
-        && !tcx.features().simd_ffi
-    {
+    if abi != abi::Abi::RustIntrinsic && !tcx.features().simd_ffi {
         let check = |ast_ty: &hir::Ty<'_>, ty: Ty<'_>| {
             if ty.is_simd() {
                 let snip = tcx
