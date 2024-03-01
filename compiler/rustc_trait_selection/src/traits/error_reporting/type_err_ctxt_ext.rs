@@ -889,7 +889,7 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                 }
             }
 
-            SelectionError::OpaqueTypeAutoTraitLeakageUnknown(def_id) => self.report_opaque_type_auto_trait_leakage(
+            SelectionError::OpaqueTypeAutoTraitLeakageUnknown(def_id) => return self.report_opaque_type_auto_trait_leakage(
                 &obligation,
                 def_id,
             ),
@@ -1528,6 +1528,12 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                         | ObligationCauseCode::Coercion { .. }
                 );
 
+                let (expected, actual) = if is_normalized_term_expected {
+                    (normalized_term, data.term)
+                } else {
+                    (data.term, normalized_term)
+                };
+
                 // constrain inference variables a bit more to nested obligations from normalize so
                 // we can have more helpful errors.
                 //
@@ -1535,13 +1541,9 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                 // since the normalization is just done to improve the error message.
                 let _ = ocx.select_where_possible();
 
-                if let Err(new_err) = ocx.eq_exp(
-                    &obligation.cause,
-                    obligation.param_env,
-                    is_normalized_term_expected,
-                    normalized_term,
-                    data.term,
-                ) {
+                if let Err(new_err) =
+                    ocx.eq(&obligation.cause, obligation.param_env, expected, actual)
+                {
                     (Some((data, is_normalized_term_expected, normalized_term, data.term)), new_err)
                 } else {
                     (None, error.err)
@@ -2252,8 +2254,7 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                                 ErrorCode::E0282,
                                 false,
                             );
-                            err.stash(span, StashKey::MaybeForgetReturn);
-                            return self.dcx().delayed_bug("stashed error never reported");
+                            return err.stash(span, StashKey::MaybeForgetReturn).unwrap();
                         }
                         Some(e) => return e,
                     }
@@ -2766,7 +2767,7 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
             self.suggest_unsized_bound_if_applicable(err, obligation);
             if let Some(span) = err.span.primary_span()
                 && let Some(mut diag) =
-                    self.tcx.dcx().steal_diagnostic(span, StashKey::AssociatedTypeSuggestion)
+                    self.tcx.dcx().steal_non_err(span, StashKey::AssociatedTypeSuggestion)
                 && let Ok(ref mut s1) = err.suggestions
                 && let Ok(ref mut s2) = diag.suggestions
             {
@@ -2961,11 +2962,10 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
             dst: trait_ref.args.type_at(0),
             src: trait_ref.args.type_at(1),
         };
-        let scope = trait_ref.args.type_at(2);
         let Some(assume) = rustc_transmute::Assume::from_const(
             self.infcx.tcx,
             obligation.param_env,
-            trait_ref.args.const_at(3),
+            trait_ref.args.const_at(2),
         ) else {
             self.dcx().span_delayed_bug(
                 span,
@@ -2977,15 +2977,12 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
         match rustc_transmute::TransmuteTypeEnv::new(self.infcx).is_transmutable(
             obligation.cause,
             src_and_dst,
-            scope,
             assume,
         ) {
             Answer::No(reason) => {
                 let dst = trait_ref.args.type_at(0);
                 let src = trait_ref.args.type_at(1);
-                let err_msg = format!(
-                    "`{src}` cannot be safely transmuted into `{dst}` in the defining scope of `{scope}`"
-                );
+                let err_msg = format!("`{src}` cannot be safely transmuted into `{dst}`");
                 let safe_transmute_explanation = match reason {
                     rustc_transmute::Reason::SrcIsUnspecified => {
                         format!("`{src}` does not have a well-specified layout")
@@ -2999,9 +2996,9 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                         format!("At least one value of `{src}` isn't a bit-valid value of `{dst}`")
                     }
 
-                    rustc_transmute::Reason::DstIsPrivate => format!(
-                        "`{dst}` is or contains a type or field that is not visible in that scope"
-                    ),
+                    rustc_transmute::Reason::DstMayHaveSafetyInvariants => {
+                        format!("`{dst}` may carry safety invariants")
+                    }
                     rustc_transmute::Reason::DstIsTooBig => {
                         format!("The size of `{src}` is smaller than the size of `{dst}`")
                     }
@@ -3291,7 +3288,7 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
         &self,
         obligation: &PredicateObligation<'tcx>,
         def_id: DefId,
-    ) -> Diag<'tcx> {
+    ) -> ErrorGuaranteed {
         let name = match self.tcx.opaque_type_origin(def_id.expect_local()) {
             hir::OpaqueTyOrigin::FnReturn(_) | hir::OpaqueTyOrigin::AsyncFn(_) => {
                 "opaque type".to_string()
@@ -3318,12 +3315,9 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
             }
         };
 
-        if let Some(diag) = self.dcx().steal_diagnostic(self.tcx.def_span(def_id), StashKey::Cycle)
-        {
-            diag.cancel();
-        }
-
-        err
+        self.note_obligation_cause(&mut err, &obligation);
+        self.point_at_returns_when_relevant(&mut err, &obligation);
+        self.dcx().try_steal_replace_and_emit_err(self.tcx.def_span(def_id), StashKey::Cycle, err)
     }
 
     fn report_signature_mismatch_error(

@@ -874,7 +874,6 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
     pub(super) fn is_transmutable(
         &self,
         src_and_dst: rustc_transmute::Types<'tcx>,
-        scope: Ty<'tcx>,
         assume: rustc_transmute::Assume,
     ) -> Result<Certainty, NoSolution> {
         use rustc_transmute::Answer;
@@ -882,7 +881,6 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
         match rustc_transmute::TransmuteTypeEnv::new(self.infcx).is_transmutable(
             ObligationCause::dummy(),
             src_and_dst,
-            scope,
             assume,
         ) {
             Answer::Yes => Ok(Certainty::Yes),
@@ -906,7 +904,6 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
             &ObligationCause::dummy(),
             param_env,
             hidden_ty,
-            true,
             &mut obligations,
         )?;
         self.add_goals(GoalSource::Misc, obligations.into_iter().map(|o| o.into()));
