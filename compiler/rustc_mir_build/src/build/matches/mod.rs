@@ -93,8 +93,14 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                     variable_source_info,
                     true,
                 ));
-                this.cfg.goto(lhs_success_block, variable_source_info, rhs_success_block);
-                rhs_success_block.unit()
+
+                // Make the LHS and RHS success arms converge to a common block.
+                // (We can't just make LHS goto RHS, because `rhs_success_block`
+                // might contain statements that we don't want on the LHS path.)
+                let success_block = this.cfg.start_new_block();
+                this.cfg.goto(lhs_success_block, variable_source_info, success_block);
+                this.cfg.goto(rhs_success_block, variable_source_info, success_block);
+                success_block.unit()
             }
             ExprKind::Unary { op: UnOp::Not, arg } => {
                 let local_scope = this.local_scope();
@@ -1091,20 +1097,17 @@ enum TestKind<'tcx> {
         variants: BitSet<VariantIdx>,
     },
 
-    /// Test what value an integer, `bool`, or `char` has.
+    /// Test what value an integer or `char` has.
     SwitchInt {
-        /// The type of the value that we're testing.
-        switch_ty: Ty<'tcx>,
         /// The (ordered) set of values that we test for.
         ///
-        /// For integers and `char`s we create a branch to each of the values in
-        /// `options`, as well as an "otherwise" branch for all other values, even
-        /// in the (rare) case that `options` is exhaustive.
-        ///
-        /// For `bool` we always generate two edges, one for `true` and one for
-        /// `false`.
+        /// We create a branch to each of the values in `options`, as well as an "otherwise" branch
+        /// for all other values, even in the (rare) case that `options` is exhaustive.
         options: FxIndexMap<Const<'tcx>, u128>,
     },
+
+    /// Test what value a `bool` has.
+    If,
 
     /// Test for equality with value, possibly after an unsizing coercion to
     /// `ty`,
@@ -1611,7 +1614,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         // a test like SwitchInt, we may want to add cases based on the candidates that are
         // available
         match test.kind {
-            TestKind::SwitchInt { switch_ty: _, ref mut options } => {
+            TestKind::SwitchInt { ref mut options } => {
                 for candidate in candidates.iter() {
                     if !self.add_cases_to_switch(&match_place, candidate, options) {
                         break;
