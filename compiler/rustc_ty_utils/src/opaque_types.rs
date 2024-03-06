@@ -8,7 +8,6 @@ use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_middle::ty::{TypeSuperVisitable, TypeVisitable, TypeVisitor};
 use rustc_span::Span;
 use rustc_trait_selection::traits::check_args_compatible;
-use std::ops::ControlFlow;
 
 use crate::errors::{DuplicateArg, NotParam};
 
@@ -34,7 +33,11 @@ enum CollectionMode {
 }
 
 impl<'tcx> OpaqueTypeCollector<'tcx> {
-    fn new(tcx: TyCtxt<'tcx>, item: LocalDefId, mode: CollectionMode) -> Self {
+    fn new(tcx: TyCtxt<'tcx>, item: LocalDefId) -> Self {
+        let mode = match tcx.def_kind(tcx.local_parent(item)) {
+            DefKind::Impl { of_trait: true } => CollectionMode::ImplTraitInAssocTypes,
+            _ => CollectionMode::TypeAliasImplTraitTransition,
+        };
         Self { tcx, opaques: Vec::new(), item, seen: Default::default(), span: None, mode }
     }
 
@@ -194,16 +197,15 @@ impl<'tcx> OpaqueTypeCollector<'tcx> {
 
 impl<'tcx> super::sig_types::SpannedTypeVisitor<'tcx> for OpaqueTypeCollector<'tcx> {
     #[instrument(skip(self), ret, level = "trace")]
-    fn visit(&mut self, span: Span, value: impl TypeVisitable<TyCtxt<'tcx>>) -> ControlFlow<!> {
+    fn visit(&mut self, span: Span, value: impl TypeVisitable<TyCtxt<'tcx>>) {
         self.visit_spanned(span, value);
-        ControlFlow::Continue(())
     }
 }
 
 impl<'tcx> TypeVisitor<TyCtxt<'tcx>> for OpaqueTypeCollector<'tcx> {
     #[instrument(skip(self), ret, level = "trace")]
-    fn visit_ty(&mut self, t: Ty<'tcx>) -> ControlFlow<!> {
-        t.super_visit_with(self)?;
+    fn visit_ty(&mut self, t: Ty<'tcx>) {
+        t.super_visit_with(self);
         match t.kind() {
             ty::Alias(ty::Opaque, alias_ty) if alias_ty.def_id.is_local() => {
                 self.visit_opaque_ty(alias_ty);
@@ -212,7 +214,7 @@ impl<'tcx> TypeVisitor<TyCtxt<'tcx>> for OpaqueTypeCollector<'tcx> {
                 self.tcx
                     .type_of(alias_ty.def_id)
                     .instantiate(self.tcx, alias_ty.args)
-                    .visit_with(self)?;
+                    .visit_with(self);
             }
             ty::Alias(ty::Projection, alias_ty) => {
                 // This avoids having to do normalization of `Self::AssocTy` by only
@@ -244,11 +246,11 @@ impl<'tcx> TypeVisitor<TyCtxt<'tcx>> for OpaqueTypeCollector<'tcx> {
                             );
 
                             if check_args_compatible(self.tcx, assoc, impl_args) {
-                                return self
-                                    .tcx
+                                self.tcx
                                     .type_of(assoc.def_id)
                                     .instantiate(self.tcx, impl_args)
                                     .visit_with(self);
+                                return;
                             } else {
                                 self.tcx.dcx().span_delayed_bug(
                                     self.tcx.def_span(assoc.def_id),
@@ -261,10 +263,10 @@ impl<'tcx> TypeVisitor<TyCtxt<'tcx>> for OpaqueTypeCollector<'tcx> {
             }
             ty::Adt(def, _) if def.did().is_local() => {
                 if let CollectionMode::ImplTraitInAssocTypes = self.mode {
-                    return ControlFlow::Continue(());
+                    return;
                 }
                 if !self.seen.insert(def.did().expect_local()) {
-                    return ControlFlow::Continue(());
+                    return;
                 }
                 for variant in def.variants().iter() {
                     for field in variant.fields.iter() {
@@ -283,17 +285,7 @@ impl<'tcx> TypeVisitor<TyCtxt<'tcx>> for OpaqueTypeCollector<'tcx> {
             }
             _ => trace!(kind=?t.kind()),
         }
-        ControlFlow::Continue(())
     }
-}
-
-fn impl_trait_in_assoc_types_defined_by<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    item: LocalDefId,
-) -> &'tcx ty::List<LocalDefId> {
-    let mut collector = OpaqueTypeCollector::new(tcx, item, CollectionMode::ImplTraitInAssocTypes);
-    super::sig_types::walk_types(tcx, item, &mut collector);
-    tcx.mk_local_def_ids(&collector.opaques)
 }
 
 fn opaque_types_defined_by<'tcx>(
@@ -302,8 +294,7 @@ fn opaque_types_defined_by<'tcx>(
 ) -> &'tcx ty::List<LocalDefId> {
     let kind = tcx.def_kind(item);
     trace!(?kind);
-    let mut collector =
-        OpaqueTypeCollector::new(tcx, item, CollectionMode::TypeAliasImplTraitTransition);
+    let mut collector = OpaqueTypeCollector::new(tcx, item);
     super::sig_types::walk_types(tcx, item, &mut collector);
     match kind {
         DefKind::AssocFn
@@ -346,6 +337,5 @@ fn opaque_types_defined_by<'tcx>(
 }
 
 pub(super) fn provide(providers: &mut Providers) {
-    *providers =
-        Providers { opaque_types_defined_by, impl_trait_in_assoc_types_defined_by, ..*providers };
+    *providers = Providers { opaque_types_defined_by, ..*providers };
 }

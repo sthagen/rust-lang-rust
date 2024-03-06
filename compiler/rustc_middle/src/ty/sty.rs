@@ -1999,6 +1999,27 @@ impl<'tcx> Ty<'tcx> {
         }
     }
 
+    /// Tests whether this is a Box using the global allocator.
+    #[inline]
+    pub fn is_box_global(self, tcx: TyCtxt<'tcx>) -> bool {
+        match self.kind() {
+            Adt(def, args) if def.is_box() => {
+                let Some(alloc) = args.get(1) else {
+                    // Single-argument Box is always global. (for "minicore" tests)
+                    return true;
+                };
+                if let Some(alloc_adt) = alloc.expect_ty().ty_adt_def() {
+                    let global_alloc = tcx.require_lang_item(LangItem::GlobalAlloc, None);
+                    alloc_adt.did() == global_alloc
+                } else {
+                    // Allocator is not an ADT...
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
+
     /// Panics if called on any type other than `Box<T>`.
     pub fn boxed_ty(self) -> Ty<'tcx> {
         match self.kind() {
@@ -2113,9 +2134,9 @@ impl<'tcx> Ty<'tcx> {
         struct ContainsTyVisitor<'tcx>(Ty<'tcx>);
 
         impl<'tcx> TypeVisitor<TyCtxt<'tcx>> for ContainsTyVisitor<'tcx> {
-            type BreakTy = ();
+            type Result = ControlFlow<()>;
 
-            fn visit_ty(&mut self, t: Ty<'tcx>) -> ControlFlow<Self::BreakTy> {
+            fn visit_ty(&mut self, t: Ty<'tcx>) -> Self::Result {
                 if self.0 == t { ControlFlow::Break(()) } else { t.super_visit_with(self) }
             }
         }
@@ -2131,9 +2152,9 @@ impl<'tcx> Ty<'tcx> {
         struct ContainsClosureVisitor;
 
         impl<'tcx> TypeVisitor<TyCtxt<'tcx>> for ContainsClosureVisitor {
-            type BreakTy = ();
+            type Result = ControlFlow<()>;
 
-            fn visit_ty(&mut self, t: Ty<'tcx>) -> ControlFlow<Self::BreakTy> {
+            fn visit_ty(&mut self, t: Ty<'tcx>) -> Self::Result {
                 if let ty::Closure(..) = t.kind() {
                     ControlFlow::Break(())
                 } else {

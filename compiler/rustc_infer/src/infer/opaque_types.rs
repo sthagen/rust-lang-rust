@@ -17,7 +17,6 @@ use rustc_middle::ty::{
     TypeVisitable, TypeVisitableExt, TypeVisitor,
 };
 use rustc_span::Span;
-use std::ops::ControlFlow;
 
 mod table;
 
@@ -101,6 +100,15 @@ impl<'tcx> InferCtxt<'tcx> {
         let process = |a: Ty<'tcx>, b: Ty<'tcx>| match *a.kind() {
             ty::Alias(ty::Opaque, ty::AliasTy { def_id, args, .. }) if def_id.is_local() => {
                 let def_id = def_id.expect_local();
+                if self.intercrate {
+                    // See comment on `insert_hidden_type` for why this is sufficient in coherence
+                    return Some(self.register_hidden_type(
+                        OpaqueTypeKey { def_id, args },
+                        cause.clone(),
+                        param_env,
+                        b,
+                    ));
+                }
                 match self.defining_use_anchor {
                     DefiningAnchor::Bind(_) => {
                         // Check that this is `impl Trait` type is
@@ -142,8 +150,10 @@ impl<'tcx> InferCtxt<'tcx> {
                         }
                     }
                     DefiningAnchor::Bubble => {}
-                    DefiningAnchor::Error => return None,
-                };
+                    DefiningAnchor::Error => {
+                        return None;
+                    }
+                }
                 if let ty::Alias(ty::Opaque, ty::AliasTy { def_id: b_def_id, .. }) = *b.kind() {
                     // We could accept this, but there are various ways to handle this situation, and we don't
                     // want to make a decision on it right now. Likely this case is so super rare anyway, that
@@ -415,29 +425,22 @@ impl<'tcx, OP> TypeVisitor<TyCtxt<'tcx>> for ConstrainOpaqueTypeRegionVisitor<'t
 where
     OP: FnMut(ty::Region<'tcx>),
 {
-    fn visit_binder<T: TypeVisitable<TyCtxt<'tcx>>>(
-        &mut self,
-        t: &ty::Binder<'tcx, T>,
-    ) -> ControlFlow<Self::BreakTy> {
+    fn visit_binder<T: TypeVisitable<TyCtxt<'tcx>>>(&mut self, t: &ty::Binder<'tcx, T>) {
         t.super_visit_with(self);
-        ControlFlow::Continue(())
     }
 
-    fn visit_region(&mut self, r: ty::Region<'tcx>) -> ControlFlow<Self::BreakTy> {
+    fn visit_region(&mut self, r: ty::Region<'tcx>) {
         match *r {
             // ignore bound regions, keep visiting
-            ty::ReBound(_, _) => ControlFlow::Continue(()),
-            _ => {
-                (self.op)(r);
-                ControlFlow::Continue(())
-            }
+            ty::ReBound(_, _) => {}
+            _ => (self.op)(r),
         }
     }
 
-    fn visit_ty(&mut self, ty: Ty<'tcx>) -> ControlFlow<Self::BreakTy> {
+    fn visit_ty(&mut self, ty: Ty<'tcx>) {
         // We're only interested in types involving regions
         if !ty.flags().intersects(ty::TypeFlags::HAS_FREE_REGIONS) {
-            return ControlFlow::Continue(());
+            return;
         }
 
         match ty.kind() {
@@ -488,8 +491,6 @@ where
                 ty.super_visit_with(self);
             }
         }
-
-        ControlFlow::Continue(())
     }
 }
 
@@ -591,8 +592,25 @@ impl<'tcx> InferCtxt<'tcx> {
         obligations: &mut Vec<PredicateObligation<'tcx>>,
     ) {
         let tcx = self.tcx;
-        let item_bounds = tcx.explicit_item_bounds(def_id);
+        // Require that the hidden type is well-formed. We have to
+        // make sure we wf-check the hidden type to fix #114728.
+        //
+        // However, we don't check that all types are well-formed.
+        // We only do so for types provided by the user or if they are
+        // "used", e.g. for method selection.
+        //
+        // This means we never check the wf requirements of the hidden
+        // type during MIR borrowck, causing us to infer the wrong
+        // lifetime for its member constraints which then results in
+        // unexpected region errors.
+        obligations.push(traits::Obligation::new(
+            tcx,
+            cause.clone(),
+            param_env,
+            ty::ClauseKind::WellFormed(hidden_ty.into()),
+        ));
 
+        let item_bounds = tcx.explicit_item_bounds(def_id);
         for (predicate, _) in item_bounds.iter_instantiated_copied(tcx, args) {
             let predicate = predicate.fold_with(&mut BottomUpFolder {
                 tcx,
