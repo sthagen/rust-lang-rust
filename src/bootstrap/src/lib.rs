@@ -171,9 +171,11 @@ pub struct Build {
     doc_tests: DocTests,
     verbosity: usize,
 
-    // Targets for which to build
+    /// Build triple for the pre-compiled snapshot compiler.
     build: TargetSelection,
+    /// Which triples to produce a compiler toolchain for.
     hosts: Vec<TargetSelection>,
+    /// Which triples to build libraries (core/alloc/std/test/proc_macro) for.
     targets: Vec<TargetSelection>,
 
     initial_rustc: PathBuf,
@@ -1350,6 +1352,17 @@ impl Build {
         self.qemu_rootfs(target).is_some()
             || target.contains("android")
             || env::var_os("TEST_DEVICE_ADDR").is_some()
+    }
+
+    /// Returns an optional "runner" to pass to `compiletest` when executing
+    /// test binaries.
+    ///
+    /// An example of this would be a WebAssembly runtime when testing the wasm
+    /// targets.
+    fn runner(&self, target: TargetSelection) -> Option<String> {
+        let target = self.config.target_config.get(&target)?;
+        let runner = target.runner.as_ref()?;
+        Some(runner.to_owned())
     }
 
     /// Returns the root of the "rootfs" image that this target will be using,
