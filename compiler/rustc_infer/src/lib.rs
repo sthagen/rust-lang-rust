@@ -24,8 +24,8 @@
 #![feature(extend_one)]
 #![feature(let_chains)]
 #![feature(if_let_guard)]
+#![feature(iter_intersperse)]
 #![feature(iterator_try_collect)]
-#![cfg_attr(bootstrap, feature(min_specialization))]
 #![feature(try_blocks)]
 #![feature(yeet_expr)]
 #![recursion_limit = "512"] // For rustdoc
