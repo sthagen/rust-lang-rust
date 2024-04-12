@@ -4263,7 +4263,6 @@ dependencies = [
  "either",
  "field-offset",
  "gsgdt",
- "measureme",
  "polonius-engine",
  "rustc-rayon",
  "rustc-rayon-core",
@@ -5580,7 +5579,6 @@ dependencies = [
 name = "tidy"
 version = "0.1.0"
 dependencies = [
- "cargo-platform",
  "cargo_metadata 0.15.4",
  "ignore",
  "lazy_static",
