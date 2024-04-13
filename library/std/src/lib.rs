@@ -221,7 +221,7 @@
         issue = "none",
         reason = "You have attempted to use a standard library built for a platform that it doesn't \
             know how to support. Consider building it for a known environment, disabling it with \
-            `#![no_std]` or overriding this warning by enabling this feature".
+            `#![no_std]` or overriding this warning by enabling this feature."
     )
 )]
 #![cfg_attr(not(bootstrap), rustc_preserve_ub_checks)]
@@ -265,7 +265,6 @@
     feature(slice_index_methods, coerce_unsized, sgx_platform)
 )]
 #![cfg_attr(any(windows, target_os = "uefi"), feature(round_char_boundary))]
-#![cfg_attr(target_os = "xous", feature(slice_ptr_len))]
 #![cfg_attr(target_family = "wasm", feature(stdarch_wasm_atomic_wait))]
 #![cfg_attr(
     all(any(target_arch = "x86_64", target_arch = "x86"), target_os = "uefi"),
