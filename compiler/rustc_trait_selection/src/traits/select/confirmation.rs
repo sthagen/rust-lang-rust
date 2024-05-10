@@ -606,7 +606,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         for assoc_type in assoc_types {
             let defs: &ty::Generics = tcx.generics_of(assoc_type);
 
-            if !defs.params.is_empty() && !tcx.features().generic_associated_types_extended {
+            if !defs.own_params.is_empty() && !tcx.features().generic_associated_types_extended {
                 tcx.dcx().span_delayed_bug(
                     obligation.cause.span,
                     "GATs in trait object shouldn't have been considered",
@@ -693,7 +693,8 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
 
         let vtable_base = vtable_trait_first_method_offset(
             tcx,
-            (unnormalized_upcast_trait_ref, ty::Binder::dummy(object_trait_ref)),
+            unnormalized_upcast_trait_ref,
+            ty::Binder::dummy(object_trait_ref),
         );
 
         Ok(ImplSource::Builtin(BuiltinImplSource::Object { vtable_base: vtable_base }, nested))

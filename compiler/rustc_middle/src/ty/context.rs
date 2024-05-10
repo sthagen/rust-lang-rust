@@ -2060,7 +2060,7 @@ impl<'tcx> TyCtxt<'tcx> {
             && let DefKind::AssocTy = self.def_kind(def_id)
             && let DefKind::Impl { of_trait: false } = self.def_kind(self.parent(def_id))
         {
-            if generics.params.len() + 1 != args.len() {
+            if generics.own_params.len() + 1 != args.len() {
                 return false;
             }
 
@@ -2085,7 +2085,7 @@ impl<'tcx> TyCtxt<'tcx> {
             own_args
         };
 
-        for (param, arg) in std::iter::zip(&generics.params, own_args) {
+        for (param, arg) in std::iter::zip(&generics.own_params, own_args) {
             match (&param.kind, arg.unpack()) {
                 (ty::GenericParamDefKind::Type { .. }, ty::GenericArgKind::Type(_))
                 | (ty::GenericParamDefKind::Lifetime, ty::GenericArgKind::Lifetime(_))
@@ -2331,7 +2331,7 @@ impl<'tcx> TyCtxt<'tcx> {
     pub fn mk_args_from_iter<I, T>(self, iter: I) -> T::Output
     where
         I: Iterator<Item = T>,
-        T: CollectAndApply<GenericArg<'tcx>, &'tcx List<GenericArg<'tcx>>>,
+        T: CollectAndApply<GenericArg<'tcx>, ty::GenericArgsRef<'tcx>>,
     {
         T::collect_and_apply(iter, |xs| self.mk_args(xs))
     }
@@ -2449,7 +2449,7 @@ impl<'tcx> TyCtxt<'tcx> {
                     span,
                     msg,
                     format!("#![feature({feature})]\n"),
-                    Applicability::MachineApplicable,
+                    Applicability::MaybeIncorrect,
                 );
             } else {
                 diag.help(msg);
