@@ -381,10 +381,10 @@ name = "bump-stage0"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "build_helper",
  "curl",
  "indexmap",
  "serde",
- "serde_json",
  "toml 0.5.11",
 ]
 
@@ -4837,7 +4837,18 @@ dependencies = [
  "rustc_macros",
  "rustc_serialize",
  "rustc_span",
+ "rustc_type_ir_macros",
  "smallvec",
+]
+
+[[package]]
+name = "rustc_type_ir_macros"
+version = "0.0.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.62",
+ "synstructure",
 ]
 
 [[package]]
