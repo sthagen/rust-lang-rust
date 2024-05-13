@@ -5,6 +5,7 @@ use rustc_hir::LangItem;
 use rustc_hir::{def_id::DefId, Movability, Mutability};
 use rustc_infer::traits::query::NoSolution;
 use rustc_macros::{TypeFoldable, TypeVisitable};
+use rustc_middle::bug;
 use rustc_middle::traits::solve::Goal;
 use rustc_middle::ty::{
     self, ToPredicate, Ty, TyCtxt, TypeFoldable, TypeFolder, TypeSuperFoldable,
@@ -17,7 +18,7 @@ use crate::solve::EvalCtxt;
 //
 // For types with an "existential" binder, i.e. coroutine witnesses, we also
 // instantiate the binder with placeholders eagerly.
-#[instrument(level = "debug", skip(ecx), ret)]
+#[instrument(level = "trace", skip(ecx), ret)]
 pub(in crate::solve) fn instantiate_constituent_tys_for_auto_trait<'tcx>(
     ecx: &EvalCtxt<'_, 'tcx>,
     ty: Ty<'tcx>,
@@ -96,7 +97,7 @@ pub(in crate::solve) fn instantiate_constituent_tys_for_auto_trait<'tcx>(
     }
 }
 
-#[instrument(level = "debug", skip(ecx), ret)]
+#[instrument(level = "trace", skip(ecx), ret)]
 pub(in crate::solve) fn instantiate_constituent_tys_for_sized_trait<'tcx>(
     ecx: &EvalCtxt<'_, 'tcx>,
     ty: Ty<'tcx>,
@@ -160,7 +161,7 @@ pub(in crate::solve) fn instantiate_constituent_tys_for_sized_trait<'tcx>(
     }
 }
 
-#[instrument(level = "debug", skip(ecx), ret)]
+#[instrument(level = "trace", skip(ecx), ret)]
 pub(in crate::solve) fn instantiate_constituent_tys_for_copy_clone_trait<'tcx>(
     ecx: &EvalCtxt<'_, 'tcx>,
     ty: Ty<'tcx>,
