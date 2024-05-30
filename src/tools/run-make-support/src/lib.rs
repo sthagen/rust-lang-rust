@@ -135,7 +135,13 @@ pub fn dynamic_lib_name(name: &str) -> String {
 /// Construct a path to a rust library (rlib) under `$TMPDIR` given the library name. This will return a
 /// path with `$TMPDIR` joined with the library name.
 pub fn rust_lib(name: &str) -> PathBuf {
-    tmp_dir().join(format!("lib{name}.rlib"))
+    tmp_dir().join(rust_lib_name(name))
+}
+
+/// Generate the name a rust library (rlib) would have. If you want the complete path, use
+/// [`rust_lib`] instead.
+pub fn rust_lib_name(name: &str) -> String {
+    format!("lib{name}.rlib")
 }
 
 /// Construct the binary name based on platform.
@@ -362,7 +368,7 @@ macro_rules! impl_common_helpers {
                 self
             }
 
-            /// Inspect what the underlying [`Command`][::std::process::Command] is up to the
+            /// Inspect what the underlying [`Command`] is up to the
             /// current construction.
             pub fn inspect<I>(&mut self, inspector: I) -> &mut Self
             where

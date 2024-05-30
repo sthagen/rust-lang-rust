@@ -22,11 +22,10 @@ use super::glb::Glb;
 use super::lub::Lub;
 use super::type_relating::TypeRelating;
 use super::StructurallyRelateAliases;
-use crate::infer::{DefineOpaqueTypes, InferCtxt, InferOk, TypeTrace};
+use crate::infer::{DefineOpaqueTypes, InferCtxt, TypeTrace};
 use crate::traits::{Obligation, PredicateObligations};
 use rustc_middle::bug;
 use rustc_middle::infer::unify_key::EffectVarValue;
-use rustc_middle::traits::ObligationCause;
 use rustc_middle::ty::error::{ExpectedFound, TypeError};
 use rustc_middle::ty::relate::{RelateResult, TypeRelation};
 use rustc_middle::ty::{self, InferConst, Ty, TyCtxt, TypeVisitableExt, Upcast};
@@ -40,6 +39,17 @@ pub struct CombineFields<'infcx, 'tcx> {
     pub param_env: ty::ParamEnv<'tcx>,
     pub obligations: PredicateObligations<'tcx>,
     pub define_opaque_types: DefineOpaqueTypes,
+}
+
+impl<'infcx, 'tcx> CombineFields<'infcx, 'tcx> {
+    pub fn new(
+        infcx: &'infcx InferCtxt<'tcx>,
+        trace: TypeTrace<'tcx>,
+        param_env: ty::ParamEnv<'tcx>,
+        define_opaque_types: DefineOpaqueTypes,
+    ) -> Self {
+        Self { infcx, trace, param_env, define_opaque_types, obligations: vec![] }
+    }
 }
 
 impl<'tcx> InferCtxt<'tcx> {
@@ -158,12 +168,6 @@ impl<'tcx> InferCtxt<'tcx> {
 
         let a = self.shallow_resolve_const(a);
         let b = self.shallow_resolve_const(b);
-
-        // It is always an error if the types of two constants that are related are not equal.
-        let InferOk { value: (), obligations } = self
-            .at(&ObligationCause::dummy_with_span(relation.span()), relation.param_env())
-            .eq(DefineOpaqueTypes::No, a.ty(), b.ty())?;
-        relation.register_obligations(obligations);
 
         match (a.kind(), b.kind()) {
             (

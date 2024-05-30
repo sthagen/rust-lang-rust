@@ -21,6 +21,25 @@ pub struct UnconditionalRecursion {
 }
 
 #[derive(LintDiagnostic)]
+#[diag(mir_build_call_to_deprecated_safe_fn_requires_unsafe)]
+pub struct CallToDeprecatedSafeFnRequiresUnsafe {
+    #[label]
+    pub span: Span,
+    pub function: String,
+    #[subdiagnostic]
+    pub sub: CallToDeprecatedSafeFnRequiresUnsafeSub,
+}
+
+#[derive(Subdiagnostic)]
+#[multipart_suggestion(mir_build_suggestion, applicability = "machine-applicable")]
+pub struct CallToDeprecatedSafeFnRequiresUnsafeSub {
+    #[suggestion_part(code = "unsafe {{ ")]
+    pub left: Span,
+    #[suggestion_part(code = " }}")]
+    pub right: Span,
+}
+
+#[derive(LintDiagnostic)]
 #[diag(mir_build_unsafe_op_in_unsafe_fn_call_to_unsafe_fn_requires_unsafe, code = E0133)]
 #[note]
 pub struct UnsafeOpInUnsafeFnCallToUnsafeFunctionRequiresUnsafe {
@@ -812,12 +831,12 @@ pub struct NonEmptyNeverPattern<'tcx> {
 }
 
 #[derive(Diagnostic)]
-#[diag(mir_build_exceeds_mcdc_condition_num_limit)]
-pub(crate) struct MCDCExceedsConditionNumLimit {
+#[diag(mir_build_exceeds_mcdc_condition_limit)]
+pub(crate) struct MCDCExceedsConditionLimit {
     #[primary_span]
     pub span: Span,
-    pub conditions_num: usize,
-    pub max_conditions_num: usize,
+    pub num_conditions: usize,
+    pub max_conditions: usize,
 }
 
 #[derive(Diagnostic)]
