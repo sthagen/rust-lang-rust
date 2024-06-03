@@ -17,10 +17,10 @@ use crate::json;
 use crate::read2::{read2_abbreviated, Truncated};
 use crate::util::{add_dylib_path, dylib_env_var, logv, PathBufExt};
 use crate::ColorConfig;
+use colored::Colorize;
 use miropt_test_tools::{files_for_miropt_test, MiroptTest, MiroptTestFile};
 use regex::{Captures, Regex};
 use rustfix::{apply_suggestions, get_suggestions_from_json, Filter};
-
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::ffi::{OsStr, OsString};
@@ -1493,14 +1493,22 @@ impl<'test> TestCx<'test> {
                 unexpected.len(),
                 not_found.len()
             ));
-            println!("status: {}\ncommand: {}", proc_res.status, proc_res.cmdline);
+            println!("status: {}\ncommand: {}\n", proc_res.status, proc_res.cmdline);
             if !unexpected.is_empty() {
-                println!("unexpected errors (from JSON output): {:#?}\n", unexpected);
+                println!("{}", "--- unexpected errors (from JSON output) ---".green());
+                for error in &unexpected {
+                    println!("{}", error.render_for_expected());
+                }
+                println!("{}", "---".green());
             }
             if !not_found.is_empty() {
-                println!("not found errors (from test file): {:#?}\n", not_found);
+                println!("{}", "--- not found errors (from test file) ---".red());
+                for error in &not_found {
+                    println!("{}", error.render_for_expected());
+                }
+                println!("{}", "---\n".red());
             }
-            panic!();
+            panic!("errors differ from expected");
         }
     }
 
@@ -3431,11 +3439,23 @@ impl<'test> TestCx<'test> {
         let build_root = self.config.build_base.parent().unwrap().parent().unwrap();
         let build_root = cwd.join(&build_root);
 
-        let tmpdir = cwd.join(self.output_base_name());
-        if tmpdir.exists() {
-            self.aggressive_rm_rf(&tmpdir).unwrap();
+        // We construct the following directory tree for each rmake.rs test:
+        // ```
+        // base_dir/
+        //     rmake.exe
+        //     rmake_out/
+        // ```
+        // having the executable separate from the output artifacts directory allows the recipes to
+        // `remove_dir_all($TMPDIR)` without running into permission denied issues because
+        // the executable is not under the `rmake_out/` directory.
+        //
+        // This setup intentionally diverges from legacy Makefile run-make tests.
+        let base_dir = cwd.join(self.output_base_name());
+        if base_dir.exists() {
+            self.aggressive_rm_rf(&base_dir).unwrap();
         }
-        create_dir_all(&tmpdir).unwrap();
+        let rmake_out_dir = base_dir.join("rmake_out");
+        create_dir_all(&rmake_out_dir).unwrap();
 
         // HACK: assume stageN-target, we only want stageN.
         let stage = self.config.stage_id.split('-').next().unwrap();
@@ -3452,8 +3472,11 @@ impl<'test> TestCx<'test> {
         stage_std_path.push("lib");
 
         // Then, we need to build the recipe `rmake.rs` and link in the support library.
-        let recipe_bin =
-            tmpdir.join(if self.config.target.contains("windows") { "rmake.exe" } else { "rmake" });
+        let recipe_bin = base_dir.join(if self.config.target.contains("windows") {
+            "rmake.exe"
+        } else {
+            "rmake"
+        });
 
         let mut support_lib_deps = PathBuf::new();
         support_lib_deps.push(&build_root);
@@ -3494,7 +3517,7 @@ impl<'test> TestCx<'test> {
             .env("S", &src_root)
             .env("RUST_BUILD_STAGE", &self.config.stage_id)
             .env("RUSTC", cwd.join(&self.config.rustc_path))
-            .env("TMPDIR", &tmpdir)
+            .env("TMPDIR", &rmake_out_dir)
             .env("LD_LIB_PATH_ENVVAR", dylib_env_var())
             .env(dylib_env_var(), &host_dylib_env_paths)
             .env("HOST_RPATH_DIR", cwd.join(&self.config.compile_lib_path))
@@ -3530,7 +3553,7 @@ impl<'test> TestCx<'test> {
         let dylib_env_paths = env::join_paths(dylib_env_paths).unwrap();
 
         let mut target_rpath_env_path = Vec::new();
-        target_rpath_env_path.push(&tmpdir);
+        target_rpath_env_path.push(&rmake_out_dir);
         target_rpath_env_path.extend(&orig_dylib_env_paths);
         let target_rpath_env_path = env::join_paths(target_rpath_env_path).unwrap();
 
@@ -3546,7 +3569,7 @@ impl<'test> TestCx<'test> {
             .env("S", &src_root)
             .env("RUST_BUILD_STAGE", &self.config.stage_id)
             .env("RUSTC", cwd.join(&self.config.rustc_path))
-            .env("TMPDIR", &tmpdir)
+            .env("TMPDIR", &rmake_out_dir)
             .env("HOST_RPATH_DIR", cwd.join(&self.config.compile_lib_path))
             .env("TARGET_RPATH_DIR", cwd.join(&self.config.run_lib_path))
             .env("LLVM_COMPONENTS", &self.config.llvm_components)

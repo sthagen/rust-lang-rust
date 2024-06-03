@@ -1938,7 +1938,10 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
         Ok(())
     }
 
-    fn pretty_closure_as_impl(&mut self, closure: ty::ClosureArgs<'tcx>) -> Result<(), PrintError> {
+    fn pretty_closure_as_impl(
+        &mut self,
+        closure: ty::ClosureArgs<TyCtxt<'tcx>>,
+    ) -> Result<(), PrintError> {
         let sig = closure.sig();
         let kind = closure.kind_ty().to_opt_closure_kind().unwrap_or(ty::ClosureKind::Fn);
 
@@ -2973,7 +2976,7 @@ impl<'tcx> ty::PolyTraitPredicate<'tcx> {
 
 #[derive(Debug, Copy, Clone, Lift)]
 pub struct PrintClosureAsImpl<'tcx> {
-    pub closure: ty::ClosureArgs<'tcx>,
+    pub closure: ty::ClosureArgs<TyCtxt<'tcx>>,
 }
 
 macro_rules! forward_display_to_print {
@@ -3199,7 +3202,7 @@ define_print_and_forward_display! {
         if let ty::PredicatePolarity::Negative = self.0.polarity {
             p!("!")
         }
-        p!(print(self.0.trait_ref.print_only_trait_path()));
+        p!(print(self.0.trait_ref.print_trait_sugared()));
     }
 
     PrintClosureAsImpl<'tcx> {
