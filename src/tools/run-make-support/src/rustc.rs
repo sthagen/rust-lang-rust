@@ -18,6 +18,7 @@ pub fn aux_build() -> Rustc {
 
 /// A `rustc` invocation builder.
 #[derive(Debug)]
+#[must_use]
 pub struct Rustc {
     cmd: Command,
 }
@@ -105,6 +106,12 @@ impl Rustc {
         self
     }
 
+    //Adjust the backtrace level, displaying more detailed information at higher levels.
+    pub fn set_backtrace_level<R: AsRef<OsStr>>(&mut self, level: R) -> &mut Self {
+        self.cmd.env("RUST_BACKTRACE", level);
+        self
+    }
+
     /// Specify path to the output file. Equivalent to `-o`` in rustc.
     pub fn output<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
         self.cmd.arg("-o");
@@ -141,6 +148,24 @@ impl Rustc {
     pub fn incremental<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
         let mut arg = OsString::new();
         arg.push("-Cincremental=");
+        arg.push(path.as_ref());
+        self.cmd.arg(&arg);
+        self
+    }
+
+    /// Specify directory path used for profile generation
+    pub fn profile_generate<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
+        let mut arg = OsString::new();
+        arg.push("-Cprofile-generate=");
+        arg.push(path.as_ref());
+        self.cmd.arg(&arg);
+        self
+    }
+
+    /// Specify directory path used for profile usage
+    pub fn profile_use<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
+        let mut arg = OsString::new();
+        arg.push("-Cprofile-use=");
         arg.push(path.as_ref());
         self.cmd.arg(&arg);
         self
