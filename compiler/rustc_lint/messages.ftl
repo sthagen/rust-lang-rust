@@ -75,7 +75,7 @@ lint_builtin_deprecated_attr_default_suggestion = remove this attribute
 lint_builtin_deprecated_attr_link = use of deprecated attribute `{$name}`: {$reason}. See {$link}
     .msg_suggestion = {$msg}
     .default_suggestion = remove this attribute
-lint_builtin_deprecated_attr_used = use of deprecated attribute `{$name}`: no longer used.
+lint_builtin_deprecated_attr_used = use of deprecated attribute `{$name}`: no longer used
 lint_builtin_deref_nullptr = dereferencing a null pointer
     .label = this code causes undefined behavior when executed
 
@@ -213,7 +213,7 @@ lint_default_hash_types = prefer `{$preferred}` over `{$used}`, it has better pe
 lint_default_source = `forbid` lint level is the default for {$id}
 
 lint_deprecated_lint_name =
-    lint name `{$name}` is deprecated and may not have an effect in the future.
+    lint name `{$name}` is deprecated and may not have an effect in the future
     .suggestion = change it to
     .help = change it to {$replace}
 
@@ -244,11 +244,11 @@ lint_duplicate_matcher_binding = duplicate matcher binding
 
 lint_enum_intrinsics_mem_discriminant =
     the return value of `mem::discriminant` is unspecified when called with a non-enum type
-    .note = the argument to `discriminant` should be a reference to an enum, but it was passed a reference to a `{$ty_param}`, which is not an enum.
+    .note = the argument to `discriminant` should be a reference to an enum, but it was passed a reference to a `{$ty_param}`, which is not an enum
 
 lint_enum_intrinsics_mem_variant =
     the return value of `mem::variant_count` is unspecified when called with a non-enum type
-    .note = the type parameter of `variant_count` should be an enum, but it was instantiated with the type `{$ty_param}`, which is not an enum.
+    .note = the type parameter of `variant_count` should be an enum, but it was instantiated with the type `{$ty_param}`, which is not an enum
 
 lint_expectation = this lint expectation is unfulfilled
     .note = the `unfulfilled_lint_expectations` lint can't be expected and will always produce this message
@@ -550,7 +550,7 @@ lint_non_local_definitions_impl = non-local `impl` definition, `impl` blocks sho
     .with_trait = an `impl` is never scoped, even when it is nested inside an item, as it may impact type checking outside of that item, which can be the case if neither the trait or the self type are at the same nesting level as the `impl`
     .bounds = `impl` may be usable in bounds, etc. from outside the expression, which might e.g. make something constructible that previously wasn't, because it's still on a publicly-visible type
     .doctest = make this doc-test a standalone test with its own `fn main() {"{"} ... {"}"}`
-    .exception = items in an anonymous const item (`const _: () = {"{"} ... {"}"}`) are treated as in the same scope as the anonymous const's declaration
+    .exception = items in an anonymous const item (`const _: () = {"{"} ... {"}"}`) are treated as in the same scope as the anonymous const's declaration for the purpose of this lint
     .const_anon = use a const-anon item to suppress this lint
     .macro_to_change = the {$macro_kind} `{$macro_to_change}` defines the non-local `impl`, and may need to be changed
 
