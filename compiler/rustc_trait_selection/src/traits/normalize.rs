@@ -3,7 +3,7 @@
 use super::SelectionContext;
 use super::{project, with_replaced_escaping_bound_vars, BoundVarReplacer, PlaceholderReplacer};
 use crate::error_reporting::traits::OverflowCause;
-use crate::error_reporting::traits::TypeErrCtxtExt;
+use crate::error_reporting::traits::TypeErrCtxtOverflowExt;
 use crate::solve::NextSolverError;
 use rustc_data_structures::stack::ensure_sufficient_stack;
 use rustc_infer::infer::at::At;
@@ -109,16 +109,13 @@ pub(super) fn needs_normalization<'tcx, T: TypeVisitable<TyCtxt<'tcx>>>(
     value: &T,
     reveal: Reveal,
 ) -> bool {
-    // This mirrors `ty::TypeFlags::HAS_ALIASES` except that we take `Reveal` into account.
+    let mut flags = ty::TypeFlags::HAS_ALIAS;
 
-    let mut flags = ty::TypeFlags::HAS_TY_PROJECTION
-        | ty::TypeFlags::HAS_TY_WEAK
-        | ty::TypeFlags::HAS_TY_INHERENT
-        | ty::TypeFlags::HAS_CT_PROJECTION;
-
+    // Opaques are treated as rigid with `Reveal::UserFacing`,
+    // so we can ignore those.
     match reveal {
-        Reveal::UserFacing => {}
-        Reveal::All => flags |= ty::TypeFlags::HAS_TY_OPAQUE,
+        Reveal::UserFacing => flags.remove(ty::TypeFlags::HAS_TY_OPAQUE),
+        Reveal::All => {}
     }
 
     value.has_type_flags(flags)
