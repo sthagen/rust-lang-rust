@@ -1,9 +1,9 @@
-//! Implementation of rustbuild, the Rust build system.
+//! Implementation of bootstrap, the Rust build system.
 //!
 //! This module, and its descendants, are the implementation of the Rust build
 //! system. Most of this build system is backed by Cargo but the outer layer
 //! here serves as the ability to orchestrate calling Cargo, sequencing Cargo
-//! builds, building artifacts like LLVM, etc. The goals of rustbuild are:
+//! builds, building artifacts like LLVM, etc. The goals of bootstrap are:
 //!
 //! * To be an easily understandable, easily extensible, and maintainable build
 //!   system.
@@ -30,7 +30,6 @@ use std::time::SystemTime;
 
 use build_helper::ci::{gha, CiEnv};
 use build_helper::exit;
-use filetime::FileTime;
 use sha2::digest::Digest;
 use termcolor::{ColorChoice, StandardStream, WriteColor};
 use utils::channel::GitInfo;
@@ -1708,9 +1707,13 @@ Executed at: {executed_at}"#,
                 panic!("failed to copy `{}` to `{}`: {}", src.display(), dst.display(), e)
             }
             t!(fs::set_permissions(dst, metadata.permissions()));
-            let atime = FileTime::from_last_access_time(&metadata);
-            let mtime = FileTime::from_last_modification_time(&metadata);
-            t!(filetime::set_file_times(dst, atime, mtime));
+
+            let file_times = fs::FileTimes::new()
+                .set_accessed(t!(metadata.accessed()))
+                .set_modified(t!(metadata.modified()));
+
+            let dst_file = t!(fs::File::open(dst));
+            t!(dst_file.set_times(file_times));
         }
     }
 
