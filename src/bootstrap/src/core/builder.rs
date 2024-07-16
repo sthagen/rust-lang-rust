@@ -1998,6 +1998,9 @@ impl<'a> Builder<'a> {
         if mode == Mode::Rustc {
             rustflags.arg("-Zunstable-options");
             rustflags.arg("-Wrustc::internal");
+            // FIXME(edition_2024): Change this to `-Wrust_2024_idioms` when all
+            // of the individual lints are satisfied.
+            rustflags.arg("-Wkeyword_idents_2024");
         }
 
         if self.config.rust_frame_pointers {
@@ -2105,7 +2108,7 @@ impl<'a> Builder<'a> {
         // Try to use a sysroot-relative bindir, in case it was configured absolutely.
         cargo.env("RUSTC_INSTALL_BINDIR", self.config.bindir_relative());
 
-        self.ci_env.force_coloring_in_ci(cargo.as_command_mut());
+        cargo.force_coloring_in_ci(self.ci_env);
 
         // When we build Rust dylibs they're all intended for intermediate
         // usage, so make sure we pass the -Cprefer-dynamic flag instead of
