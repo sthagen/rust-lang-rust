@@ -471,11 +471,10 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
                         handle_ty_args(has_default, &inf.to_ty())
                     }
                     (GenericParamDefKind::Const { .. }, GenericArg::Const(ct)) => {
-                        let did = ct.value.def_id;
-                        tcx.feed_anon_const_type(did, tcx.type_of(param.def_id));
-                        ty::Const::from_anon_const(tcx, did).into()
+                        ty::Const::from_const_arg(tcx, ct, ty::FeedConstTy::Param(param.def_id))
+                            .into()
                     }
-                    (&GenericParamDefKind::Const { .. }, hir::GenericArg::Infer(inf)) => {
+                    (&GenericParamDefKind::Const { .. }, GenericArg::Infer(inf)) => {
                         self.lowerer.ct_infer(Some(param), inf.span).into()
                     }
                     (kind, arg) => span_bug!(
@@ -912,7 +911,8 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
                                 let term: ty::Term<'_> = match term {
                                     hir::Term::Ty(ty) => self.lower_ty(ty).into(),
                                     hir::Term::Const(ct) => {
-                                        ty::Const::from_anon_const(tcx, ct.def_id).into()
+                                        ty::Const::from_const_arg(tcx, ct, ty::FeedConstTy::No)
+                                            .into()
                                     }
                                 };
                                 // FIXME(#97583): This isn't syntactically well-formed!
@@ -1087,7 +1087,7 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
                     );
 
                     let adt_def = qself_ty.ty_adt_def().expect("enum is not an ADT");
-                    if let Some(suggested_name) = find_best_match_for_name(
+                    if let Some(variant_name) = find_best_match_for_name(
                         &adt_def
                             .variants()
                             .iter()
@@ -1095,12 +1095,66 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
                             .collect::<Vec<Symbol>>(),
                         assoc_ident.name,
                         None,
-                    ) {
-                        err.span_suggestion(
-                            assoc_ident.span,
+                    ) && let Some(variant) =
+                        adt_def.variants().iter().find(|s| s.name == variant_name)
+                    {
+                        let mut suggestion = vec![(assoc_ident.span, variant_name.to_string())];
+                        if let hir::Node::Stmt(hir::Stmt {
+                            kind: hir::StmtKind::Semi(ref expr),
+                            ..
+                        })
+                        | hir::Node::Expr(ref expr) = tcx.parent_hir_node(hir_ref_id)
+                            && let hir::ExprKind::Struct(..) = expr.kind
+                        {
+                            match variant.ctor {
+                                None => {
+                                    // struct
+                                    suggestion = vec![(
+                                        assoc_ident.span.with_hi(expr.span.hi()),
+                                        if variant.fields.is_empty() {
+                                            format!("{variant_name} {{}}")
+                                        } else {
+                                            format!(
+                                                "{variant_name} {{ {} }}",
+                                                variant
+                                                    .fields
+                                                    .iter()
+                                                    .map(|f| format!("{}: /* value */", f.name))
+                                                    .collect::<Vec<_>>()
+                                                    .join(", ")
+                                            )
+                                        },
+                                    )];
+                                }
+                                Some((hir::def::CtorKind::Fn, def_id)) => {
+                                    // tuple
+                                    let fn_sig = tcx.fn_sig(def_id).instantiate_identity();
+                                    let inputs = fn_sig.inputs().skip_binder();
+                                    suggestion = vec![(
+                                        assoc_ident.span.with_hi(expr.span.hi()),
+                                        format!(
+                                            "{variant_name}({})",
+                                            inputs
+                                                .iter()
+                                                .map(|i| format!("/* {i} */"))
+                                                .collect::<Vec<_>>()
+                                                .join(", ")
+                                        ),
+                                    )];
+                                }
+                                Some((hir::def::CtorKind::Const, _)) => {
+                                    // unit
+                                    suggestion = vec![(
+                                        assoc_ident.span.with_hi(expr.span.hi()),
+                                        variant_name.to_string(),
+                                    )];
+                                }
+                            }
+                        }
+                        err.multipart_suggestion_verbose(
                             "there is a variant with a similar name",
-                            suggested_name,
-                            Applicability::MaybeIncorrect,
+                            suggestion,
+                            Applicability::HasPlaceholders,
                         );
                     } else {
                         err.span_label(
@@ -2140,7 +2194,7 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
                 let length = match length {
                     hir::ArrayLen::Infer(inf) => self.ct_infer(None, inf.span),
                     hir::ArrayLen::Body(constant) => {
-                        ty::Const::from_anon_const(tcx, constant.def_id)
+                        ty::Const::from_const_arg(tcx, constant, ty::FeedConstTy::No)
                     }
                 };
 
