@@ -573,7 +573,7 @@ checksum = "4b82cf0babdbd58558212896d1a4272303a57bdb245c2bf1147185fb45640e70"
 
 [[package]]
 name = "clippy"
-version = "0.1.81"
+version = "0.1.82"
 dependencies = [
  "anstream",
  "clippy_config",
@@ -594,13 +594,13 @@ dependencies = [
  "termize",
  "tokio",
  "toml 0.7.8",
- "ui_test 0.23.0",
+ "ui_test 0.24.0",
  "walkdir",
 ]
 
 [[package]]
 name = "clippy_config"
-version = "0.1.81"
+version = "0.1.82"
 dependencies = [
  "rustc-semver",
  "serde",
@@ -623,7 +623,7 @@ dependencies = [
 
 [[package]]
 name = "clippy_lints"
-version = "0.1.81"
+version = "0.1.82"
 dependencies = [
  "arrayvec",
  "cargo_metadata 0.18.1",
@@ -648,7 +648,7 @@ dependencies = [
 
 [[package]]
 name = "clippy_utils"
-version = "0.1.81"
+version = "0.1.82"
 dependencies = [
  "arrayvec",
  "clippy_config",
@@ -969,7 +969,7 @@ dependencies = [
 
 [[package]]
 name = "declare_clippy_lint"
-version = "0.1.81"
+version = "0.1.82"
 dependencies = [
  "itertools",
  "quote",
@@ -986,14 +986,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "derivative"
-version = "2.2.0"
+name = "derive-where"
+version = "1.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fcc3dd5e9e9c0b295d6e1e4d811fb6f157d5ffd784b8d202fc62eac8035a770b"
+checksum = "62d671cc41a825ebabc75757b62d3d168c577f9149b2d49ece1dad1f72119d25"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 1.0.109",
+ "syn 2.0.67",
 ]
 
 [[package]]
@@ -2978,6 +2978,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "prettydiff"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "abec3fb083c10660b3854367697da94c674e9e82aa7511014dc958beeb7215e9"
+dependencies = [
+ "owo-colors",
+ "pad",
+]
+
+[[package]]
 name = "proc-macro-hack"
 version = "0.5.20+deprecated"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4248,7 +4258,7 @@ name = "rustc_middle"
 version = "0.0.0"
 dependencies = [
  "bitflags 2.5.0",
- "derivative",
+ "derive-where",
  "either",
  "field-offset",
  "gsgdt",
@@ -4378,7 +4388,7 @@ name = "rustc_next_trait_solver"
 version = "0.0.0"
 dependencies = [
  "bitflags 2.5.0",
- "derivative",
+ "derive-where",
  "rustc_ast_ir",
  "rustc_data_structures",
  "rustc_index",
@@ -4628,7 +4638,7 @@ dependencies = [
 name = "rustc_span"
 version = "0.0.0"
 dependencies = [
- "derivative",
+ "derive-where",
  "indexmap",
  "itoa",
  "md-5",
@@ -4768,7 +4778,7 @@ name = "rustc_type_ir"
 version = "0.0.0"
 dependencies = [
  "bitflags 2.5.0",
- "derivative",
+ "derive-where",
  "indexmap",
  "rustc_ast_ir",
  "rustc_data_structures",
@@ -5825,7 +5835,7 @@ dependencies = [
  "indicatif",
  "lazy_static",
  "levenshtein",
- "prettydiff",
+ "prettydiff 0.6.4",
  "regex",
  "rustc_version",
  "rustfix 0.6.1",
@@ -5836,9 +5846,9 @@ dependencies = [
 
 [[package]]
 name = "ui_test"
-version = "0.23.0"
+version = "0.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29e5f4ffcbab82453958fbf59990e981b8e8a177dcd60c2bd8f9b52c3036a6e1"
+checksum = "bc1c6c78d55482388711c8d417b8e547263046a607512278fed274c54633bbe4"
 dependencies = [
  "annotate-snippets 0.11.4",
  "anyhow",
@@ -5852,14 +5862,13 @@ dependencies = [
  "indicatif",
  "lazy_static",
  "levenshtein",
- "prettydiff",
+ "prettydiff 0.7.0",
  "regex",
  "rustc_version",
  "rustfix 0.8.1",
  "serde",
  "serde_json",
  "spanned",
- "tempfile",
 ]
 
 [[package]]
