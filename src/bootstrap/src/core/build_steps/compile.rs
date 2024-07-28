@@ -182,11 +182,16 @@ impl Step for Std {
             return;
         }
 
-        builder.update_submodule(&Path::new("library").join("stdarch"));
+        builder.require_submodule("library/stdarch", None);
 
         // Profiler information requires LLVM's compiler-rt
         if builder.config.profiler {
-            builder.update_submodule(Path::new("src/llvm-project"));
+            builder.require_submodule(
+                "src/llvm-project",
+                Some(
+                    "The `build.profiler` config option requires `compiler-rt` sources from LLVM.",
+                ),
+            );
         }
 
         let mut target_deps = builder.ensure(StartupObjects { compiler, target });
@@ -456,13 +461,15 @@ pub fn std_cargo(builder: &Builder<'_>, target: TargetSelection, stage: u32, car
         // That's probably ok? At least, the difference wasn't enforced before. There's a comment in
         // the compiler_builtins build script that makes me nervous, though:
         // https://github.com/rust-lang/compiler-builtins/blob/31ee4544dbe47903ce771270d6e3bea8654e9e50/build.rs#L575-L579
-        builder.update_submodule(&Path::new("src").join("llvm-project"));
+        builder.require_submodule(
+            "src/llvm-project",
+            Some(
+                "The `build.optimized-compiler-builtins` config option \
+                 requires `compiler-rt` sources from LLVM.",
+            ),
+        );
         let compiler_builtins_root = builder.src.join("src/llvm-project/compiler-rt");
-        if !compiler_builtins_root.exists() {
-            panic!(
-                "need LLVM sources available to build `compiler-rt`, but they weren't present; consider enabling `build.submodules = true` or disabling `optimized-compiler-builtins`"
-            );
-        }
+        assert!(compiler_builtins_root.exists());
         // Note that `libprofiler_builtins/build.rs` also computes this so if
         // you're changing something here please also change that.
         cargo.env("RUST_COMPILER_RT_ROOT", &compiler_builtins_root);
@@ -1481,7 +1488,7 @@ pub fn compiler_file(
     let mut cmd = command(compiler);
     cmd.args(builder.cflags(target, GitRepo::Rustc, c));
     cmd.arg(format!("-print-file-name={file}"));
-    let out = cmd.capture_stdout().run(builder).stdout();
+    let out = cmd.run_capture_stdout(builder).stdout();
     PathBuf::from(out.trim())
 }
 
@@ -1845,7 +1852,7 @@ impl Step for Assemble {
                 builder.ensure(llvm::Llvm { target: target_compiler.host });
             if !builder.config.dry_run() && builder.config.llvm_tools_enabled {
                 let llvm_bin_dir =
-                    command(llvm_config).capture_stdout().arg("--bindir").run(builder).stdout();
+                    command(llvm_config).arg("--bindir").run_capture_stdout(builder).stdout();
                 let llvm_bin_dir = Path::new(llvm_bin_dir.trim());
 
                 // Since we've already built the LLVM tools, install them to the sysroot.
@@ -2171,7 +2178,7 @@ pub fn strip_debug(builder: &Builder<'_>, target: TargetSelection, path: &Path) 
     }
 
     let previous_mtime = t!(t!(path.metadata()).modified());
-    command("strip").capture().arg("--strip-debug").arg(path).run(builder);
+    command("strip").arg("--strip-debug").arg(path).run_capture(builder);
 
     let file = t!(fs::File::open(path));
 
