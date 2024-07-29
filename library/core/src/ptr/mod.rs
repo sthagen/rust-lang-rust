@@ -409,13 +409,9 @@
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
 use crate::cmp::Ordering;
-use crate::fmt;
-use crate::hash;
-use crate::intrinsics;
 use crate::marker::FnPtr;
-use crate::ub_checks;
-
 use crate::mem::{self, MaybeUninit};
+use crate::{fmt, hash, intrinsics, ub_checks};
 
 mod alignment;
 #[unstable(feature = "ptr_alignment_type", issue = "102070")]
@@ -423,12 +419,10 @@ pub use alignment::Alignment;
 
 #[stable(feature = "rust1", since = "1.0.0")]
 #[doc(inline)]
-pub use crate::intrinsics::copy_nonoverlapping;
-
+pub use crate::intrinsics::copy;
 #[stable(feature = "rust1", since = "1.0.0")]
 #[doc(inline)]
-pub use crate::intrinsics::copy;
-
+pub use crate::intrinsics::copy_nonoverlapping;
 #[stable(feature = "rust1", since = "1.0.0")]
 #[doc(inline)]
 pub use crate::intrinsics::write_bytes;
@@ -786,7 +780,7 @@ where
 ///
 /// The caller must also ensure that the memory the pointer (non-transitively) points to is never
 /// written to (except inside an `UnsafeCell`) using this pointer or any pointer derived from it. If
-/// you need to mutate the pointee, use [`from_mut`]`. Specifically, to turn a mutable reference `m:
+/// you need to mutate the pointee, use [`from_mut`]. Specifically, to turn a mutable reference `m:
 /// &mut T` into `*const T`, prefer `from_mut(m).cast_const()` to obtain a pointer that can later be
 /// used for mutation.
 ///

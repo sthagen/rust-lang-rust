@@ -1,7 +1,8 @@
 use super::{repeat, BorrowedBuf, Cursor, SeekFrom};
 use crate::cmp::{self, min};
-use crate::io::{self, IoSlice, IoSliceMut, DEFAULT_BUF_SIZE};
-use crate::io::{BufRead, BufReader, Read, Seek, Write};
+use crate::io::{
+    self, BufRead, BufReader, IoSlice, IoSliceMut, Read, Seek, Write, DEFAULT_BUF_SIZE,
+};
 use crate::mem::MaybeUninit;
 use crate::ops::Deref;
 
@@ -675,13 +676,13 @@ fn cursor_read_exact_eof() {
 
     let mut r = slice.clone();
     assert!(r.read_exact(&mut [0; 10]).is_err());
-    assert!(r.is_empty());
+    assert!(Cursor::split(&r).1.is_empty());
 
     let mut r = slice;
     let buf = &mut [0; 10];
     let mut buf = BorrowedBuf::from(buf.as_mut_slice());
     assert!(r.read_buf_exact(buf.unfilled()).is_err());
-    assert!(r.is_empty());
+    assert!(Cursor::split(&r).1.is_empty());
     assert_eq!(buf.filled(), b"123456");
 }
 

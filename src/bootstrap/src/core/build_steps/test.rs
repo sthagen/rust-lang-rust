@@ -3,27 +3,22 @@
 //! `./x.py test` (aka [`Kind::Test`]) is currently allowed to reach build steps in other modules.
 //! However, this contains ~all test parts we expect people to be able to build and run locally.
 
-use std::env;
-use std::ffi::OsStr;
-use std::ffi::OsString;
-use std::fs;
-use std::iter;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
+use std::{env, fs, iter};
 
 use clap_complete::shells;
 
-use crate::core::build_steps::compile;
-use crate::core::build_steps::dist;
 use crate::core::build_steps::doc::DocumentationFormat;
-use crate::core::build_steps::llvm;
 use crate::core::build_steps::synthetic_targets::MirOptPanicAbortSyntheticTarget;
 use crate::core::build_steps::tool::{self, SourceType, Tool};
 use crate::core::build_steps::toolstate::ToolState;
+use crate::core::build_steps::{compile, dist, llvm};
 use crate::core::builder;
-use crate::core::builder::crate_description;
-use crate::core::builder::{Builder, Compiler, Kind, RunConfig, ShouldRun, Step};
-use crate::core::config::flags::get_completion;
-use crate::core::config::flags::Subcommand;
+use crate::core::builder::{
+    crate_description, Builder, Compiler, Kind, RunConfig, ShouldRun, Step,
+};
+use crate::core::config::flags::{get_completion, Subcommand};
 use crate::core::config::TargetSelection;
 use crate::utils::exec::{command, BootstrapCommand};
 use crate::utils::helpers::{
@@ -73,7 +68,7 @@ impl Step for CrateBootstrap {
             compiler,
             Mode::ToolBootstrap,
             bootstrap_host,
-            "test",
+            Kind::Test,
             path,
             SourceType::InTree,
             &[],
@@ -124,7 +119,7 @@ You can skip linkcheck with --skip src/tools/linkchecker"
             compiler,
             Mode::ToolBootstrap,
             bootstrap_host,
-            "test",
+            Kind::Test,
             "src/tools/linkchecker",
             SourceType::InTree,
             &[],
@@ -289,7 +284,7 @@ impl Step for Cargo {
             compiler,
             Mode::ToolRustc,
             self.host,
-            "test",
+            Kind::Test,
             "src/tools/cargo",
             SourceType::Submodule,
             &[],
@@ -360,7 +355,7 @@ impl Step for RustAnalyzer {
             compiler,
             Mode::ToolRustc,
             host,
-            "test",
+            Kind::Test,
             crate_path,
             SourceType::InTree,
             &["in-rust-tree".to_owned()],
@@ -412,7 +407,7 @@ impl Step for Rustfmt {
             compiler,
             Mode::ToolRustc,
             host,
-            "test",
+            Kind::Test,
             "src/tools/rustfmt",
             SourceType::InTree,
             &[],
@@ -447,7 +442,7 @@ impl Miri {
             Mode::Std,
             SourceType::Submodule,
             target,
-            "miri-setup",
+            Kind::MiriSetup,
         );
 
         // Tell `cargo miri setup` where to find the sources.
@@ -532,7 +527,7 @@ impl Step for Miri {
             host_compiler,
             Mode::ToolRustc,
             host,
-            "test",
+            Kind::Test,
             "src/tools/miri",
             SourceType::InTree,
             &[],
@@ -622,7 +617,7 @@ impl Step for CargoMiri {
             compiler,
             Mode::ToolStd, // it's unclear what to use here, we're not building anything just doing a smoke test!
             target,
-            "miri-test",
+            Kind::MiriTest,
             "src/tools/miri/test-cargo-miri",
             SourceType::Submodule,
             &[],
@@ -682,7 +677,7 @@ impl Step for CompiletestTest {
             // when std sources change.
             Mode::ToolStd,
             host,
-            "test",
+            Kind::Test,
             "src/tools/compiletest",
             SourceType::InTree,
             &[],
@@ -732,7 +727,7 @@ impl Step for Clippy {
             compiler,
             Mode::ToolRustc,
             host,
-            "test",
+            Kind::Test,
             "src/tools/clippy",
             SourceType::InTree,
             &[],
@@ -852,7 +847,6 @@ impl Step for RustdocJSStd {
         builder.ensure(crate::core::build_steps::doc::Std::new(
             builder.top_stage,
             self.target,
-            builder,
             DocumentationFormat::Html,
         ));
         let _guard = builder.msg(
@@ -1282,7 +1276,7 @@ impl Step for RunMakeSupport {
             self.compiler,
             Mode::ToolStd,
             self.target,
-            "build",
+            Kind::Build,
             "src/tools/run-make-support",
             SourceType::InTree,
             &[],
@@ -1326,7 +1320,7 @@ impl Step for CrateRunMakeSupport {
             compiler,
             Mode::ToolBootstrap,
             host,
-            "test",
+            Kind::Test,
             "src/tools/run-make-support",
             SourceType::InTree,
             &[],
@@ -1372,7 +1366,7 @@ impl Step for CrateBuildHelper {
             compiler,
             Mode::ToolBootstrap,
             host,
-            "test",
+            Kind::Test,
             "src/tools/build_helper",
             SourceType::InTree,
             &[],
@@ -2636,7 +2630,7 @@ impl Step for Crate {
                 mode,
                 SourceType::InTree,
                 target,
-                "miri-test",
+                Kind::MiriTest,
             );
             // This hack helps bootstrap run standard library tests in Miri. The issue is as
             // follows: when running `cargo miri test` on libcore, cargo builds a local copy of core
@@ -2659,14 +2653,7 @@ impl Step for Crate {
             }
 
             // Build `cargo test` command
-            builder::Cargo::new(
-                builder,
-                compiler,
-                mode,
-                SourceType::InTree,
-                target,
-                builder.kind.as_str(),
-            )
+            builder::Cargo::new(builder, compiler, mode, SourceType::InTree, target, builder.kind)
         };
 
         match mode {
@@ -2758,7 +2745,7 @@ impl Step for CrateRustdoc {
             compiler,
             Mode::ToolRustc,
             target,
-            builder.kind.as_str(),
+            builder.kind,
             "src/tools/rustdoc",
             SourceType::InTree,
             &[],
@@ -2850,7 +2837,7 @@ impl Step for CrateRustdocJsonTypes {
             compiler,
             Mode::ToolRustc,
             target,
-            builder.kind.as_str(),
+            builder.kind,
             "src/rustdoc-json-types",
             SourceType::InTree,
             &[],
@@ -3084,7 +3071,7 @@ impl Step for TierCheck {
             self.compiler,
             Mode::ToolStd,
             self.compiler.host,
-            "run",
+            Kind::Run,
             "src/tools/tier-check",
             SourceType::InTree,
             &[],
@@ -3156,7 +3143,7 @@ impl Step for RustInstaller {
             compiler,
             Mode::ToolBootstrap,
             bootstrap_host,
-            "test",
+            Kind::Test,
             "src/tools/rust-installer",
             SourceType::InTree,
             &[],
@@ -3326,7 +3313,7 @@ impl Step for CodegenCranelift {
                 Mode::Codegen, // Must be codegen to ensure dlopen on compiled dylibs works
                 SourceType::InTree,
                 target,
-                "run",
+                Kind::Run,
             );
 
             cargo.current_dir(&builder.src.join("compiler/rustc_codegen_cranelift"));
@@ -3458,7 +3445,7 @@ impl Step for CodegenGCC {
                 Mode::Codegen, // Must be codegen to ensure dlopen on compiled dylibs works
                 SourceType::InTree,
                 target,
-                "run",
+                Kind::Run,
             );
 
             cargo.current_dir(&builder.src.join("compiler/rustc_codegen_gcc"));
@@ -3546,7 +3533,7 @@ impl Step for TestFloatParse {
             compiler,
             Mode::ToolStd,
             bootstrap_host,
-            "test",
+            Kind::Test,
             path,
             SourceType::InTree,
             &[],
@@ -3569,7 +3556,7 @@ impl Step for TestFloatParse {
             compiler,
             Mode::ToolStd,
             bootstrap_host,
-            "run",
+            Kind::Run,
             path,
             SourceType::InTree,
             &[],
