@@ -21,6 +21,7 @@ pub mod run;
 pub mod scoped_run;
 pub mod string;
 pub mod targets;
+pub mod symbols;
 
 // Internally we call our fs-related support module as `fs`, but re-export its content as `rfs`
 // to tests to avoid colliding with commonly used `use std::fs;`.
@@ -48,8 +49,8 @@ pub use cc::{cc, cxx, extra_c_flags, extra_cxx_flags, Cc};
 pub use clang::{clang, Clang};
 pub use htmldocck::htmldocck;
 pub use llvm::{
-    llvm_ar, llvm_filecheck, llvm_nm, llvm_objdump, llvm_profdata, llvm_readobj, LlvmAr,
-    LlvmFilecheck, LlvmNm, LlvmObjdump, LlvmProfdata, LlvmReadobj,
+    llvm_ar, llvm_bcanalyzer, llvm_filecheck, llvm_nm, llvm_objdump, llvm_profdata, llvm_readobj,
+    LlvmAr, LlvmBcanalyzer, LlvmFilecheck, LlvmNm, LlvmObjdump, LlvmProfdata, LlvmReadobj,
 };
 pub use python::python_command;
 pub use rustc::{aux_build, bare_rustc, rustc, Rustc};
