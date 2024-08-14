@@ -230,8 +230,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
                             post_message,
                         );
 
-                        let (err_msg, safe_transmute_explanation) = if Some(main_trait_ref.def_id())
-                            == self.tcx.lang_items().transmute_trait()
+                        let (err_msg, safe_transmute_explanation) = if self.tcx.is_lang_item(main_trait_ref.def_id(), LangItem::TransmuteTrait)
                         {
                             // Recompute the safe transmute reason and use that for the error reporting
                             match self.get_safe_transmute_error_and_reason(
@@ -375,7 +374,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
                         let impl_candidates = self.find_similar_impl_candidates(leaf_trait_predicate);
                         suggested = if let &[cand] = &impl_candidates[..] {
                             let cand = cand.trait_ref;
-                            if let (ty::FnPtr(_), ty::FnDef(..)) =
+                            if let (ty::FnPtr(..), ty::FnDef(..)) =
                                 (cand.self_ty().kind(), main_trait_ref.self_ty().skip_binder().kind())
                             {
                                 err.span_suggestion(
@@ -790,8 +789,8 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
             // is unimplemented is because async closures don't implement `Fn`/`FnMut`
             // if they have captures.
             if let Some(by_ref_captures) = by_ref_captures
-                && let ty::FnPtr(sig) = by_ref_captures.kind()
-                && !sig.skip_binder().output().is_unit()
+                && let ty::FnPtr(sig_tys, _) = by_ref_captures.kind()
+                && !sig_tys.skip_binder().output().is_unit()
             {
                 let mut err = self.dcx().create_err(AsyncClosureNotFn {
                     span: self.tcx.def_span(closure_def_id),
@@ -1057,7 +1056,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
                     "`{ty}` is forbidden as the type of a const generic parameter",
                 )
             }
-            ty::FnPtr(_) => {
+            ty::FnPtr(..) => {
                 struct_span_code_err!(
                     self.dcx(),
                     span,
@@ -1836,10 +1835,10 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
             if let &[cand] = &candidates[..] {
                 let (desc, mention_castable) =
                     match (cand.self_ty().kind(), trait_ref.self_ty().skip_binder().kind()) {
-                        (ty::FnPtr(_), ty::FnDef(..)) => {
+                        (ty::FnPtr(..), ty::FnDef(..)) => {
                             (" implemented for fn pointer `", ", cast using `as`")
                         }
-                        (ty::FnPtr(_), _) => (" implemented for fn pointer `", ""),
+                        (ty::FnPtr(..), _) => (" implemented for fn pointer `", ""),
                         _ => (" implemented for `", ""),
                     };
                 err.highlighted_help(vec![
