@@ -410,12 +410,9 @@ version = "0.1.0"
 
 [[package]]
 name = "cc"
-version = "1.1.13"
+version = "1.0.105"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72db2f7947ecee9b03b510377e8bb9077afa27176fdbff55c51027e976fdcc48"
-dependencies = [
- "shlex",
-]
+checksum = "5208975e568d83b6b05cc0a063c8e7e9acc2b43bee6da15616a5b73e109d7437"
 
 [[package]]
 name = "cfg-if"
@@ -539,6 +536,7 @@ name = "clippy"
 version = "0.1.82"
 dependencies = [
  "anstream",
+ "cargo_metadata 0.18.1",
  "clippy_config",
  "clippy_lints",
  "clippy_utils",
@@ -552,6 +550,7 @@ dependencies = [
  "regex",
  "rustc_tools_util",
  "serde",
+ "serde_json",
  "syn 2.0.75",
  "tempfile",
  "termize",
@@ -566,7 +565,6 @@ name = "clippy_config"
 version = "0.1.82"
 dependencies = [
  "itertools",
- "rustc-semver",
  "serde",
  "toml 0.7.8",
  "walkdir",
@@ -598,7 +596,6 @@ dependencies = [
  "quine-mc_cluskey",
  "regex",
  "regex-syntax 0.8.4",
- "rustc-semver",
  "semver",
  "serde",
  "serde_json",
@@ -617,7 +614,6 @@ dependencies = [
  "arrayvec",
  "clippy_config",
  "itertools",
- "rustc-semver",
  "rustc_apfloat",
 ]
 
@@ -2230,9 +2226,12 @@ dependencies = [
 
 [[package]]
 name = "minifier"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "95bbbf96b9ac3482c2a25450b67a15ed851319bc5fabf3b40742ea9066e84282"
+checksum = "9aa3f302fe0f8de065d4a2d1ed64f60204623cac58b80cd3c2a83a25d5a7d437"
+dependencies = [
+ "clap",
+]
 
 [[package]]
 name = "minimal-lexical"
@@ -3201,12 +3200,6 @@ dependencies = [
  "crossbeam-utils",
  "num_cpus",
 ]
-
-[[package]]
-name = "rustc-semver"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5be1bdc7edf596692617627bbfeaba522131b18e06ca4df2b6b689e3c5d5ce84"
 
 [[package]]
 name = "rustc-stable-hash"
