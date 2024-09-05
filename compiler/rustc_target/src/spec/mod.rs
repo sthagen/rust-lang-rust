@@ -1695,6 +1695,8 @@ supported_targets! {
     ("armv7r-none-eabihf", armv7r_none_eabihf),
     ("armv8r-none-eabihf", armv8r_none_eabihf),
 
+    ("armv7-rtems-eabihf", armv7_rtems_eabihf),
+
     ("x86_64-pc-solaris", x86_64_pc_solaris),
     ("sparcv9-sun-solaris", sparcv9_sun_solaris),
 
@@ -2097,9 +2099,10 @@ pub struct TargetOptions {
     /// Default CPU to pass to LLVM. Corresponds to `llc -mcpu=$cpu`. Defaults
     /// to "generic".
     pub cpu: StaticCow<str>,
-    /// Default target features to pass to LLVM. These features will *always* be
-    /// passed, and cannot be disabled even via `-C`. Corresponds to `llc
-    /// -mattr=$features`.
+    /// Default target features to pass to LLVM. These features overwrite
+    /// `-Ctarget-cpu` but can be overwritten with `-Ctarget-features`.
+    /// Corresponds to `llc -mattr=$features`.
+    /// Note that these are LLVM feature names, not Rust feature names!
     pub features: StaticCow<str>,
     /// Direct or use GOT indirect to reference external data symbols
     pub direct_access_external_data: Option<bool>,
