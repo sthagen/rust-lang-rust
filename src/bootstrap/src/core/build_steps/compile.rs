@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::{env, fs, str};
 
+use build_helper::git::get_closest_merge_commit;
 use serde_derive::Deserialize;
 
 use crate::core::build_steps::tool::SourceType;
@@ -26,10 +27,9 @@ use crate::core::builder::{
 use crate::core::config::{DebuginfoLevel, LlvmLibunwind, RustcLto, TargetSelection};
 use crate::utils::exec::command;
 use crate::utils::helpers::{
-    self, exe, get_clang_cl_resource_dir, get_closest_merge_base_commit, is_debug_info, is_dylib,
-    symlink_dir, t, up_to_date,
+    self, exe, get_clang_cl_resource_dir, is_debug_info, is_dylib, symlink_dir, t, up_to_date,
 };
-use crate::{CLang, Compiler, DependencyType, GitRepo, Mode, LLVM_TOOLS};
+use crate::{CLang, Compiler, DependencyType, GitRepo, Mode};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Std {
@@ -127,13 +127,9 @@ impl Step for Std {
         // the `rust.download-rustc=true` option.
         let force_recompile =
             if builder.rust_info().is_managed_git_subrepository() && builder.download_rustc() {
-                let closest_merge_commit = get_closest_merge_base_commit(
-                    Some(&builder.src),
-                    &builder.config.git_config(),
-                    &builder.config.stage0_metadata.config.git_merge_commit_email,
-                    &[],
-                )
-                .unwrap();
+                let closest_merge_commit =
+                    get_closest_merge_commit(Some(&builder.src), &builder.config.git_config(), &[])
+                        .unwrap();
 
                 // Check if `library` has changes (returns false otherwise)
                 !t!(helpers::git(Some(&builder.src))
@@ -1912,52 +1908,26 @@ impl Step for Assemble {
         // delegates to the `rust-lld` binary for linking and then runs
         // logic to create the final binary. This is used by the
         // `wasm32-wasip2` target of Rust.
-        if builder.tool_enabled("wasm-component-ld") {
-            let wasm_component_ld_exe =
-                builder.ensure(crate::core::build_steps::tool::WasmComponentLd {
-                    compiler: build_compiler,
-                    target: target_compiler.host,
-                });
-            builder.copy_link(
-                &wasm_component_ld_exe,
-                &libdir_bin.join(wasm_component_ld_exe.file_name().unwrap()),
-            );
-        }
+        dist::maybe_install_wasm_component_ld(
+            builder,
+            build_compiler,
+            target_compiler.host,
+            &libdir_bin,
+            false,
+        );
 
-        if builder.config.llvm_enabled(target_compiler.host) {
-            let llvm::LlvmResult { llvm_config, .. } =
-                builder.ensure(llvm::Llvm { target: target_compiler.host });
-            if !builder.config.dry_run() && builder.config.llvm_tools_enabled {
-                let llvm_bin_dir =
-                    command(llvm_config).arg("--bindir").run_capture_stdout(builder).stdout();
-                let llvm_bin_dir = Path::new(llvm_bin_dir.trim());
+        dist::maybe_install_llvm_tools(builder, target_compiler.host, &libdir_bin, false);
 
-                // Since we've already built the LLVM tools, install them to the sysroot.
-                // This is the equivalent of installing the `llvm-tools-preview` component via
-                // rustup, and lets developers use a locally built toolchain to
-                // build projects that expect llvm tools to be present in the sysroot
-                // (e.g. the `bootimage` crate).
-                for tool in LLVM_TOOLS {
-                    let tool_exe = exe(tool, target_compiler.host);
-                    let src_path = llvm_bin_dir.join(&tool_exe);
-                    // When using `download-ci-llvm`, some of the tools
-                    // may not exist, so skip trying to copy them.
-                    if src_path.exists() {
-                        builder.copy_link(&src_path, &libdir_bin.join(&tool_exe));
-                    }
-                }
-            }
-        }
+        let self_contained_bin_dir = libdir_bin.join("self-contained");
+        t!(fs::create_dir_all(&self_contained_bin_dir));
 
-        if builder.config.llvm_bitcode_linker_enabled {
-            let src_path = builder.ensure(crate::core::build_steps::tool::LlvmBitcodeLinker {
-                compiler: build_compiler,
-                target: target_compiler.host,
-                extra_features: vec![],
-            });
-            let tool_exe = exe("llvm-bitcode-linker", target_compiler.host);
-            builder.copy_link(&src_path, &libdir_bin.join(tool_exe));
-        }
+        dist::maybe_install_llvm_bitcode_linker(
+            builder,
+            build_compiler,
+            target_compiler.host,
+            &self_contained_bin_dir,
+            false,
+        );
 
         // Ensure that `libLLVM.so` ends up in the newly build compiler directory,
         // so that it can be found when the newly built `rustc` is run.

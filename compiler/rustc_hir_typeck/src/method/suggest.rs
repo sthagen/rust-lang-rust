@@ -1252,11 +1252,11 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                             && suggested_bounds.contains(parent)
                         {
                             // We don't suggest `PartialEq` when we already suggest `Eq`.
-                        } else if !suggested_bounds.contains(pred) {
-                            if collect_type_param_suggestions(self_ty, *pred, &p) {
-                                suggested = true;
-                                suggested_bounds.insert(pred);
-                            }
+                        } else if !suggested_bounds.contains(pred)
+                            && collect_type_param_suggestions(self_ty, *pred, &p)
+                        {
+                            suggested = true;
+                            suggested_bounds.insert(pred);
                         }
                         (
                             match parent_pred {
@@ -1267,14 +1267,13 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                                         if !suggested
                                             && !suggested_bounds.contains(pred)
                                             && !suggested_bounds.contains(parent_pred)
-                                        {
-                                            if collect_type_param_suggestions(
+                                            && collect_type_param_suggestions(
                                                 self_ty,
                                                 *parent_pred,
                                                 &p,
-                                            ) {
-                                                suggested_bounds.insert(pred);
-                                            }
+                                            )
+                                        {
+                                            suggested_bounds.insert(pred);
                                         }
                                         format!("`{p}`\nwhich is required by `{parent_p}`")
                                     }
@@ -1317,7 +1316,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 let actual_prefix = rcvr_ty.prefix_string(self.tcx);
                 info!("unimplemented_traits.len() == {}", unimplemented_traits.len());
                 let mut long_ty_file = None;
-                let (primary_message, label) = if unimplemented_traits.len() == 1
+                let (primary_message, label, notes) = if unimplemented_traits.len() == 1
                     && unimplemented_traits_only
                 {
                     unimplemented_traits
@@ -1327,16 +1326,16 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                             if trait_ref.self_ty().references_error() || rcvr_ty.references_error()
                             {
                                 // Avoid crashing.
-                                return (None, None);
+                                return (None, None, Vec::new());
                             }
-                            let OnUnimplementedNote { message, label, .. } = self
+                            let OnUnimplementedNote { message, label, notes, .. } = self
                                 .err_ctxt()
                                 .on_unimplemented_note(trait_ref, &obligation, &mut long_ty_file);
-                            (message, label)
+                            (message, label, notes)
                         })
                         .unwrap()
                 } else {
-                    (None, None)
+                    (None, None, Vec::new())
                 };
                 let primary_message = primary_message.unwrap_or_else(|| {
                     format!(
@@ -1363,6 +1362,10 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         "the following trait bounds were not satisfied:\n{bound_list}"
                     ));
                 }
+                for note in notes {
+                    err.note(note);
+                }
+
                 suggested_derive = self.suggest_derive(&mut err, unsatisfied_predicates);
 
                 unsatisfied_bounds = true;
