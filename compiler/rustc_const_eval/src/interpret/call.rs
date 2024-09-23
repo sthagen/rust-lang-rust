@@ -221,7 +221,6 @@ impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
         }
 
         // Fall back to exact equality.
-        // FIXME: We are missing the rules for "repr(C) wrapping compatible types".
         Ok(caller == callee)
     }
 
@@ -234,6 +233,7 @@ impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
         // so we implement a type-based check that reflects the guaranteed rules for ABI compatibility.
         if self.layout_compat(caller_abi.layout, callee_abi.layout)? {
             // Ensure that our checks imply actual ABI compatibility for this concrete call.
+            // (This can fail e.g. if `#[rustc_nonnull_optimization_guaranteed]` is used incorrectly.)
             assert!(caller_abi.eq_abi(callee_abi));
             Ok(true)
         } else {
