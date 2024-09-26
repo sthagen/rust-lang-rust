@@ -222,6 +222,7 @@ static ON_BROKEN_PIPE_FLAG_USED: crate::sync::atomic::AtomicBool =
     target_os = "horizon",
     target_os = "vxworks",
     target_os = "vita",
+    target_os = "nuttx",
 )))]
 pub(crate) fn on_broken_pipe_flag_used() -> bool {
     ON_BROKEN_PIPE_FLAG_USED.load(crate::sync::atomic::Ordering::Relaxed)
@@ -279,6 +280,7 @@ pub fn decode_error_kind(errno: i32) -> ErrorKind {
         libc::ETIMEDOUT => TimedOut,
         libc::ETXTBSY => ExecutableFileBusy,
         libc::EXDEV => CrossesDevices,
+        libc::EINPROGRESS => InProgress,
 
         libc::EACCES | libc::EPERM => PermissionDenied,
 
@@ -424,7 +426,7 @@ cfg_if::cfg_if! {
     }
 }
 
-#[cfg(any(target_os = "espidf", target_os = "horizon", target_os = "vita"))]
+#[cfg(any(target_os = "espidf", target_os = "horizon", target_os = "vita", target_os = "nuttx"))]
 mod unsupported {
     use crate::io;
 
