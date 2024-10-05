@@ -394,7 +394,8 @@ impl<T: ?Sized> NonNull<T> {
     ///
     /// [the module documentation]: crate::ptr#safety
     #[stable(feature = "nonnull", since = "1.25.0")]
-    #[rustc_const_unstable(feature = "const_ptr_as_ref", issue = "91822")]
+    #[cfg_attr(bootstrap, rustc_allow_const_fn_unstable(const_mut_refs))]
+    #[rustc_const_stable(feature = "const_ptr_as_ref", since = "CURRENT_RUSTC_VERSION")]
     #[must_use]
     #[inline(always)]
     pub const unsafe fn as_mut<'a>(&mut self) -> &'a mut T {
@@ -1433,7 +1434,10 @@ impl<T> NonNull<[T]> {
     /// (Note that this example artificially demonstrates a use of this method,
     /// but `let slice = NonNull::from(&x[..]);` would be a better way to write code like this.)
     #[stable(feature = "nonnull_slice_from_raw_parts", since = "1.70.0")]
-    #[rustc_const_unstable(feature = "const_slice_from_raw_parts_mut", issue = "67456")]
+    #[rustc_const_stable(
+        feature = "const_slice_from_raw_parts_mut",
+        since = "CURRENT_RUSTC_VERSION"
+    )]
     #[must_use]
     #[inline]
     pub const fn slice_from_raw_parts(data: NonNull<T>, len: usize) -> Self {
