@@ -572,17 +572,15 @@ fn families() {
 }
 
 #[test]
-fn ignore_mode() {
-    for mode in ["coverage-map", "coverage-run"] {
-        // Indicate profiler support so that "coverage-run" tests aren't skipped.
-        let config: Config = cfg().mode(mode).profiler_support(true).build();
-        let other = if mode == "coverage-run" { "coverage-map" } else { "coverage-run" };
+fn ignore_coverage() {
+    // Indicate profiler support so that "coverage-run" tests aren't skipped.
+    let config = cfg().mode("coverage-map").profiler_support(true).build();
+    assert!(check_ignore(&config, "//@ ignore-coverage-map"));
+    assert!(!check_ignore(&config, "//@ ignore-coverage-run"));
 
-        assert_ne!(mode, other);
-
-        assert!(check_ignore(&config, &format!("//@ ignore-mode-{mode}")));
-        assert!(!check_ignore(&config, &format!("//@ ignore-mode-{other}")));
-    }
+    let config = cfg().mode("coverage-run").profiler_support(true).build();
+    assert!(!check_ignore(&config, "//@ ignore-coverage-map"));
+    assert!(check_ignore(&config, "//@ ignore-coverage-run"));
 }
 
 #[test]
@@ -614,17 +612,6 @@ fn test_unknown_directive_check() {
         &mut poisoned,
         Path::new("a.rs"),
         include_bytes!("./test-auxillary/unknown_directive.rs"),
-    );
-    assert!(poisoned);
-}
-
-#[test]
-fn test_known_legacy_directive_check() {
-    let mut poisoned = false;
-    run_path(
-        &mut poisoned,
-        Path::new("a.rs"),
-        include_bytes!("./test-auxillary/known_legacy_directive.rs"),
     );
     assert!(poisoned);
 }
