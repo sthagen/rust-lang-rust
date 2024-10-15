@@ -125,7 +125,6 @@
 #![feature(const_heap)]
 #![feature(const_index_range_slice_index)]
 #![feature(const_likely)]
-#![feature(const_make_ascii)]
 #![feature(const_nonnull_new)]
 #![feature(const_num_midpoint)]
 #![feature(const_option_ext)]
@@ -268,6 +267,15 @@ mod macros;
 pub mod assert_matches {
     #[unstable(feature = "assert_matches", issue = "82775")]
     pub use crate::macros::{assert_matches, debug_assert_matches};
+}
+
+// We don't export this through #[macro_export] for now, to avoid breakage.
+#[cfg(not(bootstrap))]
+#[unstable(feature = "autodiff", issue = "124509")]
+/// Unstable module containing the unstable `autodiff` macro.
+pub mod autodiff {
+    #[unstable(feature = "autodiff", issue = "124509")]
+    pub use crate::macros::builtin::autodiff;
 }
 
 #[unstable(feature = "cfg_match", issue = "115585")]
