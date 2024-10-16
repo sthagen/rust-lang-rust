@@ -191,6 +191,14 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         expected: Expectation<'tcx>,
         trait_missing_method: bool,
     ) -> ErrorGuaranteed {
+        // NOTE: Reporting a method error should also suppress any unused trait errors,
+        // since the method error is very possibly the reason why the trait wasn't used.
+        for &import_id in
+            self.tcx.in_scope_traits(call_id).into_iter().flatten().flat_map(|c| &c.import_ids)
+        {
+            self.typeck_results.borrow_mut().used_trait_imports.insert(import_id);
+        }
+
         let (span, sugg_span, source, item_name, args) = match self.tcx.hir_node(call_id) {
             hir::Node::Expr(&hir::Expr {
                 kind: hir::ExprKind::MethodCall(segment, rcvr, args, _),
@@ -952,7 +960,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         continue;
                     }
                     unimplemented_traits.entry(p.trait_ref.def_id).or_insert((
-                        predicate.kind().rebind(p.trait_ref),
+                        predicate.kind().rebind(p),
                         Obligation {
                             cause: cause.clone(),
                             param_env: self.param_env,
