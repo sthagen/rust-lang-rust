@@ -279,6 +279,26 @@ impl<'tcx> Interner for TyCtxt<'tcx> {
         self.debug_assert_args_compatible(def_id, args);
     }
 
+    /// Assert that the args from an `ExistentialTraitRef` or `ExistentialProjection`
+    /// are compatible with the `DefId`. Since we're missing a `Self` type, stick on
+    /// a dummy self type and forward to `debug_assert_args_compatible`.
+    fn debug_assert_existential_args_compatible(
+        self,
+        def_id: Self::DefId,
+        args: Self::GenericArgs,
+    ) {
+        // FIXME: We could perhaps add a `skip: usize` to `debug_assert_args_compatible`
+        // to avoid needing to reintern the set of args...
+        if cfg!(debug_assertions) {
+            self.debug_assert_args_compatible(
+                def_id,
+                self.mk_args_from_iter(
+                    [self.types.trait_object_dummy_self.into()].into_iter().chain(args.iter()),
+                ),
+            );
+        }
+    }
+
     fn mk_type_list_from_iter<I, T>(self, args: I) -> T::Output
     where
         I: Iterator<Item = T>,
@@ -3093,7 +3113,7 @@ impl<'tcx> TyCtxt<'tcx> {
                 Some(stability) if stability.is_const_unstable() => {
                     // has a `rustc_const_unstable` attribute, check whether the user enabled the
                     // corresponding feature gate.
-                    self.features().declared(stability.feature)
+                    self.features().enabled(stability.feature)
                 }
                 // functions without const stability are either stable user written
                 // const fn or the user is using feature gates and we thus don't
