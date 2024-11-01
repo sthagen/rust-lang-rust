@@ -268,7 +268,7 @@ fn check_opaque_meets_bounds<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: LocalDefId,
     span: Span,
-    origin: &hir::OpaqueTyOrigin,
+    origin: &hir::OpaqueTyOrigin<LocalDefId>,
 ) -> Result<(), ErrorGuaranteed> {
     let defining_use_anchor = match *origin {
         hir::OpaqueTyOrigin::FnReturn { parent, .. }
@@ -677,7 +677,7 @@ pub(crate) fn check_item_type(tcx: TyCtxt<'_>, def_id: LocalDefId) {
         DefKind::OpaqueTy => {
             check_opaque_precise_captures(tcx, def_id);
 
-            let origin = tcx.opaque_type_origin(def_id);
+            let origin = tcx.local_opaque_ty_origin(def_id);
             if let hir::OpaqueTyOrigin::FnReturn { parent: fn_def_id, .. }
             | hir::OpaqueTyOrigin::AsyncFn { parent: fn_def_id, .. } = origin
                 && let hir::Node::TraitItem(trait_item) = tcx.hir_node_by_def_id(fn_def_id)
@@ -821,8 +821,7 @@ pub(super) fn check_specialization_validity<'tcx>(
     let result = opt_result.unwrap_or(Ok(()));
 
     if let Err(parent_impl) = result {
-        // FIXME(effects) the associated type from effects could be specialized
-        if !tcx.is_impl_trait_in_trait(impl_item) && !tcx.is_effects_desugared_assoc_ty(impl_item) {
+        if !tcx.is_impl_trait_in_trait(impl_item) {
             report_forbidden_specialization(tcx, impl_item, parent_impl);
         } else {
             tcx.dcx().delayed_bug(format!("parent item: {parent_impl:?} not marked as default"));

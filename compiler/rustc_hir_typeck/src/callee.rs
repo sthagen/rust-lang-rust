@@ -307,7 +307,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 if borrow {
                     // Check for &self vs &mut self in the method signature. Since this is either
                     // the Fn or FnMut trait, it should be one of those.
-                    let ty::Ref(region, _, mutbl) = method.sig.inputs()[0].kind() else {
+                    let ty::Ref(_, _, mutbl) = method.sig.inputs()[0].kind() else {
                         bug!("Expected `FnMut`/`Fn` to take receiver by-ref/by-mut")
                     };
 
@@ -317,7 +317,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     let mutbl = AutoBorrowMutability::new(*mutbl, AllowTwoPhase::No);
 
                     autoref = Some(Adjustment {
-                        kind: Adjust::Borrow(AutoBorrow::Ref(*region, mutbl)),
+                        kind: Adjust::Borrow(AutoBorrow::Ref(mutbl)),
                         target: method.sig.inputs()[0],
                     });
                 }
@@ -851,11 +851,16 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             return;
         }
 
+        // If we have `rustc_do_not_const_check`, do not check `~const` bounds.
+        if self.tcx.has_attr(self.body_id, sym::rustc_do_not_const_check) {
+            return;
+        }
+
         let host = match self.tcx.hir().body_const_context(self.body_id) {
             Some(hir::ConstContext::Const { .. } | hir::ConstContext::Static(_)) => {
-                ty::HostPolarity::Const
+                ty::BoundConstness::Const
             }
-            Some(hir::ConstContext::ConstFn) => ty::HostPolarity::Maybe,
+            Some(hir::ConstContext::ConstFn) => ty::BoundConstness::Maybe,
             None => return,
         };
 

@@ -55,7 +55,7 @@ use rustc_type_ir::fold::TypeFoldable;
 use rustc_type_ir::lang_items::TraitSolverLangItem;
 pub use rustc_type_ir::lift::Lift;
 use rustc_type_ir::{CollectAndApply, Interner, TypeFlags, WithCachedTypeInfo, search_graph};
-use tracing::{debug, trace};
+use tracing::{debug, instrument};
 
 use crate::arena::Arena;
 use crate::dep_graph::{DepGraph, DepKindStruct};
@@ -76,8 +76,8 @@ use crate::traits::solve::{
 };
 use crate::ty::predicate::ExistentialPredicateStableCmpExt as _;
 use crate::ty::{
-    self, AdtDef, AdtDefData, AdtKind, Binder, Clause, Clauses, Const, GenericArg, GenericArgs,
-    GenericArgsRef, GenericParamDefKind, HostPolarity, ImplPolarity, List, ListWithCachedTypeInfo,
+    self, AdtDef, AdtDefData, AdtKind, Binder, BoundConstness, Clause, Clauses, Const, GenericArg,
+    GenericArgs, GenericArgsRef, GenericParamDefKind, ImplPolarity, List, ListWithCachedTypeInfo,
     ParamConst, ParamTy, Pattern, PatternKind, PolyExistentialPredicate, PolyFnSig, Predicate,
     PredicateKind, PredicatePolarity, Region, RegionKind, ReprOptions, TraitObjectVisitor, Ty,
     TyKind, TyVid, Visibility,
@@ -2103,11 +2103,9 @@ impl<'tcx> TyCtxt<'tcx> {
     }
 
     /// Returns the origin of the opaque type `def_id`.
-    #[track_caller]
-    pub fn opaque_type_origin(self, def_id: LocalDefId) -> hir::OpaqueTyOrigin {
-        let origin = self.hir().expect_opaque_ty(def_id).origin;
-        trace!("opaque_type_origin({def_id:?}) => {origin:?}");
-        origin
+    #[instrument(skip(self), level = "trace", ret)]
+    pub fn local_opaque_ty_origin(self, def_id: LocalDefId) -> hir::OpaqueTyOrigin<LocalDefId> {
+        self.hir().expect_opaque_ty(def_id).origin
     }
 }
 
@@ -2205,7 +2203,7 @@ macro_rules! nop_slice_lift {
 nop_slice_lift! {ty::ValTree<'a> => ty::ValTree<'tcx>}
 
 TrivialLiftImpls! {
-    ImplPolarity, PredicatePolarity, Promoted, HostPolarity,
+    ImplPolarity, PredicatePolarity, Promoted, BoundConstness,
 }
 
 macro_rules! sty_debug_print {
@@ -3060,7 +3058,7 @@ impl<'tcx> TyCtxt<'tcx> {
 
         loop {
             let parent = self.local_parent(opaque_lifetime_param_def_id);
-            let hir::OpaqueTy { lifetime_mapping, .. } = self.hir().expect_opaque_ty(parent);
+            let lifetime_mapping = self.opaque_captured_lifetimes(parent);
 
             let Some((lifetime, _)) = lifetime_mapping
                 .iter()
@@ -3069,8 +3067,8 @@ impl<'tcx> TyCtxt<'tcx> {
                 bug!("duplicated lifetime param should be present");
             };
 
-            match self.named_bound_var(lifetime.hir_id) {
-                Some(resolve_bound_vars::ResolvedArg::EarlyBound(ebv)) => {
+            match *lifetime {
+                resolve_bound_vars::ResolvedArg::EarlyBound(ebv) => {
                     let new_parent = self.local_parent(ebv);
 
                     // If we map to another opaque, then it should be a parent
@@ -3089,7 +3087,7 @@ impl<'tcx> TyCtxt<'tcx> {
                         name: self.item_name(ebv.to_def_id()),
                     });
                 }
-                Some(resolve_bound_vars::ResolvedArg::LateBound(_, _, lbv)) => {
+                resolve_bound_vars::ResolvedArg::LateBound(_, _, lbv) => {
                     let new_parent = self.local_parent(lbv);
                     return ty::Region::new_late_param(
                         self,
@@ -3100,13 +3098,13 @@ impl<'tcx> TyCtxt<'tcx> {
                         ),
                     );
                 }
-                Some(resolve_bound_vars::ResolvedArg::Error(guar)) => {
+                resolve_bound_vars::ResolvedArg::Error(guar) => {
                     return ty::Region::new_error(self, guar);
                 }
                 _ => {
                     return ty::Region::new_error_with_message(
                         self,
-                        lifetime.ident.span,
+                        self.def_span(opaque_lifetime_param_def_id),
                         "cannot resolve lifetime",
                     );
                 }
