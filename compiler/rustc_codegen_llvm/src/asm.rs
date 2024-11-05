@@ -1,6 +1,7 @@
 use std::assert_matches::assert_matches;
 
 use libc::{c_char, c_uint};
+use rustc_abi::{BackendRepr, Float, Integer, Primitive, Scalar};
 use rustc_ast::{InlineAsmOptions, InlineAsmTemplatePiece};
 use rustc_codegen_ssa::mir::operand::OperandValue;
 use rustc_codegen_ssa::traits::*;
@@ -9,7 +10,6 @@ use rustc_middle::ty::Instance;
 use rustc_middle::ty::layout::TyAndLayout;
 use rustc_middle::{bug, span_bug};
 use rustc_span::{Pos, Span, Symbol, sym};
-use rustc_target::abi::*;
 use rustc_target::asm::*;
 use smallvec::SmallVec;
 use tracing::debug;
@@ -638,7 +638,9 @@ fn reg_to_llvm(reg: InlineAsmRegOrRegClass, layout: Option<&TyAndLayout<'_>>) ->
             PowerPC(PowerPCInlineAsmRegClass::reg) => "r",
             PowerPC(PowerPCInlineAsmRegClass::reg_nonzero) => "b",
             PowerPC(PowerPCInlineAsmRegClass::freg) => "f",
-            PowerPC(PowerPCInlineAsmRegClass::cr) | PowerPC(PowerPCInlineAsmRegClass::xer) => {
+            PowerPC(PowerPCInlineAsmRegClass::cr)
+            | PowerPC(PowerPCInlineAsmRegClass::xer)
+            | PowerPC(PowerPCInlineAsmRegClass::vreg) => {
                 unreachable!("clobber-only")
             }
             RiscV(RiscVInlineAsmRegClass::reg) => "r",
@@ -800,7 +802,9 @@ fn dummy_output_type<'ll>(cx: &CodegenCx<'ll, '_>, reg: InlineAsmRegClass) -> &'
         PowerPC(PowerPCInlineAsmRegClass::reg) => cx.type_i32(),
         PowerPC(PowerPCInlineAsmRegClass::reg_nonzero) => cx.type_i32(),
         PowerPC(PowerPCInlineAsmRegClass::freg) => cx.type_f64(),
-        PowerPC(PowerPCInlineAsmRegClass::cr) | PowerPC(PowerPCInlineAsmRegClass::xer) => {
+        PowerPC(PowerPCInlineAsmRegClass::cr)
+        | PowerPC(PowerPCInlineAsmRegClass::xer)
+        | PowerPC(PowerPCInlineAsmRegClass::vreg) => {
             unreachable!("clobber-only")
         }
         RiscV(RiscVInlineAsmRegClass::reg) => cx.type_i32(),

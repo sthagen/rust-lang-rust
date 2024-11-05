@@ -1,6 +1,7 @@
 use std::collections::hash_map::Entry;
 use std::slice;
 
+use rustc_abi::FieldIdx;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_errors::{Applicability, Diag, ErrorGuaranteed, MultiSpan, StashKey};
 use rustc_hir as hir;
@@ -32,7 +33,6 @@ use rustc_span::Span;
 use rustc_span::def_id::LocalDefId;
 use rustc_span::hygiene::DesugaringKind;
 use rustc_span::symbol::kw;
-use rustc_target::abi::FieldIdx;
 use rustc_trait_selection::error_reporting::infer::need_type_info::TypeAnnotationNeeded;
 use rustc_trait_selection::traits::{
     self, NormalizeExt, ObligationCauseCode, StructurallyNormalizeExt,
@@ -254,10 +254,32 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         }
 
         for a in &adj {
-            if let Adjust::NeverToAny = a.kind {
-                if a.target.is_ty_var() {
-                    self.diverging_type_vars.borrow_mut().insert(a.target);
-                    debug!("apply_adjustments: adding `{:?}` as diverging type var", a.target);
+            match a.kind {
+                Adjust::NeverToAny => {
+                    if a.target.is_ty_var() {
+                        self.diverging_type_vars.borrow_mut().insert(a.target);
+                        debug!("apply_adjustments: adding `{:?}` as diverging type var", a.target);
+                    }
+                }
+                Adjust::Deref(Some(overloaded_deref)) => {
+                    self.enforce_context_effects(
+                        expr.span,
+                        overloaded_deref.method_call(self.tcx),
+                        self.tcx.mk_args(&[a.target.into()]),
+                    );
+                }
+                Adjust::Deref(None) => {
+                    // FIXME(effects): We *could* enforce `&T: ~const Deref` here.
+                }
+                Adjust::Pointer(_pointer_coercion) => {
+                    // FIXME(effects): We should probably enforce these.
+                }
+                Adjust::ReborrowPin(_mutability) => {
+                    // FIXME(effects): We could enforce these; they correspond to
+                    // `&mut T: DerefMut` tho, so it's kinda moot.
+                }
+                Adjust::Borrow(_) => {
+                    // No effects to enforce here.
                 }
             }
         }
