@@ -545,6 +545,14 @@ const IBMZ_FEATURES: &[(&str, Stability, ImpliedFeatures)] = &[
     // tidy-alphabetical-end
 ];
 
+const SPARC_FEATURES: &[(&str, Stability, ImpliedFeatures)] = &[
+    // tidy-alphabetical-start
+    ("leoncasa", Unstable(sym::sparc_target_feature), &[]),
+    ("v8plus", Unstable(sym::sparc_target_feature), &[]),
+    ("v9", Unstable(sym::sparc_target_feature), &[]),
+    // tidy-alphabetical-end
+];
+
 /// When rustdoc is running, provide a list of all known features so that all their respective
 /// primitives may be documented.
 ///
@@ -563,9 +571,17 @@ pub fn all_rust_features() -> impl Iterator<Item = (&'static str, Stability)> {
         .chain(CSKY_FEATURES)
         .chain(LOONGARCH_FEATURES)
         .chain(IBMZ_FEATURES)
+        .chain(SPARC_FEATURES)
         .cloned()
         .map(|(f, s, _)| (f, s))
 }
+
+// These arrays represent the least-constraining feature that is required for vector types up to a
+// certain size to have their "proper" ABI on each architecture.
+// Note that they must be kept sorted by vector size.
+const X86_FEATURES_FOR_CORRECT_VECTOR_ABI: &'static [(u64, &'static str)] =
+    &[(128, "sse"), (256, "avx"), (512, "avx512f")];
+const AARCH64_FEATURES_FOR_CORRECT_VECTOR_ABI: &'static [(u64, &'static str)] = &[(128, "neon")];
 
 impl super::spec::Target {
     pub fn rust_target_features(&self) -> &'static [(&'static str, Stability, ImpliedFeatures)] {
@@ -582,7 +598,18 @@ impl super::spec::Target {
             "csky" => CSKY_FEATURES,
             "loongarch64" => LOONGARCH_FEATURES,
             "s390x" => IBMZ_FEATURES,
+            "sparc" | "sparc64" => SPARC_FEATURES,
             _ => &[],
+        }
+    }
+
+    // Returns None if we do not support ABI checks on the given target yet.
+    pub fn features_for_correct_vector_abi(&self) -> Option<&'static [(u64, &'static str)]> {
+        match &*self.arch {
+            "x86" | "x86_64" => Some(X86_FEATURES_FOR_CORRECT_VECTOR_ABI),
+            "aarch64" => Some(AARCH64_FEATURES_FOR_CORRECT_VECTOR_ABI),
+            // FIXME: add support for non-tier1 architectures
+            _ => None,
         }
     }
 
