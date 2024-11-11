@@ -972,6 +972,7 @@ warn_non_default_branch = true
 contributing_url = "https://rustc-dev-guide.rust-lang.org/getting-started.html"
 users_on_vacation = [
     "fmease",
+    "jieyouxu",
     "jyn514",
     "oli-obk",
 ]
@@ -1185,6 +1186,12 @@ project-exploit-mitigations = [
 "/src/rustdoc-json-types" =                              ["rustdoc"]
 "/src/stage0" =                                          ["bootstrap"]
 "/tests/run-make" =                                      ["@jieyouxu"]
+"/tests/rustdoc" =                                       ["rustdoc"]
+"/tests/rustdoc-gui" =                                   ["rustdoc"]
+"/tests/rustdoc-js-std" =                                ["rustdoc"]
+"/tests/rustdoc-js" =                                    ["rustdoc"]
+"/tests/rustdoc-json" =                                  ["@aDotInTheVoid"]
+"/tests/rustdoc-ui" =                                    ["rustdoc"]
 "/tests/ui" =                                            ["compiler"]
 "/src/tools/cargo" =                                     ["@ehuss"]
 "/src/tools/compiletest" =                               ["bootstrap", "@wesleywiser", "@oli-obk", "@compiler-errors", "@jieyouxu"]
