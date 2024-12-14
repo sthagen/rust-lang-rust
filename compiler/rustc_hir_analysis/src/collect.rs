@@ -201,12 +201,13 @@ pub(crate) fn placeholder_type_error_diag<'cx, 'tcx>(
         placeholder_types.iter().map(|sp| (*sp, (*type_name).to_string())).collect();
 
     if let Some(generics) = generics {
-        if let Some(arg) = params.iter().find(|arg| {
-            matches!(arg.name, hir::ParamName::Plain(Ident { name: kw::Underscore, .. }))
+        if let Some(span) = params.iter().find_map(|arg| match arg.name {
+            hir::ParamName::Plain(Ident { name: kw::Underscore, span }) => Some(span),
+            _ => None,
         }) {
             // Account for `_` already present in cases like `struct S<_>(_);` and suggest
             // `struct S<T>(T);` instead of `struct S<_, T>(T);`.
-            sugg.push((arg.span, (*type_name).to_string()));
+            sugg.push((span, (*type_name).to_string()));
         } else if let Some(span) = generics.span_for_param_suggestion() {
             // Account for bounds, we want `fn foo<T: E, K>(_: K)` not `fn foo<T, K: E>(_: K)`.
             sugg.push((span, format!(", {type_name}")));
@@ -1611,7 +1612,7 @@ fn impl_trait_header(tcx: TyCtxt<'_>, def_id: LocalDefId) -> Option<ty::ImplTrai
     impl_.of_trait.as_ref().map(|ast_trait_ref| {
         let selfty = tcx.type_of(def_id).instantiate_identity();
 
-        check_impl_constness(tcx, tcx.is_const_trait_impl(def_id.to_def_id()), ast_trait_ref);
+        check_impl_constness(tcx, impl_.constness, ast_trait_ref);
 
         let trait_ref = icx.lowerer().lower_impl_trait_ref(ast_trait_ref, selfty);
 
@@ -1619,22 +1620,23 @@ fn impl_trait_header(tcx: TyCtxt<'_>, def_id: LocalDefId) -> Option<ty::ImplTrai
             trait_ref: ty::EarlyBinder::bind(trait_ref),
             safety: impl_.safety,
             polarity: polarity_of_impl(tcx, def_id, impl_, item.span),
+            constness: impl_.constness,
         }
     })
 }
 
 fn check_impl_constness(
     tcx: TyCtxt<'_>,
-    is_const: bool,
+    constness: hir::Constness,
     hir_trait_ref: &hir::TraitRef<'_>,
-) -> Option<ErrorGuaranteed> {
-    if !is_const {
-        return None;
+) {
+    if let hir::Constness::NotConst = constness {
+        return;
     }
 
-    let trait_def_id = hir_trait_ref.trait_def_id()?;
+    let Some(trait_def_id) = hir_trait_ref.trait_def_id() else { return };
     if tcx.is_const_trait(trait_def_id) {
-        return None;
+        return;
     }
 
     let trait_name = tcx.item_name(trait_def_id).to_string();
@@ -1650,14 +1652,14 @@ fn check_impl_constness(
             ),
             (false, _) | (_, false) => (None, ""),
         };
-    Some(tcx.dcx().emit_err(errors::ConstImplForNonConstTrait {
+    tcx.dcx().emit_err(errors::ConstImplForNonConstTrait {
         trait_ref_span: hir_trait_ref.path.span,
         trait_name,
         local_trait_span,
         suggestion_pre,
         marking: (),
         adding: (),
-    }))
+    });
 }
 
 fn polarity_of_impl(
