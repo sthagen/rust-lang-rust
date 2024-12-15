@@ -2025,6 +2025,22 @@ pub fn is_range_literal(expr: &Expr<'_>) -> bool {
     }
 }
 
+/// Checks if the specified expression needs parentheses for prefix
+/// or postfix suggestions to be valid.
+/// For example, `a + b` requires parentheses to suggest `&(a + b)`,
+/// but just `a` does not.
+/// Similarly, `(a + b).c()` also requires parentheses.
+/// This should not be used for other types of suggestions.
+pub fn expr_needs_parens(expr: &Expr<'_>) -> bool {
+    match expr.kind {
+        // parenthesize if needed (Issue #46756)
+        ExprKind::Cast(_, _) | ExprKind::Binary(_, _, _) => true,
+        // parenthesize borrows of range literals (Issue #54505)
+        _ if is_range_literal(expr) => true,
+        _ => false,
+    }
+}
+
 #[derive(Debug, Clone, Copy, HashStable_Generic)]
 pub enum ExprKind<'hir> {
     /// Allow anonymous constants from an inline `const` block
@@ -3418,6 +3434,19 @@ impl Safety {
             Self::Safe => "",
         }
     }
+
+    #[inline]
+    pub fn is_unsafe(self) -> bool {
+        !self.is_safe()
+    }
+
+    #[inline]
+    pub fn is_safe(self) -> bool {
+        match self {
+            Self::Unsafe => false,
+            Self::Safe => true,
+        }
+    }
 }
 
 impl fmt::Display for Safety {
@@ -3462,7 +3491,7 @@ impl FnHeader {
     }
 
     pub fn is_unsafe(&self) -> bool {
-        matches!(&self.safety, Safety::Unsafe)
+        self.safety.is_unsafe()
     }
 }
 
