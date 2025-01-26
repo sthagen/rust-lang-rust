@@ -178,19 +178,6 @@ pub(crate) enum BuiltinDeprecatedAttrLinkSuggestion<'a> {
 }
 
 #[derive(LintDiagnostic)]
-#[diag(lint_builtin_deprecated_attr_used)]
-pub(crate) struct BuiltinDeprecatedAttrUsed {
-    pub name: String,
-    #[suggestion(
-        lint_builtin_deprecated_attr_default_suggestion,
-        style = "short",
-        code = "",
-        applicability = "machine-applicable"
-    )]
-    pub suggestion: Span,
-}
-
-#[derive(LintDiagnostic)]
 #[diag(lint_builtin_unused_doc_comment)]
 pub(crate) struct BuiltinUnusedDocComment<'a> {
     pub kind: &'a str,
@@ -2565,10 +2552,6 @@ pub(crate) struct UnusedCrateDependency {
     pub extern_crate: Symbol,
     pub local_crate: Symbol,
 }
-
-#[derive(LintDiagnostic)]
-#[diag(lint_wasm_c_abi)]
-pub(crate) struct WasmCAbi;
 
 #[derive(LintDiagnostic)]
 #[diag(lint_ill_formed_attribute_input)]
