@@ -1392,9 +1392,13 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
         mut values: Option<ty::ParamEnvAnd<'tcx, ValuePairs<'tcx>>>,
         terr: TypeError<'tcx>,
         prefer_label: bool,
+        override_span: Option<Span>,
     ) {
-        let span = cause.span;
-
+        // We use `override_span` when we want the error to point at a `Span` other than
+        // `cause.span`. This is used in E0271, when a closure is passed in where the return type
+        // isn't what was expected. We want to point at the closure's return type (or expression),
+        // instead of the expression where the closure is passed as call argument.
+        let span = override_span.unwrap_or(cause.span);
         // For some types of errors, expected-found does not make
         // sense, so just ignore the values we were given.
         if let TypeError::CyclicTy(_) = terr {
@@ -2023,14 +2027,12 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
             _ => None,
         };
         if let Some(tykind) = tykind
-            && let hir::TyKind::Array(_, length) = tykind
-            && let Some((scalar, ty)) = sz.found.try_to_scalar()
-            && ty == self.tcx.types.usize
+            && let hir::TyKind::Array(_, length_arg) = tykind
+            && let Some(length_val) = sz.found.try_to_target_usize(self.tcx)
         {
-            let span = length.span();
             Some(TypeErrorAdditionalDiags::ConsiderSpecifyingLength {
-                span,
-                length: scalar.to_target_usize(&self.tcx).unwrap(),
+                span: length_arg.span(),
+                length: length_val,
             })
         } else {
             None
@@ -2059,6 +2061,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
             Some(param_env.and(trace.values)),
             terr,
             false,
+            None,
         );
         diag
     }
