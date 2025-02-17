@@ -14,7 +14,10 @@ use rustc_infer::infer::{NllRegionVariableOrigin, RelateParamBound};
 use rustc_middle::bug;
 use rustc_middle::hir::place::PlaceBase;
 use rustc_middle::mir::{AnnotationSource, ConstraintCategory, ReturnConstraint};
-use rustc_middle::ty::{self, GenericArgs, Region, RegionVid, Ty, TyCtxt, TypeVisitor};
+use rustc_middle::ty::fold::fold_regions;
+use rustc_middle::ty::{
+    self, GenericArgs, Region, RegionVid, Ty, TyCtxt, TypeFoldable, TypeVisitor,
+};
 use rustc_span::{Ident, Span, kw};
 use rustc_trait_selection::error_reporting::InferCtxtErrorExt;
 use rustc_trait_selection::error_reporting::infer::nice_region_error::{
@@ -183,6 +186,17 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
         }
     }
 
+    /// Map the regions in the type to named regions, where possible.
+    fn name_regions<T>(&self, tcx: TyCtxt<'tcx>, ty: T) -> T
+    where
+        T: TypeFoldable<TyCtxt<'tcx>>,
+    {
+        fold_regions(tcx, ty, |region, _| match *region {
+            ty::ReVar(vid) => self.to_error_region(vid).unwrap_or(region),
+            _ => region,
+        })
+    }
+
     /// Returns `true` if a closure is inferred to be an `FnMut` closure.
     fn is_closure_fn_mut(&self, fr: RegionVid) -> bool {
         if let Some(ty::ReLateParam(late_param)) = self.to_error_region(fr).as_deref()
@@ -205,7 +219,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
         lower_bound: RegionVid,
     ) {
         let mut suggestions = vec![];
-        let hir = self.infcx.tcx.hir();
+        let tcx = self.infcx.tcx;
 
         // find generic associated types in the given region 'lower_bound'
         let gat_id_and_generics = self
@@ -214,12 +228,9 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
             .map(|placeholder| {
                 if let Some(id) = placeholder.bound.kind.get_id()
                     && let Some(placeholder_id) = id.as_local()
-                    && let gat_hir_id = self.infcx.tcx.local_def_id_to_hir_id(placeholder_id)
-                    && let Some(generics_impl) = self
-                        .infcx
-                        .tcx
-                        .parent_hir_node(self.infcx.tcx.parent_hir_id(gat_hir_id))
-                        .generics()
+                    && let gat_hir_id = tcx.local_def_id_to_hir_id(placeholder_id)
+                    && let Some(generics_impl) =
+                        tcx.parent_hir_node(tcx.parent_hir_id(gat_hir_id)).generics()
                 {
                     Some((gat_hir_id, generics_impl))
                 } else {
@@ -240,7 +251,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                 };
                 if bound_generic_params
                     .iter()
-                    .rfind(|bgp| self.infcx.tcx.local_def_id_to_hir_id(bgp.def_id) == *gat_hir_id)
+                    .rfind(|bgp| tcx.local_def_id_to_hir_id(bgp.def_id) == *gat_hir_id)
                     .is_some()
                 {
                     for bound in *bounds {
@@ -256,7 +267,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                 return;
             };
             diag.span_note(*trait_span, fluent::borrowck_limitations_implies_static);
-            let Some(generics_fn) = hir.get_generics(self.body.source.def_id().expect_local())
+            let Some(generics_fn) = tcx.hir_get_generics(self.body.source.def_id().expect_local())
             else {
                 return;
             };
@@ -314,7 +325,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                     let type_test_span = type_test.span;
 
                     if let Some(lower_bound_region) = lower_bound_region {
-                        let generic_ty = self.regioncx.name_regions(
+                        let generic_ty = self.name_regions(
                             self.infcx.tcx,
                             type_test.generic_kind.to_ty(self.infcx.tcx),
                         );
@@ -323,7 +334,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                             self.body.source.def_id().expect_local(),
                             type_test_span,
                             Some(origin),
-                            self.regioncx.name_regions(self.infcx.tcx, type_test.generic_kind),
+                            self.name_regions(self.infcx.tcx, type_test.generic_kind),
                             lower_bound_region,
                         ));
                     } else {
@@ -354,9 +365,13 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                 }
 
                 RegionErrorKind::UnexpectedHiddenRegion { span, hidden_ty, key, member_region } => {
-                    let named_ty = self.regioncx.name_regions(self.infcx.tcx, hidden_ty);
-                    let named_key = self.regioncx.name_regions(self.infcx.tcx, key);
-                    let named_region = self.regioncx.name_regions(self.infcx.tcx, member_region);
+                    let named_ty =
+                        self.regioncx.name_regions_for_member_constraint(self.infcx.tcx, hidden_ty);
+                    let named_key =
+                        self.regioncx.name_regions_for_member_constraint(self.infcx.tcx, key);
+                    let named_region = self
+                        .regioncx
+                        .name_regions_for_member_constraint(self.infcx.tcx, member_region);
                     let diag = unexpected_hidden_region_diagnostic(
                         self.infcx,
                         self.mir_def_id(),
@@ -1144,7 +1159,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
 
         if ocx.select_all_or_error().is_empty() && count > 0 {
             diag.span_suggestion_verbose(
-                tcx.hir().body(*body).value.peel_blocks().span.shrink_to_lo(),
+                tcx.hir_body(*body).value.peel_blocks().span.shrink_to_lo(),
                 fluent::borrowck_dereference_suggestion,
                 "*".repeat(count),
                 Applicability::MachineApplicable,
