@@ -87,7 +87,6 @@
 #![feature(try_blocks)]
 #![feature(try_find)]
 #![feature(try_trait_v2)]
-#![feature(unsigned_is_multiple_of)]
 #![feature(unsize)]
 #![feature(unsized_tuple_coercion)]
 #![feature(unwrap_infallible)]
@@ -154,10 +153,7 @@ mod intrinsics;
 mod io;
 mod iter;
 mod lazy;
-#[cfg(not(bootstrap))]
 mod macros;
-#[cfg(bootstrap)]
-mod macros_bootstrap;
 mod manually_drop;
 mod mem;
 mod net;

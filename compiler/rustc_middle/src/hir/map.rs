@@ -174,15 +174,12 @@ impl<'tcx> TyCtxt<'tcx> {
     }
 
     #[inline]
-    pub fn hir_free_items(self) -> impl Iterator<Item = ItemId> + 'tcx {
+    pub fn hir_free_items(self) -> impl Iterator<Item = ItemId> {
         self.hir_crate_items(()).free_items.iter().copied()
     }
 
     #[inline]
-    pub fn hir_module_free_items(
-        self,
-        module: LocalModDefId,
-    ) -> impl Iterator<Item = ItemId> + 'tcx {
+    pub fn hir_module_free_items(self, module: LocalModDefId) -> impl Iterator<Item = ItemId> {
         self.hir_module_items(module).free_items()
     }
 
@@ -283,7 +280,7 @@ impl<'tcx> TyCtxt<'tcx> {
         })
     }
 
-    pub fn hir_body_param_names(self, id: BodyId) -> impl Iterator<Item = Ident> + 'tcx {
+    pub fn hir_body_param_names(self, id: BodyId) -> impl Iterator<Item = Ident> {
         self.hir_body(id).params.iter().map(|arg| match arg.pat.kind {
             PatKind::Binding(_, _, ident, _) => ident,
             _ => Ident::empty(),
@@ -305,6 +302,7 @@ impl<'tcx> TyCtxt<'tcx> {
             DefKind::Static { safety: _, mutability, nested: false } => {
                 BodyOwnerKind::Static(mutability)
             }
+            DefKind::GlobalAsm => BodyOwnerKind::GlobalAsm,
             dk => bug!("{:?} is not a body node: {:?}", def_id, dk),
         }
     }
@@ -327,7 +325,7 @@ impl<'tcx> TyCtxt<'tcx> {
                 ConstContext::ConstFn
             }
             BodyOwnerKind::Fn if self.is_const_default_method(def_id) => ConstContext::ConstFn,
-            BodyOwnerKind::Fn | BodyOwnerKind::Closure => return None,
+            BodyOwnerKind::Fn | BodyOwnerKind::Closure | BodyOwnerKind::GlobalAsm => return None,
         };
 
         Some(ccx)
@@ -337,7 +335,7 @@ impl<'tcx> TyCtxt<'tcx> {
     /// crate. If you would prefer to iterate over the bodies
     /// themselves, you can do `self.hir().krate().body_ids.iter()`.
     #[inline]
-    pub fn hir_body_owners(self) -> impl Iterator<Item = LocalDefId> + 'tcx {
+    pub fn hir_body_owners(self) -> impl Iterator<Item = LocalDefId> {
         self.hir_crate_items(()).body_owners.iter().copied()
     }
 
@@ -502,7 +500,7 @@ impl<'tcx> TyCtxt<'tcx> {
     /// Returns an iterator for the nodes in the ancestor tree of the `current_id`
     /// until the crate root is reached. Prefer this over your own loop using `parent_id`.
     #[inline]
-    pub fn hir_parent_id_iter(self, current_id: HirId) -> impl Iterator<Item = HirId> + 'tcx {
+    pub fn hir_parent_id_iter(self, current_id: HirId) -> impl Iterator<Item = HirId> {
         ParentHirIterator::new(self, current_id)
     }
 
@@ -1166,7 +1164,7 @@ fn hir_id_to_string(map: Map<'_>, id: HirId) -> String {
                 ItemKind::Macro(..) => "macro",
                 ItemKind::Mod(..) => "mod",
                 ItemKind::ForeignMod { .. } => "foreign mod",
-                ItemKind::GlobalAsm(..) => "global asm",
+                ItemKind::GlobalAsm { .. } => "global asm",
                 ItemKind::TyAlias(..) => "ty",
                 ItemKind::Enum(..) => "enum",
                 ItemKind::Struct(..) => "struct",
