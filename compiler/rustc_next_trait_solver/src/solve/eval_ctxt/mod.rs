@@ -967,7 +967,7 @@ where
 
     /// `enter_forall`, but takes `&mut self` and passes it back through the
     /// callback since it can't be aliased during the call.
-    pub(super) fn enter_forall<T: TypeFoldable<I> + Copy, U>(
+    pub(super) fn enter_forall<T: TypeFoldable<I>, U>(
         &mut self,
         value: ty::Binder<I, T>,
         f: impl FnOnce(&mut Self, T) -> U,
@@ -1091,12 +1091,11 @@ where
 
     pub(super) fn is_transmutable(
         &mut self,
-        param_env: I::ParamEnv,
         dst: I::Ty,
         src: I::Ty,
         assume: I::Const,
     ) -> Result<Certainty, NoSolution> {
-        self.delegate.is_transmutable(param_env, dst, src, assume)
+        self.delegate.is_transmutable(dst, src, assume)
     }
 }
 
