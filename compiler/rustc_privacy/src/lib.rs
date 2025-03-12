@@ -1,12 +1,12 @@
 // tidy-alphabetical-start
 #![allow(internal_features)]
+#![cfg_attr(doc, recursion_limit = "256")] // FIXME(nnethercote): will be removed by #124141
 #![doc(html_root_url = "https://doc.rust-lang.org/nightly/nightly-rustc/")]
 #![doc(rust_logo)]
 #![feature(associated_type_defaults)]
 #![feature(let_chains)]
 #![feature(rustdoc_internals)]
 #![feature(try_blocks)]
-#![warn(unreachable_pub)]
 // tidy-alphabetical-end
 
 mod errors;
@@ -40,7 +40,7 @@ use rustc_middle::ty::{
 use rustc_middle::{bug, span_bug};
 use rustc_session::lint;
 use rustc_span::hygiene::Transparency;
-use rustc_span::{Ident, Span, Symbol, kw, sym};
+use rustc_span::{Ident, Span, Symbol, sym};
 use tracing::debug;
 use {rustc_attr_parsing as attr, rustc_hir as hir};
 
@@ -935,8 +935,8 @@ impl<'tcx> NamePrivacyVisitor<'tcx> {
         }
 
         // definition of the field
-        let ident = Ident::new(kw::Empty, use_ctxt);
-        let def_id = self.tcx.adjust_ident_and_get_scope(ident, def.did(), hir_id).1;
+        let ident = Ident::new(sym::dummy, use_ctxt);
+        let (_, def_id) = self.tcx.adjust_ident_and_get_scope(ident, def.did(), hir_id);
         !field.vis.is_accessible_from(def_id, self.tcx)
     }
 

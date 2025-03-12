@@ -2,6 +2,7 @@
 #![allow(internal_features)]
 #![allow(rustc::diagnostic_outside_of_impl)]
 #![allow(rustc::untranslatable_diagnostic)]
+#![cfg_attr(doc, recursion_limit = "256")] // FIXME(nnethercote): will be removed by #124141
 #![doc(html_root_url = "https://doc.rust-lang.org/nightly/nightly-rustc/")]
 #![doc(rust_logo)]
 #![feature(assert_matches)]
@@ -14,7 +15,6 @@
 #![feature(rustdoc_internals)]
 #![feature(trait_alias)]
 #![feature(try_blocks)]
-#![warn(unreachable_pub)]
 // tidy-alphabetical-end
 
 //! This crate contains codegen code that is used by all codegen backends (LLVM and others).

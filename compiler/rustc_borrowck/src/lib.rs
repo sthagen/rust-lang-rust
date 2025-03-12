@@ -2,6 +2,7 @@
 
 // tidy-alphabetical-start
 #![allow(internal_features)]
+#![cfg_attr(doc, recursion_limit = "256")] // FIXME(nnethercote): will be removed by #124141
 #![doc(rust_logo)]
 #![feature(assert_matches)]
 #![feature(box_patterns)]
@@ -13,7 +14,6 @@
 #![feature(rustdoc_internals)]
 #![feature(stmt_expr_attributes)]
 #![feature(try_blocks)]
-#![warn(unreachable_pub)]
 // tidy-alphabetical-end
 
 use std::borrow::Cow;

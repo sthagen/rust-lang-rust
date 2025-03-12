@@ -1,4 +1,5 @@
 // tidy-alphabetical-start
+#![cfg_attr(doc, recursion_limit = "256")] // FIXME(nnethercote): will be removed by #124141
 #![feature(array_windows)]
 #![feature(assert_matches)]
 #![feature(box_patterns)]
@@ -12,7 +13,6 @@
 #![feature(never_type)]
 #![feature(try_blocks)]
 #![feature(yeet_expr)]
-#![warn(unreachable_pub)]
 // tidy-alphabetical-end
 
 use hir::ConstContext;
