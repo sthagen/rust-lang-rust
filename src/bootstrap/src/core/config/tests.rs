@@ -4,6 +4,7 @@ use std::fs::{File, remove_file};
 use std::io::Write;
 use std::path::Path;
 
+use build_helper::ci::CiEnv;
 use clap::CommandFactory;
 use serde::Deserialize;
 
@@ -11,6 +12,7 @@ use super::flags::Flags;
 use super::{ChangeIdWrapper, Config, RUSTC_IF_UNCHANGED_ALLOWED_PATHS};
 use crate::core::build_steps::clippy::{LintConfig, get_clippy_rules_in_order};
 use crate::core::build_steps::llvm;
+use crate::core::build_steps::llvm::LLVM_INVALIDATION_PATHS;
 use crate::core::config::{LldMode, Target, TargetSelection, TomlConfig};
 
 pub(crate) fn parse(config: &str) -> Config {
@@ -23,13 +25,21 @@ pub(crate) fn parse(config: &str) -> Config {
 #[test]
 fn download_ci_llvm() {
     let config = parse("");
-    let is_available = llvm::is_ci_llvm_available(&config, config.llvm_assertions);
+    let is_available = llvm::is_ci_llvm_available_for_target(&config, config.llvm_assertions);
     if is_available {
         assert!(config.llvm_from_ci);
     }
 
-    let config = parse("llvm.download-ci-llvm = true");
-    let is_available = llvm::is_ci_llvm_available(&config, config.llvm_assertions);
+    let config = Config::parse_inner(
+        Flags::parse(&[
+            "check".to_string(),
+            "--config=/does/not/exist".to_string(),
+            "--ci".to_string(),
+            "false".to_string(),
+        ]),
+        |&_| toml::from_str("llvm.download-ci-llvm = true"),
+    );
+    let is_available = llvm::is_ci_llvm_available_for_target(&config, config.llvm_assertions);
     if is_available {
         assert!(config.llvm_from_ci);
     }
@@ -40,7 +50,7 @@ fn download_ci_llvm() {
     let if_unchanged_config = parse("llvm.download-ci-llvm = \"if-unchanged\"");
     if if_unchanged_config.llvm_from_ci {
         let has_changes = if_unchanged_config
-            .last_modified_commit(&["src/llvm-project"], "download-ci-llvm", true)
+            .last_modified_commit(LLVM_INVALIDATION_PATHS, "download-ci-llvm", true)
             .is_none();
 
         assert!(
@@ -531,4 +541,20 @@ fn test_exclude() {
         .expect("Failed to convert excluded path to string");
 
     assert_eq!(first_excluded, exclude_path);
+}
+
+#[test]
+fn test_ci_flag() {
+    let config = Config::parse_inner(Flags::parse(&["check".into(), "--ci=false".into()]), |&_| {
+        toml::from_str("")
+    });
+    assert!(!config.is_running_on_ci);
+
+    let config = Config::parse_inner(Flags::parse(&["check".into(), "--ci=true".into()]), |&_| {
+        toml::from_str("")
+    });
+    assert!(config.is_running_on_ci);
+
+    let config = Config::parse_inner(Flags::parse(&["check".into()]), |&_| toml::from_str(""));
+    assert_eq!(config.is_running_on_ci, CiEnv::is_ci());
 }
