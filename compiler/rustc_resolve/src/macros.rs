@@ -168,7 +168,7 @@ impl<'ra, 'tcx> ResolverExpand for Resolver<'ra, 'tcx> {
         hygiene::update_dollar_crate_names(|ctxt| {
             let ident = Ident::new(kw::DollarCrate, DUMMY_SP.with_ctxt(ctxt));
             match self.resolve_crate_root(ident).kind {
-                ModuleKind::Def(.., name) if name != kw::Empty => name,
+                ModuleKind::Def(.., name) if let Some(name) = name => name,
                 _ => kw::Crate,
             }
         });
@@ -264,7 +264,7 @@ impl<'ra, 'tcx> ResolverExpand for Resolver<'ra, 'tcx> {
             }
             InvocationKind::Bang { ref mac, .. } => (&mac.path, MacroKind::Bang),
             InvocationKind::Derive { ref path, .. } => (path, MacroKind::Derive),
-            InvocationKind::GlobDelegation { ref item } => {
+            InvocationKind::GlobDelegation { ref item, .. } => {
                 let ast::AssocItemKind::DelegationMac(deleg) = &item.kind else { unreachable!() };
                 deleg_impl = Some(self.invocation_parent(invoc_id));
                 // It is sufficient to consider glob delegation a bang macro for now.
@@ -323,7 +323,6 @@ impl<'ra, 'tcx> ResolverExpand for Resolver<'ra, 'tcx> {
     }
 
     fn check_unused_macros(&mut self) {
-        #[allow(rustc::potential_query_instability)] // FIXME
         for (_, &(node_id, ident)) in self.unused_macros.iter() {
             self.lint_buffer.buffer_lint(
                 UNUSED_MACROS,
@@ -576,7 +575,7 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
         match res {
             Res::Def(DefKind::Macro(_), def_id) => {
                 if let Some(def_id) = def_id.as_local() {
-                    self.unused_macros.remove(&def_id);
+                    self.unused_macros.swap_remove(&def_id);
                     if self.proc_macro_stubs.contains(&def_id) {
                         self.dcx().emit_err(errors::ProcMacroSameCrate {
                             span: path.span,
@@ -1068,11 +1067,12 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
             );
             if fallback_binding.ok().and_then(|b| b.res().opt_def_id()) != Some(def_id) {
                 let location = match parent_scope.module.kind {
-                    ModuleKind::Def(_, _, name) if name == kw::Empty => {
-                        "the crate root".to_string()
-                    }
                     ModuleKind::Def(kind, def_id, name) => {
-                        format!("{} `{name}`", kind.descr(def_id))
+                        if let Some(name) = name {
+                            format!("{} `{name}`", kind.descr(def_id))
+                        } else {
+                            "the crate root".to_string()
+                        }
                     }
                     ModuleKind::Block => "this scope".to_string(),
                 };
