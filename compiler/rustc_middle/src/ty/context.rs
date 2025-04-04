@@ -446,6 +446,10 @@ impl<'tcx> Interner for TyCtxt<'tcx> {
         self.is_lang_item(def_id, trait_lang_item_to_lang_item(lang_item))
     }
 
+    fn is_default_trait(self, def_id: DefId) -> bool {
+        self.is_default_trait(def_id)
+    }
+
     fn as_lang_item(self, def_id: DefId) -> Option<TraitSolverLangItem> {
         lang_item_to_trait_lang_item(self.lang_items().from_def_id(def_id)?)
     }
@@ -1537,6 +1541,25 @@ impl<'tcx> TyCtxt<'tcx> {
         let alloc = interpret::Allocation::from_bytes_byte_aligned_immutable(bytes);
         let alloc = self.mk_const_alloc(alloc);
         self.reserve_and_set_memory_dedup(alloc, salt)
+    }
+
+    pub fn default_traits(self) -> &'static [rustc_hir::LangItem] {
+        match self.sess.opts.unstable_opts.experimental_default_bounds {
+            true => &[
+                LangItem::Sized,
+                LangItem::DefaultTrait1,
+                LangItem::DefaultTrait2,
+                LangItem::DefaultTrait3,
+                LangItem::DefaultTrait4,
+            ],
+            false => &[LangItem::Sized],
+        }
+    }
+
+    pub fn is_default_trait(self, def_id: DefId) -> bool {
+        self.default_traits()
+            .iter()
+            .any(|&default_trait| self.lang_items().get(default_trait) == Some(def_id))
     }
 
     /// Returns a range of the start/end indices specified with the
@@ -3022,8 +3045,8 @@ impl<'tcx> TyCtxt<'tcx> {
         span: impl Into<MultiSpan>,
         decorator: impl for<'a> LintDiagnostic<'a, ()>,
     ) {
-        let (level, src) = self.lint_level_at_node(lint, hir_id);
-        lint_level(self.sess, lint, level, src, Some(span.into()), |lint| {
+        let level = self.lint_level_at_node(lint, hir_id);
+        lint_level(self.sess, lint, level, Some(span.into()), |lint| {
             decorator.decorate_lint(lint);
         })
     }
@@ -3040,8 +3063,8 @@ impl<'tcx> TyCtxt<'tcx> {
         span: impl Into<MultiSpan>,
         decorate: impl for<'a, 'b> FnOnce(&'b mut Diag<'a, ()>),
     ) {
-        let (level, src) = self.lint_level_at_node(lint, hir_id);
-        lint_level(self.sess, lint, level, src, Some(span.into()), decorate);
+        let level = self.lint_level_at_node(lint, hir_id);
+        lint_level(self.sess, lint, level, Some(span.into()), decorate);
     }
 
     /// Find the crate root and the appropriate span where `use` and outer attributes can be
@@ -3108,8 +3131,8 @@ impl<'tcx> TyCtxt<'tcx> {
         id: HirId,
         decorate: impl for<'a, 'b> FnOnce(&'b mut Diag<'a, ()>),
     ) {
-        let (level, src) = self.lint_level_at_node(lint, id);
-        lint_level(self.sess, lint, level, src, None, decorate);
+        let level = self.lint_level_at_node(lint, id);
+        lint_level(self.sess, lint, level, None, decorate);
     }
 
     pub fn in_scope_traits(self, id: HirId) -> Option<&'tcx [TraitCandidate]> {
