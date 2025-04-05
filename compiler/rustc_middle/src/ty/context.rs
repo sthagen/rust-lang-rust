@@ -206,6 +206,9 @@ impl<'tcx> Interner for TyCtxt<'tcx> {
     fn type_of(self, def_id: DefId) -> ty::EarlyBinder<'tcx, Ty<'tcx>> {
         self.type_of(def_id)
     }
+    fn type_of_opaque_hir_typeck(self, def_id: LocalDefId) -> ty::EarlyBinder<'tcx, Ty<'tcx>> {
+        self.type_of_opaque_hir_typeck(def_id)
+    }
 
     type AdtDef = ty::AdtDef<'tcx>;
     fn adt_def(self, adt_def_id: DefId) -> Self::AdtDef {
@@ -1804,10 +1807,15 @@ impl<'tcx> TyCtxt<'tcx> {
         // - needs_metadata: for putting into crate metadata.
         // - instrument_coverage: for putting into coverage data (see
         //   `hash_mir_source`).
+        // - metrics_dir: metrics use the strict version hash in the filenames
+        //   for dumped metrics files to prevent overwriting distinct metrics
+        //   for similar source builds (may change in the future, this is part
+        //   of the proof of concept impl for the metrics initiative project goal)
         cfg!(debug_assertions)
             || self.sess.opts.incremental.is_some()
             || self.needs_metadata()
             || self.sess.instrument_coverage()
+            || self.sess.opts.unstable_opts.metrics_dir.is_some()
     }
 
     #[inline]
@@ -3269,6 +3277,11 @@ impl<'tcx> TyCtxt<'tcx> {
 
     pub fn next_trait_solver_in_coherence(self) -> bool {
         self.sess.opts.unstable_opts.next_solver.coherence
+    }
+
+    #[allow(rustc::bad_opt_access)]
+    pub fn use_typing_mode_borrowck(self) -> bool {
+        self.next_trait_solver_globally() || self.sess.opts.unstable_opts.typing_mode_borrowck
     }
 
     pub fn is_impl_trait_in_trait(self, def_id: DefId) -> bool {
