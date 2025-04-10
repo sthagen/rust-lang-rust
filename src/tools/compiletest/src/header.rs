@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs::File;
 use std::io::BufReader;
@@ -11,6 +11,7 @@ use tracing::*;
 
 use crate::common::{Config, Debugger, FailMode, Mode, PassMode};
 use crate::debuggers::{extract_cdb_version, extract_gdb_version};
+use crate::errors::ErrorKind;
 use crate::executor::{CollectedTestDesc, ShouldPanic};
 use crate::header::auxiliary::{AuxProps, parse_and_update_aux};
 use crate::header::needs::CachedNeedsConditions;
@@ -196,6 +197,8 @@ pub struct TestProps {
     /// Build and use `minicore` as `core` stub for `no_core` tests in cross-compilation scenarios
     /// that don't otherwise want/need `-Z build-std`.
     pub add_core_stubs: bool,
+    /// Whether line annotatins are required for the given error kind.
+    pub require_annotations: HashMap<ErrorKind, bool>,
 }
 
 mod directives {
@@ -212,6 +215,7 @@ mod directives {
     pub const CHECK_RUN_RESULTS: &'static str = "check-run-results";
     pub const DONT_CHECK_COMPILER_STDOUT: &'static str = "dont-check-compiler-stdout";
     pub const DONT_CHECK_COMPILER_STDERR: &'static str = "dont-check-compiler-stderr";
+    pub const DONT_REQUIRE_ANNOTATIONS: &'static str = "dont-require-annotations";
     pub const NO_PREFER_DYNAMIC: &'static str = "no-prefer-dynamic";
     pub const PRETTY_MODE: &'static str = "pretty-mode";
     pub const PRETTY_COMPARE_ONLY: &'static str = "pretty-compare-only";
@@ -297,6 +301,13 @@ impl TestProps {
             no_auto_check_cfg: false,
             has_enzyme: false,
             add_core_stubs: false,
+            require_annotations: HashMap::from([
+                (ErrorKind::Help, true),
+                (ErrorKind::Note, true),
+                (ErrorKind::Error, true),
+                (ErrorKind::Warning, true),
+                (ErrorKind::Suggestion, false),
+            ]),
         }
     }
 
@@ -441,7 +452,7 @@ impl TestProps {
                         ln,
                         UNSET_EXEC_ENV,
                         &mut self.unset_exec_env,
-                        |r| r,
+                        |r| r.trim().to_owned(),
                     );
                     config.push_name_value_directive(
                         ln,
@@ -453,7 +464,7 @@ impl TestProps {
                         ln,
                         UNSET_RUSTC_ENV,
                         &mut self.unset_rustc_env,
-                        |r| r,
+                        |r| r.trim().to_owned(),
                     );
                     config.push_name_value_directive(
                         ln,
@@ -570,6 +581,13 @@ impl TestProps {
                     config.set_name_directive(ln, NO_AUTO_CHECK_CFG, &mut self.no_auto_check_cfg);
 
                     self.update_add_core_stubs(ln, config);
+
+                    if let Some(err_kind) =
+                        config.parse_name_value_directive(ln, DONT_REQUIRE_ANNOTATIONS)
+                    {
+                        self.require_annotations
+                            .insert(ErrorKind::expect_from_user_str(&err_kind), false);
+                    }
                 },
             );
 
@@ -979,16 +997,13 @@ impl Config {
 
     fn parse_env(nv: String) -> (String, String) {
         // nv is either FOO or FOO=BAR
-        let mut strs: Vec<String> = nv.splitn(2, '=').map(str::to_owned).collect();
-
-        match strs.len() {
-            1 => (strs.pop().unwrap(), String::new()),
-            2 => {
-                let end = strs.pop().unwrap();
-                (strs.pop().unwrap(), end)
-            }
-            n => panic!("Expected 1 or 2 strings, not {}", n),
-        }
+        // FIXME(Zalathar): The form without `=` seems to be unused; should
+        // we drop support for it?
+        let (name, value) = nv.split_once('=').unwrap_or((&nv, ""));
+        // Trim whitespace from the name, so that `//@ exec-env: FOO=BAR`
+        // sees the name as `FOO` and not ` FOO`.
+        let name = name.trim();
+        (name.to_owned(), value.to_owned())
     }
 
     fn parse_pp_exact(&self, line: &str, testfile: &Path) -> Option<PathBuf> {
