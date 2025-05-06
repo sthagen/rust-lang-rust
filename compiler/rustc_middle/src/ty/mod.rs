@@ -51,9 +51,17 @@ use rustc_session::lint::LintBuffer;
 pub use rustc_session::lint::RegisteredTools;
 use rustc_span::hygiene::MacroKind;
 use rustc_span::{DUMMY_SP, ExpnId, ExpnKind, Ident, Span, Symbol, kw, sym};
-pub use rustc_type_ir::data_structures::DelayedSet;
+pub use rustc_type_ir::data_structures::{DelayedMap, DelayedSet};
+#[allow(
+    hidden_glob_reexports,
+    rustc::usage_of_type_ir_inherent,
+    rustc::non_glob_import_of_type_ir_inherent
+)]
+use rustc_type_ir::inherent;
 pub use rustc_type_ir::relate::VarianceDiagInfo;
 pub use rustc_type_ir::*;
+#[allow(hidden_glob_reexports, unused_imports)]
+use rustc_type_ir::{InferCtxtLike, Interner};
 use tracing::{debug, instrument};
 pub use vtable::*;
 use {rustc_ast as ast, rustc_attr_data_structures as attr, rustc_hir as hir};
@@ -174,7 +182,7 @@ pub struct ResolverGlobalCtxt {
     pub extern_crate_map: UnordMap<LocalDefId, CrateNum>,
     pub maybe_unused_trait_imports: FxIndexSet<LocalDefId>,
     pub module_children: LocalDefIdMap<Vec<ModChild>>,
-    pub glob_map: FxHashMap<LocalDefId, FxHashSet<Symbol>>,
+    pub glob_map: FxIndexMap<LocalDefId, FxIndexSet<Symbol>>,
     pub main_def: Option<MainDefinition>,
     pub trait_impls: FxIndexMap<DefId, Vec<LocalDefId>>,
     /// A list of proc macro LocalDefIds, written out in the order in which
