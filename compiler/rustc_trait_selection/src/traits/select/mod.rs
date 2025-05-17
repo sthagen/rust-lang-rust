@@ -27,8 +27,8 @@ use rustc_middle::ty::abstract_const::NotConstEvaluatable;
 use rustc_middle::ty::error::TypeErrorToStringExt;
 use rustc_middle::ty::print::{PrintTraitRefExt as _, with_no_trimmed_paths};
 use rustc_middle::ty::{
-    self, GenericArgsRef, PolyProjectionPredicate, Ty, TyCtxt, TypeFoldable, TypeVisitableExt,
-    TypingMode, Upcast, elaborate,
+    self, DeepRejectCtxt, GenericArgsRef, PolyProjectionPredicate, Ty, TyCtxt, TypeFoldable,
+    TypeVisitableExt, TypingMode, Upcast, elaborate,
 };
 use rustc_span::{Symbol, sym};
 use tracing::{debug, instrument, trace};
@@ -1241,7 +1241,12 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             ty::PredicateKind::Clause(ty::ClauseKind::Trait(data)) => {
                 self.infcx.tcx.trait_is_coinductive(data.def_id())
             }
-            ty::PredicateKind::Clause(ty::ClauseKind::WellFormed(_)) => true,
+            ty::PredicateKind::Clause(ty::ClauseKind::WellFormed(_)) => {
+                // FIXME(generic_const_exprs): GCE needs well-formedness predicates to be
+                // coinductive, but GCE is on the way out anyways, so this should eventually
+                // be replaced with `false`.
+                self.infcx.tcx.features().generic_const_exprs()
+            }
             _ => false,
         })
     }
@@ -1666,6 +1671,12 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         debug_assert!(!placeholder_trait_ref.has_escaping_bound_vars());
         if placeholder_trait_ref.def_id != trait_bound.def_id() {
             // Avoid unnecessary normalization
+            return Err(());
+        }
+
+        let drcx = DeepRejectCtxt::relate_rigid_rigid(self.infcx.tcx);
+        let obligation_args = obligation.predicate.skip_binder().trait_ref.args;
+        if !drcx.args_may_unify(obligation_args, trait_bound.skip_binder().args) {
             return Err(());
         }
 

@@ -52,6 +52,7 @@ pub use rustc_session::lint::RegisteredTools;
 use rustc_span::hygiene::MacroKind;
 use rustc_span::{DUMMY_SP, ExpnId, ExpnKind, Ident, Span, Symbol, kw, sym};
 pub use rustc_type_ir::data_structures::{DelayedMap, DelayedSet};
+pub use rustc_type_ir::fast_reject::DeepRejectCtxt;
 #[allow(
     hidden_glob_reexports,
     rustc::usage_of_type_ir_inherent,
@@ -1184,7 +1185,7 @@ pub struct Destructor {
 #[derive(Copy, Clone, Debug, HashStable, Encodable, Decodable)]
 pub struct AsyncDestructor {
     /// The `DefId` of the `impl AsyncDrop`
-    pub impl_did: LocalDefId,
+    pub impl_did: DefId,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, HashStable, TyEncodable, TyDecodable)]
