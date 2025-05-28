@@ -13,6 +13,8 @@ lint_ambiguous_negative_literals = `-` has lower precedence than method calls, w
 lint_ambiguous_wide_pointer_comparisons = ambiguous wide pointer comparison, the comparison includes metadata which may not be expected
     .addr_metadata_suggestion = use explicit `std::ptr::eq` method to compare metadata and addresses
     .addr_suggestion = use `std::ptr::addr_eq` or untyped pointers to only compare their addresses
+    .cast_suggestion = use untyped pointers to only compare their addresses
+    .expect_suggestion = or expect the lint to compare the pointers metadata and addresses
 
 lint_associated_const_elided_lifetime = {$elided ->
         [true] `&` without an explicit lifetime name cannot be used here
@@ -804,6 +806,11 @@ lint_type_ir_inherent_usage = do not use `rustc_type_ir::inherent` unless you're
 
 lint_type_ir_trait_usage = do not use `rustc_type_ir::Interner` or `rustc_type_ir::InferCtxtLike` unless you're inside of the trait solver
     .note = the method or struct you're looking for is likely defined somewhere else downstream in the compiler
+
+lint_undefined_transmute = pointers cannot be transmuted to integers during const eval
+    .note = at compile-time, pointers do not have an integer value
+    .note2 = avoiding this restriction via `union` or raw pointers leads to compile-time undefined behavior
+    .help = for more information, see https://doc.rust-lang.org/std/mem/fn.transmute.html
 
 lint_undropped_manually_drops = calls to `std::mem::drop` with `std::mem::ManuallyDrop` instead of the inner value does nothing
     .label = argument has type `{$arg_ty}`
