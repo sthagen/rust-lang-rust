@@ -35,7 +35,7 @@ use rustc_session::lint::builtin::{
     UNKNOWN_OR_MALFORMED_DIAGNOSTIC_ATTRIBUTES, UNUSED_ATTRIBUTES,
 };
 use rustc_session::parse::feature_err;
-use rustc_span::{BytePos, DUMMY_SP, Span, Symbol, edition, sym};
+use rustc_span::{BytePos, DUMMY_SP, Span, Symbol, edition, kw, sym};
 use rustc_trait_selection::error_reporting::InferCtxtErrorExt;
 use rustc_trait_selection::infer::{TyCtxtInferExt, ValuePairs};
 use rustc_trait_selection::traits::ObligationCtxt;
@@ -149,10 +149,12 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                 }
                 Attribute::Parsed(AttributeKind::Repr(_)) => { /* handled below this loop and elsewhere */
                 }
+                Attribute::Parsed(AttributeKind::Cold(attr_span)) => {
+                    self.check_cold(hir_id, *attr_span, span, target)
+                }
                 Attribute::Parsed(AttributeKind::Align { align, span: repr_span }) => {
                     self.check_align(span, target, *align, *repr_span)
                 }
-
                 Attribute::Parsed(
                     AttributeKind::BodyStability { .. }
                     | AttributeKind::ConstStabilityIndirect
@@ -245,7 +247,6 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                         [sym::ffi_pure, ..] => self.check_ffi_pure(attr.span(), attrs, target),
                         [sym::ffi_const, ..] => self.check_ffi_const(attr.span(), target),
                         [sym::link_ordinal, ..] => self.check_link_ordinal(attr, span, target),
-                        [sym::cold, ..] => self.check_cold(hir_id, attr, span, target),
                         [sym::link, ..] => self.check_link(hir_id, attr, span, target),
                         [sym::link_name, ..] => self.check_link_name(hir_id, attr, span, target),
                         [sym::link_section, ..] => self.check_link_section(hir_id, attr, span, target),
@@ -651,8 +652,6 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
             sym::repr,
             sym::align,
             sym::rustc_std_internal_symbol,
-            // code generation
-            sym::cold,
             // documentation
             sym::doc,
         ];
@@ -688,7 +687,8 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                         Attribute::Parsed(
                             AttributeKind::Deprecation { .. }
                             | AttributeKind::Repr { .. }
-                            | AttributeKind::Align { .. },
+                            | AttributeKind::Align { .. }
+                            | AttributeKind::Cold(..),
                         ) => {
                             continue;
                         }
@@ -724,7 +724,10 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                         && !matches!(other_attr.path().as_slice(), [sym::rustfmt, ..])
                     {
                         let path = other_attr.path();
-                        let path: Vec<_> = path.iter().map(|s| s.as_str()).collect();
+                        let path: Vec<_> = path
+                            .iter()
+                            .map(|s| if *s == kw::PathRoot { "" } else { s.as_str() })
+                            .collect();
                         let other_attr_name = path.join("::");
 
                         self.dcx().emit_err(errors::NakedFunctionIncompatibleAttribute {
@@ -1637,7 +1640,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
     }
 
     /// Checks if `#[cold]` is applied to a non-function.
-    fn check_cold(&self, hir_id: HirId, attr: &Attribute, span: Span, target: Target) {
+    fn check_cold(&self, hir_id: HirId, attr_span: Span, span: Span, target: Target) {
         match target {
             Target::Fn | Target::Method(..) | Target::ForeignFn | Target::Closure => {}
             // FIXME(#80564): We permit struct fields, match arms and macro defs to have an
@@ -1645,7 +1648,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
             // erroneously allowed it and some crates used it accidentally, to be compatible
             // with crates depending on them, we can't throw an error here.
             Target::Field | Target::Arm | Target::MacroDef => {
-                self.inline_attr_str_error_with_macro_def(hir_id, attr.span(), "cold");
+                self.inline_attr_str_error_with_macro_def(hir_id, attr_span, "cold");
             }
             _ => {
                 // FIXME: #[cold] was previously allowed on non-functions and some crates used
@@ -1653,7 +1656,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                 self.tcx.emit_node_span_lint(
                     UNUSED_ATTRIBUTES,
                     hir_id,
-                    attr.span(),
+                    attr_span,
                     errors::Cold { span, on_crate: hir_id == CRATE_HIR_ID },
                 );
             }
