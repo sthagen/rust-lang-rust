@@ -116,6 +116,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
         let mut seen = FxHashMap::default();
         let attrs = self.tcx.hir_attrs(hir_id);
         for attr in attrs {
+            let mut style = None;
             match attr {
                 Attribute::Parsed(AttributeKind::Confusables { first_span, .. }) => {
                     self.check_confusables(*first_span, target);
@@ -149,6 +150,10 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                 }
                 Attribute::Parsed(AttributeKind::Repr(_)) => { /* handled below this loop and elsewhere */
                 }
+
+                &Attribute::Parsed(AttributeKind::PubTransparent(attr_span)) => {
+                    self.check_rustc_pub_transparent(attr_span, span, attrs)
+                }
                 Attribute::Parsed(AttributeKind::Cold(attr_span)) => {
                     self.check_cold(hir_id, *attr_span, span, target)
                 }
@@ -163,7 +168,11 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                 Attribute::Parsed(AttributeKind::AsPtr(attr_span)) => {
                     self.check_applied_to_fn_or_method(hir_id, *attr_span, span, target)
                 }
-                Attribute::Unparsed(_) => {
+                Attribute::Parsed(AttributeKind::MayDangle(attr_span)) => {
+                    self.check_may_dangle(hir_id, *attr_span)
+                }
+                Attribute::Unparsed(attr_item) => {
+                    style = Some(attr_item.style);
                     match attr.path().as_slice() {
                         [sym::diagnostic, sym::do_not_recommend, ..] => {
                             self.check_do_not_recommend(attr.span(), hir_id, target, attr, item)
@@ -186,6 +195,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                         }
                         [sym::doc, ..] => self.check_doc_attrs(
                             attr,
+                            attr_item.style,
                             hir_id,
                             target,
                             &mut specified_inline,
@@ -236,7 +246,6 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                         [sym::collapse_debuginfo, ..] => self.check_collapse_debuginfo(attr, span, target),
                         [sym::must_not_suspend, ..] => self.check_must_not_suspend(attr, span, target),
                         [sym::must_use, ..] => self.check_must_use(hir_id, attr, target),
-                        [sym::may_dangle, ..] => self.check_may_dangle(hir_id, attr),
                         [sym::rustc_pass_by_value, ..] => self.check_pass_by_value(attr, span, target),
                         [sym::rustc_allow_incoherent_impl, ..] => {
                             self.check_allow_incoherent_impl(attr, span, target)
@@ -286,7 +295,6 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                             self.check_type_const(hir_id,attr, target);
                         }
                         [sym::linkage, ..] => self.check_linkage(attr, span, target),
-                        [sym::rustc_pub_transparent, ..] => self.check_rustc_pub_transparent(attr.span(), span, attrs),
                         [
                             // ok
                             sym::allow
@@ -348,14 +356,14 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                 if let Some(BuiltinAttribute { type_: AttributeType::CrateLevel, .. }) =
                     attr.ident().and_then(|ident| BUILTIN_ATTRIBUTE_MAP.get(&ident.name))
                 {
-                    match attr.style() {
-                        ast::AttrStyle::Outer => self.tcx.emit_node_span_lint(
+                    match style {
+                        Some(ast::AttrStyle::Outer) => self.tcx.emit_node_span_lint(
                             UNUSED_ATTRIBUTES,
                             hir_id,
                             attr.span(),
                             errors::OuterCrateLevelAttr,
                         ),
-                        ast::AttrStyle::Inner => self.tcx.emit_node_span_lint(
+                        Some(ast::AttrStyle::Inner) | None => self.tcx.emit_node_span_lint(
                             UNUSED_ATTRIBUTES,
                             hir_id,
                             attr.span(),
@@ -369,7 +377,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                 check_duplicates(self.tcx, attr, hir_id, *duplicates, &mut seen);
             }
 
-            self.check_unused_attribute(hir_id, attr)
+            self.check_unused_attribute(hir_id, attr, style)
         }
 
         self.check_repr(attrs, span, target, item, hir_id);
@@ -1192,7 +1200,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
     /// the first `inline`/`no_inline` attribute.
     fn check_doc_inline(
         &self,
-        attr: &Attribute,
+        style: AttrStyle,
         meta: &MetaItemInner,
         hir_id: HirId,
         target: Target,
@@ -1222,8 +1230,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                     meta.span(),
                     errors::DocInlineOnlyUse {
                         attr_span: meta.span(),
-                        item_span: (attr.style() == AttrStyle::Outer)
-                            .then(|| self.tcx.hir_span(hir_id)),
+                        item_span: (style == AttrStyle::Outer).then(|| self.tcx.hir_span(hir_id)),
                     },
                 );
             }
@@ -1232,7 +1239,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
 
     fn check_doc_masked(
         &self,
-        attr: &Attribute,
+        style: AttrStyle,
         meta: &MetaItemInner,
         hir_id: HirId,
         target: Target,
@@ -1244,8 +1251,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                 meta.span(),
                 errors::DocMaskedOnlyExternCrate {
                     attr_span: meta.span(),
-                    item_span: (attr.style() == AttrStyle::Outer)
-                        .then(|| self.tcx.hir_span(hir_id)),
+                    item_span: (style == AttrStyle::Outer).then(|| self.tcx.hir_span(hir_id)),
                 },
             );
             return;
@@ -1258,8 +1264,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                 meta.span(),
                 errors::DocMaskedNotExternCrateSelf {
                     attr_span: meta.span(),
-                    item_span: (attr.style() == AttrStyle::Outer)
-                        .then(|| self.tcx.hir_span(hir_id)),
+                    item_span: (style == AttrStyle::Outer).then(|| self.tcx.hir_span(hir_id)),
                 },
             );
         }
@@ -1283,13 +1288,14 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
     fn check_attr_crate_level(
         &self,
         attr: &Attribute,
+        style: AttrStyle,
         meta: &MetaItemInner,
         hir_id: HirId,
     ) -> bool {
         if hir_id != CRATE_HIR_ID {
             // insert a bang between `#` and `[...`
             let bang_span = attr.span().lo() + BytePos(1);
-            let sugg = (attr.style() == AttrStyle::Outer
+            let sugg = (style == AttrStyle::Outer
                 && self.tcx.hir_get_parent_item(hir_id) == CRATE_OWNER_ID)
                 .then_some(errors::AttrCrateLevelOnlySugg {
                     attr: attr.span().with_lo(bang_span).with_hi(bang_span),
@@ -1306,7 +1312,13 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
     }
 
     /// Checks that `doc(test(...))` attribute contains only valid attributes and are at the right place.
-    fn check_test_attr(&self, attr: &Attribute, meta: &MetaItemInner, hir_id: HirId) {
+    fn check_test_attr(
+        &self,
+        attr: &Attribute,
+        style: AttrStyle,
+        meta: &MetaItemInner,
+        hir_id: HirId,
+    ) {
         if let Some(metas) = meta.meta_item_list() {
             for i_meta in metas {
                 match (i_meta.name(), i_meta.meta_item()) {
@@ -1314,7 +1326,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                         // Allowed everywhere like `#[doc]`
                     }
                     (Some(sym::no_crate_inject), _) => {
-                        self.check_attr_crate_level(attr, meta, hir_id);
+                        self.check_attr_crate_level(attr, style, meta, hir_id);
                     }
                     (_, Some(m)) => {
                         self.tcx.emit_node_span_lint(
@@ -1368,6 +1380,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
     fn check_doc_attrs(
         &self,
         attr: &Attribute,
+        style: AttrStyle,
         hir_id: HirId,
         target: Target,
         specified_inline: &mut Option<(bool, Span)>,
@@ -1402,7 +1415,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                         }
 
                         Some(sym::test) => {
-                            self.check_test_attr(attr, meta, hir_id);
+                            self.check_test_attr(attr, style, meta, hir_id);
                         }
 
                         Some(
@@ -1413,25 +1426,25 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                             | sym::html_root_url
                             | sym::html_no_source,
                         ) => {
-                            self.check_attr_crate_level(attr, meta, hir_id);
+                            self.check_attr_crate_level(attr, style, meta, hir_id);
                         }
 
                         Some(sym::cfg_hide) => {
-                            if self.check_attr_crate_level(attr, meta, hir_id) {
+                            if self.check_attr_crate_level(attr, style, meta, hir_id) {
                                 self.check_doc_cfg_hide(meta, hir_id);
                             }
                         }
 
                         Some(sym::inline | sym::no_inline) => {
-                            self.check_doc_inline(attr, meta, hir_id, target, specified_inline)
+                            self.check_doc_inline(style, meta, hir_id, target, specified_inline)
                         }
 
-                        Some(sym::masked) => self.check_doc_masked(attr, meta, hir_id, target),
+                        Some(sym::masked) => self.check_doc_masked(style, meta, hir_id, target),
 
                         Some(sym::cfg | sym::hidden | sym::notable_trait) => {}
 
                         Some(sym::rust_logo) => {
-                            if self.check_attr_crate_level(attr, meta, hir_id)
+                            if self.check_attr_crate_level(attr, style, meta, hir_id)
                                 && !self.tcx.features().rustdoc_internals()
                             {
                                 feature_err(
@@ -1470,7 +1483,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                                     errors::DocTestUnknownInclude {
                                         path,
                                         value: value.to_string(),
-                                        inner: match attr.style() {
+                                        inner: match style {
                                             AttrStyle::Inner => "!",
                                             AttrStyle::Outer => "",
                                         },
@@ -1619,7 +1632,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
     }
 
     /// Checks if `#[may_dangle]` is applied to a lifetime or type generic parameter in `Drop` impl.
-    fn check_may_dangle(&self, hir_id: HirId, attr: &Attribute) {
+    fn check_may_dangle(&self, hir_id: HirId, attr_span: Span) {
         if let hir::Node::GenericParam(param) = self.tcx.hir_node(hir_id)
             && matches!(
                 param.kind,
@@ -1636,7 +1649,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
             return;
         }
 
-        self.dcx().emit_err(errors::InvalidMayDangle { attr_span: attr.span() });
+        self.dcx().emit_err(errors::InvalidMayDangle { attr_span });
     }
 
     /// Checks if `#[cold]` is applied to a non-function.
@@ -2424,7 +2437,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
         }
     }
 
-    fn check_unused_attribute(&self, hir_id: HirId, attr: &Attribute) {
+    fn check_unused_attribute(&self, hir_id: HirId, attr: &Attribute, style: Option<AttrStyle>) {
         // FIXME(jdonszelmann): deduplicate these checks after more attrs are parsed. This is very
         // ugly now but can 100% be removed later.
         if let Attribute::Parsed(p) = attr {
@@ -2477,14 +2490,14 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
             })
         {
             if hir_id != CRATE_HIR_ID {
-                match attr.style() {
-                    ast::AttrStyle::Outer => self.tcx.emit_node_span_lint(
+                match style {
+                    Some(ast::AttrStyle::Outer) => self.tcx.emit_node_span_lint(
                         UNUSED_ATTRIBUTES,
                         hir_id,
                         attr.span(),
                         errors::OuterCrateLevelAttr,
                     ),
-                    ast::AttrStyle::Inner => self.tcx.emit_node_span_lint(
+                    Some(ast::AttrStyle::Inner) | None => self.tcx.emit_node_span_lint(
                         UNUSED_ATTRIBUTES,
                         hir_id,
                         attr.span(),
