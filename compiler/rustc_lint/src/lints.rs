@@ -1353,6 +1353,8 @@ pub(crate) struct NonUpperCaseGlobal<'a> {
     pub name: &'a str,
     #[subdiagnostic]
     pub sub: NonUpperCaseGlobalSub,
+    #[subdiagnostic]
+    pub usages: Vec<NonUpperCaseGlobalSubTool>,
 }
 
 #[derive(Subdiagnostic)]
@@ -1362,12 +1364,27 @@ pub(crate) enum NonUpperCaseGlobalSub {
         #[primary_span]
         span: Span,
     },
-    #[suggestion(lint_suggestion, code = "{replace}", applicability = "maybe-incorrect")]
+    #[suggestion(lint_suggestion, code = "{replace}")]
     Suggestion {
         #[primary_span]
         span: Span,
+        #[applicability]
+        applicability: Applicability,
         replace: String,
     },
+}
+
+#[derive(Subdiagnostic)]
+#[suggestion(
+    lint_suggestion,
+    code = "{replace}",
+    applicability = "machine-applicable",
+    style = "tool-only"
+)]
+pub(crate) struct NonUpperCaseGlobalSubTool {
+    #[primary_span]
+    pub(crate) span: Span,
+    pub(crate) replace: String,
 }
 
 // noop_method_call.rs
@@ -3261,7 +3278,7 @@ impl Subdiagnostic for MismatchedLifetimeSyntaxesSuggestion {
                 diag.multipart_suggestion_with_style(
                     fluent::lint_mismatched_lifetime_syntaxes_suggestion_implicit,
                     suggestions,
-                    Applicability::MachineApplicable,
+                    Applicability::MaybeIncorrect,
                     style(tool_only),
                 );
             }
@@ -3276,7 +3293,7 @@ impl Subdiagnostic for MismatchedLifetimeSyntaxesSuggestion {
                 diag.multipart_suggestion_with_style(
                     fluent::lint_mismatched_lifetime_syntaxes_suggestion_mixed,
                     suggestions,
-                    Applicability::MachineApplicable,
+                    Applicability::MaybeIncorrect,
                     style(tool_only),
                 );
             }
@@ -3291,7 +3308,7 @@ impl Subdiagnostic for MismatchedLifetimeSyntaxesSuggestion {
                 diag.multipart_suggestion_with_style(
                     msg,
                     suggestions,
-                    Applicability::MachineApplicable,
+                    Applicability::MaybeIncorrect,
                     style(tool_only),
                 );
             }
