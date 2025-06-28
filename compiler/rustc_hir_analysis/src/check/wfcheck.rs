@@ -231,7 +231,6 @@ fn check_item<'tcx>(tcx: TyCtxt<'tcx>, item: &'tcx hir::Item<'tcx>) -> Result<()
         item.name = ? tcx.def_path_str(def_id)
     );
     crate::collect::lower_item(tcx, item.item_id());
-    crate::collect::reject_placeholder_type_signatures_in_item(tcx, item);
 
     let res = match item.kind {
         // Right now we check that every default trait implementation
@@ -1403,7 +1402,7 @@ fn check_impl<'tcx>(
                     }
                 }
 
-                // Ensure that the `~const` where clauses of the trait hold for the impl.
+                // Ensure that the `[const]` where clauses of the trait hold for the impl.
                 if tcx.is_conditionally_const(item.owner_id.def_id) {
                     for (bound, _) in
                         tcx.const_conditions(trait_ref.def_id).instantiate(tcx, trait_ref.args)
