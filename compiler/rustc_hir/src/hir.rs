@@ -1807,7 +1807,7 @@ pub struct PatExpr<'hir> {
 #[derive(Debug, Clone, Copy, HashStable_Generic)]
 pub enum PatExprKind<'hir> {
     Lit {
-        lit: &'hir Lit,
+        lit: Lit,
         // FIXME: move this into `Lit` and handle negated literal expressions
         // once instead of matching on unop neg expressions everywhere.
         negated: bool,
@@ -2734,7 +2734,7 @@ pub enum ExprKind<'hir> {
     /// A unary operation (e.g., `!x`, `*x`).
     Unary(UnOp, &'hir Expr<'hir>),
     /// A literal (e.g., `1`, `"foo"`).
-    Lit(&'hir Lit),
+    Lit(Lit),
     /// A cast (e.g., `foo as f64`).
     Cast(&'hir Expr<'hir>, &'hir Ty<'hir>),
     /// A type ascription (e.g., `x: Foo`). See RFC 3307.
@@ -3141,15 +3141,6 @@ pub enum TraitItemKind<'hir> {
     /// type.
     Type(GenericBounds<'hir>, Option<&'hir Ty<'hir>>),
 }
-impl TraitItemKind<'_> {
-    pub fn descr(&self) -> &'static str {
-        match self {
-            TraitItemKind::Const(..) => "associated constant",
-            TraitItemKind::Fn(..) => "function",
-            TraitItemKind::Type(..) => "associated type",
-        }
-    }
-}
 
 // The bodies for items are stored "out of line", in a separate
 // hashmap in the `Crate`. Here we just record the hir-id of the item
@@ -3210,15 +3201,6 @@ pub enum ImplItemKind<'hir> {
     Fn(FnSig<'hir>, BodyId),
     /// An associated type.
     Type(&'hir Ty<'hir>),
-}
-impl ImplItemKind<'_> {
-    pub fn descr(&self) -> &'static str {
-        match self {
-            ImplItemKind::Const(..) => "associated constant",
-            ImplItemKind::Fn(..) => "function",
-            ImplItemKind::Type(..) => "associated type",
-        }
-    }
 }
 
 /// A constraint on an associated item.
@@ -4543,16 +4525,6 @@ pub enum ForeignItemKind<'hir> {
     Static(&'hir Ty<'hir>, Mutability, Safety),
     /// A foreign type.
     Type,
-}
-
-impl ForeignItemKind<'_> {
-    pub fn descr(&self) -> &'static str {
-        match self {
-            ForeignItemKind::Fn(..) => "function",
-            ForeignItemKind::Static(..) => "static variable",
-            ForeignItemKind::Type => "type",
-        }
-    }
 }
 
 /// A variable captured by a closure.
