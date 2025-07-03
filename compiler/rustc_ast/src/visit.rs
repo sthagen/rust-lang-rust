@@ -142,7 +142,7 @@ macro_rules! common_visitor_and_walkers {
             )?
 
             // Methods in this trait have one of three forms, with the last two forms
-            // only occuring on `MutVisitor`:
+            // only occurring on `MutVisitor`:
             //
             //   fn visit_t(&mut self, t: &mut T);                      // common
             //   fn flat_map_t(&mut self, t: T) -> SmallVec<[T; 1]>;    // rare
@@ -1142,7 +1142,7 @@ macro_rules! common_visitor_and_walkers {
             vis: &mut V,
             p: &$($lt)? $($mut)? PolyTraitRef,
         ) -> V::Result {
-            let PolyTraitRef { bound_generic_params, modifiers, trait_ref, span } = p;
+            let PolyTraitRef { bound_generic_params, modifiers, trait_ref, span, parens: _ } = p;
             try_visit!(visit_modifiers(vis, modifiers));
             try_visit!(visit_generic_params(vis, bound_generic_params));
             try_visit!(vis.visit_trait_ref(trait_ref));
