@@ -293,6 +293,7 @@ fn emit_malformed_attribute(
             | sym::rustc_force_inline
             | sym::rustc_confusables
             | sym::rustc_skip_during_method_dispatch
+            | sym::rustc_pass_by_value
             | sym::repr
             | sym::align
             | sym::deprecated
@@ -310,6 +311,7 @@ fn emit_malformed_attribute(
             | sym::link_section
             | sym::rustc_layout_scalar_valid_range_start
             | sym::rustc_layout_scalar_valid_range_end
+            | sym::no_implicit_prelude
     ) {
         return;
     }

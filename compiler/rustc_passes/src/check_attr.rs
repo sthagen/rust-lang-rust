@@ -183,6 +183,14 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                 Attribute::Parsed(AttributeKind::Naked(attr_span)) => {
                     self.check_naked(hir_id, *attr_span, span, target)
                 }
+                Attribute::Parsed(AttributeKind::NoImplicitPrelude(attr_span)) => self
+                    .check_generic_attr(
+                        hir_id,
+                        sym::no_implicit_prelude,
+                        *attr_span,
+                        target,
+                        Target::Mod,
+                    ),
                 Attribute::Parsed(AttributeKind::TrackCaller(attr_span)) => {
                     self.check_track_caller(hir_id, *attr_span, attrs, span, target)
                 }
@@ -212,6 +220,9 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                 }
                 Attribute::Parsed(AttributeKind::Used { span: attr_span, .. }) => {
                     self.check_used(*attr_span, target, span);
+                }
+                &Attribute::Parsed(AttributeKind::PassByValue(attr_span)) => {
+                    self.check_pass_by_value(attr_span, span, target)
                 }
                 Attribute::Unparsed(attr_item) => {
                     style = Some(attr_item.style);
@@ -275,7 +286,6 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                         | [sym::const_trait, ..] => self.check_must_be_applied_to_trait(attr.span(), span, target),
                         [sym::collapse_debuginfo, ..] => self.check_collapse_debuginfo(attr, span, target),
                         [sym::must_not_suspend, ..] => self.check_must_not_suspend(attr, span, target),
-                        [sym::rustc_pass_by_value, ..] => self.check_pass_by_value(attr, span, target),
                         [sym::rustc_allow_incoherent_impl, ..] => {
                             self.check_allow_incoherent_impl(attr, span, target)
                         }
@@ -289,16 +299,13 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                         [sym::macro_use, ..] | [sym::macro_escape, ..] => {
                             self.check_macro_use(hir_id, attr, target)
                         }
-                        [sym::path, ..] => self.check_generic_attr(hir_id, attr, target, Target::Mod),
+                        [sym::path, ..] => self.check_generic_attr_unparsed(hir_id, attr, target, Target::Mod),
                         [sym::macro_export, ..] => self.check_macro_export(hir_id, attr, target),
                         [sym::ignore, ..] | [sym::should_panic, ..] => {
-                            self.check_generic_attr(hir_id, attr, target, Target::Fn)
+                            self.check_generic_attr_unparsed(hir_id, attr, target, Target::Fn)
                         }
                         [sym::automatically_derived, ..] => {
-                            self.check_generic_attr(hir_id, attr, target, Target::Impl)
-                        }
-                        [sym::no_implicit_prelude, ..] => {
-                            self.check_generic_attr(hir_id, attr, target, Target::Mod)
+                            self.check_generic_attr_unparsed(hir_id, attr, target, Target::Impl)
                         }
                         [sym::proc_macro, ..] => {
                             self.check_proc_macro(hir_id, target, ProcMacroKind::FunctionLike)
@@ -307,7 +314,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                             self.check_proc_macro(hir_id, target, ProcMacroKind::Attribute);
                         }
                         [sym::proc_macro_derive, ..] => {
-                            self.check_generic_attr(hir_id, attr, target, Target::Fn);
+                            self.check_generic_attr_unparsed(hir_id, attr, target, Target::Fn);
                             self.check_proc_macro(hir_id, target, ProcMacroKind::Derive)
                         }
                         [sym::autodiff_forward, ..] | [sym::autodiff_reverse, ..] => {
@@ -616,7 +623,8 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
         }
     }
 
-    fn check_generic_attr(
+    /// FIXME: Remove when all attributes are ported to the new parser
+    fn check_generic_attr_unparsed(
         &self,
         hir_id: HirId,
         attr: &Attribute,
@@ -633,6 +641,27 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                 attr.span(),
                 errors::OnlyHasEffectOn {
                     attr_name,
+                    target_name: allowed_target.name().replace(' ', "_"),
+                },
+            );
+        }
+    }
+
+    fn check_generic_attr(
+        &self,
+        hir_id: HirId,
+        attr_name: Symbol,
+        attr_span: Span,
+        target: Target,
+        allowed_target: Target,
+    ) {
+        if target != allowed_target {
+            self.tcx.emit_node_span_lint(
+                UNUSED_ATTRIBUTES,
+                hir_id,
+                attr_span,
+                errors::OnlyHasEffectOn {
+                    attr_name: attr_name.to_string(),
                     target_name: allowed_target.name().replace(' ', "_"),
                 },
             );
@@ -1438,11 +1467,11 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
     }
 
     /// Warns against some misuses of `#[pass_by_value]`
-    fn check_pass_by_value(&self, attr: &Attribute, span: Span, target: Target) {
+    fn check_pass_by_value(&self, attr_span: Span, span: Span, target: Target) {
         match target {
             Target::Struct | Target::Enum | Target::TyAlias => {}
             _ => {
-                self.dcx().emit_err(errors::PassByValue { attr_span: attr.span(), span });
+                self.dcx().emit_err(errors::PassByValue { attr_span, span });
             }
         }
     }
