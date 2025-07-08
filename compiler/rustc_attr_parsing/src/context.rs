@@ -28,6 +28,7 @@ use crate::attributes::loop_match::{ConstContinueParser, LoopMatchParser};
 use crate::attributes::must_use::MustUseParser;
 use crate::attributes::no_implicit_prelude::NoImplicitPreludeParser;
 use crate::attributes::non_exhaustive::NonExhaustiveParser;
+use crate::attributes::path::PathParser as PathAttributeParser;
 use crate::attributes::repr::{AlignParser, ReprParser};
 use crate::attributes::rustc_internal::{
     RustcLayoutScalarValidRangeEnd, RustcLayoutScalarValidRangeStart,
@@ -133,6 +134,7 @@ attribute_parsers!(
         Single<LinkSectionParser>,
         Single<MustUseParser>,
         Single<OptimizeParser>,
+        Single<PathAttributeParser>,
         Single<RustcForceInlineParser>,
         Single<RustcLayoutScalarValidRangeEnd>,
         Single<RustcLayoutScalarValidRangeStart>,
@@ -165,6 +167,7 @@ mod private {
 #[allow(private_interfaces)]
 pub trait Stage: Sized + 'static + Sealed {
     type Id: Copy;
+    const SHOULD_EMIT_LINTS: bool;
 
     fn parsers() -> &'static group_type!(Self);
 
@@ -175,6 +178,7 @@ pub trait Stage: Sized + 'static + Sealed {
 #[allow(private_interfaces)]
 impl Stage for Early {
     type Id = NodeId;
+    const SHOULD_EMIT_LINTS: bool = false;
 
     fn parsers() -> &'static group_type!(Self) {
         &early::ATTRIBUTE_PARSERS
@@ -188,6 +192,7 @@ impl Stage for Early {
 #[allow(private_interfaces)]
 impl Stage for Late {
     type Id = HirId;
+    const SHOULD_EMIT_LINTS: bool = true;
 
     fn parsers() -> &'static group_type!(Self) {
         &late::ATTRIBUTE_PARSERS
@@ -228,6 +233,9 @@ impl<'f, 'sess: 'f, S: Stage> SharedContext<'f, 'sess, S> {
     /// must be delayed until after HIR is built. This method will take care of the details of
     /// that.
     pub(crate) fn emit_lint(&mut self, lint: AttributeLintKind, span: Span) {
+        if !S::SHOULD_EMIT_LINTS {
+            return;
+        }
         let id = self.target_id;
         (self.emit_lint)(AttributeLint { id, span, kind: lint });
     }
@@ -408,6 +416,10 @@ impl<'f, 'sess: 'f, S: Stage> AcceptContext<'f, 'sess, S> {
                 strings: true,
             },
         })
+    }
+
+    pub(crate) fn warn_empty_attribute(&mut self, span: Span) {
+        self.emit_lint(AttributeLintKind::EmptyAttribute { first_span: span }, span);
     }
 }
 

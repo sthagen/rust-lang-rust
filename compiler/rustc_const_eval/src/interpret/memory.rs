@@ -537,7 +537,7 @@ impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
 
         #[inline]
         fn is_offset_misaligned(offset: u64, align: Align) -> Option<Misalignment> {
-            if offset % align.bytes() == 0 {
+            if offset.is_multiple_of(align.bytes()) {
                 None
             } else {
                 // The biggest power of two through which `offset` is divisible.
@@ -1233,7 +1233,7 @@ impl<'a, 'tcx, Prov: Provenance, Extra, Bytes: AllocBytes>
 
     /// `offset` is relative to this allocation reference, not the base of the allocation.
     pub fn write_ptr_sized(&mut self, offset: Size, val: Scalar<Prov>) -> InterpResult<'tcx> {
-        self.write_scalar(alloc_range(offset, self.tcx.data_layout().pointer_size), val)
+        self.write_scalar(alloc_range(offset, self.tcx.data_layout().pointer_size()), val)
     }
 
     /// Mark the given sub-range (relative to this allocation reference) as uninitialized.
@@ -1285,7 +1285,7 @@ impl<'a, 'tcx, Prov: Provenance, Extra, Bytes: AllocBytes> AllocRef<'a, 'tcx, Pr
     /// `offset` is relative to this allocation reference, not the base of the allocation.
     pub fn read_pointer(&self, offset: Size) -> InterpResult<'tcx, Scalar<Prov>> {
         self.read_scalar(
-            alloc_range(offset, self.tcx.data_layout().pointer_size),
+            alloc_range(offset, self.tcx.data_layout().pointer_size()),
             /*read_provenance*/ true,
         )
     }
@@ -1554,7 +1554,7 @@ impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
                         // If the allocation is N-aligned, and the offset is not divisible by N,
                         // then `base + offset` has a non-zero remainder after division by `N`,
                         // which means `base + offset` cannot be null.
-                        if offset.bytes() % info.align.bytes() != 0 {
+                        if !offset.bytes().is_multiple_of(info.align.bytes()) {
                             return interp_ok(false);
                         }
                         // We don't know enough, this might be null.

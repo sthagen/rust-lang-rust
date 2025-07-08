@@ -67,8 +67,6 @@ pub enum ReprAttr {
     ReprSimd,
     ReprTransparent,
     ReprAlign(Align),
-    // this one is just so we can emit a lint for it
-    ReprEmpty,
 }
 pub use ReprAttr::*;
 
@@ -151,7 +149,7 @@ pub enum UsedBy {
 /// ## Attribute Processing
 /// While attributes are initially parsed by [`rustc_parse`] into [`ast::Attribute`], they still contain raw token streams
 /// because different attributes have different internal structures. This enum represents the final,
-/// fully parsed form of these attributes, where each variant contains contains all the information and
+/// fully parsed form of these attributes, where each variant contains all the information and
 /// structure relevant for the specific attribute.
 ///
 /// Some attributes can be applied multiple times to the same item, and they are "collapsed" into a single
@@ -300,11 +298,14 @@ pub enum AttributeKind {
     /// Represents `#[rustc_pass_by_value]` (used by the `rustc_pass_by_value` lint).
     PassByValue(Span),
 
+    /// Represents `#[path]`
+    Path(Symbol, Span),
+
     /// Represents `#[rustc_pub_transparent]` (used by the `repr_transparent_external_private_fields` lint).
     PubTransparent(Span),
 
     /// Represents [`#[repr]`](https://doc.rust-lang.org/stable/reference/type-layout.html#representations).
-    Repr(ThinVec<(ReprAttr, Span)>),
+    Repr { reprs: ThinVec<(ReprAttr, Span)>, first_span: Span },
 
     /// Represents `#[rustc_layout_scalar_valid_range_end]`.
     RustcLayoutScalarValidRangeEnd(Box<u128>, Span),
