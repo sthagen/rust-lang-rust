@@ -7,10 +7,12 @@
 
 use std::cell::Cell;
 use std::collections::hash_map::Entry;
+use std::slice;
 
 use rustc_abi::{Align, ExternAbi, Size};
 use rustc_ast::{AttrStyle, LitKind, MetaItemInner, MetaItemKind, ast};
 use rustc_attr_data_structures::{AttributeKind, InlineAttr, ReprAttr, find_attr};
+use rustc_attr_parsing::{AttributeParser, Late};
 use rustc_data_structures::fx::FxHashMap;
 use rustc_errors::{Applicability, DiagCtxtHandle, IntoDiagArg, MultiSpan, StashKey};
 use rustc_feature::{AttributeDuplicates, AttributeType, BUILTIN_ATTRIBUTE_MAP, BuiltinAttribute};
@@ -33,7 +35,7 @@ use rustc_session::config::CrateType;
 use rustc_session::lint;
 use rustc_session::lint::builtin::{
     CONFLICTING_REPR_HINTS, INVALID_DOC_ATTRIBUTES, INVALID_MACRO_EXPORT_ARGUMENTS,
-    UNKNOWN_OR_MALFORMED_DIAGNOSTIC_ATTRIBUTES, UNUSED_ATTRIBUTES,
+    MALFORMED_DIAGNOSTIC_ATTRIBUTES, MISPLACED_DIAGNOSTIC_ATTRIBUTES, UNUSED_ATTRIBUTES,
 };
 use rustc_session::parse::feature_err;
 use rustc_span::edition::Edition;
@@ -384,11 +386,18 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                             | sym::custom_mir,
                             ..
                         ] => {}
-                        [name, ..] => {
+                        [name, rest@..] => {
                             match BUILTIN_ATTRIBUTE_MAP.get(name) {
                                 // checked below
                                 Some(BuiltinAttribute { type_: AttributeType::CrateLevel, .. }) => {}
                                 Some(_) => {
+                                    if rest.len() > 0 && AttributeParser::<Late>::is_parsed_attribute(slice::from_ref(name)) {
+                                        // Check if we tried to use a builtin attribute as an attribute namespace, like `#[must_use::skip]`.
+                                        // This check is here to solve https://github.com/rust-lang/rust/issues/137590
+                                        // An error is already produced for this case elsewhere
+                                        continue
+                                    }
+
                                     // FIXME: differentiate between unstable and internal attributes just
                                     // like we do with features instead of just accepting `rustc_`
                                     // attributes by name. That should allow trimming the above list, too.
@@ -460,7 +469,8 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
         );
     }
 
-    /// Checks if `#[diagnostic::do_not_recommend]` is applied on a trait impl.
+    /// Checks if `#[diagnostic::do_not_recommend]` is applied on a trait impl and that it has no
+    /// arguments.
     fn check_do_not_recommend(
         &self,
         attr_span: Span,
@@ -477,7 +487,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
             )
         {
             self.tcx.emit_node_span_lint(
-                UNKNOWN_OR_MALFORMED_DIAGNOSTIC_ATTRIBUTES,
+                MISPLACED_DIAGNOSTIC_ATTRIBUTES,
                 hir_id,
                 attr_span,
                 errors::IncorrectDoNotRecommendLocation,
@@ -485,7 +495,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
         }
         if !attr.is_word() {
             self.tcx.emit_node_span_lint(
-                UNKNOWN_OR_MALFORMED_DIAGNOSTIC_ATTRIBUTES,
+                MALFORMED_DIAGNOSTIC_ATTRIBUTES,
                 hir_id,
                 attr_span,
                 errors::DoNotRecommendDoesNotExpectArgs,
@@ -497,7 +507,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
     fn check_diagnostic_on_unimplemented(&self, attr_span: Span, hir_id: HirId, target: Target) {
         if !matches!(target, Target::Trait) {
             self.tcx.emit_node_span_lint(
-                UNKNOWN_OR_MALFORMED_DIAGNOSTIC_ATTRIBUTES,
+                MISPLACED_DIAGNOSTIC_ATTRIBUTES,
                 hir_id,
                 attr_span,
                 DiagnosticOnUnimplementedOnlyForTraits,
