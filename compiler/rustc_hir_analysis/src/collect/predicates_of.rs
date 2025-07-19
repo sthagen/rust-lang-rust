@@ -163,7 +163,7 @@ fn gather_explicit_predicates_of(tcx: TyCtxt<'_>, def_id: LocalDefId) -> ty::Gen
                         .map(|t| ty::Binder::dummy(t.instantiate_identity()));
                 }
             }
-            ItemKind::Trait(_, _, _, _, self_bounds, ..)
+            ItemKind::Trait(_, _, _, _, _, self_bounds, ..)
             | ItemKind::TraitAlias(_, _, self_bounds) => {
                 is_trait = Some((self_bounds, item.span));
             }
@@ -267,20 +267,16 @@ fn gather_explicit_predicates_of(tcx: TyCtxt<'_>, def_id: LocalDefId) -> ty::Gen
         match predicate.kind {
             hir::WherePredicateKind::BoundPredicate(bound_pred) => {
                 let ty = icx.lowerer().lower_ty_maybe_return_type_notation(bound_pred.bounded_ty);
-
                 let bound_vars = tcx.late_bound_vars(predicate.hir_id);
-                // Keep the type around in a dummy predicate, in case of no bounds.
-                // That way, `where Ty:` is not a complete noop (see #53696) and `Ty`
-                // is still checked for WF.
+
+                // This is a `where Ty:` (sic!).
                 if bound_pred.bounds.is_empty() {
                     if let ty::Param(_) = ty.kind() {
-                        // This is a `where T:`, which can be in the HIR from the
-                        // transformation that moves `?Sized` to `T`'s declaration.
-                        // We can skip the predicate because type parameters are
-                        // trivially WF, but also we *should*, to avoid exposing
-                        // users who never wrote `where Type:,` themselves, to
-                        // compiler/tooling bugs from not handling WF predicates.
+                        // We can skip the predicate because type parameters are trivially WF.
                     } else {
+                        // Keep the type around in a dummy predicate. That way, it's not a complete
+                        // noop (see #53696) and `Ty` is still checked for WF.
+
                         let span = bound_pred.bounded_ty.span;
                         let predicate = ty::Binder::bind_with_vars(
                             ty::ClauseKind::WellFormed(ty.into()),
@@ -1022,7 +1018,7 @@ pub(super) fn const_conditions<'tcx>(
         Node::Item(item) => match item.kind {
             hir::ItemKind::Impl(impl_) => (impl_.generics, None, false),
             hir::ItemKind::Fn { generics, .. } => (generics, None, false),
-            hir::ItemKind::Trait(_, _, _, generics, supertraits, _) => {
+            hir::ItemKind::Trait(_, _, _, _, generics, supertraits, _) => {
                 (generics, Some((item.owner_id.def_id, supertraits)), false)
             }
             _ => bug!("const_conditions called on wrong item: {def_id:?}"),
