@@ -739,7 +739,6 @@ impl Step for CompiletestTest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Clippy {
-    stage: u32,
     host: TargetSelection,
 }
 
@@ -753,33 +752,23 @@ impl Step for Clippy {
     }
 
     fn make_run(run: RunConfig<'_>) {
-        // If stage is explicitly set or not lower than 2, keep it. Otherwise, make sure it's at least 2
-        // as tests for this step don't work with a lower stage.
-        let stage = if run.builder.config.is_explicit_stage() || run.builder.top_stage >= 2 {
-            run.builder.top_stage
-        } else {
-            2
-        };
-
-        run.builder.ensure(Clippy { stage, host: run.target });
+        run.builder.ensure(Clippy { host: run.target });
     }
 
     /// Runs `cargo test` for clippy.
     fn run(self, builder: &Builder<'_>) {
-        let stage = self.stage;
+        let stage = builder.top_stage;
         let host = self.host;
-        let compiler = builder.compiler(stage, host);
+        // We need to carefully distinguish the compiler that builds clippy, and the compiler
+        // that is linked into the clippy being tested. `target_compiler` is the latter,
+        // and it must also be used by clippy's test runner to build tests and their dependencies.
+        let target_compiler = builder.compiler(stage, host);
 
-        if stage < 2 {
-            eprintln!("WARNING: clippy tests on stage {stage} may not behave well.");
-            eprintln!("HELP: consider using stage 2");
-        }
-
-        let tool_result = builder.ensure(tool::Clippy { compiler, target: self.host });
-        let compiler = tool_result.build_compiler;
+        let tool_result = builder.ensure(tool::Clippy { compiler: target_compiler, target: host });
+        let tool_compiler = tool_result.build_compiler;
         let mut cargo = tool::prepare_tool_cargo(
             builder,
-            compiler,
+            tool_compiler,
             Mode::ToolRustc,
             host,
             Kind::Test,
@@ -788,10 +777,16 @@ impl Step for Clippy {
             &[],
         );
 
-        cargo.env("RUSTC_TEST_SUITE", builder.rustc(compiler));
-        cargo.env("RUSTC_LIB_PATH", builder.rustc_libdir(compiler));
-        let host_libs = builder.stage_out(compiler, Mode::ToolRustc).join(builder.cargo_dir());
+        cargo.env("RUSTC_TEST_SUITE", builder.rustc(tool_compiler));
+        cargo.env("RUSTC_LIB_PATH", builder.rustc_libdir(tool_compiler));
+        let host_libs = builder.stage_out(tool_compiler, Mode::ToolRustc).join(builder.cargo_dir());
         cargo.env("HOST_LIBS", host_libs);
+
+        // Build the standard library that the tests can use.
+        builder.std(target_compiler, host);
+        cargo.env("TEST_SYSROOT", builder.sysroot(target_compiler));
+        cargo.env("TEST_RUSTC", builder.rustc(target_compiler));
+        cargo.env("TEST_RUSTC_LIB", builder.rustc_libdir(target_compiler));
 
         // Collect paths of tests to run
         'partially_test: {
@@ -813,7 +808,8 @@ impl Step for Clippy {
         cargo.add_rustc_lib_path(builder);
         let cargo = prepare_cargo_test(cargo, &[], &[], host, builder);
 
-        let _guard = builder.msg_sysroot_tool(Kind::Test, compiler.stage, "clippy", host, host);
+        let _guard =
+            builder.msg_sysroot_tool(Kind::Test, tool_compiler.stage, "clippy", host, host);
 
         // Clippy reports errors if it blessed the outputs
         if cargo.allow_failure().run(builder) {
@@ -1757,6 +1753,10 @@ NOTE: if you're sure you want to do this, please open an issue as to why. In the
         cmd.arg("--host").arg(&*compiler.host.triple);
         cmd.arg("--llvm-filecheck").arg(builder.llvm_filecheck(builder.config.host_target));
 
+        if let Some(codegen_backend) = builder.config.default_codegen_backend(compiler.host) {
+            cmd.arg("--codegen-backend").arg(&codegen_backend);
+        }
+
         if builder.build.config.llvm_enzyme {
             cmd.arg("--has-enzyme");
         }
@@ -1810,7 +1810,24 @@ NOTE: if you're sure you want to do this, please open an issue as to why. In the
         }
 
         let mut flags = if is_rustdoc { Vec::new() } else { vec!["-Crpath".to_string()] };
-        flags.push(format!("-Cdebuginfo={}", builder.config.rust_debuginfo_level_tests));
+        flags.push(format!(
+            "-Cdebuginfo={}",
+            if suite == "codegen" {
+                // codegen tests typically check LLVM IR and are sensitive to additional debuginfo.
+                // So do not apply `rust.debuginfo-level-tests` for codegen tests.
+                if builder.config.rust_debuginfo_level_tests
+                    != crate::core::config::DebuginfoLevel::None
+                {
+                    println!(
+                        "NOTE: ignoring `rust.debuginfo-level-tests={}` for codegen tests",
+                        builder.config.rust_debuginfo_level_tests
+                    );
+                }
+                crate::core::config::DebuginfoLevel::None
+            } else {
+                builder.config.rust_debuginfo_level_tests
+            }
+        ));
         flags.extend(builder.config.cmd.compiletest_rustc_args().iter().map(|s| s.to_string()));
 
         if suite != "mir-opt" {
@@ -3387,7 +3404,7 @@ impl Step for CodegenCranelift {
             cargo
                 .arg("--manifest-path")
                 .arg(builder.src.join("compiler/rustc_codegen_cranelift/build_system/Cargo.toml"));
-            compile::rustc_cargo_env(builder, &mut cargo, target, compiler.stage);
+            compile::rustc_cargo_env(builder, &mut cargo, target);
 
             // Avoid incremental cache issues when changing rustc
             cargo.env("CARGO_BUILD_INCREMENTAL", "false");
@@ -3519,7 +3536,7 @@ impl Step for CodegenGCC {
             cargo
                 .arg("--manifest-path")
                 .arg(builder.src.join("compiler/rustc_codegen_gcc/build_system/Cargo.toml"));
-            compile::rustc_cargo_env(builder, &mut cargo, target, compiler.stage);
+            compile::rustc_cargo_env(builder, &mut cargo, target);
             add_cg_gcc_cargo_flags(&mut cargo, &gcc);
 
             // Avoid incremental cache issues when changing rustc
