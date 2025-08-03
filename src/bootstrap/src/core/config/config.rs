@@ -51,7 +51,7 @@ use crate::core::download::{
 use crate::utils::channel;
 use crate::utils::exec::{ExecutionContext, command};
 use crate::utils::helpers::{exe, get_host_target};
-use crate::{GitInfo, OnceLock, TargetSelection, check_ci_llvm, helpers, t};
+use crate::{CodegenBackendKind, GitInfo, OnceLock, TargetSelection, check_ci_llvm, helpers, t};
 
 /// Each path in this list is considered "allowed" in the `download-rustc="if-unchanged"` logic.
 /// This means they can be modified and changes to these paths should never trigger a compiler build
@@ -208,7 +208,7 @@ pub struct Config {
     pub rustc_default_linker: Option<String>,
     pub rust_optimize_tests: bool,
     pub rust_dist_src: bool,
-    pub rust_codegen_backends: Vec<String>,
+    pub rust_codegen_backends: Vec<CodegenBackendKind>,
     pub rust_verify_llvm_ir: bool,
     pub rust_thin_lto_import_instr_limit: Option<u32>,
     pub rust_randomize_layout: bool,
@@ -298,8 +298,16 @@ pub struct Config {
     /// Command for visual diff display, e.g. `diff-tool --color=always`.
     pub compiletest_diff_tool: Option<String>,
 
+    /// Whether to allow running both `compiletest` self-tests and `compiletest`-managed test suites
+    /// against the stage 0 (rustc, std).
+    ///
+    /// This is only intended to be used when the stage 0 compiler is actually built from in-tree
+    /// sources.
+    pub compiletest_allow_stage0: bool,
+
     /// Whether to use the precompiled stage0 libtest with compiletest.
     pub compiletest_use_stage0_libtest: bool,
+
     /// Default value for `--extra-checks`
     pub tidy_extra_checks: Option<String>,
     pub is_running_on_ci: bool,
@@ -342,7 +350,7 @@ impl Config {
             channel: "dev".to_string(),
             codegen_tests: true,
             rust_dist_src: true,
-            rust_codegen_backends: vec!["llvm".to_owned()],
+            rust_codegen_backends: vec![CodegenBackendKind::Llvm],
             deny_warnings: true,
             bindir: "bin".into(),
             dist_include_mingw_linker: true,
@@ -749,6 +757,7 @@ impl Config {
             optimized_compiler_builtins,
             jobs,
             compiletest_diff_tool,
+            compiletest_allow_stage0,
             compiletest_use_stage0_libtest,
             tidy_extra_checks,
             ccache,
@@ -1020,8 +1029,12 @@ impl Config {
 
         config.optimized_compiler_builtins =
             optimized_compiler_builtins.unwrap_or(config.channel != "dev");
+
         config.compiletest_diff_tool = compiletest_diff_tool;
+
+        config.compiletest_allow_stage0 = compiletest_allow_stage0.unwrap_or(false);
         config.compiletest_use_stage0_libtest = compiletest_use_stage0_libtest.unwrap_or(true);
+
         config.tidy_extra_checks = tidy_extra_checks;
 
         let download_rustc = config.download_rustc_commit.is_some();
@@ -1734,7 +1747,7 @@ impl Config {
             .unwrap_or(self.profiler)
     }
 
-    pub fn codegen_backends(&self, target: TargetSelection) -> &[String] {
+    pub fn codegen_backends(&self, target: TargetSelection) -> &[CodegenBackendKind] {
         self.target_config
             .get(&target)
             .and_then(|cfg| cfg.codegen_backends.as_deref())
@@ -1745,7 +1758,7 @@ impl Config {
         self.target_config.get(&target).and_then(|cfg| cfg.jemalloc).unwrap_or(self.jemalloc)
     }
 
-    pub fn default_codegen_backend(&self, target: TargetSelection) -> Option<String> {
+    pub fn default_codegen_backend(&self, target: TargetSelection) -> Option<CodegenBackendKind> {
         self.codegen_backends(target).first().cloned()
     }
 
@@ -1761,7 +1774,7 @@ impl Config {
     }
 
     pub fn llvm_enabled(&self, target: TargetSelection) -> bool {
-        self.codegen_backends(target).contains(&"llvm".to_owned())
+        self.codegen_backends(target).contains(&CodegenBackendKind::Llvm)
     }
 
     pub fn llvm_libunwind(&self, target: TargetSelection) -> LlvmLibunwind {
