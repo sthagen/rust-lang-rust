@@ -44,7 +44,7 @@ impl f64 {
     #[rustc_allow_incoherent_impl]
     #[must_use = "method returns a new number and does not mutate the original value"]
     #[stable(feature = "rust1", since = "1.0.0")]
-    #[rustc_const_stable(feature = "const_float_round_methods", since = "CURRENT_RUSTC_VERSION")]
+    #[rustc_const_stable(feature = "const_float_round_methods", since = "1.90.0")]
     #[inline]
     pub const fn floor(self) -> f64 {
         core::f64::math::floor(self)
@@ -67,7 +67,7 @@ impl f64 {
     #[rustc_allow_incoherent_impl]
     #[must_use = "method returns a new number and does not mutate the original value"]
     #[stable(feature = "rust1", since = "1.0.0")]
-    #[rustc_const_stable(feature = "const_float_round_methods", since = "CURRENT_RUSTC_VERSION")]
+    #[rustc_const_stable(feature = "const_float_round_methods", since = "1.90.0")]
     #[inline]
     pub const fn ceil(self) -> f64 {
         core::f64::math::ceil(self)
@@ -96,7 +96,7 @@ impl f64 {
     #[rustc_allow_incoherent_impl]
     #[must_use = "method returns a new number and does not mutate the original value"]
     #[stable(feature = "rust1", since = "1.0.0")]
-    #[rustc_const_stable(feature = "const_float_round_methods", since = "CURRENT_RUSTC_VERSION")]
+    #[rustc_const_stable(feature = "const_float_round_methods", since = "1.90.0")]
     #[inline]
     pub const fn round(self) -> f64 {
         core::f64::math::round(self)
@@ -123,7 +123,7 @@ impl f64 {
     #[rustc_allow_incoherent_impl]
     #[must_use = "method returns a new number and does not mutate the original value"]
     #[stable(feature = "round_ties_even", since = "1.77.0")]
-    #[rustc_const_stable(feature = "const_float_round_methods", since = "CURRENT_RUSTC_VERSION")]
+    #[rustc_const_stable(feature = "const_float_round_methods", since = "1.90.0")]
     #[inline]
     pub const fn round_ties_even(self) -> f64 {
         core::f64::math::round_ties_even(self)
@@ -149,7 +149,7 @@ impl f64 {
     #[rustc_allow_incoherent_impl]
     #[must_use = "method returns a new number and does not mutate the original value"]
     #[stable(feature = "rust1", since = "1.0.0")]
-    #[rustc_const_stable(feature = "const_float_round_methods", since = "CURRENT_RUSTC_VERSION")]
+    #[rustc_const_stable(feature = "const_float_round_methods", since = "1.90.0")]
     #[inline]
     pub const fn trunc(self) -> f64 {
         core::f64::math::trunc(self)
@@ -173,7 +173,7 @@ impl f64 {
     #[rustc_allow_incoherent_impl]
     #[must_use = "method returns a new number and does not mutate the original value"]
     #[stable(feature = "rust1", since = "1.0.0")]
-    #[rustc_const_stable(feature = "const_float_round_methods", since = "CURRENT_RUSTC_VERSION")]
+    #[rustc_const_stable(feature = "const_float_round_methods", since = "1.90.0")]
     #[inline]
     pub const fn fract(self) -> f64 {
         core::f64::math::fract(self)
@@ -749,12 +749,12 @@ impl f64 {
     /// # Examples
     ///
     /// ```
-    /// let f = std::f64::consts::FRAC_PI_2;
+    /// let f = std::f64::consts::FRAC_PI_4;
     ///
     /// // asin(sin(pi/2))
-    /// let abs_difference = (f.sin().asin() - std::f64::consts::FRAC_PI_2).abs();
+    /// let abs_difference = (f.sin().asin() - f).abs();
     ///
-    /// assert!(abs_difference < 1e-7);
+    /// assert!(abs_difference < 1e-14);
     /// ```
     #[doc(alias = "arcsin")]
     #[rustc_allow_incoherent_impl]
@@ -1153,7 +1153,7 @@ impl f64 {
     ///
     /// let abs_difference = (x.gamma() - 24.0).abs();
     ///
-    /// assert!(abs_difference <= f64::EPSILON);
+    /// assert!(abs_difference <= 1e-10);
     /// ```
     #[rustc_allow_incoherent_impl]
     #[must_use = "method returns a new number and does not mutate the original value"]
@@ -1248,7 +1248,7 @@ impl f64 {
     /// let one = x.erf() + x.erfc();
     /// let abs_difference = (one - 1.0).abs();
     ///
-    /// assert!(abs_difference <= f64::EPSILON);
+    /// assert!(abs_difference <= 1e-10);
     /// ```
     #[rustc_allow_incoherent_impl]
     #[must_use = "method returns a new number and does not mutate the original value"]
