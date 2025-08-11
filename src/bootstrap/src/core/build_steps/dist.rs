@@ -92,7 +92,8 @@ impl Step for Docs {
 
 #[derive(Debug, PartialOrd, Ord, Clone, Hash, PartialEq, Eq)]
 pub struct JsonDocs {
-    pub host: TargetSelection,
+    build_compiler: Compiler,
+    target: TargetSelection,
 }
 
 impl Step for JsonDocs {
@@ -105,24 +106,27 @@ impl Step for JsonDocs {
     }
 
     fn make_run(run: RunConfig<'_>) {
-        run.builder.ensure(JsonDocs { host: run.target });
+        run.builder.ensure(JsonDocs {
+            build_compiler: run.builder.compiler(run.builder.top_stage, run.builder.host_target),
+            target: run.target,
+        });
     }
 
     /// Builds the `rust-docs-json` installer component.
     fn run(self, builder: &Builder<'_>) -> Option<GeneratedTarball> {
-        let host = self.host;
-        builder.ensure(crate::core::build_steps::doc::Std::new(
-            builder.top_stage,
-            host,
+        let target = self.target;
+        let directory = builder.ensure(crate::core::build_steps::doc::Std::from_build_compiler(
+            self.build_compiler,
+            target,
             DocumentationFormat::Json,
         ));
 
         let dest = "share/doc/rust/json";
 
-        let mut tarball = Tarball::new(builder, "rust-docs-json", &host.triple);
+        let mut tarball = Tarball::new(builder, "rust-docs-json", &target.triple);
         tarball.set_product_name("Rust Documentation In JSON Format");
         tarball.is_preview(true);
-        tarball.add_bulk_dir(builder.json_doc_out(host), dest);
+        tarball.add_bulk_dir(directory, dest);
         Some(tarball.generate())
     }
 }
@@ -925,10 +929,24 @@ fn copy_src_dirs(
             "llvm-project\\cmake",
             "llvm-project/runtimes",
             "llvm-project\\runtimes",
+            "llvm-project/third-party",
+            "llvm-project\\third-party",
         ];
         if spath.contains("llvm-project")
             && !spath.ends_with("llvm-project")
             && !LLVM_PROJECTS.iter().any(|path| spath.contains(path))
+        {
+            return false;
+        }
+
+        // Keep only these third party libraries
+        const LLVM_THIRD_PARTY: &[&str] =
+            &["llvm-project/third-party/siphash", "llvm-project\\third-party\\siphash"];
+        if (spath.starts_with("llvm-project/third-party")
+            || spath.starts_with("llvm-project\\third-party"))
+            && !(spath.ends_with("llvm-project/third-party")
+                || spath.ends_with("llvm-project\\third-party"))
+            && !LLVM_THIRD_PARTY.iter().any(|path| spath.contains(path))
         {
             return false;
         }
@@ -1571,11 +1589,12 @@ impl Step for Extended {
             };
         }
 
+        let target_compiler = builder.compiler(stage, target);
         // When rust-std package split from rustc, we needed to ensure that during
         // upgrades rustc was upgraded before rust-std. To avoid rustc clobbering
         // the std files during uninstall. To do this ensure that rustc comes
         // before rust-std in the list below.
-        tarballs.push(builder.ensure(Rustc { compiler: builder.compiler(stage, target) }));
+        tarballs.push(builder.ensure(Rustc { compiler: target_compiler }));
         tarballs.push(builder.ensure(Std { compiler, target }).expect("missing std"));
 
         if target.is_windows_gnu() {
@@ -1583,7 +1602,8 @@ impl Step for Extended {
         }
 
         add_component!("rust-docs" => Docs { host: target });
-        add_component!("rust-json-docs" => JsonDocs { host: target });
+        // Std stage N is documented with compiler stage N
+        add_component!("rust-json-docs" => JsonDocs { build_compiler: target_compiler, target });
         add_component!("cargo" => Cargo { build_compiler: compiler, target });
         add_component!("rustfmt" => Rustfmt { build_compiler: compiler, target });
         add_component!("rust-analyzer" => RustAnalyzer { build_compiler: compiler, target });
