@@ -68,7 +68,13 @@ fn install_sh(
     host: Option<TargetSelection>,
     tarball: &GeneratedTarball,
 ) {
-    let _guard = builder.msg(Kind::Install, stage, package, host, host);
+    let _guard = builder.msg(
+        Kind::Install,
+        package,
+        None,
+        (host.unwrap_or(builder.host_target), stage),
+        host,
+    );
 
     let prefix = default_path(&builder.config.prefix, "/usr/local");
     let sysconfdir = prefix.join(default_path(&builder.config.sysconfdir, "/etc"));
@@ -276,6 +282,7 @@ install!((self, builder, _config),
     RustcCodegenCranelift, alias = "rustc-codegen-cranelift", Self::should_build(_config), only_hosts: true, {
         if let Some(tarball) = builder.ensure(dist::CraneliftCodegenBackend {
             build_compiler: self.compiler,
+            target: self.target
         }) {
             install_sh(builder, "rustc-codegen-cranelift", self.compiler.stage, Some(self.target), &tarball);
         } else {
