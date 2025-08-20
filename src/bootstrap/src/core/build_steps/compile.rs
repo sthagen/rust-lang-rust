@@ -12,6 +12,7 @@ use std::ffi::OsStr;
 use std::io::BufReader;
 use std::io::prelude::*;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 use std::{env, fs, str};
 
 use serde_derive::Deserialize;
@@ -38,7 +39,7 @@ use crate::{
 };
 
 /// Build a standard library for the given `target` using the given `build_compiler`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Std {
     pub target: TargetSelection,
     /// Compiler that builds the standard library.
@@ -948,7 +949,7 @@ pub struct BuiltRustc {
 ///   so that it can compile build scripts and proc macros when building this `rustc`.
 /// - Makes sure that `build_compiler` has a standard library prepared for `target`,
 ///   so that the built `rustc` can *link to it* and use it at runtime.
-#[derive(Debug, PartialOrd, Ord, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Rustc {
     /// The target on which rustc will run (its host).
     pub target: TargetSelection,
@@ -1047,22 +1048,18 @@ impl Step for Rustc {
 
         // If we are building a stage3+ compiler, and full bootstrap is disabled, and we have a
         // previous rustc available, we will uplift a compiler from a previous stage.
+        // We do not allow cross-compilation uplifting here, because there it can be quite tricky
+        // to figure out which stage actually built the rustc that should be uplifted.
         if build_compiler.stage >= 2
             && !builder.config.full_bootstrap
-            && (target == builder.host_target || builder.hosts.contains(&target))
+            && target == builder.host_target
         {
             // Here we need to determine the **build compiler** that built the stage that we will
             // be uplifting. We cannot uplift stage 1, as it has a different ABI than stage 2+,
             // so we always uplift the stage2 compiler (compiled with stage 1).
             let uplift_build_compiler = builder.compiler(1, build_compiler.host);
-            let msg = if uplift_build_compiler.host == target {
-                format!("Uplifting rustc (stage2 -> stage{stage})")
-            } else {
-                format!(
-                    "Uplifting rustc (stage2:{} -> stage{stage}:{target})",
-                    uplift_build_compiler.host
-                )
-            };
+
+            let msg = format!("Uplifting rustc from stage2 to stage{stage})");
             builder.info(&msg);
 
             // Here the compiler that built the rlibs (`uplift_build_compiler`) can be different
@@ -1959,7 +1956,7 @@ impl Step for Sysroot {
 /// linker wrappers (LLD, LLVM bitcode linker, etc.).
 ///
 /// This will assemble a compiler in `build/$target/stage$stage`.
-#[derive(Debug, PartialOrd, Ord, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Assemble {
     /// The compiler which we will produce in this step. Assemble itself will
     /// take care of ensuring that the necessary prerequisites to do so exist,
@@ -2330,6 +2327,7 @@ impl Step for Assemble {
 ///
 /// For a particular stage this will link the file listed in `stamp` into the
 /// `sysroot_dst` provided.
+#[track_caller]
 pub fn add_to_sysroot(
     builder: &Builder<'_>,
     sysroot_dst: &Path,
@@ -2612,7 +2610,17 @@ pub fn strip_debug(builder: &Builder<'_>, target: TargetSelection, path: &Path) 
     }
 
     let previous_mtime = t!(t!(path.metadata()).modified());
-    command("strip").arg("--strip-debug").arg(path).run_capture(builder);
+    let stamp = BuildStamp::new(path.parent().unwrap())
+        .with_prefix(path.file_name().unwrap().to_str().unwrap())
+        .with_prefix("strip")
+        .add_stamp(previous_mtime.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos());
+
+    // Running strip can be relatively expensive (~1s on librustc_driver.so), so we don't rerun it
+    // if the file is unchanged.
+    if !stamp.is_up_to_date() {
+        command("strip").arg("--strip-debug").arg(path).run_capture(builder);
+    }
+    t!(stamp.write());
 
     let file = t!(fs::File::open(path));
 
