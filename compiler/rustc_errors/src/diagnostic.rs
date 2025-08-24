@@ -138,8 +138,18 @@ where
 /// `#[derive(LintDiagnostic)]` -- see [rustc_macros::LintDiagnostic].
 #[rustc_diagnostic_item = "LintDiagnostic"]
 pub trait LintDiagnostic<'a, G: EmissionGuarantee> {
-    /// Decorate and emit a lint.
+    /// Decorate a lint with the information from this type.
     fn decorate_lint<'b>(self, diag: &'b mut Diag<'a, G>);
+}
+
+pub trait LintDiagnosticBox<'a, G: EmissionGuarantee> {
+    fn decorate_lint_box<'b>(self: Box<Self>, diag: &'b mut Diag<'a, G>);
+}
+
+impl<'a, G: EmissionGuarantee, D: LintDiagnostic<'a, G>> LintDiagnosticBox<'a, G> for D {
+    fn decorate_lint_box<'b>(self: Box<Self>, diag: &'b mut Diag<'a, G>) {
+        self.decorate_lint(diag);
+    }
 }
 
 #[derive(Clone, Debug, Encodable, Decodable)]
@@ -565,6 +575,29 @@ impl<'a, G: EmissionGuarantee> Diag<'a, G> {
             self.level
         );
         self.level = Level::DelayedBug;
+    }
+
+    /// Make emitting this diagnostic fatal
+    ///
+    /// Changes the level of this diagnostic to Fatal, and importantly also changes the emission guarantee.
+    /// This is sound for errors that would otherwise be printed, but now simply exit the process instead.
+    /// This function still gives an emission guarantee, the guarantee is now just that it exits fatally.
+    /// For delayed bugs this is different, since those are buffered. If we upgrade one to fatal, another
+    /// might now be ignored.
+    #[rustc_lint_diagnostics]
+    #[track_caller]
+    pub fn upgrade_to_fatal(mut self) -> Diag<'a, FatalAbort> {
+        assert!(
+            matches!(self.level, Level::Error),
+            "upgrade_to_fatal: cannot upgrade {:?} to Fatal: not an error",
+            self.level
+        );
+        self.level = Level::Fatal;
+
+        // Take is okay since we immediately rewrap it in another diagnostic.
+        // i.e. we do emit it despite defusing the original diagnostic's drop bomb.
+        let diag = self.diag.take();
+        Diag { dcx: self.dcx, diag, _marker: PhantomData }
     }
 
     with_fn! { with_span_label,

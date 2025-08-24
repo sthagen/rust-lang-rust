@@ -10,6 +10,7 @@ use rustc_macros::{Decodable, Encodable, HashStable_Generic, PrintAttribute};
 use rustc_span::def_id::DefId;
 use rustc_span::hygiene::Transparency;
 use rustc_span::{Ident, Span, Symbol};
+pub use rustc_target::spec::SanitizerSet;
 use thin_vec::ThinVec;
 
 use crate::attrs::pretty_printing::PrintAttribute;
@@ -366,6 +367,9 @@ pub enum AttributeKind {
     /// Represents `#[coverage(..)]`.
     Coverage(Span, CoverageAttrKind),
 
+    /// Represents `#[crate_name = ...]`
+    CrateName { name: Symbol, name_span: Span, attr_span: Span, style: AttrStyle },
+
     /// Represents `#[custom_mir]`.
     CustomMir(Option<(MirDialect, Span)>, Option<(MirPhase, Span)>, Span),
 
@@ -505,6 +509,12 @@ pub enum AttributeKind {
     /// Represents `#[rustc_object_lifetime_default]`.
     RustcObjectLifetimeDefault,
 
+    /// Represents `#[sanitize]`
+    ///
+    /// the on set and off set are distjoint since there's a third option: unset.
+    /// a node may not set the sanitizer setting in which case it inherits from parents.
+    Sanitize { on_set: SanitizerSet, off_set: SanitizerSet, span: Span },
+
     /// Represents `#[should_panic]`
     ShouldPanic { reason: Option<Symbol>, span: Span },
 
@@ -524,8 +534,9 @@ pub enum AttributeKind {
     /// Represents `#[rustc_std_internal_symbol]`.
     StdInternalSymbol(Span),
 
-    /// Represents `#[target_feature(enable = "...")]`
-    TargetFeature(ThinVec<(Symbol, Span)>, Span),
+    /// Represents `#[target_feature(enable = "...")]` and
+    /// `#[unsafe(force_target_feature(enable = "...")]`.
+    TargetFeature { features: ThinVec<(Symbol, Span)>, attr_span: Span, was_forced: bool },
 
     /// Represents `#[track_caller]`
     TrackCaller(Span),

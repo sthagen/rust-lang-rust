@@ -1,13 +1,5 @@
-use rustc_feature::{AttributeTemplate, template};
-use rustc_hir::Target;
-use rustc_hir::attrs::AttributeKind;
-use rustc_hir::lints::AttributeLintKind;
-use rustc_span::{Symbol, sym};
+use super::prelude::*;
 
-use crate::attributes::{AttributeOrder, OnDuplicate, SingleAttributeParser};
-use crate::context::MaybeWarn::{Allow, Error};
-use crate::context::{AcceptContext, AllowedTargets, Stage};
-use crate::parser::ArgParser;
 pub(crate) struct IgnoreParser;
 
 impl<S: Stage> SingleAttributeParser<S> for IgnoreParser {
@@ -89,7 +81,7 @@ impl<S: Stage> SingleAttributeParser<S> for ShouldPanicParser {
                         return None;
                     };
                     if !single.path().word_is(sym::expected) {
-                        cx.expected_specific_argument_strings(list.span, vec!["expected"]);
+                        cx.expected_specific_argument_strings(list.span, &[sym::expected]);
                         return None;
                     }
                     let Some(nv) = single.args().name_value() else {
