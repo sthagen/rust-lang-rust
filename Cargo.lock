@@ -2167,6 +2167,7 @@ version = "0.1.0"
 dependencies = [
  "html5ever",
  "regex",
+ "urlencoding",
 ]
 
 [[package]]
@@ -3248,6 +3249,7 @@ dependencies = [
  "rustc_driver_impl",
  "rustc_public",
  "rustc_public_bridge",
+ "rustc_windows_rc",
  "tikv-jemalloc-sys",
 ]
 
@@ -3623,6 +3625,7 @@ name = "rustc_driver"
 version = "0.0.0"
 dependencies = [
  "rustc_driver_impl",
+ "rustc_windows_rc",
 ]
 
 [[package]]
@@ -4409,7 +4412,6 @@ dependencies = [
  "rustc_middle",
  "rustc_query_system",
  "rustc_serialize",
- "rustc_session",
  "rustc_span",
  "tracing",
 ]
@@ -4681,6 +4683,7 @@ dependencies = [
 name = "rustc_type_ir"
 version = "0.0.0"
 dependencies = [
+ "arrayvec",
  "bitflags",
  "derive-where",
  "ena",
@@ -4716,6 +4719,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfcb3a22ef46e85b45de6ee7e79d063319ebb6594faafcf1c225ea92ab6e9b92"
 dependencies = [
  "semver",
+]
+
+[[package]]
+name = "rustc_windows_rc"
+version = "0.0.0"
+dependencies = [
+ "cc",
 ]
 
 [[package]]
@@ -5518,11 +5528,10 @@ checksum = "5d99f8c9a7727884afe522e9bd5edbfc91a3312b36a77b5fb8926e4c31a41801"
 
 [[package]]
 name = "tracing"
-version = "0.1.37"
+version = "0.1.41"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ce8c33a8d48bd45d624a6e523445fd21ec13d3653cd51f681abf67418f54eb8"
+checksum = "784e0ac535deb450455cbfa28a6f0df145ea1bb7ae51b821cf5e7927fdcfbdd0"
 dependencies = [
- "cfg-if",
  "pin-project-lite",
  "tracing-attributes",
  "tracing-core",
@@ -5824,6 +5833,12 @@ dependencies = [
  "idna",
  "percent-encoding",
 ]
+
+[[package]]
+name = "urlencoding"
+version = "2.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "daf8dba3b7eb870caf1ddeed7bc9d2a049f3cfdfae7cb521b087cc33ae4c49da"
 
 [[package]]
 name = "utf-8"
