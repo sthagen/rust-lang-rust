@@ -834,6 +834,7 @@ crate::target_spec_enum! {
     pub enum PanicStrategy {
         Unwind = "unwind",
         Abort = "abort",
+        ImmediateAbort = "immediate-abort",
     }
 
     parse_error_type = "panic strategy";
@@ -852,7 +853,12 @@ impl PanicStrategy {
         match *self {
             PanicStrategy::Unwind => sym::unwind,
             PanicStrategy::Abort => sym::abort,
+            PanicStrategy::ImmediateAbort => sym::immediate_abort,
         }
+    }
+
+    pub fn unwinds(self) -> bool {
+        matches!(self, PanicStrategy::Unwind)
     }
 }
 
@@ -1642,6 +1648,7 @@ supported_targets! {
     ("aarch64-unknown-hermit", aarch64_unknown_hermit),
     ("riscv64gc-unknown-hermit", riscv64gc_unknown_hermit),
     ("x86_64-unknown-hermit", x86_64_unknown_hermit),
+    ("x86_64-unknown-motor", x86_64_unknown_motor),
 
     ("x86_64-unikraft-linux-musl", x86_64_unikraft_linux_musl),
 
