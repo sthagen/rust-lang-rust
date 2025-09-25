@@ -1367,8 +1367,7 @@ impl f128 {
     #[rustc_const_unstable(feature = "f128", issue = "116909")]
     #[must_use = "method returns a new number and does not mutate the original value"]
     pub const fn copysign(self, sign: f128) -> f128 {
-        // SAFETY: this is actually a safe intrinsic
-        unsafe { intrinsics::copysignf128(self, sign) }
+        intrinsics::copysignf128(self, sign)
     }
 
     /// Float addition that allows optimizations based on algebraic rules.
@@ -1660,7 +1659,8 @@ impl f128 {
     #[doc(alias = "fmaf128", alias = "fusedMultiplyAdd")]
     #[unstable(feature = "f128", issue = "116909")]
     #[must_use = "method returns a new number and does not mutate the original value"]
-    pub fn mul_add(self, a: f128, b: f128) -> f128 {
+    #[rustc_const_unstable(feature = "const_mul_add", issue = "146724")]
+    pub const fn mul_add(self, a: f128, b: f128) -> f128 {
         intrinsics::fmaf128(self, a, b)
     }
 

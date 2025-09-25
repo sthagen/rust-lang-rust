@@ -1344,8 +1344,7 @@ impl f16 {
     #[rustc_const_unstable(feature = "f16", issue = "116909")]
     #[must_use = "method returns a new number and does not mutate the original value"]
     pub const fn copysign(self, sign: f16) -> f16 {
-        // SAFETY: this is actually a safe intrinsic
-        unsafe { intrinsics::copysignf16(self, sign) }
+        intrinsics::copysignf16(self, sign)
     }
 
     /// Float addition that allows optimizations based on algebraic rules.
@@ -1635,7 +1634,8 @@ impl f16 {
     #[unstable(feature = "f16", issue = "116909")]
     #[doc(alias = "fmaf16", alias = "fusedMultiplyAdd")]
     #[must_use = "method returns a new number and does not mutate the original value"]
-    pub fn mul_add(self, a: f16, b: f16) -> f16 {
+    #[rustc_const_unstable(feature = "const_mul_add", issue = "146724")]
+    pub const fn mul_add(self, a: f16, b: f16) -> f16 {
         intrinsics::fmaf16(self, a, b)
     }
 
