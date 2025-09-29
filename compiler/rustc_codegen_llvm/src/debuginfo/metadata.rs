@@ -117,7 +117,7 @@ fn build_fixed_size_array_di_node<'ll, 'tcx>(
         .try_to_target_usize(cx.tcx)
         .expect("expected monomorphic const in codegen") as c_longlong;
 
-    let subrange = unsafe { llvm::LLVMRustDIBuilderGetOrCreateSubrange(DIB(cx), 0, upper_bound) };
+    let subrange = unsafe { llvm::LLVMDIBuilderGetOrCreateSubrange(DIB(cx), 0, upper_bound) };
     let subscripts = &[subrange];
 
     let di_node = unsafe {
@@ -1043,7 +1043,7 @@ fn create_member_type<'ll, 'tcx>(
             file_metadata,
             line_number,
             layout.size.bits(),
-            layout.align.abi.bits() as u32,
+            layout.align.bits() as u32,
             offset.bits(),
             flags,
             type_di_node,
