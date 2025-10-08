@@ -37,11 +37,9 @@ use crate::common::Funclet;
 use crate::context::{CodegenCx, FullCx, GenericCx, SCx};
 use crate::llvm::{
     self, AtomicOrdering, AtomicRmwBinOp, BasicBlock, FromGeneric, GEPNoWrapFlags, Metadata, TRUE,
-    ToLlvmBool,
+    ToLlvmBool, Type, Value,
 };
-use crate::type_::Type;
 use crate::type_of::LayoutLlvmExt;
-use crate::value::Value;
 
 #[must_use]
 pub(crate) struct GenericBuilder<'a, 'll, CX: Borrow<SCx<'ll>>> {
@@ -641,13 +639,9 @@ impl<'a, 'll, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
         size: Size,
     ) -> &'ll Value {
         unsafe {
-            let load = llvm::LLVMRustBuildAtomicLoad(
-                self.llbuilder,
-                ty,
-                ptr,
-                UNNAMED,
-                AtomicOrdering::from_generic(order),
-            );
+            let load = llvm::LLVMBuildLoad2(self.llbuilder, ty, ptr, UNNAMED);
+            // Set atomic ordering
+            llvm::LLVMSetOrdering(load, AtomicOrdering::from_generic(order));
             // LLVM requires the alignment of atomic loads to be at least the size of the type.
             llvm::LLVMSetAlignment(load, size.bytes() as c_uint);
             load
@@ -874,12 +868,9 @@ impl<'a, 'll, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
         debug!("Store {:?} -> {:?}", val, ptr);
         assert_eq!(self.cx.type_kind(self.cx.val_ty(ptr)), TypeKind::Pointer);
         unsafe {
-            let store = llvm::LLVMRustBuildAtomicStore(
-                self.llbuilder,
-                val,
-                ptr,
-                AtomicOrdering::from_generic(order),
-            );
+            let store = llvm::LLVMBuildStore(self.llbuilder, val, ptr);
+            // Set atomic ordering
+            llvm::LLVMSetOrdering(store, AtomicOrdering::from_generic(order));
             // LLVM requires the alignment of atomic stores to be at least the size of the type.
             llvm::LLVMSetAlignment(store, size.bytes() as c_uint);
         }
