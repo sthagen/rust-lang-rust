@@ -397,7 +397,10 @@ rustc_queries! {
     /// The root query triggering all analysis passes like typeck or borrowck.
     query analysis(key: ()) {
         eval_always
-        desc { "running analysis passes on this crate" }
+        desc { |tcx|
+            "running analysis passes on crate `{}`",
+            tcx.crate_name(LOCAL_CRATE),
+        }
     }
 
     /// This query checks the fulfillment of collected lint expectations.
@@ -1244,7 +1247,10 @@ rustc_queries! {
 
     /// Borrow-checks the given typeck root, e.g. functions, const/static items,
     /// and its children, e.g. closures, inline consts.
-    query mir_borrowck(key: LocalDefId) -> Result<&'tcx mir::DefinitionSiteHiddenTypes<'tcx>, ErrorGuaranteed> {
+    query mir_borrowck(key: LocalDefId) -> Result<
+        &'tcx FxIndexMap<LocalDefId, ty::DefinitionSiteHiddenType<'tcx>>,
+        ErrorGuaranteed
+    > {
         desc { |tcx| "borrow-checking `{}`", tcx.def_path_str(key) }
     }
 
