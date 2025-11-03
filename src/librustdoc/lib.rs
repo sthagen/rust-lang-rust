@@ -60,7 +60,7 @@ extern crate rustc_target;
 extern crate rustc_trait_selection;
 extern crate test;
 
-// See docs in https://github.com/rust-lang/rust/blob/master/compiler/rustc/src/main.rs
+// See docs in https://github.com/rust-lang/rust/blob/HEAD/compiler/rustc/src/main.rs
 // about jemalloc.
 #[cfg(feature = "jemalloc")]
 extern crate tikv_jemalloc_sys as jemalloc_sys;
@@ -123,7 +123,7 @@ mod visit_ast;
 mod visit_lib;
 
 pub fn main() {
-    // See docs in https://github.com/rust-lang/rust/blob/master/compiler/rustc/src/main.rs
+    // See docs in https://github.com/rust-lang/rust/blob/HEAD/compiler/rustc/src/main.rs
     // about jemalloc.
     #[cfg(feature = "jemalloc")]
     {
@@ -896,7 +896,7 @@ fn main_args(early_dcx: &mut EarlyDiagCtxt, at_args: &[String]) {
         // Register the loaded external files in the source map so they show up in depinfo.
         // We can't load them via the source map because it gets created after we process the options.
         for external_path in &loaded_paths {
-            let _ = sess.source_map().load_file(external_path);
+            let _ = sess.source_map().load_binary_file(external_path);
         }
 
         if sess.opts.describe_lints {
