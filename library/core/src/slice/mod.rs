@@ -51,7 +51,7 @@ pub use ascii::is_ascii_simple;
 pub use index::SliceIndex;
 #[unstable(feature = "slice_range", issue = "76393")]
 pub use index::{range, try_range};
-#[unstable(feature = "array_windows", issue = "75027")]
+#[stable(feature = "array_windows", since = "CURRENT_RUSTC_VERSION")]
 pub use iter::ArrayWindows;
 #[stable(feature = "slice_group_by", since = "1.77.0")]
 pub use iter::{ChunkBy, ChunkByMut};
@@ -842,8 +842,8 @@ impl<T> [T] {
     /// Gets a reference to the underlying array.
     ///
     /// If `N` is not exactly equal to the length of `self`, then this method returns `None`.
-    #[stable(feature = "core_slice_as_array", since = "CURRENT_RUSTC_VERSION")]
-    #[rustc_const_stable(feature = "core_slice_as_array", since = "CURRENT_RUSTC_VERSION")]
+    #[stable(feature = "core_slice_as_array", since = "1.93.0")]
+    #[rustc_const_stable(feature = "core_slice_as_array", since = "1.93.0")]
     #[inline]
     #[must_use]
     pub const fn as_array<const N: usize>(&self) -> Option<&[T; N]> {
@@ -861,8 +861,8 @@ impl<T> [T] {
     /// Gets a mutable reference to the slice's underlying array.
     ///
     /// If `N` is not exactly equal to the length of `self`, then this method returns `None`.
-    #[stable(feature = "core_slice_as_array", since = "CURRENT_RUSTC_VERSION")]
-    #[rustc_const_stable(feature = "core_slice_as_array", since = "CURRENT_RUSTC_VERSION")]
+    #[stable(feature = "core_slice_as_array", since = "1.93.0")]
+    #[rustc_const_stable(feature = "core_slice_as_array", since = "1.93.0")]
     #[inline]
     #[must_use]
     pub const fn as_mut_array<const N: usize>(&mut self) -> Option<&mut [T; N]> {
@@ -1620,13 +1620,15 @@ impl<T> [T] {
     ///
     /// # Panics
     ///
-    /// Panics if `N` is zero. This check will most probably get changed to a compile time
-    /// error before this method gets stabilized.
+    /// Panics if `N` is zero.
+    ///
+    /// Note that this check is against a const generic parameter, not a runtime
+    /// value, and thus a particular monomorphization will either always panic
+    /// or it will never panic.
     ///
     /// # Examples
     ///
     /// ```
-    /// #![feature(array_windows)]
     /// let slice = [0, 1, 2, 3];
     /// let mut iter = slice.array_windows();
     /// assert_eq!(iter.next().unwrap(), &[0, 1]);
@@ -1636,7 +1638,7 @@ impl<T> [T] {
     /// ```
     ///
     /// [`windows`]: slice::windows
-    #[unstable(feature = "array_windows", issue = "75027")]
+    #[stable(feature = "array_windows", since = "CURRENT_RUSTC_VERSION")]
     #[rustc_const_unstable(feature = "const_slice_make_iter", issue = "137737")]
     #[inline]
     #[track_caller]
@@ -4905,6 +4907,28 @@ impl<T> [T] {
         let end = start.wrapping_add(subslice.len());
 
         if start <= self.len() && end <= self.len() { Some(start..end) } else { None }
+    }
+
+    /// Returns the same slice `&[T]`.
+    ///
+    /// This method is redundant when used directly on `&[T]`, but
+    /// it helps dereferencing other "container" types to slices,
+    /// for example `Box<[T]>` or `Arc<[T]>`.
+    #[inline]
+    #[unstable(feature = "str_as_str", issue = "130366")]
+    pub const fn as_slice(&self) -> &[T] {
+        self
+    }
+
+    /// Returns the same slice `&mut [T]`.
+    ///
+    /// This method is redundant when used directly on `&mut [T]`, but
+    /// it helps dereferencing other "container" types to slices,
+    /// for example `Box<[T]>` or `MutexGuard<[T]>`.
+    #[inline]
+    #[unstable(feature = "str_as_str", issue = "130366")]
+    pub const fn as_mut_slice(&mut self) -> &mut [T] {
+        self
     }
 }
 

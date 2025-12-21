@@ -2,6 +2,8 @@ use std::env;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
+use build_helper::ci::CiEnv;
+
 use super::{Builder, Kind};
 use crate::core::build_steps::test;
 use crate::core::build_steps::tool::SourceType;
@@ -98,6 +100,7 @@ pub struct Cargo {
     command: BootstrapCommand,
     args: Vec<OsString>,
     compiler: Compiler,
+    mode: Mode,
     target: TargetSelection,
     rustflags: Rustflags,
     rustdocflags: Rustflags,
@@ -139,6 +142,10 @@ impl Cargo {
 
     pub fn compiler(&self) -> Compiler {
         self.compiler
+    }
+
+    pub fn mode(&self) -> Mode {
+        self.mode
     }
 
     pub fn into_cmd(self) -> BootstrapCommand {
@@ -1025,10 +1032,7 @@ impl Builder<'_> {
                     self.build.debuginfo_map_to(GitRepo::Rustc, RemapScheme::Compiler)
                 {
                     // When building compiler sources, we want to apply the compiler remap scheme.
-                    cargo.env(
-                        "RUSTC_DEBUGINFO_MAP",
-                        format!("{}={}", self.build.src.display(), map_to),
-                    );
+                    cargo.env("RUSTC_DEBUGINFO_MAP", format!("compiler/={map_to}/compiler"));
                     cargo.env("CFG_VIRTUAL_RUSTC_DEV_SOURCE_BASE_DIR", map_to);
                 }
             }
@@ -1040,10 +1044,7 @@ impl Builder<'_> {
                 if let Some(ref map_to) =
                     self.build.debuginfo_map_to(GitRepo::Rustc, RemapScheme::NonCompiler)
                 {
-                    cargo.env(
-                        "RUSTC_DEBUGINFO_MAP",
-                        format!("{}={}", self.build.src.display(), map_to),
-                    );
+                    cargo.env("RUSTC_DEBUGINFO_MAP", format!("library/={map_to}/library"));
                 }
             }
         }
@@ -1329,7 +1330,13 @@ impl Builder<'_> {
         // Try to use a sysroot-relative bindir, in case it was configured absolutely.
         cargo.env("RUSTC_INSTALL_BINDIR", self.config.bindir_relative());
 
-        cargo.force_coloring_in_ci();
+        if CiEnv::is_ci() {
+            // Tell cargo to use colored output for nicer logs in CI, even
+            // though CI isn't printing to a terminal.
+            // Also set an explicit `TERM=xterm` so that cargo doesn't warn
+            // about TERM not being set.
+            cargo.env("TERM", "xterm").args(["--color=always"]);
+        };
 
         // When we build Rust dylibs they're all intended for intermediate
         // usage, so make sure we pass the -Cprefer-dynamic flag instead of
@@ -1404,6 +1411,7 @@ impl Builder<'_> {
             command: cargo,
             args: vec![],
             compiler,
+            mode,
             target,
             rustflags,
             rustdocflags,

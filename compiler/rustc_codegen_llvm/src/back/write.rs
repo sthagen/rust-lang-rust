@@ -21,10 +21,8 @@ use rustc_errors::{DiagCtxtHandle, Level};
 use rustc_fs_util::{link_or_copy, path_to_c_string};
 use rustc_middle::ty::TyCtxt;
 use rustc_session::Session;
-use rustc_session::config::{
-    self, Lto, OutputType, Passes, RemapPathScopeComponents, SplitDwarfKind, SwitchWithOptPath,
-};
-use rustc_span::{BytePos, InnerSpan, Pos, SpanData, SyntaxContext, sym};
+use rustc_session::config::{self, Lto, OutputType, Passes, SplitDwarfKind, SwitchWithOptPath};
+use rustc_span::{BytePos, InnerSpan, Pos, RemapPathScopeComponents, SpanData, SyntaxContext, sym};
 use rustc_target::spec::{
     Arch, CodeModel, FloatAbi, RelocModel, SanitizerSet, SplitDebuginfo, TlsModel,
 };
@@ -75,7 +73,7 @@ fn write_output_file<'ll>(
     let result = unsafe {
         let pm = llvm::LLVMCreatePassManager();
         llvm::LLVMAddAnalysisPasses(target, pm);
-        llvm::LLVMRustAddLibraryInfo(pm, m, no_builtins);
+        llvm::LLVMRustAddLibraryInfo(target, pm, m, no_builtins);
         llvm::LLVMRustWriteOutputFile(
             target,
             pm,
@@ -248,6 +246,7 @@ pub(crate) fn target_machine_factory(
         !sess.opts.unstable_opts.use_ctors_section.unwrap_or(sess.target.use_ctors_section);
 
     let path_mapping = sess.source_map().path_mapping().clone();
+    let working_dir = sess.source_map().working_dir().clone();
 
     let use_emulated_tls = matches!(sess.tls_model(), TlsModel::Emulated);
 
@@ -271,9 +270,6 @@ pub(crate) fn target_machine_factory(
         }
     };
 
-    let file_name_display_preference =
-        sess.filename_display_preference(RemapPathScopeComponents::DEBUGINFO);
-
     let use_wasm_eh = wants_wasm_eh(sess);
 
     let prof = SelfProfilerRef::clone(&sess.prof);
@@ -284,8 +280,9 @@ pub(crate) fn target_machine_factory(
         let path_to_cstring_helper = |path: Option<PathBuf>| -> CString {
             let path = path.unwrap_or_default();
             let path = path_mapping
-                .to_real_filename(path)
-                .to_string_lossy(file_name_display_preference)
+                .to_real_filename(&working_dir, path)
+                .path(RemapPathScopeComponents::DEBUGINFO)
+                .to_string_lossy()
                 .into_owned();
             CString::new(path).unwrap()
         };
@@ -710,8 +707,7 @@ pub(crate) unsafe fn llvm_optimize(
     if cgcx.target_is_like_gpu && config.offload.contains(&config::Offload::Enable) {
         let cx =
             SimpleCx::new(module.module_llvm.llmod(), module.module_llvm.llcx, cgcx.pointer_size);
-        // For now we only support up to 10 kernels named kernel_0 ... kernel_9, a follow-up PR is
-        // introducing a proper offload intrinsic to solve this limitation.
+
         for func in cx.get_functions() {
             let offload_kernel = "offload-kernel";
             if attributes::has_string_attr(func, offload_kernel) {
@@ -733,6 +729,13 @@ pub(crate) unsafe fn llvm_optimize(
 
     let llvm_plugins = config.llvm_plugins.join(",");
 
+    let enzyme_fn = if consider_ad {
+        let wrapper = llvm::EnzymeWrapper::get_instance();
+        wrapper.registerEnzymeAndPassPipeline
+    } else {
+        std::ptr::null()
+    };
+
     let result = unsafe {
         llvm::LLVMRustOptimize(
             module.module_llvm.llmod(),
@@ -752,7 +755,7 @@ pub(crate) unsafe fn llvm_optimize(
             vectorize_loop,
             config.no_builtins,
             config.emit_lifetime_markers,
-            run_enzyme,
+            enzyme_fn,
             print_before_enzyme,
             print_after_enzyme,
             print_passes,

@@ -838,7 +838,6 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 self.parent_module,
                 self.infcx.typing_env(self.param_env),
             );
-
             if !ty_is_inhabited {
                 // Unreachable code warnings are already emitted during type checking.
                 // However, during type checking, full type information is being
@@ -849,7 +848,23 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 // uninhabited types (e.g. empty enums). The check above is used so
                 // that we do not emit the same warning twice if the uninhabited type
                 // is indeed `!`.
-                if !ty.is_never() {
+                if !ty.is_never()
+                    && matches!(self.tcx.def_kind(self.def_id), DefKind::Fn | DefKind::AssocFn)
+                // check if the function's return type is inhabited
+                // this was added here because of this regression
+                // https://github.com/rust-lang/rust/issues/149571
+                    && self
+                        .tcx
+                        .fn_sig(self.def_id)
+                        .instantiate_identity()
+                        .skip_binder()
+                        .output()
+                        .is_inhabited_from(
+                            self.tcx,
+                            self.parent_module,
+                            self.infcx.typing_env(self.param_env),
+                        )
+                {
                     lints.push((target_bb, ty, term.source_info.span));
                 }
 

@@ -325,8 +325,8 @@ impl Duration {
     /// assert_eq!(10_u64.pow(15), duration.as_secs());
     /// assert_eq!(321, duration.subsec_nanos());
     /// ```
-    #[stable(feature = "duration_from_nanos_u128", since = "CURRENT_RUSTC_VERSION")]
-    #[rustc_const_stable(feature = "duration_from_nanos_u128", since = "CURRENT_RUSTC_VERSION")]
+    #[stable(feature = "duration_from_nanos_u128", since = "1.93.0")]
+    #[rustc_const_stable(feature = "duration_from_nanos_u128", since = "1.93.0")]
     #[must_use]
     #[inline]
     #[track_caller]
@@ -672,11 +672,10 @@ impl Duration {
             let mut nanos = self.nanos.as_inner() + rhs.nanos.as_inner();
             if nanos >= NANOS_PER_SEC {
                 nanos -= NANOS_PER_SEC;
-                if let Some(new_secs) = secs.checked_add(1) {
-                    secs = new_secs;
-                } else {
+                let Some(new_secs) = secs.checked_add(1) else {
                     return None;
-                }
+                };
+                secs = new_secs;
             }
             debug_assert!(nanos < NANOS_PER_SEC);
             Some(Duration::new(secs, nanos))

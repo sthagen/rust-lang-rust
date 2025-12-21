@@ -1758,8 +1758,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
                 // specify a byte literal
                 (ty::Uint(ty::UintTy::U8), ty::Char) => {
                     if let Ok(code) = self.tcx.sess().source_map().span_to_snippet(span)
-                        && let Some(code) =
-                            code.strip_prefix('\'').and_then(|s| s.strip_suffix('\''))
+                        && let Some(code) = code.strip_circumfix('\'', '\'')
                         // forbid all Unicode escapes
                         && !code.starts_with("\\u")
                         // forbids literal Unicode characters beyond ASCII
@@ -1776,7 +1775,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
                 // specify a character literal (issue #92479)
                 (ty::Char, ty::Ref(_, r, _)) if r.is_str() => {
                     if let Ok(code) = self.tcx.sess().source_map().span_to_snippet(span)
-                        && let Some(code) = code.strip_prefix('"').and_then(|s| s.strip_suffix('"'))
+                        && let Some(code) = code.strip_circumfix('"', '"')
                         && code.chars().count() == 1
                     {
                         suggestions.push(TypeErrorAdditionalDiags::MeantCharLiteral {
@@ -2067,6 +2066,19 @@ struct SameTypeModuloInfer<'a, 'tcx>(&'a InferCtxt<'tcx>);
 impl<'tcx> TypeRelation<TyCtxt<'tcx>> for SameTypeModuloInfer<'_, 'tcx> {
     fn cx(&self) -> TyCtxt<'tcx> {
         self.0.tcx
+    }
+
+    fn relate_ty_args(
+        &mut self,
+        a_ty: Ty<'tcx>,
+        _: Ty<'tcx>,
+        _: DefId,
+        a_args: ty::GenericArgsRef<'tcx>,
+        b_args: ty::GenericArgsRef<'tcx>,
+        _: impl FnOnce(ty::GenericArgsRef<'tcx>) -> Ty<'tcx>,
+    ) -> RelateResult<'tcx, Ty<'tcx>> {
+        relate::relate_args_invariantly(self, a_args, b_args)?;
+        Ok(a_ty)
     }
 
     fn relate_with_variance<T: relate::Relate<TyCtxt<'tcx>>>(

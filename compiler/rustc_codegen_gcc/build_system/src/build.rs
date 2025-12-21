@@ -46,8 +46,16 @@ impl BuildArg {
         println!(
             r#"
 `build` command help:
-
-    --sysroot              : Build with sysroot"#
+    --sysroot              : When used on its own, build backend in dev mode with optimized dependencies
+                             and sysroot in dev mode (unoptimized)
+                             When used together with --release, build backend in release mode with optimized dependencies
+                             When used together with --release-sysroot,
+                             build the sysroot in release mode with optimized dependencies instead of in dev mode
+    --release-sysroot      : When combined with --sysroot, additionally
+                             build the sysroot in release mode with optimized dependencies.
+                             It has no effect if `--sysroot` is not specified.
+                             It should not be used on its own.
+    --sysroot-panic-abort  : Build the sysroot without unwinding support"#
         );
         ConfigInfo::show_usage();
         println!("    --help                 : Show this help");
@@ -103,14 +111,20 @@ pub fn build_sysroot(env: &HashMap<String, String>, config: &ConfigInfo) -> Resu
 
     // Symlink libgccjit.so to sysroot.
     let lib_path = start_dir.join("sysroot").join("lib");
+    let rustlib_target_path = lib_path
+        .join("rustlib")
+        .join(&config.host_triple)
+        .join("codegen-backends")
+        .join("lib")
+        .join(&config.target_triple);
     let libgccjit_path =
         PathBuf::from(config.gcc_path.as_ref().expect("libgccjit should be set by this point"))
             .join("libgccjit.so");
-    let libgccjit_in_sysroot_path = lib_path.join("libgccjit.so");
+    let libgccjit_in_sysroot_path = rustlib_target_path.join("libgccjit.so");
     // First remove the file to be able to create the symlink even when the file already exists.
     let _ = fs::remove_file(&libgccjit_in_sysroot_path);
-    create_dir(&lib_path)?;
-    symlink(libgccjit_path, libgccjit_in_sysroot_path)
+    create_dir(&rustlib_target_path)?;
+    symlink(libgccjit_path, &libgccjit_in_sysroot_path)
         .map_err(|error| format!("Cannot create symlink for libgccjit.so: {}", error))?;
 
     let library_dir = start_dir.join("sysroot_src").join("library");
