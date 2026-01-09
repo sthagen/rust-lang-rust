@@ -21,7 +21,7 @@ use rustc_hir::{
     GenericParam, GenericParamKind, HirId, ImplicitSelfKind, LifetimeParamKind, Node, PatKind,
     PreciseCapturingArg, RangeEnd, Term, TyPatKind,
 };
-use rustc_span::source_map::SourceMap;
+use rustc_span::source_map::{SourceMap, Spanned};
 use rustc_span::{DUMMY_SP, FileName, Ident, Span, Symbol, kw, sym};
 use {rustc_ast as ast, rustc_hir as hir};
 
@@ -1141,12 +1141,26 @@ impl<'a> State<'a> {
 
     fn print_const_arg(&mut self, const_arg: &hir::ConstArg<'_>) {
         match &const_arg.kind {
+            ConstArgKind::Tup(exprs) => {
+                self.popen();
+                self.commasep_cmnt(
+                    Inconsistent,
+                    exprs,
+                    |s, arg| s.print_const_arg(arg),
+                    |arg| arg.span,
+                );
+                self.pclose();
+            }
             ConstArgKind::Struct(qpath, fields) => self.print_const_struct(qpath, fields),
             ConstArgKind::TupleCall(qpath, args) => self.print_const_ctor(qpath, args),
             ConstArgKind::Path(qpath) => self.print_qpath(qpath, true),
             ConstArgKind::Anon(anon) => self.print_anon_const(anon),
-            ConstArgKind::Error(_, _) => self.word("/*ERROR*/"),
+            ConstArgKind::Error(_) => self.word("/*ERROR*/"),
             ConstArgKind::Infer(..) => self.word("_"),
+            ConstArgKind::Literal(node) => {
+                let span = const_arg.span;
+                self.print_literal(&Spanned { span, node: *node })
+            }
         }
     }
 
