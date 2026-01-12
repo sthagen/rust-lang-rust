@@ -21,7 +21,7 @@ use crate::attributes::allow_unstable::{
 use crate::attributes::body::CoroutineParser;
 use crate::attributes::cfi_encoding::CfiEncodingParser;
 use crate::attributes::codegen_attrs::{
-    ColdParser, CoverageParser, EiiExternItemParser, ExportNameParser, ForceTargetFeatureParser,
+    ColdParser, CoverageParser, EiiForeignItemParser, ExportNameParser, ForceTargetFeatureParser,
     NakedParser, NoMangleParser, ObjcClassParser, ObjcSelectorParser, OptimizeParser,
     RustcPassIndirectlyInNonRusticAbisParser, SanitizeParser, TargetFeatureParser,
     ThreadLocalParser, TrackCallerParser, UsedParser,
@@ -48,7 +48,8 @@ use crate::attributes::lint_helpers::{
 };
 use crate::attributes::loop_match::{ConstContinueParser, LoopMatchParser};
 use crate::attributes::macro_attrs::{
-    AllowInternalUnsafeParser, MacroEscapeParser, MacroExportParser, MacroUseParser,
+    AllowInternalUnsafeParser, CollapseDebugInfoParser, MacroEscapeParser, MacroExportParser,
+    MacroUseParser,
 };
 use crate::attributes::must_use::MustUseParser;
 use crate::attributes::no_implicit_prelude::NoImplicitPreludeParser;
@@ -191,6 +192,7 @@ attribute_parsers!(
 
         // tidy-alphabetical-start
         Single<CfiEncodingParser>,
+        Single<CollapseDebugInfoParser>,
         Single<CoverageParser>,
         Single<CrateNameParser>,
         Single<CustomMirParser>,
@@ -241,7 +243,7 @@ attribute_parsers!(
         Single<WithoutArgs<CoroutineParser>>,
         Single<WithoutArgs<DenyExplicitImplParser>>,
         Single<WithoutArgs<DoNotImplementViaObjectParser>>,
-        Single<WithoutArgs<EiiExternItemParser>>,
+        Single<WithoutArgs<EiiForeignItemParser>>,
         Single<WithoutArgs<ExportStableParser>>,
         Single<WithoutArgs<FfiConstParser>>,
         Single<WithoutArgs<FfiPureParser>>,
