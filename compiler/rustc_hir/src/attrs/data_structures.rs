@@ -167,6 +167,14 @@ pub enum CoverageAttrKind {
     Off,
 }
 
+/// Successfully-parsed value of a `#[rustc_abi(..)]` attribute.
+#[derive(Copy, Debug, Eq, PartialEq, Encodable, Decodable, Clone)]
+#[derive(HashStable_Generic, PrintAttribute)]
+pub enum RustcAbiAttrKind {
+    Debug,
+    AssertEq,
+}
+
 impl Deprecation {
     /// Whether an item marked with #[deprecated(since = "X")] is currently
     /// deprecated (i.e., whether X is not greater than the current rustc
@@ -716,6 +724,23 @@ pub enum BorrowckGraphvizFormatKind {
     TwoPhase,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(HashStable_Generic, Encodable, Decodable, PrintAttribute)]
+pub struct RustcCleanAttribute {
+    pub span: Span,
+    pub cfg: Symbol,
+    pub except: Option<RustcCleanQueries>,
+    pub loaded_from_disk: Option<RustcCleanQueries>,
+}
+
+/// Represents the `except=` or `loaded_from_disk=` argument of `#[rustc_clean]`
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(HashStable_Generic, Encodable, Decodable, PrintAttribute)]
+pub struct RustcCleanQueries {
+    pub entries: ThinVec<Symbol>,
+    pub span: Span,
+}
+
 /// Represents parsed *built-in* inert attributes.
 ///
 /// ## Overview
@@ -992,8 +1017,14 @@ pub enum AttributeKind {
     /// Represents [`#[recursion_limit]`](https://doc.rust-lang.org/reference/attributes/limits.html#the-recursion_limit-attribute)
     RecursionLimit { attr_span: Span, limit_span: Span, limit: Limit },
 
+    /// Represents `#[reexport_test_harness_main]`
+    ReexportTestHarnessMain(Symbol),
+
     /// Represents [`#[repr]`](https://doc.rust-lang.org/stable/reference/type-layout.html#representations).
     Repr { reprs: ThinVec<(ReprAttr, Span)>, first_span: Span },
+
+    /// Represents `#[rustc_abi(..)]`
+    RustcAbi { attr_span: Span, kind: RustcAbiAttrKind },
 
     /// Represents `#[rustc_allocator]`
     RustcAllocator,
@@ -1021,6 +1052,9 @@ pub enum AttributeKind {
     },
     /// Represents `#[rustc_builtin_macro]`.
     RustcBuiltinMacro { builtin_name: Option<Symbol>, helper_attrs: ThinVec<Symbol>, span: Span },
+
+    /// Represents `#[rustc_clean]`
+    RustcClean(ThinVec<RustcCleanAttribute>),
 
     /// Represents `#[rustc_coherence_is_core]`
     RustcCoherenceIsCore(Span),
@@ -1071,11 +1105,17 @@ pub enum AttributeKind {
     /// Represents `#[rustc_dyn_incompatible_trait]`.
     RustcDynIncompatibleTrait(Span),
 
+    /// Represents `#[rustc_effective_visibility]`.
+    RustcEffectiveVisibility,
+
     /// Represents `#[rustc_has_incoherent_inherent_impls]`
     RustcHasIncoherentInherentImpls,
 
     /// Represents `#[rustc_hidden_type_of_opaques]`
     RustcHiddenTypeOfOpaques,
+
+    /// Represents `#[rustc_if_this_changed]`
+    RustcIfThisChanged(Span, Option<Symbol>),
 
     /// Represents `#[rustc_layout]`
     RustcLayout(ThinVec<RustcLayoutType>),
@@ -1177,6 +1217,9 @@ pub enum AttributeKind {
 
     /// Represents `#[rustc_std_internal_symbol]`.
     RustcStdInternalSymbol(Span),
+
+    /// Represents `#[rustc_then_this_would_need]`
+    RustcThenThisWouldNeed(Span, ThinVec<Ident>),
 
     /// Represents `#[rustc_unsafe_specialization_marker]`.
     RustcUnsafeSpecializationMarker(Span),

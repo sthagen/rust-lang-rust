@@ -967,7 +967,6 @@ pub fn build_session(
     sopts: config::Options,
     io: CompilerIO,
     fluent_bundle: Option<Arc<rustc_errors::FluentBundle>>,
-    registry: rustc_errors::registry::Registry,
     fluent_resources: Vec<&'static str>,
     driver_lint_caps: FxHashMap<lint::LintId, lint::Level>,
     target: Target,
@@ -996,9 +995,8 @@ pub fn build_session(
     let source_map = rustc_span::source_map::get_source_map().unwrap();
     let emitter = default_emitter(&sopts, Arc::clone(&source_map), translator);
 
-    let mut dcx = DiagCtxt::new(emitter)
-        .with_flags(sopts.unstable_opts.dcx_flags(can_emit_warnings))
-        .with_registry(registry);
+    let mut dcx =
+        DiagCtxt::new(emitter).with_flags(sopts.unstable_opts.dcx_flags(can_emit_warnings));
     if let Some(ice_file) = ice_file {
         dcx = dcx.with_ice_file(ice_file);
     }
@@ -1432,8 +1430,7 @@ impl EarlyDiagCtxt {
 fn mk_emitter(output: ErrorOutputType) -> Box<DynEmitter> {
     // FIXME(#100717): early errors aren't translated at the moment, so this is fine, but it will
     // need to reference every crate that might emit an early error for translation to work.
-    let translator =
-        Translator::with_fallback_bundle(vec![rustc_errors::DEFAULT_LOCALE_RESOURCE], false);
+    let translator = Translator::with_fallback_bundle(vec![], false);
     let emitter: Box<DynEmitter> = match output {
         config::ErrorOutputType::HumanReadable { kind, color_config } => match kind {
             HumanReadableErrorType { short, unicode } => Box::new(

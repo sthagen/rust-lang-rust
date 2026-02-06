@@ -20,7 +20,7 @@ use std::fs::{self, File};
 use std::io::{self, IsTerminal, Read, Write};
 use std::panic::{self, PanicHookInfo};
 use std::path::{Path, PathBuf};
-use std::process::{self, Command, Stdio};
+use std::process::{Command, ExitCode, Stdio, Termination};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
@@ -34,7 +34,6 @@ use rustc_data_structures::profiling::{
 };
 pub use rustc_errors::catch_fatal_errors;
 use rustc_errors::emitter::stderr_destination;
-use rustc_errors::registry::Registry;
 use rustc_errors::translation::Translator;
 use rustc_errors::{ColorConfig, DiagCtxt, ErrCode, PResult, markdown};
 use rustc_feature::find_gated_cfg;
@@ -114,26 +113,11 @@ pub fn default_translator() -> Translator {
 
 pub static DEFAULT_LOCALE_RESOURCES: &[&str] = &[
     // tidy-alphabetical-start
-    rustc_ast_lowering::DEFAULT_LOCALE_RESOURCE,
-    rustc_ast_passes::DEFAULT_LOCALE_RESOURCE,
-    rustc_borrowck::DEFAULT_LOCALE_RESOURCE,
-    rustc_builtin_macros::DEFAULT_LOCALE_RESOURCE,
-    rustc_codegen_ssa::DEFAULT_LOCALE_RESOURCE,
     rustc_const_eval::DEFAULT_LOCALE_RESOURCE,
-    rustc_errors::DEFAULT_LOCALE_RESOURCE,
-    rustc_expand::DEFAULT_LOCALE_RESOURCE,
-    rustc_hir_analysis::DEFAULT_LOCALE_RESOURCE,
-    rustc_hir_typeck::DEFAULT_LOCALE_RESOURCE,
     rustc_lint::DEFAULT_LOCALE_RESOURCE,
-    rustc_metadata::DEFAULT_LOCALE_RESOURCE,
-    rustc_middle::DEFAULT_LOCALE_RESOURCE,
     rustc_mir_build::DEFAULT_LOCALE_RESOURCE,
-    rustc_mir_transform::DEFAULT_LOCALE_RESOURCE,
     rustc_parse::DEFAULT_LOCALE_RESOURCE,
     rustc_passes::DEFAULT_LOCALE_RESOURCE,
-    rustc_pattern_analysis::DEFAULT_LOCALE_RESOURCE,
-    rustc_resolve::DEFAULT_LOCALE_RESOURCE,
-    rustc_trait_selection::DEFAULT_LOCALE_RESOURCE,
     // tidy-alphabetical-end
 ];
 
@@ -197,10 +181,6 @@ impl Callbacks for TimePassesCallbacks {
     }
 }
 
-pub fn diagnostics_registry() -> Registry {
-    Registry::new(rustc_errors::codes::DIAGNOSTICS)
-}
-
 /// This is the primary entry point for rustc.
 pub fn run_compiler(at_args: &[String], callbacks: &mut (dyn Callbacks + Send)) {
     let mut default_early_dcx = EarlyDiagCtxt::new(ErrorOutputType::default());
@@ -228,7 +208,7 @@ pub fn run_compiler(at_args: &[String], callbacks: &mut (dyn Callbacks + Send)) 
     let ice_file = ice_path_with_config(Some(&sopts.unstable_opts)).clone();
 
     if let Some(ref code) = matches.opt_str("explain") {
-        handle_explain(&default_early_dcx, diagnostics_registry(), code, sopts.color);
+        handle_explain(&default_early_dcx, code, sopts.color);
         return;
     }
 
@@ -255,7 +235,6 @@ pub fn run_compiler(at_args: &[String], callbacks: &mut (dyn Callbacks + Send)) 
         override_queries: None,
         extra_symbols: Vec::new(),
         make_codegen_backend: None,
-        registry: diagnostics_registry(),
         using_internal_features: &USING_INTERNAL_FEATURES,
     };
 
@@ -455,12 +434,12 @@ pub enum Compilation {
     Continue,
 }
 
-fn handle_explain(early_dcx: &EarlyDiagCtxt, registry: Registry, code: &str, color: ColorConfig) {
+fn handle_explain(early_dcx: &EarlyDiagCtxt, code: &str, color: ColorConfig) {
     // Allow "E0123" or "0123" form.
     let upper_cased_code = code.to_ascii_uppercase();
     if let Ok(code) = upper_cased_code.trim_prefix('E').parse::<u32>()
         && code <= ErrCode::MAX_AS_U32
-        && let Ok(description) = registry.try_find_description(ErrCode::from_u32(code))
+        && let Ok(description) = rustc_errors::codes::try_find_description(ErrCode::from_u32(code))
     {
         let mut is_in_code_block = false;
         let mut text = String::new();
@@ -1404,10 +1383,10 @@ fn parse_crate_attrs<'a>(sess: &'a Session) -> PResult<'a, ast::AttrVec> {
 
 /// Variant of `catch_fatal_errors` for the `interface::Result` return type
 /// that also computes the exit code.
-pub fn catch_with_exit_code(f: impl FnOnce()) -> i32 {
+pub fn catch_with_exit_code<T: Termination>(f: impl FnOnce() -> T) -> ExitCode {
     match catch_fatal_errors(f) {
-        Ok(()) => EXIT_SUCCESS,
-        _ => EXIT_FAILURE,
+        Ok(status) => status.report(),
+        _ => ExitCode::FAILURE,
     }
 }
 
@@ -1692,7 +1671,7 @@ pub fn install_ctrlc_handler() {
     .expect("Unable to install ctrlc handler");
 }
 
-pub fn main() -> ! {
+pub fn main() -> ExitCode {
     let start_time = Instant::now();
     let start_rss = get_resident_set_size();
 
@@ -1712,5 +1691,5 @@ pub fn main() -> ! {
         print_time_passes_entry("total", start_time.elapsed(), start_rss, end_rss, format);
     }
 
-    process::exit(exit_code)
+    exit_code
 }

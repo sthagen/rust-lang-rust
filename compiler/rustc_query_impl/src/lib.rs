@@ -19,8 +19,8 @@ use rustc_middle::queries::{
 use rustc_middle::query::AsLocalKey;
 use rustc_middle::query::on_disk_cache::{CacheEncoder, EncodedDepNodeIndex, OnDiskCache};
 use rustc_middle::query::plumbing::{QuerySystem, QuerySystemFns, QueryVTable};
+use rustc_middle::query::values::Value;
 use rustc_middle::ty::TyCtxt;
-use rustc_query_system::Value;
 use rustc_query_system::dep_graph::SerializedDepNodeIndex;
 use rustc_query_system::ich::StableHashingContext;
 use rustc_query_system::query::{
@@ -29,7 +29,7 @@ use rustc_query_system::query::{
 };
 use rustc_span::{ErrorGuaranteed, Span};
 
-use crate::plumbing::{__rust_begin_short_backtrace, encode_all_query_results, try_mark_green};
+use crate::plumbing::{encode_all_query_results, try_mark_green};
 use crate::profiling_support::QueryKeyStringCache;
 
 #[macro_use]
@@ -38,6 +38,8 @@ pub use crate::plumbing::{QueryCtxt, query_key_hash_verify_all};
 
 mod profiling_support;
 pub use self::profiling_support::alloc_self_profile_query_strings;
+
+mod error;
 
 #[derive(ConstParamTy)] // Allow this struct to be used for const-generic values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -123,7 +125,7 @@ where
 
     #[inline(always)]
     fn compute(self, qcx: QueryCtxt<'tcx>, key: Self::Key) -> Self::Value {
-        (self.vtable.compute)(qcx.tcx, key)
+        (self.vtable.compute_fn)(qcx.tcx, key)
     }
 
     #[inline(always)]

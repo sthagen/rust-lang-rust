@@ -284,14 +284,17 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                     | AttributeKind::Pointee(..)
                     | AttributeKind::ProfilerRuntime
                     | AttributeKind::RecursionLimit { .. }
+                    | AttributeKind::ReexportTestHarnessMain(..)
                     // handled below this loop and elsewhere
                     | AttributeKind::Repr { .. }
+                    | AttributeKind::RustcAbi { .. }
                     | AttributeKind::RustcAllocator
                     | AttributeKind::RustcAllocatorZeroed
                     | AttributeKind::RustcAllocatorZeroedVariant { .. }
                     | AttributeKind::RustcAsPtr(..)
                     | AttributeKind::RustcBodyStability { .. }
                     | AttributeKind::RustcBuiltinMacro { .. }
+                    | AttributeKind::RustcClean(..)
                     | AttributeKind::RustcCoherenceIsCore(..)
                     | AttributeKind::RustcCoinductive(..)
                     | AttributeKind::RustcConfusables { .. }
@@ -305,8 +308,10 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                     | AttributeKind::RustcDumpUserArgs
                     | AttributeKind::RustcDumpVtable(..)
                     | AttributeKind::RustcDynIncompatibleTrait(..)
+                    | AttributeKind::RustcEffectiveVisibility
                     | AttributeKind::RustcHasIncoherentInherentImpls
                     | AttributeKind::RustcHiddenTypeOfOpaques
+                    | AttributeKind::RustcIfThisChanged(..)
                     | AttributeKind::RustcLayout(..)
                     | AttributeKind::RustcLayoutScalarValidRangeEnd(..)
                     | AttributeKind::RustcLayoutScalarValidRangeStart(..)
@@ -335,6 +340,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                     | AttributeKind::RustcSkipDuringMethodDispatch { .. }
                     | AttributeKind::RustcSpecializationTrait(..)
                     | AttributeKind::RustcStdInternalSymbol (..)
+                    | AttributeKind::RustcThenThisWouldNeed(..)
                     | AttributeKind::RustcUnsafeSpecializationMarker(..)
                     | AttributeKind::RustcVariance
                     | AttributeKind::RustcVarianceOfOpaques
@@ -356,10 +362,6 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                         [sym::diagnostic, sym::on_const, ..] => {
                             self.check_diagnostic_on_const(attr.span(), hir_id, target, item)
                         }
-                        [sym::rustc_clean, ..]
-                        | [sym::rustc_dirty, ..]
-                        | [sym::rustc_if_this_changed, ..]
-                        | [sym::rustc_then_this_would_need, ..] => self.check_rustc_dirty_clean(attr),
                         [sym::autodiff_forward, ..] | [sym::autodiff_reverse, ..] => {
                             self.check_autodiff(hir_id, attr, span, target)
                         }
@@ -392,7 +394,6 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                             | sym::rustc_conversion_suggestion
                             | sym::rustc_deprecated_safe_2024
                             | sym::rustc_test_marker
-                            | sym::rustc_abi
                             | sym::rustc_layout
                             | sym::rustc_proc_macro_decls
                             | sym::rustc_never_type_options
@@ -401,7 +402,6 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                             | sym::rustc_regions
                             | sym::rustc_strict_coherence
                             | sym::rustc_mir
-                            | sym::rustc_effective_visibility
                             | sym::rustc_outlives
                             | sym::rustc_symbol_name
                             | sym::rustc_evaluate_where_clauses
@@ -414,8 +414,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                             | sym::feature
                             | sym::register_tool
                             | sym::rustc_no_implicit_bounds
-                            | sym::test_runner
-                            | sym::reexport_test_harness_main,
+                            | sym::test_runner,
                             ..
                         ] => {}
                         [name, rest@..] => {
@@ -1257,14 +1256,6 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                     arg_count,
                 });
             }
-        }
-    }
-
-    /// Checks that the dep-graph debugging attributes are only present when the query-dep-graph
-    /// option is passed to the compiler.
-    fn check_rustc_dirty_clean(&self, attr: &Attribute) {
-        if !self.tcx.sess.opts.unstable_opts.query_dep_graph {
-            self.dcx().emit_err(errors::RustcDirtyClean { span: attr.span() });
         }
     }
 
