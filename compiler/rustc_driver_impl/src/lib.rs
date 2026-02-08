@@ -111,11 +111,7 @@ pub fn default_translator() -> Translator {
     Translator::with_fallback_bundle(DEFAULT_LOCALE_RESOURCES.to_vec(), false)
 }
 
-pub static DEFAULT_LOCALE_RESOURCES: &[&str] = &[
-    // tidy-alphabetical-start
-    rustc_lint::DEFAULT_LOCALE_RESOURCE,
-    // tidy-alphabetical-end
-];
+pub static DEFAULT_LOCALE_RESOURCES: &[&str] = &[];
 
 /// Exit status code used for successful compilation and help output.
 pub const EXIT_SUCCESS: i32 = 0;
@@ -507,7 +503,7 @@ fn show_md_content_with_pager(content: &str, color: ColorConfig) {
     };
 
     // Try to print via the pager, pretty output if possible.
-    let pager_res: Option<()> = try {
+    let pager_res = try {
         let mut pager = cmd.stdin(Stdio::piped()).spawn().ok()?;
 
         let pager_stdin = pager.stdin.as_mut()?;

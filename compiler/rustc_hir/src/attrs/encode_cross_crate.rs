@@ -118,6 +118,8 @@ impl AttributeKind {
             RustcHasIncoherentInherentImpls => Yes,
             RustcHiddenTypeOfOpaques => No,
             RustcIfThisChanged(..) => No,
+            RustcIntrinsic => Yes,
+            RustcIntrinsicConstStableIndirect => No,
             RustcLayout(..) => No,
             RustcLayoutScalarValidRangeEnd(..) => Yes,
             RustcLayoutScalarValidRangeStart(..) => Yes,
@@ -144,6 +146,7 @@ impl AttributeKind {
             RustcPreserveUbChecks => No,
             RustcPubTransparent(..) => Yes,
             RustcReallocator => No,
+            RustcRegions => No,
             RustcScalableVector { .. } => Yes,
             RustcShouldNotBeCalledOnConstItems(..) => Yes,
             RustcSimdMonomorphizeLaneLimit(..) => Yes, // Affects layout computation, which needs to work cross-crate

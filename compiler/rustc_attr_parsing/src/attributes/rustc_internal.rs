@@ -219,6 +219,22 @@ impl<S: Stage> NoArgsAttributeParser<S> for RustcLintQueryInstabilityParser {
     const CREATE: fn(Span) -> AttributeKind = |_| AttributeKind::RustcLintQueryInstability;
 }
 
+pub(crate) struct RustcRegionsParser;
+
+impl<S: Stage> NoArgsAttributeParser<S> for RustcRegionsParser {
+    const PATH: &[Symbol] = &[sym::rustc_regions];
+    const ON_DUPLICATE: OnDuplicate<S> = OnDuplicate::Error;
+    const ALLOWED_TARGETS: AllowedTargets = AllowedTargets::AllowList(&[
+        Allow(Target::Fn),
+        Allow(Target::Method(MethodKind::Inherent)),
+        Allow(Target::Method(MethodKind::Trait { body: false })),
+        Allow(Target::Method(MethodKind::Trait { body: true })),
+        Allow(Target::Method(MethodKind::TraitImpl)),
+    ]);
+
+    const CREATE: fn(Span) -> AttributeKind = |_| AttributeKind::RustcRegions;
+}
+
 pub(crate) struct RustcLintUntrackedQueryInformationParser;
 
 impl<S: Stage> NoArgsAttributeParser<S> for RustcLintUntrackedQueryInformationParser {
@@ -490,6 +506,7 @@ impl<S: Stage> CombineAttributeParser<S> for RustcMirParser {
             .collect()
     }
 }
+
 pub(crate) struct RustcNonConstTraitMethodParser;
 
 impl<S: Stage> NoArgsAttributeParser<S> for RustcNonConstTraitMethodParser {
@@ -809,4 +826,22 @@ impl<S: Stage> SingleAttributeParser<S> for RustcDefPath {
         }
         Some(AttributeKind::RustcDefPath(cx.attr_span))
     }
+}
+
+pub(crate) struct RustcIntrinsicParser;
+
+impl<S: Stage> NoArgsAttributeParser<S> for RustcIntrinsicParser {
+    const PATH: &[Symbol] = &[sym::rustc_intrinsic];
+    const ON_DUPLICATE: OnDuplicate<S> = OnDuplicate::Error;
+    const ALLOWED_TARGETS: AllowedTargets = AllowedTargets::AllowList(&[Allow(Target::Fn)]);
+    const CREATE: fn(Span) -> AttributeKind = |_| AttributeKind::RustcIntrinsic;
+}
+
+pub(crate) struct RustcIntrinsicConstStableIndirectParser;
+
+impl<S: Stage> NoArgsAttributeParser<S> for RustcIntrinsicConstStableIndirectParser {
+    const PATH: &'static [Symbol] = &[sym::rustc_intrinsic_const_stable_indirect];
+    const ON_DUPLICATE: OnDuplicate<S> = OnDuplicate::Error;
+    const ALLOWED_TARGETS: AllowedTargets = AllowedTargets::AllowList(&[Allow(Target::Fn)]);
+    const CREATE: fn(Span) -> AttributeKind = |_| AttributeKind::RustcIntrinsicConstStableIndirect;
 }

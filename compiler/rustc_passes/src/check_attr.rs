@@ -313,6 +313,8 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                     | AttributeKind::RustcHasIncoherentInherentImpls
                     | AttributeKind::RustcHiddenTypeOfOpaques
                     | AttributeKind::RustcIfThisChanged(..)
+                    | AttributeKind::RustcIntrinsic
+                    | AttributeKind::RustcIntrinsicConstStableIndirect
                     | AttributeKind::RustcLayout(..)
                     | AttributeKind::RustcLayoutScalarValidRangeEnd(..)
                     | AttributeKind::RustcLayoutScalarValidRangeStart(..)
@@ -335,6 +337,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                     | AttributeKind::RustcPassIndirectlyInNonRusticAbis(..)
                     | AttributeKind::RustcPreserveUbChecks
                     | AttributeKind::RustcReallocator
+                    | AttributeKind::RustcRegions
                     | AttributeKind::RustcScalableVector { .. }
                     | AttributeKind::RustcShouldNotBeCalledOnConstItems(..)
                     | AttributeKind::RustcSimdMonomorphizeLaneLimit(..)
@@ -385,9 +388,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                             | sym::rustc_no_mir_inline
                             | sym::rustc_insignificant_dtor
                             | sym::rustc_nonnull_optimization_guaranteed
-                            | sym::rustc_intrinsic
                             | sym::rustc_inherit_overflow_checks
-                            | sym::rustc_intrinsic_const_stable_indirect
                             | sym::rustc_trivial_field_reads
                             | sym::rustc_on_unimplemented
                             | sym::rustc_do_not_const_check
@@ -401,7 +402,6 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                             | sym::rustc_never_type_options
                             | sym::rustc_autodiff
                             | sym::rustc_capture_analysis
-                            | sym::rustc_regions
                             | sym::rustc_strict_coherence
                             | sym::rustc_mir
                             | sym::rustc_outlives
