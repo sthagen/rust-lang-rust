@@ -1084,6 +1084,9 @@ pub enum AttributeKind {
     /// Represents `#[rustc_def_path]`
     RustcDefPath(Span),
 
+    /// Represents `#[rustc_delayed_bug_from_inside_query]`
+    RustcDelayedBugFromInsideQuery,
+
     /// Represents `#[rustc_deny_explicit_impl]`.
     RustcDenyExplicitImpl(Span),
 
@@ -1111,6 +1114,9 @@ pub enum AttributeKind {
     /// Represents `#[rustc_effective_visibility]`.
     RustcEffectiveVisibility,
 
+    /// Represents `#[rustc_evaluate_where_clauses]`
+    RustcEvaluateWhereClauses,
+
     /// Represents `#[rustc_has_incoherent_inherent_impls]`
     RustcHasIncoherentInherentImpls,
 
@@ -1119,6 +1125,9 @@ pub enum AttributeKind {
 
     /// Represents `#[rustc_if_this_changed]`
     RustcIfThisChanged(Span, Option<Symbol>),
+
+    /// Represents `#[rustc_insignificant_dtor]`
+    RustcInsignificantDtor,
 
     /// Represents `#[rustc_intrinsic]`
     RustcIntrinsic,
@@ -1186,6 +1195,9 @@ pub enum AttributeKind {
     /// Represents `#[rustc_offload_kernel]`
     RustcOffloadKernel,
 
+    /// Represents `#[rustc_outlives]`
+    RustcOutlives,
+
     /// Represents `#[rustc_paren_sugar]`.
     RustcParenSugar(Span),
 
@@ -1230,6 +1242,9 @@ pub enum AttributeKind {
     /// Represents `#[rustc_std_internal_symbol]`.
     RustcStdInternalSymbol(Span),
 
+    /// Represents `#[rustc_strict_coherence]`.
+    RustcStrictCoherence(Span),
+
     /// Represents `#[rustc_symbol_name]`
     RustcSymbolName(Span),
 
@@ -1266,6 +1281,7 @@ pub enum AttributeKind {
         /// Span of the attribute.
         span: Span,
     },
+
     /// Represents `#[target_feature(enable = "...")]` and
     /// `#[unsafe(force_target_feature(enable = "...")]`.
     TargetFeature { features: ThinVec<(Symbol, Span)>, attr_span: Span, was_forced: bool },

@@ -503,7 +503,7 @@ pub(crate) struct AutoTraitItems {
     #[primary_span]
     pub spans: Vec<Span>,
     #[suggestion(
-        "remove the super traits or lifetime bounds",
+        "remove the associated items",
         code = "",
         applicability = "machine-applicable",
         style = "tool-only"
@@ -948,6 +948,16 @@ pub(crate) struct IncompatibleFeatures {
     pub spans: Vec<Span>,
     pub f1: Symbol,
     pub f2: Symbol,
+}
+
+#[derive(Diagnostic)]
+#[diag("`{$parent}` requires {$missing} to be enabled")]
+#[help("enable all of these features")]
+pub(crate) struct MissingDependentFeatures {
+    #[primary_span]
+    pub parent_span: Span,
+    pub parent: Symbol,
+    pub missing: String,
 }
 
 #[derive(Diagnostic)]
