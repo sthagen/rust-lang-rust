@@ -22,9 +22,7 @@ use rustc_abi::{ExternAbi, Size};
 use rustc_ast::Recovered;
 use rustc_data_structures::assert_matches;
 use rustc_data_structures::fx::{FxHashSet, FxIndexMap};
-use rustc_errors::{
-    Applicability, Diag, DiagCtxtHandle, E0228, ErrorGuaranteed, StashKey, struct_span_code_err,
-};
+use rustc_errors::{Applicability, Diag, DiagCtxtHandle, E0228, ErrorGuaranteed, StashKey};
 use rustc_hir::attrs::AttributeKind;
 use rustc_hir::def::{DefKind, Res};
 use rustc_hir::def_id::{DefId, LocalDefId};
@@ -95,6 +93,7 @@ pub(crate) fn provide(providers: &mut Providers) {
         const_param_default,
         anon_const_kind,
         const_of_item,
+        is_rhs_type_const,
         ..*providers
     };
 }
@@ -317,16 +316,24 @@ impl<'tcx> HirTyLowerer<'tcx> for ItemCtxt<'tcx> {
     }
 
     fn re_infer(&self, span: Span, reason: RegionInferReason<'_>) -> ty::Region<'tcx> {
-        if let RegionInferReason::ObjectLifetimeDefault = reason {
-            let e = struct_span_code_err!(
-                self.dcx(),
-                span,
-                E0228,
-                "the lifetime bound for this object type cannot be deduced \
-                from context; please supply an explicit bound"
-            )
-            .emit();
-            ty::Region::new_error(self.tcx(), e)
+        if let RegionInferReason::ObjectLifetimeDefault(sugg_sp) = reason {
+            // FIXME: Account for trailing plus `dyn Trait+`, the need of parens in
+            //        `*const dyn Trait` and `Fn() -> *const dyn Trait`.
+            let guar = self
+                .dcx()
+                .struct_span_err(
+                    span,
+                    "cannot deduce the lifetime bound for this trait object type from context",
+                )
+                .with_code(E0228)
+                .with_span_suggestion_verbose(
+                    sugg_sp,
+                    "please supply an explicit bound",
+                    " + /* 'a */",
+                    Applicability::HasPlaceholders,
+                )
+                .emit();
+            ty::Region::new_error(self.tcx(), guar)
         } else {
             // This indicates an illegal lifetime in a non-assoc-trait position
             ty::Region::new_error_with_message(self.tcx(), span, "unelided lifetime in signature")
@@ -1275,7 +1282,8 @@ fn impl_trait_header(tcx: TyCtxt<'_>, def_id: LocalDefId) -> ty::ImplTraitHeader
         .of_trait
         .unwrap_or_else(|| panic!("expected impl trait, found inherent impl on {def_id:?}"));
     let selfty = tcx.type_of(def_id).instantiate_identity();
-    let is_rustc_reservation = tcx.has_attr(def_id, sym::rustc_reservation_impl);
+    let is_rustc_reservation =
+        find_attr!(tcx.get_all_attrs(def_id), AttributeKind::RustcReservationImpl(..));
 
     check_impl_constness(tcx, impl_.constness, &of_trait.trait_ref);
 
@@ -1549,7 +1557,8 @@ fn is_anon_const_rhs_of_const_item<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) 
     let (Node::Item(hir::Item { kind: hir::ItemKind::Const(_, _, _, ct_rhs), .. })
     | Node::ImplItem(hir::ImplItem { kind: hir::ImplItemKind::Const(_, ct_rhs), .. })
     | Node::TraitItem(hir::TraitItem {
-        kind: hir::TraitItemKind::Const(_, Some(ct_rhs)), ..
+        kind: hir::TraitItemKind::Const(_, Some(ct_rhs), _),
+        ..
     })) = grandparent_node
     else {
         return false;
@@ -1594,7 +1603,7 @@ fn const_of_item<'tcx>(
     let ct_rhs = match tcx.hir_node_by_def_id(def_id) {
         hir::Node::Item(hir::Item { kind: hir::ItemKind::Const(.., ct), .. }) => *ct,
         hir::Node::TraitItem(hir::TraitItem {
-            kind: hir::TraitItemKind::Const(.., ct), ..
+            kind: hir::TraitItemKind::Const(_, ct, _), ..
         }) => ct.expect("no default value for trait assoc const"),
         hir::Node::ImplItem(hir::ImplItem { kind: hir::ImplItemKind::Const(.., ct), .. }) => *ct,
         _ => {
@@ -1622,5 +1631,24 @@ fn const_of_item<'tcx>(
         ty::EarlyBinder::bind(Const::new_error(tcx, e))
     } else {
         ty::EarlyBinder::bind(ct)
+    }
+}
+
+/// Check if a Const or AssocConst is a type const (mgca)
+fn is_rhs_type_const<'tcx>(tcx: TyCtxt<'tcx>, def: LocalDefId) -> bool {
+    match tcx.hir_node_by_def_id(def) {
+        hir::Node::Item(hir::Item {
+            kind: hir::ItemKind::Const(_, _, _, hir::ConstItemRhs::TypeConst(_)),
+            ..
+        })
+        | hir::Node::ImplItem(hir::ImplItem {
+            kind: hir::ImplItemKind::Const(_, hir::ConstItemRhs::TypeConst(_)),
+            ..
+        })
+        | hir::Node::TraitItem(hir::TraitItem {
+            kind: hir::TraitItemKind::Const(_, _, hir::IsTypeConst::Yes),
+            ..
+        }) => return true,
+        _ => return false,
     }
 }
