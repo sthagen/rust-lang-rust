@@ -6,7 +6,7 @@ use std::borrow::Cow;
 use either::{Left, Right};
 use rustc_abi::{self as abi, ExternAbi, FieldIdx, Integer, VariantIdx};
 use rustc_data_structures::assert_matches;
-use rustc_errors::inline_fluent;
+use rustc_errors::msg;
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::layout::{IntegerExt, TyAndLayout};
 use rustc_middle::ty::{self, AdtDef, Instance, Ty, VariantDef};
@@ -91,6 +91,9 @@ impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
                 let (_, field) = layout.non_1zst_field(self).unwrap();
                 self.unfold_transparent(field, may_unfold)
             }
+            ty::Pat(base, _) => self.layout_of(*base).expect(
+                "if the layout of a pattern type could be computed, so can the layout of its base",
+            ),
             // Not a transparent type, no further unfolding.
             _ => layout,
         }
@@ -294,9 +297,7 @@ impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
         }
         // Find next caller arg.
         let Some((caller_arg, caller_abi)) = caller_args.next() else {
-            throw_ub_custom!(inline_fluent!(
-                "calling a function with fewer arguments than it requires"
-            ));
+            throw_ub_custom!(msg!("calling a function with fewer arguments than it requires"));
         };
         assert_eq!(caller_arg.layout().layout, caller_abi.layout.layout);
         // Sadly we cannot assert that `caller_arg.layout().ty` and `caller_abi.layout.ty` are
@@ -363,7 +364,7 @@ impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
 
         if caller_fn_abi.conv != callee_fn_abi.conv {
             throw_ub_custom!(
-                rustc_errors::inline_fluent!(
+                rustc_errors::msg!(
                     "calling a function with calling convention \"{$callee_conv}\" using calling convention \"{$caller_conv}\""
                 ),
                 callee_conv = format!("{}", callee_fn_abi.conv),
@@ -496,9 +497,7 @@ impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
                 "mismatch between callee ABI and callee body arguments"
             );
             if caller_args.next().is_some() {
-                throw_ub_custom!(inline_fluent!(
-                    "calling a function with more arguments than it expected"
-                ));
+                throw_ub_custom!(msg!("calling a function with more arguments than it expected"));
             }
             // Don't forget to check the return type!
             if !self.check_argument_compat(&caller_fn_abi.ret, &callee_fn_abi.ret)? {
@@ -698,7 +697,7 @@ impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
                 let vtable_entries = self.vtable_entries(receiver_trait.principal(), dyn_ty);
                 let Some(ty::VtblEntry::Method(fn_inst)) = vtable_entries.get(idx).copied() else {
                     // FIXME(fee1-dead) these could be variants of the UB info enum instead of this
-                    throw_ub_custom!(inline_fluent!(
+                    throw_ub_custom!(msg!(
                         "`dyn` call trying to call something that is not a method"
                     ));
                 };
@@ -897,7 +896,7 @@ impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
             }
         );
         if unwinding && self.frame_idx() == 0 {
-            throw_ub_custom!(inline_fluent!("unwinding past the topmost frame of the stack"));
+            throw_ub_custom!(msg!("unwinding past the topmost frame of the stack"));
         }
 
         // Get out the return value. Must happen *before* the frame is popped as we have to get the
