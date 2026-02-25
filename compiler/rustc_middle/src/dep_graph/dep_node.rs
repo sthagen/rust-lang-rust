@@ -54,7 +54,7 @@ use rustc_data_structures::fingerprint::{Fingerprint, PackedFingerprint};
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher, StableOrd, ToStableHashKey};
 use rustc_hir::def_id::DefId;
 use rustc_hir::definitions::DefPathHash;
-use rustc_macros::{Decodable, Encodable};
+use rustc_macros::{Decodable, Encodable, HashStable};
 use rustc_span::Symbol;
 
 use super::{KeyFingerprintStyle, SerializedDepNodeIndex};
@@ -290,7 +290,9 @@ pub struct DepKindVTable<'tcx> {
 /// some independent path or string that persists between runs without
 /// the need to be mapped or unmapped. (This ensures we can serialize
 /// them even in the absence of a tcx.)
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encodable, Decodable)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encodable, Decodable, HashStable
+)]
 pub struct WorkProductId {
     hash: Fingerprint,
 }
@@ -300,13 +302,6 @@ impl WorkProductId {
         let mut hasher = StableHasher::new();
         cgu_name.hash(&mut hasher);
         WorkProductId { hash: hasher.finish() }
-    }
-}
-
-impl<HCX> HashStable<HCX> for WorkProductId {
-    #[inline]
-    fn hash_stable(&self, hcx: &mut HCX, hasher: &mut StableHasher) {
-        self.hash.hash_stable(hcx, hasher)
     }
 }
 impl<HCX> ToStableHashKey<HCX> for WorkProductId {
@@ -324,11 +319,12 @@ impl StableOrd for WorkProductId {
     const THIS_IMPLEMENTATION_HAS_BEEN_TRIPLE_CHECKED: () = ();
 }
 
+// Note: `$K` and `$V` are unused but present so this can be called by `rustc_with_all_queries`.
 macro_rules! define_dep_nodes {
     (
         $(
             $(#[$attr:meta])*
-            [$($modifiers:tt)*] fn $variant:ident($($K:tt)*) -> $V:ty,
+            [$($modifiers:tt)*] fn $variant:ident($K:ty) -> $V:ty,
         )*
     ) => {
 
@@ -382,20 +378,20 @@ macro_rules! define_dep_nodes {
 }
 
 // Create various data structures for each query, and also for a few things
-// that aren't queries.
+// that aren't queries. The key and return types aren't used, hence the use of `()`.
 rustc_with_all_queries!(define_dep_nodes![
     /// We use this for most things when incr. comp. is turned off.
-    [] fn Null() -> (),
+    [] fn Null(()) -> (),
     /// We use this to create a forever-red node.
-    [] fn Red() -> (),
+    [] fn Red(()) -> (),
     /// We use this to create a side effect node.
-    [] fn SideEffect() -> (),
+    [] fn SideEffect(()) -> (),
     /// We use this to create the anon node with zero dependencies.
-    [] fn AnonZeroDeps() -> (),
-    [] fn TraitSelect() -> (),
-    [] fn CompileCodegenUnit() -> (),
-    [] fn CompileMonoItem() -> (),
-    [] fn Metadata() -> (),
+    [] fn AnonZeroDeps(()) -> (),
+    [] fn TraitSelect(()) -> (),
+    [] fn CompileCodegenUnit(()) -> (),
+    [] fn CompileMonoItem(()) -> (),
+    [] fn Metadata(()) -> (),
 ]);
 
 // WARNING: `construct` is generic and does not know that `CompileCodegenUnit` takes `Symbol`s as keys.

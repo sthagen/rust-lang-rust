@@ -1295,7 +1295,7 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                             .tcx
                             .associated_item_def_ids(def_id)
                             .iter()
-                            .map(|field_id| self.tcx.visibility(field_id))
+                            .map(|&field_id| self.tcx.visibility(field_id))
                             .collect();
                         (ctor_res, ctor_vis, field_visibilities)
                     })
@@ -1554,6 +1554,10 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                                         }
                                         NoConstantGenericsReason::NonTrivialConstArg => {
                                             ResolutionError::ParamInNonTrivialAnonConst {
+                                                is_ogca: self
+                                                    .tcx
+                                                    .features()
+                                                    .opaque_generic_const_args(),
                                                 name: rib_ident.name,
                                                 param_kind: ParamKindInNonTrivialAnonConst::Type,
                                             }
@@ -1645,6 +1649,10 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                                         }
                                         NoConstantGenericsReason::NonTrivialConstArg => {
                                             ResolutionError::ParamInNonTrivialAnonConst {
+                                                is_ogca: self
+                                                    .tcx
+                                                    .features()
+                                                    .opaque_generic_const_args(),
                                                 name: rib_ident.name,
                                                 param_kind: ParamKindInNonTrivialAnonConst::Const {
                                                     name: rib_ident.name,

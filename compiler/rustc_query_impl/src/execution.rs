@@ -6,9 +6,10 @@ use rustc_data_structures::stack::ensure_sufficient_stack;
 use rustc_data_structures::{outline, sharded, sync};
 use rustc_errors::{Diag, FatalError, StashKey};
 use rustc_middle::dep_graph::{DepGraphData, DepNodeKey};
+use rustc_middle::query::plumbing::QueryVTable;
 use rustc_middle::query::{
-    ActiveKeyStatus, CycleError, CycleErrorHandling, QueryCache, QueryJob, QueryJobId, QueryLatch,
-    QueryMode, QueryStackDeferred, QueryStackFrame, QueryState,
+    ActiveKeyStatus, CycleError, CycleErrorHandling, EnsureMode, QueryCache, QueryJob, QueryJobId,
+    QueryLatch, QueryMode, QueryStackDeferred, QueryStackFrame, QueryState,
 };
 use rustc_middle::ty::TyCtxt;
 use rustc_middle::verify_ich::incremental_verify_ich;
@@ -19,7 +20,6 @@ use crate::job::{QueryJobInfo, QueryJobMap, find_cycle_in_stack, report_cycle};
 use crate::plumbing::{
     collect_active_jobs_from_all_queries, current_query_job, next_job_id, start_query,
 };
-use crate::{QueryFlags, SemiDynamicQueryDispatcher};
 
 #[inline]
 fn equivalent_key<K: Eq, V>(k: &K) -> impl Fn(&(K, V)) -> bool + '_ {
@@ -102,8 +102,8 @@ where
 
 #[cold]
 #[inline(never)]
-fn mk_cycle<'tcx, C: QueryCache, const FLAGS: QueryFlags>(
-    query: SemiDynamicQueryDispatcher<'tcx, C, FLAGS>,
+fn mk_cycle<'tcx, C: QueryCache>(
+    query: &'tcx QueryVTable<'tcx, C>,
     tcx: TyCtxt<'tcx>,
     cycle_error: CycleError,
 ) -> C::Value {
@@ -111,13 +111,13 @@ fn mk_cycle<'tcx, C: QueryCache, const FLAGS: QueryFlags>(
     handle_cycle_error(query, tcx, &cycle_error, error)
 }
 
-fn handle_cycle_error<'tcx, C: QueryCache, const FLAGS: QueryFlags>(
-    query: SemiDynamicQueryDispatcher<'tcx, C, FLAGS>,
+fn handle_cycle_error<'tcx, C: QueryCache>(
+    query: &'tcx QueryVTable<'tcx, C>,
     tcx: TyCtxt<'tcx>,
     cycle_error: &CycleError,
     error: Diag<'_>,
 ) -> C::Value {
-    match query.cycle_error_handling() {
+    match query.cycle_error_handling {
         CycleErrorHandling::Error => {
             let guar = error.emit();
             query.value_from_cycle_error(tcx, cycle_error, guar)
@@ -208,8 +208,8 @@ where
 
 #[cold]
 #[inline(never)]
-fn cycle_error<'tcx, C: QueryCache, const FLAGS: QueryFlags>(
-    query: SemiDynamicQueryDispatcher<'tcx, C, FLAGS>,
+fn cycle_error<'tcx, C: QueryCache>(
+    query: &'tcx QueryVTable<'tcx, C>,
     tcx: TyCtxt<'tcx>,
     try_execute: QueryJobId,
     span: Span,
@@ -225,8 +225,8 @@ fn cycle_error<'tcx, C: QueryCache, const FLAGS: QueryFlags>(
 }
 
 #[inline(always)]
-fn wait_for_query<'tcx, C: QueryCache, const FLAGS: QueryFlags>(
-    query: SemiDynamicQueryDispatcher<'tcx, C, FLAGS>,
+fn wait_for_query<'tcx, C: QueryCache>(
+    query: &'tcx QueryVTable<'tcx, C>,
     tcx: TyCtxt<'tcx>,
     span: Span,
     key: C::Key,
@@ -244,18 +244,18 @@ fn wait_for_query<'tcx, C: QueryCache, const FLAGS: QueryFlags>(
 
     match result {
         Ok(()) => {
-            let Some((v, index)) = query.query_cache(tcx).lookup(&key) else {
+            let Some((v, index)) = query.cache.lookup(&key) else {
                 outline(|| {
                     // We didn't find the query result in the query cache. Check if it was
                     // poisoned due to a panic instead.
                     let key_hash = sharded::make_hash(&key);
-                    let shard = query.query_state(tcx).active.lock_shard_by_hash(key_hash);
+                    let shard = query.state.active.lock_shard_by_hash(key_hash);
                     match shard.find(key_hash, equivalent_key(&key)) {
                         // The query we waited on panicked. Continue unwinding here.
                         Some((_, ActiveKeyStatus::Poisoned)) => FatalError.raise(),
                         _ => panic!(
                             "query '{}' result must be in the cache or the query must be poisoned after a wait",
-                            query.name()
+                            query.name
                         ),
                     }
                 })
@@ -271,16 +271,17 @@ fn wait_for_query<'tcx, C: QueryCache, const FLAGS: QueryFlags>(
 }
 
 #[inline(never)]
-fn try_execute_query<'tcx, C: QueryCache, const FLAGS: QueryFlags, const INCR: bool>(
-    query: SemiDynamicQueryDispatcher<'tcx, C, FLAGS>,
+fn try_execute_query<'tcx, C: QueryCache, const INCR: bool>(
+    query: &'tcx QueryVTable<'tcx, C>,
     tcx: TyCtxt<'tcx>,
     span: Span,
     key: C::Key,
+    // If present, some previous step has already created a `DepNode` for this
+    // query+key, which we should reuse instead of creating a new one.
     dep_node: Option<DepNode>,
 ) -> (C::Value, Option<DepNodeIndex>) {
-    let state = query.query_state(tcx);
     let key_hash = sharded::make_hash(&key);
-    let mut state_lock = state.active.lock_shard_by_hash(key_hash);
+    let mut state_lock = query.state.active.lock_shard_by_hash(key_hash);
 
     // For the parallel compiler we need to check both the query cache and query state structures
     // while holding the state lock to ensure that 1) the query has not yet completed and 2) the
@@ -289,7 +290,7 @@ fn try_execute_query<'tcx, C: QueryCache, const FLAGS: QueryFlags, const INCR: b
     // executing, but another thread may have already completed the query and stores it result
     // in the query cache.
     if tcx.sess.threads() > 1 {
-        if let Some((value, index)) = query.query_cache(tcx).lookup(&key) {
+        if let Some((value, index)) = query.cache.lookup(&key) {
             tcx.prof.query_cache_hit(index.into());
             return (value, Some(index));
         }
@@ -308,7 +309,7 @@ fn try_execute_query<'tcx, C: QueryCache, const FLAGS: QueryFlags, const INCR: b
             // Drop the lock before we start executing the query
             drop(state_lock);
 
-            execute_job::<C, FLAGS, INCR>(query, tcx, state, key, key_hash, id, dep_node)
+            execute_job::<C, INCR>(query, tcx, key, key_hash, id, dep_node)
         }
         Entry::Occupied(mut entry) => {
             match &mut entry.get_mut().1 {
@@ -337,10 +338,9 @@ fn try_execute_query<'tcx, C: QueryCache, const FLAGS: QueryFlags, const INCR: b
 }
 
 #[inline(always)]
-fn execute_job<'tcx, C: QueryCache, const FLAGS: QueryFlags, const INCR: bool>(
-    query: SemiDynamicQueryDispatcher<'tcx, C, FLAGS>,
+fn execute_job<'tcx, C: QueryCache, const INCR: bool>(
+    query: &'tcx QueryVTable<'tcx, C>,
     tcx: TyCtxt<'tcx>,
-    state: &'tcx QueryState<'tcx, C::Key>,
     key: C::Key,
     key_hash: u64,
     id: QueryJobId,
@@ -348,7 +348,7 @@ fn execute_job<'tcx, C: QueryCache, const FLAGS: QueryFlags, const INCR: bool>(
 ) -> (C::Value, Option<DepNodeIndex>) {
     // Set up a guard object that will automatically poison the query if a
     // panic occurs while executing the query (or any intermediate plumbing).
-    let job_guard = ActiveJobGuard { state, key, key_hash };
+    let job_guard = ActiveJobGuard { state: &query.state, key, key_hash };
 
     debug_assert_eq!(tcx.dep_graph.is_fully_enabled(), INCR);
 
@@ -359,26 +359,26 @@ fn execute_job<'tcx, C: QueryCache, const FLAGS: QueryFlags, const INCR: bool>(
         execute_job_non_incr(query, tcx, key, id)
     };
 
-    let cache = query.query_cache(tcx);
-    if query.feedable() {
+    let cache = &query.cache;
+    if query.feedable {
         // We should not compute queries that also got a value via feeding.
         // This can't happen, as query feeding adds the very dependencies to the fed query
         // as its feeding query had. So if the fed query is red, so is its feeder, which will
         // get evaluated first, and re-feed the query.
         if let Some((cached_result, _)) = cache.lookup(&key) {
-            let Some(hasher) = query.hash_result() else {
+            let Some(hasher) = query.hash_result else {
                 panic!(
                     "no_hash fed query later has its value computed.\n\
                     Remove `no_hash` modifier to allow recomputation.\n\
                     The already cached value: {}",
-                    (query.format_value())(&cached_result)
+                    (query.format_value)(&cached_result)
                 );
             };
 
             let (old_hash, new_hash) = tcx.with_stable_hashing_context(|mut hcx| {
                 (hasher(&mut hcx, &cached_result), hasher(&mut hcx, &result))
             });
-            let formatter = query.format_value();
+            let formatter = query.format_value;
             if old_hash != new_hash {
                 // We have an inconsistency. This can happen if one of the two
                 // results is tainted by errors.
@@ -386,7 +386,7 @@ fn execute_job<'tcx, C: QueryCache, const FLAGS: QueryFlags, const INCR: bool>(
                     tcx.dcx().has_errors().is_some(),
                     "Computed query value for {:?}({:?}) is inconsistent with fed value,\n\
                         computed={:#?}\nfed={:#?}",
-                    query.dep_kind(),
+                    query.dep_kind,
                     key,
                     formatter(&result),
                     formatter(&cached_result),
@@ -403,8 +403,8 @@ fn execute_job<'tcx, C: QueryCache, const FLAGS: QueryFlags, const INCR: bool>(
 
 // Fast path for when incr. comp. is off.
 #[inline(always)]
-fn execute_job_non_incr<'tcx, C: QueryCache, const FLAGS: QueryFlags>(
-    query: SemiDynamicQueryDispatcher<'tcx, C, FLAGS>,
+fn execute_job_non_incr<'tcx, C: QueryCache>(
+    query: &'tcx QueryVTable<'tcx, C>,
     tcx: TyCtxt<'tcx>,
     key: C::Key,
     job_id: QueryJobId,
@@ -419,14 +419,15 @@ fn execute_job_non_incr<'tcx, C: QueryCache, const FLAGS: QueryFlags>(
 
     let prof_timer = tcx.prof.query_provider();
     // Call the query provider.
-    let result = start_query(tcx, job_id, query.depth_limit(), || query.invoke_provider(tcx, key));
+    let result =
+        start_query(tcx, job_id, query.depth_limit, || (query.invoke_provider_fn)(tcx, key));
     let dep_node_index = tcx.dep_graph.next_virtual_depnode_index();
     prof_timer.finish_with_query_invocation_id(dep_node_index.into());
 
     // Similarly, fingerprint the result to assert that
     // it doesn't have anything not considered hashable.
     if cfg!(debug_assertions)
-        && let Some(hash_result) = query.hash_result()
+        && let Some(hash_result) = query.hash_result
     {
         tcx.with_stable_hashing_context(|mut hcx| {
             hash_result(&mut hcx, &result);
@@ -437,8 +438,8 @@ fn execute_job_non_incr<'tcx, C: QueryCache, const FLAGS: QueryFlags>(
 }
 
 #[inline(always)]
-fn execute_job_incr<'tcx, C: QueryCache, const FLAGS: QueryFlags>(
-    query: SemiDynamicQueryDispatcher<'tcx, C, FLAGS>,
+fn execute_job_incr<'tcx, C: QueryCache>(
+    query: &'tcx QueryVTable<'tcx, C>,
     tcx: TyCtxt<'tcx>,
     key: C::Key,
     mut dep_node_opt: Option<DepNode>,
@@ -447,7 +448,7 @@ fn execute_job_incr<'tcx, C: QueryCache, const FLAGS: QueryFlags>(
     let dep_graph_data =
         tcx.dep_graph.data().expect("should always be present in incremental mode");
 
-    if !query.anon() && !query.eval_always() {
+    if !query.anon && !query.eval_always {
         // `to_dep_node` is expensive for some `DepKind`s.
         let dep_node = dep_node_opt.get_or_insert_with(|| query.construct_dep_node(tcx, &key));
 
@@ -462,11 +463,12 @@ fn execute_job_incr<'tcx, C: QueryCache, const FLAGS: QueryFlags>(
 
     let prof_timer = tcx.prof.query_provider();
 
-    let (result, dep_node_index) = start_query(tcx, job_id, query.depth_limit(), || {
-        if query.anon() {
+    let (result, dep_node_index) = start_query(tcx, job_id, query.depth_limit, || {
+        if query.anon {
             // Call the query provider inside an anon task.
-            return dep_graph_data
-                .with_anon_task_inner(tcx, query.dep_kind(), || query.invoke_provider(tcx, key));
+            return dep_graph_data.with_anon_task_inner(tcx, query.dep_kind, || {
+                (query.invoke_provider_fn)(tcx, key)
+            });
         }
 
         // `to_dep_node` is expensive for some `DepKind`s.
@@ -477,8 +479,8 @@ fn execute_job_incr<'tcx, C: QueryCache, const FLAGS: QueryFlags>(
             dep_node,
             tcx,
             (query, key),
-            |tcx, (query, key)| query.invoke_provider(tcx, key),
-            query.hash_result(),
+            |tcx, (query, key)| (query.invoke_provider_fn)(tcx, key),
+            query.hash_result,
         )
     });
 
@@ -488,8 +490,8 @@ fn execute_job_incr<'tcx, C: QueryCache, const FLAGS: QueryFlags>(
 }
 
 #[inline(always)]
-fn try_load_from_disk_and_cache_in_memory<'tcx, C: QueryCache, const FLAGS: QueryFlags>(
-    query: SemiDynamicQueryDispatcher<'tcx, C, FLAGS>,
+fn try_load_from_disk_and_cache_in_memory<'tcx, C: QueryCache>(
+    query: &'tcx QueryVTable<'tcx, C>,
     dep_graph_data: &DepGraphData,
     tcx: TyCtxt<'tcx>,
     key: &C::Key,
@@ -526,8 +528,8 @@ fn try_load_from_disk_and_cache_in_memory<'tcx, C: QueryCache, const FLAGS: Quer
                 dep_graph_data,
                 &result,
                 prev_dep_node_index,
-                query.hash_result(),
-                query.format_value(),
+                query.hash_result,
+                query.format_value,
             );
         }
 
@@ -555,7 +557,7 @@ fn try_load_from_disk_and_cache_in_memory<'tcx, C: QueryCache, const FLAGS: Quer
 
     // The dep-graph for this computation is already in-place.
     // Call the query provider.
-    let result = tcx.dep_graph.with_ignore(|| query.invoke_provider(tcx, *key));
+    let result = tcx.dep_graph.with_ignore(|| (query.invoke_provider_fn)(tcx, *key));
 
     prof_timer.finish_with_query_invocation_id(dep_node_index.into());
 
@@ -573,34 +575,43 @@ fn try_load_from_disk_and_cache_in_memory<'tcx, C: QueryCache, const FLAGS: Quer
         dep_graph_data,
         &result,
         prev_dep_node_index,
-        query.hash_result(),
-        query.format_value(),
+        query.hash_result,
+        query.format_value,
     );
 
     Some((result, dep_node_index))
 }
 
-/// Ensure that either this query has all green inputs or been executed.
-/// Executing `query::ensure(D)` is considered a read of the dep-node `D`.
-/// Returns true if the query should still run.
+/// Return value struct for [`check_if_ensure_can_skip_execution`].
+struct EnsureCanSkip {
+    /// If true, the current `tcx.ensure_ok()` or `tcx.ensure_done()` query
+    /// can return early without actually trying to execute.
+    skip_execution: bool,
+    /// A dep node that was prepared while checking whether execution can be
+    /// skipped, to be reused by execution itself if _not_ skipped.
+    dep_node: Option<DepNode>,
+}
+
+/// Checks whether a `tcx.ensure_ok()` or `tcx.ensure_done()` query call can
+/// return early without actually trying to execute.
 ///
-/// This function is particularly useful when executing passes for their
-/// side-effects -- e.g., in order to report errors for erroneous programs.
-///
-/// Note: The optimization is only available during incr. comp.
+/// This only makes sense during incremental compilation, because it relies
+/// on having the dependency graph (and in some cases a disk-cached value)
+/// from the previous incr-comp session.
 #[inline(never)]
-fn ensure_must_run<'tcx, C: QueryCache, const FLAGS: QueryFlags>(
-    query: SemiDynamicQueryDispatcher<'tcx, C, FLAGS>,
+fn check_if_ensure_can_skip_execution<'tcx, C: QueryCache>(
+    query: &'tcx QueryVTable<'tcx, C>,
     tcx: TyCtxt<'tcx>,
     key: &C::Key,
-    check_cache: bool,
-) -> (bool, Option<DepNode>) {
-    if query.eval_always() {
-        return (true, None);
+    ensure_mode: EnsureMode,
+) -> EnsureCanSkip {
+    // Queries with `eval_always` should never skip execution.
+    if query.eval_always {
+        return EnsureCanSkip { skip_execution: false, dep_node: None };
     }
 
     // Ensuring an anonymous query makes no sense
-    assert!(!query.anon());
+    assert!(!query.anon);
 
     let dep_node = query.construct_dep_node(tcx, key);
 
@@ -613,7 +624,7 @@ fn ensure_must_run<'tcx, C: QueryCache, const FLAGS: QueryFlags>(
             // DepNodeIndex. We must invoke the query itself. The performance cost
             // this introduces should be negligible as we'll immediately hit the
             // in-memory cache, or another query down the line will.
-            return (true, Some(dep_node));
+            return EnsureCanSkip { skip_execution: false, dep_node: Some(dep_node) };
         }
         Some((serialized_dep_node_index, dep_node_index)) => {
             dep_graph.read_index(dep_node_index);
@@ -622,30 +633,38 @@ fn ensure_must_run<'tcx, C: QueryCache, const FLAGS: QueryFlags>(
         }
     };
 
-    // We do not need the value at all, so do not check the cache.
-    if !check_cache {
-        return (false, None);
+    match ensure_mode {
+        EnsureMode::Ok => {
+            // In ensure-ok mode, we can skip execution for this key if the node
+            // is green. It must have succeeded in the previous session, and
+            // therefore would succeed in the current session if executed.
+            EnsureCanSkip { skip_execution: true, dep_node: None }
+        }
+        EnsureMode::Done => {
+            // In ensure-done mode, we can only skip execution for this key if
+            // there's a disk-cached value available to load later if needed,
+            // which guarantees the query provider will never run for this key.
+            let is_loadable = query.is_loadable_from_disk(tcx, key, serialized_dep_node_index);
+            EnsureCanSkip { skip_execution: is_loadable, dep_node: Some(dep_node) }
+        }
     }
-
-    let loadable = query.is_loadable_from_disk(tcx, key, serialized_dep_node_index);
-    (!loadable, Some(dep_node))
 }
 
 #[inline(always)]
-pub(super) fn get_query_non_incr<'tcx, C: QueryCache, const FLAGS: QueryFlags>(
-    query: SemiDynamicQueryDispatcher<'tcx, C, FLAGS>,
+pub(super) fn get_query_non_incr<'tcx, C: QueryCache>(
+    query: &'tcx QueryVTable<'tcx, C>,
     tcx: TyCtxt<'tcx>,
     span: Span,
     key: C::Key,
 ) -> C::Value {
     debug_assert!(!tcx.dep_graph.is_fully_enabled());
 
-    ensure_sufficient_stack(|| try_execute_query::<C, FLAGS, false>(query, tcx, span, key, None).0)
+    ensure_sufficient_stack(|| try_execute_query::<C, false>(query, tcx, span, key, None).0)
 }
 
 #[inline(always)]
-pub(super) fn get_query_incr<'tcx, C: QueryCache, const FLAGS: QueryFlags>(
-    query: SemiDynamicQueryDispatcher<'tcx, C, FLAGS>,
+pub(super) fn get_query_incr<'tcx, C: QueryCache>(
+    query: &'tcx QueryVTable<'tcx, C>,
     tcx: TyCtxt<'tcx>,
     span: Span,
     key: C::Key,
@@ -653,41 +672,46 @@ pub(super) fn get_query_incr<'tcx, C: QueryCache, const FLAGS: QueryFlags>(
 ) -> Option<C::Value> {
     debug_assert!(tcx.dep_graph.is_fully_enabled());
 
-    let dep_node = if let QueryMode::Ensure { check_cache } = mode {
-        let (must_run, dep_node) = ensure_must_run(query, tcx, &key, check_cache);
-        if !must_run {
-            return None;
+    // Check if query execution can be skipped, for `ensure_ok` or `ensure_done`.
+    // This might have the side-effect of creating a suitable DepNode, which
+    // we should reuse for execution instead of creating a new one.
+    let dep_node: Option<DepNode> = match mode {
+        QueryMode::Ensure { ensure_mode } => {
+            let EnsureCanSkip { skip_execution, dep_node } =
+                check_if_ensure_can_skip_execution(query, tcx, &key, ensure_mode);
+            if skip_execution {
+                // Return early to skip execution.
+                return None;
+            }
+            dep_node
         }
-        dep_node
-    } else {
-        None
+        QueryMode::Get => None,
     };
 
-    let (result, dep_node_index) = ensure_sufficient_stack(|| {
-        try_execute_query::<C, FLAGS, true>(query, tcx, span, key, dep_node)
-    });
+    let (result, dep_node_index) =
+        ensure_sufficient_stack(|| try_execute_query::<C, true>(query, tcx, span, key, dep_node));
     if let Some(dep_node_index) = dep_node_index {
         tcx.dep_graph.read_index(dep_node_index)
     }
     Some(result)
 }
 
-pub(crate) fn force_query<'tcx, C: QueryCache, const FLAGS: QueryFlags>(
-    query: SemiDynamicQueryDispatcher<'tcx, C, FLAGS>,
+pub(crate) fn force_query<'tcx, C: QueryCache>(
+    query: &'tcx QueryVTable<'tcx, C>,
     tcx: TyCtxt<'tcx>,
     key: C::Key,
     dep_node: DepNode,
 ) {
     // We may be concurrently trying both execute and force a query.
     // Ensure that only one of them runs the query.
-    if let Some((_, index)) = query.query_cache(tcx).lookup(&key) {
+    if let Some((_, index)) = query.cache.lookup(&key) {
         tcx.prof.query_cache_hit(index.into());
         return;
     }
 
-    debug_assert!(!query.anon());
+    debug_assert!(!query.anon);
 
     ensure_sufficient_stack(|| {
-        try_execute_query::<C, FLAGS, true>(query, tcx, DUMMY_SP, key, Some(dep_node))
+        try_execute_query::<C, true>(query, tcx, DUMMY_SP, key, Some(dep_node))
     });
 }
