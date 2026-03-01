@@ -151,8 +151,7 @@ impl Emitter for BufferEmitter {
         let mut buffer = self.buffer.borrow_mut();
 
         let fluent_args = to_fluent_args(diag.args.iter());
-        let translated_main_message = format_diag_message(&diag.messages[0].0, &fluent_args)
-            .unwrap_or_else(|e| panic!("{e}"));
+        let translated_main_message = format_diag_message(&diag.messages[0].0, &fluent_args);
 
         buffer.messages.push(format!("error from rustc: {translated_main_message}"));
         if diag.is_error() {

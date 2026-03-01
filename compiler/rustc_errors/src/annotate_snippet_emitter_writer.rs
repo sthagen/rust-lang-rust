@@ -6,7 +6,6 @@
 //! [annotate_snippets]: https://docs.rs/crate/annotate-snippets/
 
 use std::borrow::Cow;
-use std::error::Report;
 use std::fmt::Debug;
 use std::io;
 use std::io::Write;
@@ -361,10 +360,7 @@ impl AnnotateSnippetEmitter {
                     if substitutions.is_empty() {
                         continue;
                     }
-                    let mut msg = format_diag_message(&suggestion.msg, args)
-                        .map_err(Report::new)
-                        .unwrap()
-                        .to_string();
+                    let mut msg = format_diag_message(&suggestion.msg, args).to_string();
 
                     let lo = substitutions
                         .iter()
@@ -547,7 +543,7 @@ impl AnnotateSnippetEmitter {
     ) -> String {
         msgs.iter()
             .filter_map(|(m, style)| {
-                let text = format_diag_message(m, args).map_err(Report::new).unwrap();
+                let text = format_diag_message(m, args);
                 let style = style.anstyle(level);
                 if text.is_empty() { None } else { Some(format!("{style}{text}{style:#}")) }
             })
@@ -694,9 +690,7 @@ fn collect_annotations(
 
         let kind = if is_primary { AnnotationKind::Primary } else { AnnotationKind::Context };
 
-        let label = label.as_ref().map(|m| {
-            normalize_whitespace(&format_diag_message(m, args).map_err(Report::new).unwrap())
-        });
+        let label = label.as_ref().map(|m| normalize_whitespace(&format_diag_message(m, args)));
 
         let ann = Annotation { kind, span, label };
         if sm.is_valid_span(ann.span).is_ok() {

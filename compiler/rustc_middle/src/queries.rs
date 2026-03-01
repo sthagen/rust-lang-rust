@@ -2771,12 +2771,6 @@ rustc_queries! {
         cache_on_disk_if { *cnum == LOCAL_CRATE }
         separate_provide_extern
     }
-
-    query is_rhs_type_const(def_id: DefId) -> bool {
-        desc { "checking whether `{}` is a rhs type const", tcx.def_path_str(def_id) }
-        cache_on_disk_if { def_id.is_local() }
-        separate_provide_extern
-    }
 }
 
 rustc_with_all_queries! { define_callbacks! }

@@ -29,9 +29,10 @@ use rustc_middle::ty::{self, TyCtxt};
 use rustc_serialize::{Decodable, Encodable};
 use rustc_span::def_id::LOCAL_CRATE;
 
+use crate::collect_active_jobs_from_all_queries;
 use crate::error::{QueryOverflow, QueryOverflowNote};
 use crate::execution::{all_inactive, force_query};
-use crate::job::{QueryJobMap, find_dep_kind_root};
+use crate::job::find_dep_kind_root;
 
 fn depth_limit_error<'tcx>(tcx: TyCtxt<'tcx>, job: QueryJobId) {
     let job_map =
@@ -94,54 +95,8 @@ pub(crate) fn start_query<'tcx, R>(
     })
 }
 
-/// Returns a map of currently active query jobs, collected from all queries.
-///
-/// If `require_complete` is `true`, this function locks all shards of the
-/// query results to produce a complete map, which always returns `Ok`.
-/// Otherwise, it may return an incomplete map as an error if any shard
-/// lock cannot be acquired.
-///
-/// Prefer passing `false` to `require_complete` to avoid potential deadlocks,
-/// especially when called from within a deadlock handler, unless a
-/// complete map is needed and no deadlock is possible at this call site.
-pub fn collect_active_jobs_from_all_queries<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    require_complete: bool,
-) -> Result<QueryJobMap<'tcx>, QueryJobMap<'tcx>> {
-    let mut job_map_out = QueryJobMap::default();
-    let mut complete = true;
-
-    for gather_fn in crate::PER_QUERY_GATHER_ACTIVE_JOBS_FNS.iter() {
-        if gather_fn(tcx, require_complete, &mut job_map_out).is_none() {
-            complete = false;
-        }
-    }
-
-    if complete { Ok(job_map_out) } else { Err(job_map_out) }
-}
-
 pub(super) fn try_mark_green<'tcx>(tcx: TyCtxt<'tcx>, dep_node: &DepNode) -> bool {
     tcx.dep_graph.try_mark_green(tcx, dep_node).is_some()
-}
-
-pub(super) fn encode_all_query_results<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    encoder: &mut CacheEncoder<'_, 'tcx>,
-    query_result_index: &mut EncodedDepNodeIndex,
-) {
-    for encode in super::ENCODE_QUERY_RESULTS.iter().copied().flatten() {
-        encode(tcx, encoder, query_result_index);
-    }
-}
-
-pub fn query_key_hash_verify_all<'tcx>(tcx: TyCtxt<'tcx>) {
-    if tcx.sess.opts.unstable_opts.incremental_verify_ich || cfg!(debug_assertions) {
-        tcx.sess.time("query_key_hash_verify_all", || {
-            for verify in super::QUERY_KEY_HASH_VERIFY.iter() {
-                verify(tcx);
-            }
-        })
-    }
 }
 
 macro_rules! cycle_error_handling {
@@ -313,8 +268,7 @@ pub(crate) fn create_deferred_query_stack_frame<'tcx, C>(
     key: C::Key,
 ) -> QueryStackFrame<QueryStackDeferred<'tcx>>
 where
-    C: QueryCache,
-    C::Key: QueryKey + DynSend + DynSync,
+    C: QueryCache<Key: QueryKey + DynSend + DynSync>,
     QueryVTable<'tcx, C>: DynSync,
 {
     let kind = vtable.dep_kind;
@@ -326,7 +280,7 @@ where
     QueryStackFrame::new(info, kind, def_id, def_id_for_ty_in_cycle)
 }
 
-pub(crate) fn encode_query_results_inner<'a, 'tcx, C, V>(
+pub(crate) fn encode_query_results<'a, 'tcx, C, V>(
     tcx: TyCtxt<'tcx>,
     query: &'tcx QueryVTable<'tcx, C>,
     encoder: &mut CacheEncoder<'a, 'tcx>,
@@ -628,74 +582,6 @@ macro_rules! define_queries {
                     &tcx.query_system.query_vtables.$name
                 }
             }
-
-            /// Internal per-query plumbing for collecting the set of active jobs for this query.
-            ///
-            /// Should only be called through `PER_QUERY_GATHER_ACTIVE_JOBS_FNS`.
-            pub(crate) fn gather_active_jobs<'tcx>(
-                tcx: TyCtxt<'tcx>,
-                require_complete: bool,
-                job_map_out: &mut QueryJobMap<'tcx>,
-            ) -> Option<()> {
-                let make_frame = |tcx: TyCtxt<'tcx>, key| {
-                    let vtable = &tcx.query_system.query_vtables.$name;
-                    $crate::plumbing::create_deferred_query_stack_frame(tcx, vtable, key)
-                };
-
-                // Call `gather_active_jobs_inner` to do the actual work.
-                let res = crate::execution::gather_active_jobs_inner(
-                    &tcx.query_system.query_vtables.$name.state,
-                    tcx,
-                    make_frame,
-                    require_complete,
-                    job_map_out,
-                );
-
-                // this can be called during unwinding, and the function has a `try_`-prefix, so
-                // don't `unwrap()` here, just manually check for `None` and do best-effort error
-                // reporting.
-                if res.is_none() {
-                    tracing::warn!(
-                        "Failed to collect active jobs for query with name `{}`!",
-                        stringify!($name)
-                    );
-                }
-                res
-            }
-
-            pub(crate) fn alloc_self_profile_query_strings<'tcx>(
-                tcx: TyCtxt<'tcx>,
-                string_cache: &mut QueryKeyStringCache
-            ) {
-                $crate::profiling_support::alloc_self_profile_query_strings_for_query_cache(
-                    tcx,
-                    stringify!($name),
-                    &tcx.query_system.query_vtables.$name.cache,
-                    string_cache,
-                )
-            }
-
-            item_if_cache_on_disk! { [$($modifiers)*]
-                pub(crate) fn encode_query_results<'tcx>(
-                    tcx: TyCtxt<'tcx>,
-                    encoder: &mut CacheEncoder<'_, 'tcx>,
-                    query_result_index: &mut EncodedDepNodeIndex
-                ) {
-                    $crate::plumbing::encode_query_results_inner(
-                        tcx,
-                        &tcx.query_system.query_vtables.$name,
-                        encoder,
-                        query_result_index,
-                    )
-                }
-            }
-
-            pub(crate) fn query_key_hash_verify<'tcx>(tcx: TyCtxt<'tcx>) {
-                $crate::plumbing::query_key_hash_verify(
-                    &tcx.query_system.query_vtables.$name,
-                    tcx,
-                )
-            }
         })*}
 
         pub fn make_query_vtables<'tcx>(incremental: bool) -> queries::QueryVTables<'tcx> {
@@ -706,47 +592,96 @@ macro_rules! define_queries {
             }
         }
 
-        // These arrays are used for iteration and can't be indexed by `DepKind`.
-
-        /// Used by `collect_active_jobs_from_all_queries` to iterate over all
-        /// queries, and gather the active jobs for each query.
+        /// Returns a map of currently active query jobs, collected from all queries.
         ///
-        /// (We arbitrarily use the word "gather" when collecting the jobs for
-        /// each individual query, so that we have distinct function names to
-        /// grep for.)
-        const PER_QUERY_GATHER_ACTIVE_JOBS_FNS: &[
-            for<'tcx> fn(
-                tcx: TyCtxt<'tcx>,
-                require_complete: bool,
-                job_map_out: &mut QueryJobMap<'tcx>,
-            ) -> Option<()>
-        ] = &[
-            $( $crate::query_impl::$name::gather_active_jobs ),*
-        ];
+        /// If `require_complete` is `true`, this function locks all shards of the
+        /// query results to produce a complete map, which always returns `Ok`.
+        /// Otherwise, it may return an incomplete map as an error if any shard
+        /// lock cannot be acquired.
+        ///
+        /// Prefer passing `false` to `require_complete` to avoid potential deadlocks,
+        /// especially when called from within a deadlock handler, unless a
+        /// complete map is needed and no deadlock is possible at this call site.
+        pub fn collect_active_jobs_from_all_queries<'tcx>(
+            tcx: TyCtxt<'tcx>,
+            require_complete: bool,
+        ) -> Result<QueryJobMap<'tcx>, QueryJobMap<'tcx>> {
+            let mut job_map_out = QueryJobMap::default();
+            let mut complete = true;
 
-        const ALLOC_SELF_PROFILE_QUERY_STRINGS: &[
-            for<'tcx> fn(TyCtxt<'tcx>, &mut QueryKeyStringCache)
-        ] = &[$(query_impl::$name::alloc_self_profile_query_strings),*];
-
-        const ENCODE_QUERY_RESULTS: &[
-            Option<for<'tcx> fn(
-                TyCtxt<'tcx>,
-                &mut CacheEncoder<'_, 'tcx>,
-                &mut EncodedDepNodeIndex)
-            >
-        ] = &[
             $(
-                if_cache_on_disk!([$($modifiers)*] {
-                    Some(query_impl::$name::encode_query_results)
-                } {
-                    None
-                })
-            ),*
-        ];
+                let res = crate::execution::gather_active_jobs(
+                    &tcx.query_system.query_vtables.$name,
+                    tcx,
+                    require_complete,
+                    &mut job_map_out,
+                );
+                if res.is_none() {
+                    complete = false;
+                }
+            )*
 
-        const QUERY_KEY_HASH_VERIFY: &[
-            for<'tcx> fn(TyCtxt<'tcx>)
-        ] = &[$(query_impl::$name::query_key_hash_verify),*];
+            if complete { Ok(job_map_out) } else { Err(job_map_out) }
+        }
+
+        /// All self-profiling events generated by the query engine use
+        /// virtual `StringId`s for their `event_id`. This method makes all
+        /// those virtual `StringId`s point to actual strings.
+        ///
+        /// If we are recording only summary data, the ids will point to
+        /// just the query names. If we are recording query keys too, we
+        /// allocate the corresponding strings here.
+        pub fn alloc_self_profile_query_strings(tcx: TyCtxt<'_>) {
+            if !tcx.prof.enabled() {
+                return;
+            }
+
+            let _prof_timer = tcx.sess.prof.generic_activity("self_profile_alloc_query_strings");
+
+            let mut string_cache = QueryKeyStringCache::new();
+
+            $(
+                $crate::profiling_support::alloc_self_profile_query_strings_for_query_cache(
+                    tcx,
+                    stringify!($name),
+                    &tcx.query_system.query_vtables.$name.cache,
+                    &mut string_cache,
+                );
+            )*
+
+            tcx.sess.prof.store_query_cache_hits();
+        }
+
+        fn encode_all_query_results<'tcx>(
+            tcx: TyCtxt<'tcx>,
+            encoder: &mut CacheEncoder<'_, 'tcx>,
+            query_result_index: &mut EncodedDepNodeIndex,
+        ) {
+            $(
+                item_if_cache_on_disk! {
+                    [$($modifiers)*]
+                    $crate::plumbing::encode_query_results(
+                        tcx,
+                        &tcx.query_system.query_vtables.$name,
+                        encoder,
+                        query_result_index,
+                    )
+                }
+            )*
+        }
+
+        pub fn query_key_hash_verify_all<'tcx>(tcx: TyCtxt<'tcx>) {
+            if tcx.sess.opts.unstable_opts.incremental_verify_ich || cfg!(debug_assertions) {
+                tcx.sess.time("query_key_hash_verify_all", || {
+                    $(
+                        $crate::plumbing::query_key_hash_verify(
+                            &tcx.query_system.query_vtables.$name,
+                            tcx
+                        );
+                    )*
+                })
+            }
+        }
 
         /// Declares a dep-kind vtable constructor for each query.
         mod _dep_kind_vtable_ctors_for_queries {

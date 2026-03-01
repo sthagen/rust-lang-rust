@@ -9,7 +9,6 @@
 
 // FIXME: spec the JSON output properly.
 
-use std::error::Report;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -301,8 +300,7 @@ impl Diagnostic {
     fn from_errors_diagnostic(diag: crate::DiagInner, je: &JsonEmitter) -> Diagnostic {
         let args = to_fluent_args(diag.args.iter());
         let sugg_to_diag = |sugg: &CodeSuggestion| {
-            let translated_message =
-                format_diag_message(&sugg.msg, &args).map_err(Report::new).unwrap();
+            let translated_message = format_diag_message(&sugg.msg, &args);
             Diagnostic {
                 message: translated_message.to_string(),
                 code: None,
@@ -417,10 +415,7 @@ impl DiagnosticSpan {
         Self::from_span_etc(
             span.span,
             span.is_primary,
-            span.label
-                .as_ref()
-                .map(|m| format_diag_message(m, args).unwrap())
-                .map(|m| m.to_string()),
+            span.label.as_ref().map(|m| format_diag_message(m, args)).map(|m| m.to_string()),
             suggestion,
             je,
         )

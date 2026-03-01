@@ -21,7 +21,6 @@ extern crate self as rustc_errors;
 use std::backtrace::{Backtrace, BacktraceStatus};
 use std::borrow::Cow;
 use std::cell::Cell;
-use std::error::Report;
 use std::ffi::OsStr;
 use std::hash::Hash;
 use std::io::Write;
@@ -78,7 +77,6 @@ mod decorate_diag;
 mod diagnostic;
 mod diagnostic_impls;
 pub mod emitter;
-pub mod error;
 pub mod json;
 mod lock;
 pub mod markdown;
@@ -1437,7 +1435,7 @@ impl DiagCtxtInner {
         args: impl Iterator<Item = DiagArg<'a>>,
     ) -> String {
         let args = crate::translation::to_fluent_args(args);
-        format_diag_message(&message, &args).map_err(Report::new).unwrap().to_string()
+        format_diag_message(&message, &args).to_string()
     }
 
     fn eagerly_translate_for_subdiag(

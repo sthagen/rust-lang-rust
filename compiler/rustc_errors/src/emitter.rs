@@ -8,7 +8,6 @@
 //! The output types are defined in `rustc_session::config::ErrorOutputType`.
 
 use std::borrow::Cow;
-use std::error::Report;
 use std::io::prelude::*;
 use std::io::{self, IsTerminal};
 use std::iter;
@@ -106,7 +105,7 @@ pub trait Emitter {
         fluent_args: &FluentArgs<'_>,
     ) {
         if let Some((sugg, rest)) = suggestions.split_first() {
-            let msg = format_diag_message(&sugg.msg, fluent_args).map_err(Report::new).unwrap();
+            let msg = format_diag_message(&sugg.msg, fluent_args);
             if rest.is_empty()
                // ^ if there is only one suggestion
                // don't display multi-suggestions as labels
