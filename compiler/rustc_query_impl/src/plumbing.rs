@@ -29,10 +29,10 @@ use rustc_middle::ty::{self, TyCtxt};
 use rustc_serialize::{Decodable, Encodable};
 use rustc_span::def_id::LOCAL_CRATE;
 
-use crate::collect_active_jobs_from_all_queries;
 use crate::error::{QueryOverflow, QueryOverflowNote};
 use crate::execution::{all_inactive, force_query};
 use crate::job::find_dep_kind_root;
+use crate::{GetQueryVTable, collect_active_jobs_from_all_queries};
 
 fn depth_limit_error<'tcx>(tcx: TyCtxt<'tcx>, job: QueryJobId) {
     let job_map =
@@ -165,19 +165,13 @@ macro_rules! is_feedable {
     };
 }
 
-macro_rules! hash_result {
-    ([][$V:ty]) => {{
-        Some(|hcx, result| {
-            let result = rustc_middle::query::erase::restore_val::<$V>(*result);
-            rustc_middle::dep_graph::hash_result(hcx, &result)
-        })
-    }};
-    ([(no_hash) $($rest:tt)*][$V:ty]) => {{
-        None
-    }};
-    ([$other:tt $($modifiers:tt)*][$($args:tt)*]) => {
-        hash_result!([$($modifiers)*][$($args)*])
-    };
+/// Expands to `$yes` if the `no_hash` modifier is present, or `$no` otherwise.
+macro_rules! if_no_hash {
+    ([] $yes:tt $no:tt) => { $no };
+    ([(no_hash) $($modifiers:tt)*] $yes:tt $no:tt) => { $yes };
+    ([$other:tt $($modifiers:tt)*] $yes:tt $no:tt) => {
+        if_no_hash!([$($modifiers)*] $yes $no)
+    }
 }
 
 macro_rules! call_provider {
@@ -332,15 +326,15 @@ pub(crate) fn query_key_hash_verify<'tcx, C: QueryCache>(
     });
 }
 
-/// Implementation of [`DepKindVTable::try_load_from_on_disk_cache`] for queries.
-pub(crate) fn try_load_from_on_disk_cache_inner<'tcx, C: QueryCache>(
-    query: &'tcx QueryVTable<'tcx, C>,
+/// Implementation of [`DepKindVTable::promote_from_disk_fn`] for queries.
+pub(crate) fn promote_from_disk_inner<'tcx, Q: GetQueryVTable<'tcx>>(
     tcx: TyCtxt<'tcx>,
     dep_node: DepNode,
 ) {
+    let query = Q::query_vtable(tcx);
     debug_assert!(tcx.dep_graph.is_green(&dep_node));
 
-    let key = C::Key::try_recover_key(tcx, &dep_node).unwrap_or_else(|| {
+    let key = <Q::Cache as QueryCache>::Key::try_recover_key(tcx, &dep_node).unwrap_or_else(|| {
         panic!(
             "Failed to recover key for {dep_node:?} with key fingerprint {}",
             dep_node.key_fingerprint
@@ -385,12 +379,15 @@ where
     value
 }
 
-/// Implementation of [`DepKindVTable::force_from_dep_node`] for queries.
-pub(crate) fn force_from_dep_node_inner<'tcx, C: QueryCache>(
-    query: &'tcx QueryVTable<'tcx, C>,
+/// Implementation of [`DepKindVTable::force_from_dep_node_fn`] for queries.
+pub(crate) fn force_from_dep_node_inner<'tcx, Q: GetQueryVTable<'tcx>>(
     tcx: TyCtxt<'tcx>,
     dep_node: DepNode,
+    // Needed by the vtable function signature, but not used when forcing queries.
+    _prev_index: SerializedDepNodeIndex,
 ) -> bool {
+    let query = Q::query_vtable(tcx);
+
     // We must avoid ever having to call `force_from_dep_node()` for a
     // `DepNode::codegen_unit`:
     // Since we cannot reconstruct the query key of a `DepNode::codegen_unit`, we
@@ -409,7 +406,7 @@ pub(crate) fn force_from_dep_node_inner<'tcx, C: QueryCache>(
         "calling force_from_dep_node() on dep_kinds::codegen_unit"
     );
 
-    if let Some(key) = C::Key::try_recover_key(tcx, &dep_node) {
+    if let Some(key) = <Q::Cache as QueryCache>::Key::try_recover_key(tcx, &dep_node) {
         force_query(query, tcx, key, dep_node);
         true
     } else {
@@ -557,10 +554,20 @@ macro_rules! define_queries {
                         None
                     }),
                     value_from_cycle_error: |tcx, cycle, guar| {
-                        let result: queries::$name::Value<'tcx> = Value::from_cycle_error(tcx, cycle, guar);
+                        let result: queries::$name::Value<'tcx> =
+                            FromCycleError::from_cycle_error(tcx, cycle, guar);
                         erase::erase_val(result)
                     },
-                    hash_result: hash_result!([$($modifiers)*][queries::$name::Value<'tcx>]),
+                    hash_value_fn: if_no_hash!(
+                        [$($modifiers)*]
+                        None
+                        {
+                            Some(|hcx, erased_value: &erase::Erased<queries::$name::Value<'tcx>>| {
+                                let value = erase::restore_val(*erased_value);
+                                rustc_middle::dep_graph::hash_result(hcx, &value)
+                            })
+                        }
+                    ),
                     format_value: |value| format!("{:?}", erase::restore_val::<queries::$name::Value<'tcx>>(*value)),
                     description_fn: $crate::queries::_description_fns::$name,
                     execute_query_fn: if incremental {
@@ -694,6 +701,7 @@ macro_rules! define_queries {
                     use $crate::query_impl::$name::VTableGetter;
                     make_dep_kind_vtable_for_query::<VTableGetter>(
                         is_anon!([$($modifiers)*]),
+                        if_cache_on_disk!([$($modifiers)*] true false),
                         is_eval_always!([$($modifiers)*]),
                     )
                 }

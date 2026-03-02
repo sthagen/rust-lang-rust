@@ -5,7 +5,7 @@ use rustc_data_structures::hash_table::{Entry, HashTable};
 use rustc_data_structures::stack::ensure_sufficient_stack;
 use rustc_data_structures::sync::{DynSend, DynSync};
 use rustc_data_structures::{outline, sharded, sync};
-use rustc_errors::{Diag, FatalError, StashKey};
+use rustc_errors::{FatalError, StashKey};
 use rustc_middle::dep_graph::{DepGraphData, DepNodeKey, SerializedDepNodeIndex};
 use rustc_middle::query::plumbing::QueryVTable;
 use rustc_middle::query::{
@@ -126,24 +126,14 @@ fn mk_cycle<'tcx, C: QueryCache>(
     cycle_error: CycleError,
 ) -> C::Value {
     let error = report_cycle(tcx.sess, &cycle_error);
-    handle_cycle_error(query, tcx, &cycle_error, error)
-}
-
-fn handle_cycle_error<'tcx, C: QueryCache>(
-    query: &'tcx QueryVTable<'tcx, C>,
-    tcx: TyCtxt<'tcx>,
-    cycle_error: &CycleError,
-    error: Diag<'_>,
-) -> C::Value {
     match query.cycle_error_handling {
         CycleErrorHandling::Error => {
             let guar = error.emit();
             query.value_from_cycle_error(tcx, cycle_error, guar)
         }
         CycleErrorHandling::Fatal => {
-            error.emit();
-            tcx.dcx().abort_if_errors();
-            unreachable!()
+            let guar = error.emit();
+            guar.raise_fatal();
         }
         CycleErrorHandling::DelayBug => {
             let guar = error.delay_as_bug();
@@ -340,15 +330,15 @@ fn try_execute_query<'tcx, C: QueryCache, const INCR: bool>(
 
                         // Only call `wait_for_query` if we're using a Rayon thread pool
                         // as it will attempt to mark the worker thread as blocked.
-                        return wait_for_query(query, tcx, span, key, latch, current_job_id);
+                        wait_for_query(query, tcx, span, key, latch, current_job_id)
+                    } else {
+                        let id = job.id;
+                        drop(state_lock);
+
+                        // If we are single-threaded we know that we have cycle error,
+                        // so we just return the error.
+                        cycle_error(query, tcx, id, span)
                     }
-
-                    let id = job.id;
-                    drop(state_lock);
-
-                    // If we are single-threaded we know that we have cycle error,
-                    // so we just return the error.
-                    cycle_error(query, tcx, id, span)
                 }
                 ActiveKeyStatus::Poisoned => FatalError.raise(),
             }
@@ -372,7 +362,7 @@ fn execute_job<'tcx, C: QueryCache, const INCR: bool>(
     debug_assert_eq!(tcx.dep_graph.is_fully_enabled(), INCR);
 
     // Delegate to another function to actually execute the query job.
-    let (result, dep_node_index) = if INCR {
+    let (value, dep_node_index) = if INCR {
         execute_job_incr(query, tcx, key, dep_node, id)
     } else {
         execute_job_non_incr(query, tcx, key, id)
@@ -384,18 +374,18 @@ fn execute_job<'tcx, C: QueryCache, const INCR: bool>(
         // This can't happen, as query feeding adds the very dependencies to the fed query
         // as its feeding query had. So if the fed query is red, so is its feeder, which will
         // get evaluated first, and re-feed the query.
-        if let Some((cached_result, _)) = cache.lookup(&key) {
-            let Some(hasher) = query.hash_result else {
+        if let Some((cached_value, _)) = cache.lookup(&key) {
+            let Some(hash_value_fn) = query.hash_value_fn else {
                 panic!(
                     "no_hash fed query later has its value computed.\n\
                     Remove `no_hash` modifier to allow recomputation.\n\
                     The already cached value: {}",
-                    (query.format_value)(&cached_result)
+                    (query.format_value)(&cached_value)
                 );
             };
 
             let (old_hash, new_hash) = tcx.with_stable_hashing_context(|mut hcx| {
-                (hasher(&mut hcx, &cached_result), hasher(&mut hcx, &result))
+                (hash_value_fn(&mut hcx, &cached_value), hash_value_fn(&mut hcx, &value))
             });
             let formatter = query.format_value;
             if old_hash != new_hash {
@@ -407,17 +397,17 @@ fn execute_job<'tcx, C: QueryCache, const INCR: bool>(
                         computed={:#?}\nfed={:#?}",
                     query.dep_kind,
                     key,
-                    formatter(&result),
-                    formatter(&cached_result),
+                    formatter(&value),
+                    formatter(&cached_value),
                 );
             }
         }
     }
 
     // Tell the guard to perform completion bookkeeping, and also to not poison the query.
-    job_guard.complete(cache, result, dep_node_index);
+    job_guard.complete(cache, value, dep_node_index);
 
-    (result, Some(dep_node_index))
+    (value, Some(dep_node_index))
 }
 
 // Fast path for when incr. comp. is off.
@@ -430,30 +420,24 @@ fn execute_job_non_incr<'tcx, C: QueryCache>(
 ) -> (C::Value, DepNodeIndex) {
     debug_assert!(!tcx.dep_graph.is_fully_enabled());
 
-    // Fingerprint the key, just to assert that it doesn't
-    // have anything we don't consider hashable
-    if cfg!(debug_assertions) {
-        let _ = key.to_fingerprint(tcx);
-    }
-
     let prof_timer = tcx.prof.query_provider();
     // Call the query provider.
-    let result =
+    let value =
         start_query(tcx, job_id, query.depth_limit, || (query.invoke_provider_fn)(tcx, key));
     let dep_node_index = tcx.dep_graph.next_virtual_depnode_index();
     prof_timer.finish_with_query_invocation_id(dep_node_index.into());
 
-    // Similarly, fingerprint the result to assert that
-    // it doesn't have anything not considered hashable.
-    if cfg!(debug_assertions)
-        && let Some(hash_result) = query.hash_result
-    {
-        tcx.with_stable_hashing_context(|mut hcx| {
-            hash_result(&mut hcx, &result);
-        });
+    // Sanity: Fingerprint the key and the result to assert they don't contain anything unhashable.
+    if cfg!(debug_assertions) {
+        let _ = key.to_fingerprint(tcx);
+        if let Some(hash_value_fn) = query.hash_value_fn {
+            tcx.with_stable_hashing_context(|mut hcx| {
+                hash_value_fn(&mut hcx, &value);
+            });
+        }
     }
 
-    (result, dep_node_index)
+    (value, dep_node_index)
 }
 
 #[inline(always)]
@@ -509,7 +493,7 @@ fn execute_job_incr<'tcx, C: QueryCache>(
             tcx,
             (query, key),
             |tcx, (query, key)| (query.invoke_provider_fn)(tcx, key),
-            query.hash_result,
+            query.hash_value_fn,
         )
     });
 
@@ -560,7 +544,7 @@ fn load_from_disk_or_invoke_provider_green<'tcx, C: QueryCache>(
                 dep_graph_data,
                 &value,
                 prev_index,
-                query.hash_result,
+                query.hash_value_fn,
                 query.format_value,
             );
         }
@@ -572,7 +556,7 @@ fn load_from_disk_or_invoke_provider_green<'tcx, C: QueryCache>(
     // can be forced from `DepNode`.
     debug_assert!(
         !query.will_cache_on_disk_for_key(tcx, key)
-            || !tcx.key_fingerprint_style(dep_node.kind).reconstructible(),
+            || !tcx.key_fingerprint_style(dep_node.kind).is_maybe_recoverable(),
         "missing on-disk cache entry for {dep_node:?}"
     );
 
@@ -607,7 +591,7 @@ fn load_from_disk_or_invoke_provider_green<'tcx, C: QueryCache>(
         dep_graph_data,
         &value,
         prev_index,
-        query.hash_result,
+        query.hash_value_fn,
         query.format_value,
     );
 

@@ -121,7 +121,7 @@ impl DepNode {
 
         #[cfg(debug_assertions)]
         {
-            if !tcx.key_fingerprint_style(kind).reconstructible()
+            if !tcx.key_fingerprint_style(kind).is_maybe_recoverable()
                 && (tcx.sess.opts.unstable_opts.incremental_info
                     || tcx.sess.opts.unstable_opts.query_dep_graph)
             {
@@ -174,11 +174,6 @@ impl fmt::Debug for DepNode {
 /// of the `DepKind`. Overall, this allows to implement `DepContext` using this manual
 /// jump table instead of large matches.
 pub struct DepKindVTable<'tcx> {
-    /// Anonymous queries cannot be replayed from one compiler invocation to the next.
-    /// When their result is needed, it is recomputed. They are useful for fine-grained
-    /// dependency tracking, and caching within one compiler invocation.
-    pub is_anon: bool,
-
     /// Eval-always queries do not track their dependencies, and are always recomputed, even if
     /// their inputs have not changed since the last compiler invocation. The result is still
     /// cached within one compiler invocation.
@@ -225,12 +220,12 @@ pub struct DepKindVTable<'tcx> {
     /// with kind `mir_promoted`, we know that the key fingerprint of the `DepNode`
     /// is actually a `DefPathHash`, and can therefore just look up the corresponding
     /// `DefId` in `tcx.def_path_hash_to_def_id`.
-    pub force_from_dep_node: Option<
+    pub force_from_dep_node_fn: Option<
         fn(tcx: TyCtxt<'tcx>, dep_node: DepNode, prev_index: SerializedDepNodeIndex) -> bool,
     >,
 
     /// Invoke a query to put the on-disk cached value in memory.
-    pub try_load_from_on_disk_cache: Option<fn(TyCtxt<'tcx>, DepNode)>,
+    pub promote_from_disk_fn: Option<fn(TyCtxt<'tcx>, DepNode)>,
 }
 
 /// A "work product" corresponds to a `.o` (or other) file that we

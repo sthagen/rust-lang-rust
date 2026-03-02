@@ -9,7 +9,7 @@ use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_data_structures::profiling::QueryInvocationId;
 use rustc_data_structures::sharded::{self, ShardedHashMap};
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
-use rustc_data_structures::sync::{AtomicU64, Lock};
+use rustc_data_structures::sync::{AtomicU64, Lock, is_dyn_thread_safe};
 use rustc_data_structures::unord::UnordMap;
 use rustc_data_structures::{assert_matches, outline};
 use rustc_errors::DiagInner;
@@ -1064,7 +1064,11 @@ impl DepGraph {
             match data.colors.get(prev_index) {
                 DepNodeColor::Green(_) => {
                     let dep_node = data.previous.index_to_node(prev_index);
-                    tcx.try_load_from_on_disk_cache(dep_node);
+                    if let Some(promote_fn) =
+                        tcx.dep_kind_vtable(dep_node.kind).promote_from_disk_fn
+                    {
+                        promote_fn(tcx, *dep_node)
+                    };
                 }
                 DepNodeColor::Unknown | DepNodeColor::Red => {
                     // We can skip red nodes because a node can only be marked
@@ -1302,7 +1306,9 @@ impl CurrentDepGraph {
         prev_graph: &SerializedDepGraph,
         prev_index: SerializedDepNodeIndex,
     ) {
-        if let Some(ref nodes_in_current_session) = self.nodes_in_current_session {
+        if !is_dyn_thread_safe()
+            && let Some(ref nodes_in_current_session) = self.nodes_in_current_session
+        {
             debug_assert!(
                 !nodes_in_current_session
                     .lock()
