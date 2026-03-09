@@ -6,6 +6,7 @@
 //! See [`rustc_hir_analysis::check`] for more context on type checking in general.
 
 use rustc_abi::{FIRST_VARIANT, FieldIdx};
+use rustc_ast as ast;
 use rustc_ast::util::parser::ExprPrecedence;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_data_structures::stack::ensure_sufficient_stack;
@@ -15,6 +16,7 @@ use rustc_errors::{
     Applicability, Diag, ErrorGuaranteed, MultiSpan, StashKey, Subdiagnostic, listify, pluralize,
     struct_span_code_err,
 };
+use rustc_hir as hir;
 use rustc_hir::def::{CtorKind, DefKind, Res};
 use rustc_hir::def_id::DefId;
 use rustc_hir::lang_items::LangItem;
@@ -37,7 +39,6 @@ use rustc_span::{Ident, Span, Symbol, kw, sym};
 use rustc_trait_selection::infer::InferCtxtExt;
 use rustc_trait_selection::traits::{self, ObligationCauseCode, ObligationCtxt};
 use tracing::{debug, instrument, trace};
-use {rustc_ast as ast, rustc_hir as hir};
 
 use crate::Expectation::{self, ExpectCastableToType, ExpectHasType, NoExpectation};
 use crate::coercion::CoerceMany;
@@ -1791,27 +1792,24 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
     fn check_expr_tuple(
         &self,
-        elts: &'tcx [hir::Expr<'tcx>],
+        elements: &'tcx [hir::Expr<'tcx>],
         expected: Expectation<'tcx>,
         expr: &'tcx hir::Expr<'tcx>,
     ) -> Ty<'tcx> {
-        let flds = expected.only_has_type(self).and_then(|ty| {
-            let ty = self.try_structurally_resolve_type(expr.span, ty);
-            match ty.kind() {
-                ty::Tuple(flds) => Some(&flds[..]),
-                _ => None,
-            }
+        let mut expectations = expected
+            .only_has_type(self)
+            .and_then(|ty| self.try_structurally_resolve_type(expr.span, ty).opt_tuple_fields())
+            .unwrap_or_default()
+            .iter();
+
+        let elements = elements.iter().map(|e| {
+            let ty = expectations.next().unwrap_or_else(|| self.next_ty_var(e.span));
+            self.check_expr_coercible_to_type(e, ty, None);
+            ty
         });
 
-        let elt_ts_iter = elts.iter().enumerate().map(|(i, e)| match flds {
-            Some(fs) if i < fs.len() => {
-                let ety = fs[i];
-                self.check_expr_coercible_to_type(e, ety, None);
-                ety
-            }
-            _ => self.check_expr_with_expectation(e, NoExpectation),
-        });
-        let tuple = Ty::new_tup_from_iter(self.tcx, elt_ts_iter);
+        let tuple = Ty::new_tup_from_iter(self.tcx, elements);
+
         if let Err(guar) = tuple.error_reported() {
             Ty::new_error(self.tcx, guar)
         } else {
