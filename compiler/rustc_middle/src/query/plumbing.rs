@@ -7,7 +7,6 @@ use rustc_data_structures::sharded::Sharded;
 use rustc_data_structures::sync::{AtomicU64, WorkerLocal};
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_hir::hir_id::OwnerId;
-use rustc_macros::HashStable;
 use rustc_span::{ErrorGuaranteed, Span};
 pub use sealed::IntoQueryParam;
 
@@ -58,7 +57,6 @@ pub enum ActiveKeyStatus<'tcx> {
 pub enum CycleErrorHandling {
     Error,
     DelayBug,
-    Stash,
 }
 
 #[derive(Clone, Debug)]
@@ -138,8 +136,12 @@ pub struct QueryVTable<'tcx, C: QueryCache> {
     /// For `no_hash` queries, this function pointer is None.
     pub hash_value_fn: Option<fn(&mut StableHashingContext<'_>, &C::Value) -> Fingerprint>,
 
-    pub value_from_cycle_error:
-        fn(tcx: TyCtxt<'tcx>, cycle_error: CycleError, guar: ErrorGuaranteed) -> C::Value,
+    pub value_from_cycle_error: fn(
+        tcx: TyCtxt<'tcx>,
+        key: C::Key,
+        cycle_error: CycleError,
+        guar: ErrorGuaranteed,
+    ) -> C::Value,
     pub format_value: fn(&C::Value) -> String,
 
     /// Formats a human-readable description of this query and its key, as
@@ -650,9 +652,6 @@ mod sealed {
         }
     }
 }
-
-#[derive(Copy, Clone, Debug, HashStable)]
-pub struct CyclePlaceholder(pub ErrorGuaranteed);
 
 #[cold]
 pub(crate) fn default_query(name: &str, key: &dyn std::fmt::Debug) -> ! {

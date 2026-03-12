@@ -11,8 +11,7 @@ use rustc_data_structures::sync::DynSend;
 use rustc_error_messages::{DiagArgMap, DiagArgName, DiagArgValue, IntoDiagArg};
 use rustc_lint_defs::{Applicability, LintExpectationId};
 use rustc_macros::{Decodable, Encodable};
-use rustc_span::source_map::Spanned;
-use rustc_span::{DUMMY_SP, Span, Symbol};
+use rustc_span::{DUMMY_SP, Span, Spanned, Symbol};
 use tracing::debug;
 
 use crate::{
@@ -934,6 +933,7 @@ impl<'a, G: EmissionGuarantee> Diag<'a, G> {
         self
     } }
 
+    with_fn! { with_span_suggestion_with_style,
     /// [`Diag::span_suggestion()`] but you can set the [`SuggestionStyle`].
     pub fn span_suggestion_with_style(
         &mut self,
@@ -956,7 +956,7 @@ impl<'a, G: EmissionGuarantee> Diag<'a, G> {
             applicability,
         });
         self
-    }
+    } }
 
     with_fn! { with_span_suggestion_verbose,
     /// Always show the suggested change.

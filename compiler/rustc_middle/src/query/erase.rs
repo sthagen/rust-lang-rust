@@ -10,12 +10,10 @@ use std::intrinsics::transmute_unchecked;
 use std::mem::MaybeUninit;
 
 use rustc_ast::tokenstream::TokenStream;
-use rustc_span::ErrorGuaranteed;
-use rustc_span::source_map::Spanned;
+use rustc_span::{ErrorGuaranteed, Spanned};
 
 use crate::mir::interpret::EvalToValTreeResult;
 use crate::mir::mono::{MonoItem, NormalizationErrorInMono};
-use crate::query::plumbing::CyclePlaceholder;
 use crate::traits::solve;
 use crate::ty::adjustment::CoerceUnsizedInfo;
 use crate::ty::{self, Ty, TyCtxt};
@@ -211,10 +209,6 @@ impl Erasable for EvalToValTreeResult<'_> {
 impl Erasable for Result<&'_ ty::List<Ty<'_>>, ty::util::AlwaysRequiresDrop> {
     type Storage =
         [u8; size_of::<Result<&'static ty::List<Ty<'static>>, ty::util::AlwaysRequiresDrop>>()];
-}
-
-impl Erasable for Result<ty::EarlyBinder<'_, Ty<'_>>, CyclePlaceholder> {
-    type Storage = [u8; size_of::<Result<ty::EarlyBinder<'static, Ty<'_>>, CyclePlaceholder>>()];
 }
 
 impl Erasable
