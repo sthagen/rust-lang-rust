@@ -5,14 +5,14 @@ use std::ops::ControlFlow;
 
 use rustc_data_structures::fx::FxHashSet;
 use rustc_errors::codes::*;
-use rustc_errors::{Applicability, MultiSpan, pluralize, struct_span_code_err};
+use rustc_errors::{Applicability, Diag, MultiSpan, pluralize, struct_span_code_err};
 use rustc_hir as hir;
 use rustc_hir::def::{DefKind, Res};
 use rustc_middle::dep_graph::DepKind;
 use rustc_middle::queries::QueryVTables;
 use rustc_middle::query::CycleError;
 use rustc_middle::query::erase::erase_val;
-use rustc_middle::ty::layout::{LayoutError, TyAndLayout};
+use rustc_middle::ty::layout::LayoutError;
 use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_middle::{bug, span_bug};
 use rustc_span::def_id::{DefId, LocalDefId};
@@ -21,37 +21,45 @@ use rustc_span::{ErrorGuaranteed, Span};
 use crate::job::report_cycle;
 
 pub(crate) fn specialize_query_vtables<'tcx>(vtables: &mut QueryVTables<'tcx>) {
-    vtables.type_of.value_from_cycle_error =
-        |tcx, _, _, guar| erase_val(ty::EarlyBinder::bind(Ty::new_error(tcx, guar)));
+    vtables.type_of.value_from_cycle_error = |tcx, _, _, err| {
+        let guar = err.emit();
+        erase_val(ty::EarlyBinder::bind(Ty::new_error(tcx, guar)))
+    };
 
-    vtables.type_of_opaque_hir_typeck.value_from_cycle_error =
-        |tcx, _, _, guar| erase_val(ty::EarlyBinder::bind(Ty::new_error(tcx, guar)));
+    vtables.type_of_opaque_hir_typeck.value_from_cycle_error = |tcx, _, _, err| {
+        let guar = err.emit();
+        erase_val(ty::EarlyBinder::bind(Ty::new_error(tcx, guar)))
+    };
 
-    vtables.erase_and_anonymize_regions_ty.value_from_cycle_error =
-        |tcx, _, _, guar| erase_val(Ty::new_error(tcx, guar));
+    vtables.erase_and_anonymize_regions_ty.value_from_cycle_error = |tcx, _, _, err| {
+        let guar = err.emit();
+        erase_val(Ty::new_error(tcx, guar))
+    };
 
-    vtables.fn_sig.value_from_cycle_error = |tcx, key, _, guar| erase_val(fn_sig(tcx, key, guar));
+    vtables.fn_sig.value_from_cycle_error = |tcx, key, _, err| {
+        let guar = err.delay_as_bug();
+        erase_val(fn_sig(tcx, key, guar))
+    };
 
     vtables.check_representability.value_from_cycle_error =
-        |tcx, _, cycle, guar| check_representability(tcx, cycle, guar);
+        |tcx, _, cycle, _err| check_representability(tcx, cycle);
 
     vtables.check_representability_adt_ty.value_from_cycle_error =
-        |tcx, _, cycle, guar| check_representability(tcx, cycle, guar);
+        |tcx, _, cycle, _err| check_representability(tcx, cycle);
 
-    vtables.variances_of.value_from_cycle_error =
-        |tcx, _, cycle, guar| erase_val(variances_of(tcx, cycle, guar));
+    vtables.variances_of.value_from_cycle_error = |tcx, _, cycle, err| {
+        let _guar = err.delay_as_bug();
+        erase_val(variances_of(tcx, cycle))
+    };
 
-    vtables.layout_of.value_from_cycle_error =
-        |tcx, _, cycle, guar| erase_val(layout_of(tcx, cycle, guar));
+    vtables.layout_of.value_from_cycle_error = |tcx, _, cycle, err| {
+        let _guar = err.delay_as_bug();
+        erase_val(Err(layout_of(tcx, cycle)))
+    }
 }
 
-pub(crate) fn default<'tcx>(tcx: TyCtxt<'tcx>, cycle_error: CycleError, query_name: &str) -> ! {
-    let Some(guar) = tcx.sess.dcx().has_errors() else {
-        bug!(
-            "`from_cycle_error_default` on query `{query_name}` called without errors: {:#?}",
-            cycle_error.cycle,
-        );
-    };
+pub(crate) fn default(err: Diag<'_>) -> ! {
+    let guar = err.emit();
     guar.raise_fatal()
 }
 
@@ -80,18 +88,14 @@ fn fn_sig<'tcx>(
     )))
 }
 
-fn check_representability<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    cycle_error: CycleError,
-    _guar: ErrorGuaranteed,
-) -> ! {
+fn check_representability<'tcx>(tcx: TyCtxt<'tcx>, cycle_error: CycleError<'tcx>) -> ! {
     let mut item_and_field_ids = Vec::new();
     let mut representable_ids = FxHashSet::default();
     for info in &cycle_error.cycle {
         if info.frame.dep_kind == DepKind::check_representability
             && let Some(field_id) = info.frame.def_id
             && let Some(field_id) = field_id.as_local()
-            && let Some(DefKind::Field) = info.frame.info.def_kind
+            && let Some(DefKind::Field) = info.frame.tagged_key.def_kind(tcx)
         {
             let parent_id = tcx.parent(field_id.to_def_id());
             let item_id = match tcx.def_kind(parent_id) {
@@ -116,11 +120,7 @@ fn check_representability<'tcx>(
     guar.raise_fatal()
 }
 
-fn variances_of<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    cycle_error: CycleError,
-    _guar: ErrorGuaranteed,
-) -> &'tcx [ty::Variance] {
+fn variances_of<'tcx>(tcx: TyCtxt<'tcx>, cycle_error: CycleError<'tcx>) -> &'tcx [ty::Variance] {
     search_for_cycle_permutation(
         &cycle_error.cycle,
         |cycle| {
@@ -164,9 +164,8 @@ fn search_for_cycle_permutation<Q, T>(
 
 fn layout_of<'tcx>(
     tcx: TyCtxt<'tcx>,
-    cycle_error: CycleError,
-    _guar: ErrorGuaranteed,
-) -> Result<TyAndLayout<'tcx>, &'tcx ty::layout::LayoutError<'tcx>> {
+    cycle_error: CycleError<'tcx>,
+) -> &'tcx ty::layout::LayoutError<'tcx> {
     let diag = search_for_cycle_permutation(
         &cycle_error.cycle,
         |cycle| {
@@ -205,7 +204,7 @@ fn layout_of<'tcx>(
                         continue;
                     };
                     let frame_span =
-                        info.frame.info.default_span(cycle[(i + 1) % cycle.len()].span);
+                        info.frame.tagged_key.default_span(tcx, cycle[(i + 1) % cycle.len()].span);
                     if frame_span.is_dummy() {
                         continue;
                     }
@@ -239,11 +238,11 @@ fn layout_of<'tcx>(
                 ControlFlow::Continue(())
             }
         },
-        || report_cycle(tcx.sess, &cycle_error),
+        || report_cycle(tcx, &cycle_error),
     );
 
     let guar = diag.emit();
-    Err(tcx.arena.alloc(LayoutError::Cycle(guar)))
+    tcx.arena.alloc(LayoutError::Cycle(guar))
 }
 
 // item_and_field_ids should form a cycle where each field contains the

@@ -10,7 +10,7 @@
 
 use rustc_data_structures::sync::AtomicU64;
 use rustc_middle::dep_graph;
-use rustc_middle::queries::{self, ExternProviders, Providers};
+use rustc_middle::queries::{self, ExternProviders, Providers, TaggedQueryKey};
 use rustc_middle::query::on_disk_cache::OnDiskCache;
 use rustc_middle::query::plumbing::{QuerySystem, QueryVTable};
 use rustc_middle::query::{AsLocalQueryKey, QueryCache, QueryMode};
@@ -18,7 +18,7 @@ use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;
 
 pub use crate::dep_kind_vtables::make_dep_kind_vtables;
-pub use crate::execution::collect_active_jobs_from_all_queries;
+pub use crate::execution::{CollectActiveJobsKind, collect_active_jobs_from_all_queries};
 pub use crate::job::{QueryJobMap, break_query_cycles, print_query_stack};
 
 #[macro_use]

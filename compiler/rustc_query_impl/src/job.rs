@@ -7,14 +7,12 @@ use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_errors::{Diag, DiagCtxtHandle};
 use rustc_hir::def::DefKind;
 use rustc_middle::query::{
-    CycleError, QueryInfo, QueryJob, QueryJobId, QueryLatch, QueryStackDeferred, QueryStackFrame,
-    QueryWaiter,
+    CycleError, QueryInfo, QueryJob, QueryJobId, QueryLatch, QueryStackFrame, QueryWaiter,
 };
 use rustc_middle::ty::TyCtxt;
-use rustc_session::Session;
 use rustc_span::{DUMMY_SP, Span};
 
-use crate::execution::collect_active_jobs_from_all_queries;
+use crate::{CollectActiveJobsKind, collect_active_jobs_from_all_queries};
 
 /// Map from query job IDs to job information collected by
 /// `collect_active_jobs_from_all_queries`.
@@ -31,7 +29,7 @@ impl<'tcx> QueryJobMap<'tcx> {
         self.map.insert(id, info);
     }
 
-    fn frame_of(&self, id: QueryJobId) -> &QueryStackFrame<QueryStackDeferred<'tcx>> {
+    fn frame_of(&self, id: QueryJobId) -> &QueryStackFrame<'tcx> {
         &self.map[&id].frame
     }
 
@@ -50,7 +48,7 @@ impl<'tcx> QueryJobMap<'tcx> {
 
 #[derive(Clone, Debug)]
 pub(crate) struct QueryJobInfo<'tcx> {
-    pub(crate) frame: QueryStackFrame<QueryStackDeferred<'tcx>>,
+    pub(crate) frame: QueryStackFrame<'tcx>,
     pub(crate) job: QueryJob<'tcx>,
 }
 
@@ -59,7 +57,7 @@ pub(crate) fn find_cycle_in_stack<'tcx>(
     job_map: QueryJobMap<'tcx>,
     current_job: &Option<QueryJobId>,
     span: Span,
-) -> CycleError<QueryStackDeferred<'tcx>> {
+) -> CycleError<'tcx> {
     // Find the waitee amongst `current_job` parents
     let mut cycle = Vec::new();
     let mut current_job = Option::clone(current_job);
@@ -385,8 +383,7 @@ pub fn print_query_stack<'tcx>(
     let mut count_total = 0;
 
     // Make use of a partial query job map if we fail to take locks collecting active queries.
-    let job_map: QueryJobMap<'_> = collect_active_jobs_from_all_queries(tcx, false)
-        .unwrap_or_else(|partial_job_map| partial_job_map);
+    let job_map = collect_active_jobs_from_all_queries(tcx, CollectActiveJobsKind::PartialAllowed);
 
     if let Some(ref mut file) = file {
         let _ = writeln!(file, "\n\nquery stack during panic:");
@@ -395,12 +392,12 @@ pub fn print_query_stack<'tcx>(
         let Some(query_info) = job_map.map.get(&query) else {
             break;
         };
-        let query_extra = query_info.frame.info.extract();
+        let description = query_info.frame.tagged_key.description(tcx);
         if Some(count_printed) < limit_frames || limit_frames.is_none() {
             // Only print to stderr as many stack frames as `num_frames` when present.
             dcx.struct_failure_note(format!(
                 "#{} [{:?}] {}",
-                count_printed, query_info.frame.dep_kind, query_extra.description
+                count_printed, query_info.frame.dep_kind, description
             ))
             .with_span(query_info.job.span)
             .emit();
@@ -411,7 +408,7 @@ pub fn print_query_stack<'tcx>(
             let _ = writeln!(
                 file,
                 "#{} [{:?}] {}",
-                count_total, query_info.frame.dep_kind, query_extra.description
+                count_total, query_info.frame.dep_kind, description
             );
         }
 
@@ -427,18 +424,18 @@ pub fn print_query_stack<'tcx>(
 
 #[inline(never)]
 #[cold]
-pub(crate) fn report_cycle<'a>(
-    sess: &'a Session,
-    CycleError { usage, cycle: stack }: &CycleError,
-) -> Diag<'a> {
+pub(crate) fn report_cycle<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    CycleError { usage, cycle: stack }: &CycleError<'tcx>,
+) -> Diag<'tcx> {
     assert!(!stack.is_empty());
 
-    let span = stack[0].frame.info.default_span(stack[1 % stack.len()].span);
+    let span = stack[0].frame.tagged_key.default_span(tcx, stack[1 % stack.len()].span);
 
     let mut cycle_stack = Vec::new();
 
     use crate::error::StackCount;
-    let stack_bottom = stack[0].frame.info.description.to_owned();
+    let stack_bottom = stack[0].frame.tagged_key.description(tcx);
     let stack_count = if stack.len() == 1 {
         StackCount::Single { stack_bottom: stack_bottom.clone() }
     } else {
@@ -447,27 +444,32 @@ pub(crate) fn report_cycle<'a>(
 
     for i in 1..stack.len() {
         let frame = &stack[i].frame;
-        let span = frame.info.default_span(stack[(i + 1) % stack.len()].span);
+        let span = frame.tagged_key.default_span(tcx, stack[(i + 1) % stack.len()].span);
         cycle_stack
-            .push(crate::error::CycleStack { span, desc: frame.info.description.to_owned() });
+            .push(crate::error::CycleStack { span, desc: frame.tagged_key.description(tcx) });
     }
 
     let mut cycle_usage = None;
     if let Some((span, ref query)) = *usage {
         cycle_usage = Some(crate::error::CycleUsage {
-            span: query.info.default_span(span),
-            usage: query.info.description.to_string(),
+            span: query.tagged_key.default_span(tcx, span),
+            usage: query.tagged_key.description(tcx),
         });
     }
 
-    let alias =
-        if stack.iter().all(|entry| matches!(entry.frame.info.def_kind, Some(DefKind::TyAlias))) {
-            Some(crate::error::Alias::Ty)
-        } else if stack.iter().all(|entry| entry.frame.info.def_kind == Some(DefKind::TraitAlias)) {
-            Some(crate::error::Alias::Trait)
-        } else {
-            None
-        };
+    let alias = if stack
+        .iter()
+        .all(|entry| matches!(entry.frame.tagged_key.def_kind(tcx), Some(DefKind::TyAlias)))
+    {
+        Some(crate::error::Alias::Ty)
+    } else if stack
+        .iter()
+        .all(|entry| entry.frame.tagged_key.def_kind(tcx) == Some(DefKind::TraitAlias))
+    {
+        Some(crate::error::Alias::Trait)
+    } else {
+        None
+    };
 
     let cycle_diag = crate::error::Cycle {
         span,
@@ -479,5 +481,5 @@ pub(crate) fn report_cycle<'a>(
         note_span: (),
     };
 
-    sess.dcx().create_err(cycle_diag)
+    tcx.sess.dcx().create_err(cycle_diag)
 }
