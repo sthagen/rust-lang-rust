@@ -7,15 +7,15 @@ use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_errors::{Diag, DiagCtxtHandle};
 use rustc_hir::def::DefKind;
 use rustc_middle::query::{
-    CycleError, QueryInfo, QueryJob, QueryJobId, QueryLatch, QueryStackFrame, QueryWaiter,
+    CycleError, QueryJob, QueryJobId, QueryLatch, QueryStackFrame, QueryWaiter,
 };
 use rustc_middle::ty::TyCtxt;
-use rustc_span::{DUMMY_SP, Span};
+use rustc_span::{DUMMY_SP, Span, respan};
 
-use crate::{CollectActiveJobsKind, collect_active_jobs_from_all_queries};
+use crate::{CollectActiveJobsKind, collect_active_query_jobs};
 
 /// Map from query job IDs to job information collected by
-/// `collect_active_jobs_from_all_queries`.
+/// `collect_active_query_jobs`.
 #[derive(Debug, Default)]
 pub struct QueryJobMap<'tcx> {
     map: FxHashMap<QueryJobId, QueryJobInfo<'tcx>>,
@@ -24,7 +24,7 @@ pub struct QueryJobMap<'tcx> {
 impl<'tcx> QueryJobMap<'tcx> {
     /// Adds information about a job ID to the job map.
     ///
-    /// Should only be called by `gather_active_jobs`.
+    /// Should only be called by `collect_active_query_jobs_inner`.
     pub(crate) fn insert(&mut self, id: QueryJobId, info: QueryJobInfo<'tcx>) {
         self.map.insert(id, info);
     }
@@ -64,7 +64,7 @@ pub(crate) fn find_cycle_in_stack<'tcx>(
 
     while let Some(job) = current_job {
         let info = &job_map.map[&job];
-        cycle.push(QueryInfo { span: info.job.span, frame: info.frame.clone() });
+        cycle.push(respan(info.job.span, info.frame.clone()));
 
         if job == id {
             cycle.reverse();
@@ -77,7 +77,7 @@ pub(crate) fn find_cycle_in_stack<'tcx>(
             // Find out why the cycle itself was used
             let usage = try {
                 let parent = info.job.parent?;
-                (info.job.span, job_map.frame_of(parent).clone())
+                respan(info.job.span, job_map.frame_of(parent).clone())
             };
             return CycleError { usage, cycle };
         }
@@ -313,14 +313,14 @@ fn remove_cycle<'tcx>(
 
         let usage = entry_point
             .query_waiting_on_cycle
-            .map(|(span, job)| (span, job_map.frame_of(job).clone()));
+            .map(|(span, job)| respan(span, job_map.frame_of(job).clone()));
 
         // Create the cycle error
         let error = CycleError {
             usage,
             cycle: stack
                 .iter()
-                .map(|&(span, job)| QueryInfo { span, frame: job_map.frame_of(job).clone() })
+                .map(|&(span, job)| respan(span, job_map.frame_of(job).clone()))
                 .collect(),
         };
 
@@ -407,7 +407,7 @@ pub fn print_query_stack<'tcx>(
     let mut count_total = 0;
 
     // Make use of a partial query job map if we fail to take locks collecting active queries.
-    let job_map = collect_active_jobs_from_all_queries(tcx, CollectActiveJobsKind::PartialAllowed);
+    let job_map = collect_active_query_jobs(tcx, CollectActiveJobsKind::PartialAllowed);
 
     if let Some(ref mut file) = file {
         let _ = writeln!(file, "\n\nquery stack during panic:");
@@ -454,12 +454,12 @@ pub(crate) fn report_cycle<'tcx>(
 ) -> Diag<'tcx> {
     assert!(!stack.is_empty());
 
-    let span = stack[0].frame.tagged_key.default_span(tcx, stack[1 % stack.len()].span);
+    let span = stack[0].node.tagged_key.default_span(tcx, stack[1 % stack.len()].span);
 
     let mut cycle_stack = Vec::new();
 
     use crate::error::StackCount;
-    let stack_bottom = stack[0].frame.tagged_key.description(tcx);
+    let stack_bottom = stack[0].node.tagged_key.description(tcx);
     let stack_count = if stack.len() == 1 {
         StackCount::Single { stack_bottom: stack_bottom.clone() }
     } else {
@@ -467,28 +467,27 @@ pub(crate) fn report_cycle<'tcx>(
     };
 
     for i in 1..stack.len() {
-        let frame = &stack[i].frame;
-        let span = frame.tagged_key.default_span(tcx, stack[(i + 1) % stack.len()].span);
-        cycle_stack
-            .push(crate::error::CycleStack { span, desc: frame.tagged_key.description(tcx) });
+        let node = &stack[i].node;
+        let span = node.tagged_key.default_span(tcx, stack[(i + 1) % stack.len()].span);
+        cycle_stack.push(crate::error::CycleStack { span, desc: node.tagged_key.description(tcx) });
     }
 
     let mut cycle_usage = None;
-    if let Some((span, ref query)) = *usage {
+    if let Some(usage) = usage {
         cycle_usage = Some(crate::error::CycleUsage {
-            span: query.tagged_key.default_span(tcx, span),
-            usage: query.tagged_key.description(tcx),
+            span: usage.node.tagged_key.default_span(tcx, usage.span),
+            usage: usage.node.tagged_key.description(tcx),
         });
     }
 
     let alias = if stack
         .iter()
-        .all(|entry| matches!(entry.frame.tagged_key.def_kind(tcx), Some(DefKind::TyAlias)))
+        .all(|entry| matches!(entry.node.tagged_key.def_kind(tcx), Some(DefKind::TyAlias)))
     {
         Some(crate::error::Alias::Ty)
     } else if stack
         .iter()
-        .all(|entry| entry.frame.tagged_key.def_kind(tcx) == Some(DefKind::TraitAlias))
+        .all(|entry| entry.node.tagged_key.def_kind(tcx) == Some(DefKind::TraitAlias))
     {
         Some(crate::error::Alias::Trait)
     } else {
