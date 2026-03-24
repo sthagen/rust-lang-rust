@@ -6,8 +6,7 @@ use rustc_errors::codes::*;
 use rustc_errors::formatting::DiagMessageAddArg;
 use rustc_errors::{
     Applicability, Diag, DiagArgValue, DiagCtxtHandle, DiagMessage, DiagStyledString, Diagnostic,
-    ElidedLifetimeInPathSubdiag, EmissionGuarantee, Level, MultiSpan, Subdiagnostic,
-    SuggestionStyle, msg,
+    ElidedLifetimeInPathSubdiag, EmissionGuarantee, Level, Subdiagnostic, SuggestionStyle, msg,
 };
 use rustc_hir as hir;
 use rustc_hir::def_id::DefId;
@@ -3090,98 +3089,6 @@ pub(crate) enum UnusedImportsSugg {
 }
 
 #[derive(Diagnostic)]
-#[diag("the item `{$ident}` is imported redundantly")]
-pub(crate) struct RedundantImport {
-    #[subdiagnostic]
-    pub subs: Vec<RedundantImportSub>,
-    pub ident: Ident,
-}
-
-#[derive(Subdiagnostic)]
-pub(crate) enum RedundantImportSub {
-    #[label("the item `{$ident}` is already imported here")]
-    ImportedHere {
-        #[primary_span]
-        span: Span,
-        ident: Ident,
-    },
-    #[label("the item `{$ident}` is already defined here")]
-    DefinedHere {
-        #[primary_span]
-        span: Span,
-        ident: Ident,
-    },
-    #[label("the item `{$ident}` is already imported by the extern prelude")]
-    ImportedPrelude {
-        #[primary_span]
-        span: Span,
-        ident: Ident,
-    },
-    #[label("the item `{$ident}` is already defined by the extern prelude")]
-    DefinedPrelude {
-        #[primary_span]
-        span: Span,
-        ident: Ident,
-    },
-}
-
-#[derive(Diagnostic)]
-pub(crate) enum PatternsInFnsWithoutBody {
-    #[diag("patterns aren't allowed in foreign function declarations")]
-    Foreign {
-        #[subdiagnostic]
-        sub: PatternsInFnsWithoutBodySub,
-    },
-    #[diag("patterns aren't allowed in functions without bodies")]
-    Bodiless {
-        #[subdiagnostic]
-        sub: PatternsInFnsWithoutBodySub,
-    },
-}
-
-#[derive(Subdiagnostic)]
-#[suggestion(
-    "remove `mut` from the parameter",
-    code = "{ident}",
-    applicability = "machine-applicable"
-)]
-pub(crate) struct PatternsInFnsWithoutBodySub {
-    #[primary_span]
-    pub span: Span,
-
-    pub ident: Ident,
-}
-
-#[derive(Diagnostic)]
-#[diag("where clause not allowed here")]
-#[note("see issue #89122 <https://github.com/rust-lang/rust/issues/89122> for more information")]
-pub(crate) struct DeprecatedWhereClauseLocation {
-    #[subdiagnostic]
-    pub suggestion: DeprecatedWhereClauseLocationSugg,
-}
-
-#[derive(Subdiagnostic)]
-pub(crate) enum DeprecatedWhereClauseLocationSugg {
-    #[multipart_suggestion(
-        "move it to the end of the type declaration",
-        applicability = "machine-applicable"
-    )]
-    MoveToEnd {
-        #[suggestion_part(code = "")]
-        left: Span,
-        #[suggestion_part(code = "{sugg}")]
-        right: Span,
-
-        sugg: String,
-    },
-    #[suggestion("remove this `where`", code = "", applicability = "machine-applicable")]
-    RemoveWhere {
-        #[primary_span]
-        span: Span,
-    },
-}
-
-#[derive(Diagnostic)]
 #[diag("lifetime parameter `{$ident}` only used once")]
 pub(crate) struct SingleUseLifetime {
     #[label("this lifetime...")]
@@ -3206,15 +3113,6 @@ pub(crate) struct SingleUseLifetimeSugg {
 }
 
 #[derive(Diagnostic)]
-#[diag("lifetime parameter `{$ident}` never used")]
-pub(crate) struct UnusedLifetime {
-    #[suggestion("elide the unused lifetime", code = "", applicability = "machine-applicable")]
-    pub deletion_span: Option<Span>,
-
-    pub ident: Ident,
-}
-
-#[derive(Diagnostic)]
 #[diag("named argument `{$named_arg_name}` is not used by name")]
 pub(crate) struct NamedArgumentUsedPositionally {
     #[label("this named argument is referred to by position in formatting string")]
@@ -3231,66 +3129,6 @@ pub(crate) struct NamedArgumentUsedPositionally {
 
     pub name: String,
     pub named_arg_name: String,
-}
-
-#[derive(Diagnostic)]
-#[diag("ambiguous glob re-exports")]
-pub(crate) struct AmbiguousGlobReexports {
-    #[label("the name `{$name}` in the {$namespace} namespace is first re-exported here")]
-    pub first_reexport: Span,
-    #[label("but the name `{$name}` in the {$namespace} namespace is also re-exported here")]
-    pub duplicate_reexport: Span,
-
-    pub name: String,
-    pub namespace: String,
-}
-
-#[derive(Diagnostic)]
-#[diag("private item shadows public glob re-export")]
-pub(crate) struct HiddenGlobReexports {
-    #[note(
-        "the name `{$name}` in the {$namespace} namespace is supposed to be publicly re-exported here"
-    )]
-    pub glob_reexport: Span,
-    #[note("but the private item here shadows it")]
-    pub private_item: Span,
-
-    pub name: String,
-    pub namespace: String,
-}
-
-#[derive(Diagnostic)]
-#[diag("unnecessary qualification")]
-pub(crate) struct UnusedQualifications {
-    #[suggestion(
-        "remove the unnecessary path segments",
-        style = "verbose",
-        code = "",
-        applicability = "machine-applicable"
-    )]
-    pub removal_span: Span,
-}
-
-#[derive(Diagnostic)]
-#[diag(
-    "{$elided ->
-        [true] `&` without an explicit lifetime name cannot be used here
-        *[false] `'_` cannot be used here
-    }"
-)]
-pub(crate) struct AssociatedConstElidedLifetime {
-    #[suggestion(
-        "use the `'static` lifetime",
-        style = "verbose",
-        code = "{code}",
-        applicability = "machine-applicable"
-    )]
-    pub span: Span,
-
-    pub code: &'static str,
-    pub elided: bool,
-    #[note("cannot automatically infer `'static` because of other lifetimes in scope")]
-    pub lifetimes_in_scope: MultiSpan,
 }
 
 #[derive(Diagnostic)]
@@ -3645,19 +3483,6 @@ pub(crate) struct UnsafeAttrOutsideUnsafeSuggestion {
 }
 
 #[derive(Diagnostic)]
-#[diag("visibility qualifiers have no effect on `const _` declarations")]
-#[note("`const _` does not declare a name, so there is nothing for the qualifier to apply to")]
-pub(crate) struct UnusedVisibility {
-    #[suggestion(
-        "remove the qualifier",
-        style = "short",
-        code = "",
-        applicability = "machine-applicable"
-    )]
-    pub span: Span,
-}
-
-#[derive(Diagnostic)]
 #[diag("doc alias is duplicated")]
 pub(crate) struct DocAliasDuplicated {
     #[label("first defined here")]
@@ -3785,23 +3610,6 @@ pub(crate) struct UnknownCrateTypesSuggestion {
     #[primary_span]
     pub span: Span,
     pub snippet: Symbol,
-}
-
-#[derive(Diagnostic)]
-#[diag("unreachable configuration predicate")]
-pub(crate) struct UnreachableCfgSelectPredicate {
-    #[label("this configuration predicate is never reached")]
-    pub span: Span,
-}
-
-#[derive(Diagnostic)]
-#[diag("unreachable configuration predicate")]
-pub(crate) struct UnreachableCfgSelectPredicateWildcard {
-    #[label("this configuration predicate is never reached")]
-    pub span: Span,
-
-    #[label("always matches")]
-    pub wildcard_span: Span,
 }
 
 #[derive(Diagnostic)]
