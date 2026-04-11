@@ -7,7 +7,7 @@ use std::sync::LazyLock;
 
 use private::Sealed;
 use rustc_ast::{AttrStyle, MetaItemLit, NodeId};
-use rustc_errors::{Diag, Diagnostic, Level};
+use rustc_errors::{Diag, Diagnostic, Level, MultiSpan};
 use rustc_feature::{AttrSuggestionStyle, AttributeTemplate};
 use rustc_hir::attrs::AttributeKind;
 use rustc_hir::lints::AttributeLintKind;
@@ -15,7 +15,7 @@ use rustc_hir::{AttrPath, HirId};
 use rustc_parse::parser::Recovery;
 use rustc_session::Session;
 use rustc_session::lint::{Lint, LintId};
-use rustc_span::{AttrId, ErrorGuaranteed, Span, Symbol};
+use rustc_span::{ErrorGuaranteed, Span, Symbol};
 
 use crate::AttributeParser;
 // Glob imports to avoid big, bitrotty import lists
@@ -32,12 +32,12 @@ use crate::attributes::diagnostic::do_not_recommend::*;
 use crate::attributes::diagnostic::on_const::*;
 use crate::attributes::diagnostic::on_move::*;
 use crate::attributes::diagnostic::on_unimplemented::*;
+use crate::attributes::diagnostic::on_unknown::*;
 use crate::attributes::doc::*;
 use crate::attributes::dummy::*;
 use crate::attributes::inline::*;
 use crate::attributes::instruction_set::*;
 use crate::attributes::link_attrs::*;
-use crate::attributes::lint::*;
 use crate::attributes::lint_helpers::*;
 use crate::attributes::loop_match::*;
 use crate::attributes::macro_attrs::*;
@@ -150,12 +150,12 @@ attribute_parsers!(
         ConfusablesParser,
         ConstStabilityParser,
         DocParser,
-        LintParser,
         MacroUseParser,
         NakedParser,
         OnConstParser,
         OnMoveParser,
         OnUnimplementedParser,
+        OnUnknownParser,
         RustcAlignParser,
         RustcAlignStaticParser,
         RustcCguTestAttributeParser,
@@ -174,7 +174,7 @@ attribute_parsers!(
         Combine<ReprParser>,
         Combine<RustcAllowConstFnUnstableParser>,
         Combine<RustcCleanParser>,
-        Combine<RustcLayoutParser>,
+        Combine<RustcDumpLayoutParser>,
         Combine<RustcMirParser>,
         Combine<RustcThenThisWouldNeedParser>,
         Combine<TargetFeatureParser>,
@@ -213,11 +213,12 @@ attribute_parsers!(
         Single<RustcAllocatorZeroedVariantParser>,
         Single<RustcAutodiffParser>,
         Single<RustcBuiltinMacroParser>,
-        Single<RustcDefPathParser>,
         Single<RustcDeprecatedSafe2024Parser>,
         Single<RustcDiagnosticItemParser>,
         Single<RustcDocPrimitiveParser>,
         Single<RustcDummyParser>,
+        Single<RustcDumpDefPathParser>,
+        Single<RustcDumpSymbolNameParser>,
         Single<RustcForceInlineParser>,
         Single<RustcIfThisChangedParser>,
         Single<RustcLayoutScalarValidRangeEndParser>,
@@ -233,7 +234,6 @@ attribute_parsers!(
         Single<RustcScalableVectorParser>,
         Single<RustcSimdMonomorphizeLaneLimitParser>,
         Single<RustcSkipDuringMethodDispatchParser>,
-        Single<RustcSymbolNameParser>,
         Single<RustcTestMarkerParser>,
         Single<SanitizeParser>,
         Single<ShouldPanicParser>,
@@ -287,6 +287,7 @@ attribute_parsers!(
         Single<WithoutArgs<RustcDenyExplicitImplParser>>,
         Single<WithoutArgs<RustcDoNotConstCheckParser>>,
         Single<WithoutArgs<RustcDumpDefParentsParser>>,
+        Single<WithoutArgs<RustcDumpHiddenTypeOfOpaquesParser>>,
         Single<WithoutArgs<RustcDumpInferredOutlivesParser>>,
         Single<WithoutArgs<RustcDumpItemBoundsParser>>,
         Single<WithoutArgs<RustcDumpObjectLifetimeDefaultsParser>>,
@@ -299,8 +300,8 @@ attribute_parsers!(
         Single<WithoutArgs<RustcEffectiveVisibilityParser>>,
         Single<WithoutArgs<RustcEiiForeignItemParser>>,
         Single<WithoutArgs<RustcEvaluateWhereClausesParser>>,
+        Single<WithoutArgs<RustcExhaustiveParser>>,
         Single<WithoutArgs<RustcHasIncoherentInherentImplsParser>>,
-        Single<WithoutArgs<RustcHiddenTypeOfOpaquesParser>>,
         Single<WithoutArgs<RustcInheritOverflowChecksParser>>,
         Single<WithoutArgs<RustcInsignificantDtorParser>>,
         Single<WithoutArgs<RustcIntrinsicConstStableIndirectParser>>,
@@ -447,8 +448,6 @@ pub struct AcceptContext<'f, 'sess, S: Stage> {
 
     /// The name of the attribute we're currently accepting.
     pub(crate) attr_path: AttrPath,
-
-    pub(crate) attr_id: AttrId,
 }
 
 impl<'f, 'sess: 'f, S: Stage> SharedContext<'f, 'sess, S> {
@@ -459,14 +458,19 @@ impl<'f, 'sess: 'f, S: Stage> SharedContext<'f, 'sess, S> {
     /// Emit a lint. This method is somewhat special, since lints emitted during attribute parsing
     /// must be delayed until after HIR is built. This method will take care of the details of
     /// that.
-    pub(crate) fn emit_lint(&mut self, lint: &'static Lint, kind: AttributeLintKind, span: Span) {
+    pub(crate) fn emit_lint<M: Into<MultiSpan>>(
+        &mut self,
+        lint: &'static Lint,
+        kind: AttributeLintKind,
+        span: M,
+    ) {
         if !matches!(
             self.stage.should_emit(),
             ShouldEmit::ErrorsAndLints { .. } | ShouldEmit::EarlyFatal { also_emit_lints: true }
         ) {
             return;
         }
-        (self.emit_lint)(LintId::of(lint), span, kind);
+        (self.emit_lint)(LintId::of(lint), span.into(), kind);
     }
 
     pub(crate) fn warn_unused_duplicate(&mut self, used_span: Span, unused_span: Span) {
@@ -532,7 +536,7 @@ pub struct SharedContext<'p, 'sess, S: Stage> {
 
     /// The second argument of the closure is a [`NodeId`] if `S` is `Early` and a [`HirId`] if `S`
     /// is `Late` and is the ID of the syntactical component this attribute was applied to.
-    pub(crate) emit_lint: &'p mut dyn FnMut(LintId, Span, AttributeLintKind),
+    pub(crate) emit_lint: &'p mut dyn FnMut(LintId, MultiSpan, AttributeLintKind),
 }
 
 /// Context given to every attribute parser during finalization.
@@ -805,17 +809,6 @@ where
                 strings: true,
                 list: false,
             },
-        )
-    }
-
-    pub(crate) fn expected_nv_as_last_argument(
-        &mut self,
-        span: Span,
-        name_value_key: Symbol,
-    ) -> ErrorGuaranteed {
-        self.emit_parse_error(
-            span,
-            AttributeParseErrorReason::ExpectedNameValueAsLastArgument { span, name_value_key },
         )
     }
 
