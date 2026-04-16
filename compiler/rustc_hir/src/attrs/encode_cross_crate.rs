@@ -86,7 +86,6 @@ impl AttributeKind {
             Path(..) => No,
             PatternComplexityLimit { .. } => No,
             PinV2(..) => Yes,
-            Pointee(..) => No,
             PreludeImport => No,
             ProcMacro(..) => No,
             ProcMacroAttribute(..) => No,
@@ -199,6 +198,7 @@ impl AttributeKind {
             TrackCaller(..) => Yes,
             TypeLengthLimit { .. } => No,
             UnstableFeatureBound(..) => No,
+            UnstableRemoved(..) => Yes,
             Used { .. } => No,
             WindowsSubsystem(..) => No,
             // tidy-alphabetical-end

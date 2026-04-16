@@ -329,30 +329,6 @@ pub(crate) struct InvalidMayDangle {
 }
 
 #[derive(Diagnostic)]
-#[diag("unused attribute")]
-pub(crate) struct UnusedDuplicate {
-    #[suggestion("remove this attribute", code = "", applicability = "machine-applicable")]
-    pub this: Span,
-    #[note("attribute also specified here")]
-    pub other: Span,
-    #[warning(
-        "this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!"
-    )]
-    pub warning: bool,
-}
-
-#[derive(Diagnostic)]
-#[diag("multiple `{$name}` attributes")]
-pub(crate) struct UnusedMultiple {
-    #[primary_span]
-    #[suggestion("remove this attribute", code = "", applicability = "machine-applicable")]
-    pub this: Span,
-    #[note("attribute also specified here")]
-    pub other: Span,
-    pub name: Symbol,
-}
-
-#[derive(Diagnostic)]
 #[diag("this `#[deprecated]` annotation has no effect")]
 pub(crate) struct DeprecatedAnnotationHasNoEffect {
     #[suggestion(
@@ -896,6 +872,20 @@ pub(crate) struct ImpliedFeatureNotExist {
 }
 
 #[derive(Diagnostic)]
+#[diag("feature `{$feature}` has been removed", code = E0557)]
+#[note("removed in {$since}; see <{$link}> for more information")]
+#[note("{$reason}")]
+pub(crate) struct FeatureRemoved {
+    #[primary_span]
+    #[label("feature has been removed")]
+    pub span: Span,
+    pub feature: Symbol,
+    pub reason: Symbol,
+    pub since: String,
+    pub link: Symbol,
+}
+
+#[derive(Diagnostic)]
 #[diag(
     "attributes `#[rustc_const_unstable]`, `#[rustc_const_stable]` and `#[rustc_const_stable_indirect]` require the function or method to be `const`"
 )]
@@ -1175,8 +1165,8 @@ pub(crate) struct ReprAlignShouldBeAlignStatic {
 }
 
 #[derive(Diagnostic)]
-#[diag("`eii_macro_for` is only valid on functions")]
-pub(crate) struct EiiImplNotFunction {
+#[diag("`eii_macro_for` is only valid on functions and statics")]
+pub(crate) struct EiiImplTarget {
     #[primary_span]
     pub span: Span,
 }

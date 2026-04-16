@@ -894,6 +894,14 @@ impl fmt::Display for AutoDiffItem {
     }
 }
 
+#[derive(Clone, Debug, HashStable_Generic, Encodable, Decodable, PrintAttribute)]
+pub struct UnstableRemovedFeature {
+    pub feature: Symbol,
+    pub reason: Symbol,
+    pub link: Symbol,
+    pub since: RustcVersion,
+}
+
 /// Represents parsed *built-in* inert attributes.
 ///
 /// ## Overview
@@ -1225,9 +1233,6 @@ pub enum AttributeKind {
     /// Represents `#[pin_v2]`
     PinV2(Span),
 
-    /// Represents `#[pointee]`
-    Pointee(Span),
-
     /// Represents `#[prelude_import]`
     PreludeImport,
 
@@ -1331,9 +1336,7 @@ pub enum AttributeKind {
 
     /// Represents `#[rustc_confusables]`.
     RustcConfusables {
-        symbols: ThinVec<Symbol>,
-        // FIXME(jdonszelmann): remove when target validation code is moved
-        first_span: Span,
+        confusables: ThinVec<Symbol>,
     },
     /// Represents `#[rustc_const_stable]` and `#[rustc_const_unstable]`.
     RustcConstStability {
@@ -1647,6 +1650,9 @@ pub enum AttributeKind {
 
     /// Represents `#[unstable_feature_bound]`.
     UnstableFeatureBound(ThinVec<(Symbol, Span)>),
+
+    /// Represents all `#![unstable_removed(...)]` features
+    UnstableRemoved(ThinVec<UnstableRemovedFeature>),
 
     /// Represents `#[used]`
     Used {

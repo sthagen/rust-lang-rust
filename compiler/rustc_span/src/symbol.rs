@@ -641,7 +641,6 @@ symbols! {
         compiler_move,
         concat,
         concat_bytes,
-        concat_idents,
         conservative_impl_trait,
         console,
         const_allocate,
@@ -953,6 +952,7 @@ symbols! {
         floorf32,
         floorf64,
         floorf128,
+        fma4_target_feature,
         fmaf16,
         fmaf32,
         fmaf64,
@@ -2185,6 +2185,7 @@ symbols! {
         unstable_location_reason_default: "this crate is being loaded from the sysroot, an \
                           unstable location; did you mean to load this crate \
                           from crates.io via `Cargo.toml` instead?",
+        unstable_removed,
         untagged_unions,
         unused_imports,
         unwind,
