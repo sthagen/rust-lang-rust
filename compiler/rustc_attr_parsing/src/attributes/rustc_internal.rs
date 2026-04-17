@@ -6,11 +6,11 @@ use rustc_hir::attrs::{
     BorrowckGraphvizFormatKind, CguFields, CguKind, DivergingBlockBehavior,
     DivergingFallbackBehavior, RustcCleanAttribute, RustcCleanQueries, RustcMirKind,
 };
-use rustc_session::errors;
 use rustc_span::Symbol;
 
 use super::prelude::*;
 use super::util::parse_single_integer;
+use crate::errors;
 use crate::session_diagnostics::{
     AttributeRequiresOpt, CguFieldsMissing, RustcScalableVectorCountOutOfRange, UnknownLangItem,
 };
@@ -525,6 +525,21 @@ impl<S: Stage> NoArgsAttributeParser<S> for RustcNoMirInlineParser {
         Allow(Target::Method(MethodKind::TraitImpl)),
     ]);
     const CREATE: fn(Span) -> AttributeKind = |_| AttributeKind::RustcNoMirInline;
+}
+
+pub(crate) struct RustcNoWritableParser;
+
+impl<S: Stage> NoArgsAttributeParser<S> for RustcNoWritableParser {
+    const PATH: &[Symbol] = &[sym::rustc_no_writable];
+    const ON_DUPLICATE: OnDuplicate<S> = OnDuplicate::Error;
+    const ALLOWED_TARGETS: AllowedTargets = AllowedTargets::AllowList(&[
+        Allow(Target::Fn),
+        Allow(Target::Closure),
+        Allow(Target::Method(MethodKind::Inherent)),
+        Allow(Target::Method(MethodKind::TraitImpl)),
+        Allow(Target::Method(MethodKind::Trait { body: true })),
+    ]);
+    const CREATE: fn(Span) -> AttributeKind = |_| AttributeKind::RustcNoWritable;
 }
 
 pub(crate) struct RustcLintQueryInstabilityParser;
