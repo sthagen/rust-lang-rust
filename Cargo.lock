@@ -4004,6 +4004,7 @@ dependencies = [
  "rustc_ast_pretty",
  "rustc_data_structures",
  "rustc_error_messages",
+ "rustc_errors",
  "rustc_hashes",
  "rustc_hir_id",
  "rustc_index",
@@ -4578,7 +4579,6 @@ name = "rustc_query_impl"
 version = "0.0.0"
 dependencies = [
  "measureme",
- "rustc_abi",
  "rustc_data_structures",
  "rustc_errors",
  "rustc_hir",

@@ -41,7 +41,7 @@ use std::sync::Arc;
 use rustc_ast::node_id::NodeMap;
 use rustc_ast::visit::Visitor;
 use rustc_ast::{self as ast, *};
-use rustc_attr_parsing::{AttributeParser, Late, OmitDoc};
+use rustc_attr_parsing::{AttributeParser, EmitAttribute, Late, OmitDoc};
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::fx::FxIndexSet;
 use rustc_data_structures::sorted_map::SortedMap;
@@ -52,7 +52,7 @@ use rustc_errors::{DiagArgFromDisplay, DiagCtxtHandle};
 use rustc_hir::def::{DefKind, LifetimeRes, Namespace, PartialRes, PerNS, Res};
 use rustc_hir::def_id::{CRATE_DEF_ID, LOCAL_CRATE, LocalDefId};
 use rustc_hir::definitions::PerParentDisambiguatorState;
-use rustc_hir::lints::{AttributeLint, DelayedLint};
+use rustc_hir::lints::{AttributeLint, DelayedLint, DynAttribute};
 use rustc_hir::{
     self as hir, AngleBrackets, ConstArg, GenericArg, HirId, ItemLocalMap, LifetimeSource,
     LifetimeSyntax, ParamName, Target, TraitCandidate, find_attr,
@@ -1174,13 +1174,23 @@ impl<'hir, R: ResolverAstLoweringExt<'hir>> LoweringContext<'_, 'hir, R> {
             target,
             OmitDoc::Lower,
             |s| l.lower(s),
-            |lint_id, span, kind| {
-                self.delayed_lints.push(DelayedLint::AttributeParsing(AttributeLint {
-                    lint_id,
-                    id: target_hir_id,
-                    span,
-                    kind,
-                }));
+            |lint_id, span, kind| match kind {
+                EmitAttribute::Static(attr_kind) => {
+                    self.delayed_lints.push(DelayedLint::AttributeParsing(AttributeLint {
+                        lint_id,
+                        id: target_hir_id,
+                        span,
+                        kind: attr_kind,
+                    }));
+                }
+                EmitAttribute::Dynamic(callback) => {
+                    self.delayed_lints.push(DelayedLint::Dynamic(DynAttribute {
+                        lint_id,
+                        id: target_hir_id,
+                        span,
+                        callback,
+                    }));
+                }
             },
         )
     }
@@ -1839,7 +1849,7 @@ impl<'hir, R: ResolverAstLoweringExt<'hir>> LoweringContext<'_, 'hir, R> {
         // as they are not explicit in HIR/Ty function signatures.
         // (instead, the `c_variadic` flag is set to `true`)
         let mut inputs = &decl.inputs[..];
-        if c_variadic {
+        if decl.c_variadic() {
             inputs = &inputs[..inputs.len() - 1];
         }
         let inputs = self.arena.alloc_from_iter(inputs.iter().map(|param| {
@@ -1902,12 +1912,8 @@ impl<'hir, R: ResolverAstLoweringExt<'hir>> LoweringContext<'_, 'hir, R> {
             },
         };
 
-        self.arena.alloc(hir::FnDecl {
-            inputs,
-            output,
-            c_variadic,
-            lifetime_elision_allowed: self.resolver.lifetime_elision_allowed(fn_node_id),
-            implicit_self: decl.inputs.get(0).map_or(hir::ImplicitSelfKind::None, |arg| {
+        let fn_decl_kind = hir::FnDeclFlags::default()
+            .set_implicit_self(decl.inputs.get(0).map_or(hir::ImplicitSelfKind::None, |arg| {
                 let is_mutable_pat = matches!(
                     arg.pat.kind,
                     PatKind::Ident(hir::BindingMode(_, Mutability::Mut), ..)
@@ -1929,8 +1935,11 @@ impl<'hir, R: ResolverAstLoweringExt<'hir>> LoweringContext<'_, 'hir, R> {
                     }
                     _ => hir::ImplicitSelfKind::None,
                 }
-            }),
-        })
+            }))
+            .set_lifetime_elision_allowed(self.resolver.lifetime_elision_allowed(fn_node_id))
+            .set_c_variadic(c_variadic);
+
+        self.arena.alloc(hir::FnDecl { inputs, output, fn_decl_kind })
     }
 
     // Transforms `-> T` for `async fn` into `-> OpaqueTy { .. }`

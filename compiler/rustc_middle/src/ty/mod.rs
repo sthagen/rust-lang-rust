@@ -97,7 +97,8 @@ pub use self::predicate::{
     PolyExistentialPredicate, PolyExistentialProjection, PolyExistentialTraitRef,
     PolyProjectionPredicate, PolyRegionOutlivesPredicate, PolySubtypePredicate, PolyTraitPredicate,
     PolyTraitRef, PolyTypeOutlivesPredicate, Predicate, PredicateKind, ProjectionPredicate,
-    RegionOutlivesPredicate, SubtypePredicate, TraitPredicate, TraitRef, TypeOutlivesPredicate,
+    RegionConstraint, RegionEqPredicate, RegionOutlivesPredicate, SubtypePredicate, TraitPredicate,
+    TraitRef, TypeOutlivesPredicate,
 };
 pub use self::region::{
     EarlyParamRegion, LateParamRegion, LateParamRegionKind, Region, RegionKind, RegionVid,
@@ -105,7 +106,7 @@ pub use self::region::{
 pub use self::sty::{
     AliasTy, AliasTyKind, Article, Binder, BoundConst, BoundRegion, BoundRegionKind, BoundTy,
     BoundTyKind, BoundVariableKind, CanonicalPolyFnSig, CoroutineArgsExt, EarlyBinder, FnSig,
-    InlineConstArgs, InlineConstArgsParts, ParamConst, ParamTy, PlaceholderConst,
+    FnSigKind, InlineConstArgs, InlineConstArgsParts, ParamConst, ParamTy, PlaceholderConst,
     PlaceholderRegion, PlaceholderType, PolyFnSig, TyKind, TypeAndMut, TypingMode,
     TypingModeEqWrapper, UpvarArgs,
 };
