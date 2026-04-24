@@ -1,12 +1,12 @@
 use std::ops::Range;
 
-use rustc_errors::E0232;
+use rustc_errors::{Diagnostic, E0232};
 use rustc_hir::AttrPath;
 use rustc_hir::attrs::diagnostic::{
     Directive, FilterFormatString, Flag, FormatArg, FormatString, LitOrArg, Name, NameValue,
     OnUnimplementedCondition, Piece, Predicate,
 };
-use rustc_hir::lints::{AttributeLintKind, FormatWarning};
+use rustc_hir::lints::FormatWarning;
 use rustc_macros::Diagnostic;
 use rustc_parse_format::{
     Argument, FormatSpec, ParseError, ParseMode, Parser, Piece as RpfPiece, Position,
@@ -18,6 +18,11 @@ use rustc_span::{Ident, InnerSpan, Span, Symbol, kw, sym};
 use thin_vec::{ThinVec, thin_vec};
 
 use crate::context::{AcceptContext, Stage};
+use crate::errors::{
+    DisallowedPlaceholder, DisallowedPositionalArgument, IgnoredDiagnosticOption,
+    InvalidFormatSpecifier, MalFormedDiagnosticAttributeLint, MissingOptionsForDiagnosticAttribute,
+    NonMetaItemDiagnosticAttribute, WrappedParserError,
+};
 use crate::parser::{ArgParser, MetaItemListParser, MetaItemOrLitParser, MetaItemParser};
 
 pub(crate) mod do_not_recommend;
@@ -112,12 +117,12 @@ fn merge<T, S: Stage>(
     match (first, later) {
         (Some(_) | None, None) => {}
         (Some((first_span, _)), Some((later_span, _))) => {
-            cx.emit_lint(
+            let first_span = *first_span;
+            cx.emit_dyn_lint(
                 MALFORMED_DIAGNOSTIC_ATTRIBUTES,
-                AttributeLintKind::IgnoredDiagnosticOption {
-                    first_span: *first_span,
-                    later_span,
-                    option_name,
+                move |dcx, level| {
+                    IgnoredDiagnosticOption { first_span, later_span, option_name }
+                        .into_diag(dcx, level)
                 },
                 later_span,
             );
@@ -140,29 +145,35 @@ fn parse_list<'p, S: Stage>(
             // We're dealing with `#[diagnostic::attr()]`.
             // This can be because that is what the user typed, but that's also what we'd see
             // if the user used non-metaitem syntax. See `ArgParser::from_attr_args`.
-            cx.emit_lint(
+            cx.emit_dyn_lint(
                 MALFORMED_DIAGNOSTIC_ATTRIBUTES,
-                AttributeLintKind::NonMetaItemDiagnosticAttribute,
+                move |dcx, level| NonMetaItemDiagnosticAttribute.into_diag(dcx, level),
                 list.span,
             );
         }
         ArgParser::NoArgs => {
-            cx.emit_lint(
+            cx.emit_dyn_lint(
                 MALFORMED_DIAGNOSTIC_ATTRIBUTES,
-                AttributeLintKind::MissingOptionsForDiagnosticAttribute {
-                    attribute: mode.as_str(),
-                    options: mode.expected_options(),
+                move |dcx, level| {
+                    MissingOptionsForDiagnosticAttribute {
+                        attribute: mode.as_str(),
+                        options: mode.expected_options(),
+                    }
+                    .into_diag(dcx, level)
                 },
                 span,
             );
         }
         ArgParser::NameValue(_) => {
-            cx.emit_lint(
+            cx.emit_dyn_lint(
                 MALFORMED_DIAGNOSTIC_ATTRIBUTES,
-                AttributeLintKind::MalFormedDiagnosticAttribute {
-                    attribute: mode.as_str(),
-                    options: mode.allowed_options(),
-                    span,
+                move |dcx, level| {
+                    MalFormedDiagnosticAttributeLint {
+                        attribute: mode.as_str(),
+                        options: mode.allowed_options(),
+                        span,
+                    }
+                    .into_diag(dcx, level)
                 },
                 span,
             );
@@ -188,12 +199,15 @@ fn parse_directive_items<'p, S: Stage>(
         let span = item.span();
 
         macro malformed() {{
-            cx.emit_lint(
+            cx.emit_dyn_lint(
                 MALFORMED_DIAGNOSTIC_ATTRIBUTES,
-                AttributeLintKind::MalFormedDiagnosticAttribute {
-                    attribute: mode.as_str(),
-                    options: mode.allowed_options(),
-                    span,
+                move |dcx, level| {
+                    MalFormedDiagnosticAttributeLint {
+                        attribute: mode.as_str(),
+                        options: mode.allowed_options(),
+                        span,
+                    }
+                    .into_diag(dcx, level)
                 },
                 span,
             );
@@ -210,13 +224,14 @@ fn parse_directive_items<'p, S: Stage>(
         }}
 
         macro duplicate($name: ident, $($first_span:tt)*) {{
-            cx.emit_lint(
+            let first_span = $($first_span)*;
+            cx.emit_dyn_lint(
                 MALFORMED_DIAGNOSTIC_ATTRIBUTES,
-                AttributeLintKind::IgnoredDiagnosticOption {
-                    first_span: $($first_span)*,
+                move |dcx, level| IgnoredDiagnosticOption {
+                    first_span,
                     later_span: span,
                     option_name: $name,
-                },
+                }.into_diag(dcx, level),
                 span,
             );
         }}
@@ -245,9 +260,19 @@ fn parse_directive_items<'p, S: Stage>(
                         let (FormatWarning::InvalidSpecifier { span, .. }
                         | FormatWarning::PositionalArgument { span, .. }
                         | FormatWarning::DisallowedPlaceholder { span }) = warning;
-                        cx.emit_lint(
+                        cx.emit_dyn_lint(
                             MALFORMED_DIAGNOSTIC_FORMAT_LITERALS,
-                            AttributeLintKind::MalformedDiagnosticFormat { warning },
+                            move |dcx, level| match warning {
+                                FormatWarning::PositionalArgument { .. } => {
+                                    DisallowedPositionalArgument.into_diag(dcx, level)
+                                }
+                                FormatWarning::InvalidSpecifier { .. } => {
+                                    InvalidFormatSpecifier.into_diag(dcx, level)
+                                }
+                                FormatWarning::DisallowedPlaceholder { .. } => {
+                                    DisallowedPlaceholder.into_diag(dcx, level)
+                                }
+                            },
                             span,
                         );
                     }
@@ -255,12 +280,15 @@ fn parse_directive_items<'p, S: Stage>(
                     f
                 }
                 Err(e) => {
-                    cx.emit_lint(
+                    cx.emit_dyn_lint(
                         MALFORMED_DIAGNOSTIC_FORMAT_LITERALS,
-                        AttributeLintKind::DiagnosticWrappedParserError {
-                            description: e.description,
-                            label: e.label,
-                            span: slice_span(input.span, e.span, is_snippet),
+                        move |dcx, level| {
+                            WrappedParserError {
+                                description: &e.description,
+                                label: &e.label,
+                                span: slice_span(input.span, e.span.clone(), is_snippet),
+                            }
+                            .into_diag(dcx, level)
                         },
                         input.span,
                     );
