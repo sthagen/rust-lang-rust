@@ -533,7 +533,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                     ty::FnDef(def_id, _) => {
                         let name = self.infcx.tcx.item_name(*def_id);
                         let identity_args = GenericArgs::identity_for_item(self.infcx.tcx, *def_id);
-                        let desc = format!("a function pointer to `{name}`");
+                        let desc = format!("the function item type defined by `{name}`");
                         let note = format!(
                             "the function `{name}` is invariant over the parameter `{}`",
                             identity_args[param_index as usize]
