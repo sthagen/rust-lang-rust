@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use rustc_errors::{Diagnostic, E0232};
+use rustc_errors::E0232;
 use rustc_hir::AttrPath;
 use rustc_hir::attrs::diagnostic::{
     Directive, FilterFormatString, Flag, FormatArg, FormatString, LitOrArg, Name, NameValue,
@@ -16,7 +16,7 @@ use rustc_session::lint::builtin::{
 use rustc_span::{Ident, InnerSpan, Span, Symbol, kw, sym};
 use thin_vec::{ThinVec, thin_vec};
 
-use crate::context::{AcceptContext, Stage};
+use crate::context::AcceptContext;
 use crate::errors::{
     FormatWarning, IgnoredDiagnosticOption, MalFormedDiagnosticAttributeLint,
     MissingOptionsForDiagnosticAttribute, NonMetaItemDiagnosticAttribute, WrappedParserError,
@@ -112,8 +112,8 @@ impl Mode {
     }
 }
 
-fn merge_directives<S: Stage>(
-    cx: &mut AcceptContext<'_, '_, S>,
+fn merge_directives(
+    cx: &mut AcceptContext<'_, '_>,
     first: &mut Option<(Span, Directive)>,
     later: (Span, Directive),
 ) {
@@ -130,8 +130,8 @@ fn merge_directives<S: Stage>(
     }
 }
 
-fn merge<T, S: Stage>(
-    cx: &mut AcceptContext<'_, '_, S>,
+fn merge<T>(
+    cx: &mut AcceptContext<'_, '_>,
     first: &mut Option<(Span, T)>,
     later: Option<(Span, T)>,
     option_name: Symbol,
@@ -140,12 +140,9 @@ fn merge<T, S: Stage>(
         (Some(_) | None, None) => {}
         (Some((first_span, _)), Some((later_span, _))) => {
             let first_span = *first_span;
-            cx.emit_dyn_lint(
+            cx.emit_lint(
                 MALFORMED_DIAGNOSTIC_ATTRIBUTES,
-                move |dcx, level| {
-                    IgnoredDiagnosticOption { first_span, later_span, option_name }
-                        .into_diag(dcx, level)
-                },
+                IgnoredDiagnosticOption { first_span, later_span, option_name },
                 later_span,
             );
         }
@@ -155,8 +152,8 @@ fn merge<T, S: Stage>(
     }
 }
 
-fn parse_list<'p, S: Stage>(
-    cx: &mut AcceptContext<'_, '_, S>,
+fn parse_list<'p>(
+    cx: &mut AcceptContext<'_, '_>,
     args: &'p ArgParser,
     mode: Mode,
 ) -> Option<&'p MetaItemListParser> {
@@ -167,35 +164,29 @@ fn parse_list<'p, S: Stage>(
             // We're dealing with `#[diagnostic::attr()]`.
             // This can be because that is what the user typed, but that's also what we'd see
             // if the user used non-metaitem syntax. See `ArgParser::from_attr_args`.
-            cx.emit_dyn_lint(
+            cx.emit_lint(
                 MALFORMED_DIAGNOSTIC_ATTRIBUTES,
-                move |dcx, level| NonMetaItemDiagnosticAttribute.into_diag(dcx, level),
+                NonMetaItemDiagnosticAttribute,
                 list.span,
             );
         }
         ArgParser::NoArgs => {
-            cx.emit_dyn_lint(
+            cx.emit_lint(
                 MALFORMED_DIAGNOSTIC_ATTRIBUTES,
-                move |dcx, level| {
-                    MissingOptionsForDiagnosticAttribute {
-                        attribute: mode.as_str(),
-                        options: mode.expected_options(),
-                    }
-                    .into_diag(dcx, level)
+                MissingOptionsForDiagnosticAttribute {
+                    attribute: mode.as_str(),
+                    options: mode.expected_options(),
                 },
                 span,
             );
         }
         ArgParser::NameValue(_) => {
-            cx.emit_dyn_lint(
+            cx.emit_lint(
                 MALFORMED_DIAGNOSTIC_ATTRIBUTES,
-                move |dcx, level| {
-                    MalFormedDiagnosticAttributeLint {
-                        attribute: mode.as_str(),
-                        options: mode.allowed_options(),
-                        span,
-                    }
-                    .into_diag(dcx, level)
+                MalFormedDiagnosticAttributeLint {
+                    attribute: mode.as_str(),
+                    options: mode.allowed_options(),
+                    span,
                 },
                 span,
             );
@@ -204,8 +195,8 @@ fn parse_list<'p, S: Stage>(
     None
 }
 
-fn parse_directive_items<'p, S: Stage>(
-    cx: &mut AcceptContext<'_, '_, S>,
+fn parse_directive_items<'p>(
+    cx: &mut AcceptContext<'_, '_>,
     mode: Mode,
     items: impl Iterator<Item = &'p MetaItemOrLitParser>,
     is_root: bool,
@@ -221,15 +212,12 @@ fn parse_directive_items<'p, S: Stage>(
         let span = item.span();
 
         macro malformed() {{
-            cx.emit_dyn_lint(
+            cx.emit_lint(
                 MALFORMED_DIAGNOSTIC_ATTRIBUTES,
-                move |dcx, level| {
-                    MalFormedDiagnosticAttributeLint {
-                        attribute: mode.as_str(),
-                        options: mode.allowed_options(),
-                        span,
-                    }
-                    .into_diag(dcx, level)
+                MalFormedDiagnosticAttributeLint {
+                    attribute: mode.as_str(),
+                    options: mode.allowed_options(),
+                    span,
                 },
                 span,
             );
@@ -249,13 +237,13 @@ fn parse_directive_items<'p, S: Stage>(
 
         macro duplicate($name: ident, $($first_span:tt)*) {{
             let first_span = $($first_span)*;
-            cx.emit_dyn_lint(
+            cx.emit_lint(
                 MALFORMED_DIAGNOSTIC_ATTRIBUTES,
-                move |dcx, level| IgnoredDiagnosticOption {
+                IgnoredDiagnosticOption {
                     first_span,
                     later_span: span,
                     option_name: $name,
-                }.into_diag(dcx, level),
+                },
                 span,
             );
         }}
@@ -270,7 +258,7 @@ fn parse_directive_items<'p, S: Stage>(
         // But we don't assert its presence yet because we don't want to mention it
         // if someone does something like `#[diagnostic::on_unimplemented(doesnt_exist)]`.
         // That happens in the big `match` below.
-        let value: Option<Ident> = match item.args().name_value() {
+        let value: Option<Ident> = match item.args().as_name_value() {
             Some(nv) => Some(or_malformed!(nv.value_as_ident()?)),
             None => None,
         };
@@ -285,25 +273,18 @@ fn parse_directive_items<'p, S: Stage>(
                         | FormatWarning::PositionalArgument { span }
                         | FormatWarning::IndexedArgument { span }
                         | FormatWarning::DisallowedPlaceholder { span, .. }) = warning;
-                        cx.emit_dyn_lint(
-                            MALFORMED_DIAGNOSTIC_FORMAT_LITERALS,
-                            move |dcx, level| warning.into_diag(dcx, level),
-                            span,
-                        );
+                        cx.emit_lint(MALFORMED_DIAGNOSTIC_FORMAT_LITERALS, warning, span);
                     }
 
                     f
                 }
                 Err(e) => {
-                    cx.emit_dyn_lint(
+                    cx.emit_lint(
                         MALFORMED_DIAGNOSTIC_FORMAT_LITERALS,
-                        move |dcx, level| {
-                            WrappedParserError {
-                                description: &e.description,
-                                label: &e.label,
-                                span: slice_span(input.span, e.span.clone(), is_snippet),
-                            }
-                            .into_diag(dcx, level)
+                        WrappedParserError {
+                            description: e.description,
+                            label: e.label,
+                            span: slice_span(input.span, e.span.clone(), is_snippet),
                         },
                         input.span,
                     );

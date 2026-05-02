@@ -257,7 +257,7 @@ where
 
 // This internal type isn't publicly exposed, because it is an implementation detail.
 // But it's a public field of FnSig (which has a public mirror type), so allow conversions.
-impl<'tcx> Stable<'tcx> for ty::FnSigKind {
+impl<'tcx> Stable<'tcx> for ty::FnSigKind<'tcx> {
     type T = (bool /*c_variadic*/, crate::mir::Safety, crate::ty::Abi);
     fn stable<'cx>(
         &self,
@@ -408,7 +408,7 @@ impl<'tcx> Stable<'tcx> for Ty<'tcx> {
         tables: &mut Tables<'cx, BridgeTys>,
         cx: &CompilerCtxt<'cx, BridgeTys>,
     ) -> Self::T {
-        tables.intern_ty(cx.lift(*self).unwrap())
+        tables.intern_ty(cx.lift(*self))
     }
 }
 
@@ -526,7 +526,7 @@ impl<'tcx> Stable<'tcx> for ty::Const<'tcx> {
         tables: &mut Tables<'cx, BridgeTys>,
         cx: &CompilerCtxt<'cx, BridgeTys>,
     ) -> Self::T {
-        let ct = cx.lift(*self).unwrap();
+        let ct = cx.lift(*self);
         let kind = match ct.kind() {
             ty::ConstKind::Value(cv) => {
                 let const_val = cx.valtree_to_const_val(cv);
@@ -967,7 +967,7 @@ impl<'tcx> Stable<'tcx> for ty::Instance<'tcx> {
         tables: &mut Tables<'cx, BridgeTys>,
         cx: &CompilerCtxt<'cx, BridgeTys>,
     ) -> Self::T {
-        let def = tables.instance_def(cx.lift(*self).unwrap());
+        let def = tables.instance_def(cx.lift(*self));
         let kind = match self.def {
             ty::InstanceKind::Item(..) => crate::mir::mono::InstanceKind::Item,
             ty::InstanceKind::Intrinsic(..) => crate::mir::mono::InstanceKind::Intrinsic,

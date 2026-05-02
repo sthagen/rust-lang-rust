@@ -2,7 +2,7 @@
 //! Note that these are similar to but not always identical to LLVM's feature names,
 //! and Rust adds some features that do not correspond to LLVM features at all.
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
-use rustc_macros::HashStable_Generic;
+use rustc_macros::StableHash;
 use rustc_span::{Symbol, sym};
 
 use crate::spec::{Arch, FloatAbi, LlvmAbi, RustcAbi, Target};
@@ -12,7 +12,7 @@ use crate::spec::{Arch, FloatAbi, LlvmAbi, RustcAbi, Target};
 pub const RUSTC_SPECIFIC_FEATURES: &[&str] = &["crt-static"];
 
 /// Stability information for target features.
-#[derive(Debug, Copy, Clone, HashStable_Generic)]
+#[derive(Debug, Copy, Clone, StableHash)]
 pub enum Stability {
     /// This target feature is stable, it can be used in `#[target_feature]` and
     /// `#[cfg(target_feature)]`.
@@ -536,19 +536,7 @@ const MIPS_FEATURES: &[(&str, Stability, ImpliedFeatures)] = &[
 
 const NVPTX_FEATURES: &[(&str, Stability, ImpliedFeatures)] = &[
     // tidy-alphabetical-start
-    ("sm_20", Unstable(sym::nvptx_target_feature), &[]),
-    ("sm_21", Unstable(sym::nvptx_target_feature), &["sm_20"]),
-    ("sm_30", Unstable(sym::nvptx_target_feature), &["sm_21"]),
-    ("sm_32", Unstable(sym::nvptx_target_feature), &["sm_30"]),
-    ("sm_35", Unstable(sym::nvptx_target_feature), &["sm_32"]),
-    ("sm_37", Unstable(sym::nvptx_target_feature), &["sm_35"]),
-    ("sm_50", Unstable(sym::nvptx_target_feature), &["sm_37"]),
-    ("sm_52", Unstable(sym::nvptx_target_feature), &["sm_50"]),
-    ("sm_53", Unstable(sym::nvptx_target_feature), &["sm_52"]),
-    ("sm_60", Unstable(sym::nvptx_target_feature), &["sm_53"]),
-    ("sm_61", Unstable(sym::nvptx_target_feature), &["sm_60"]),
-    ("sm_62", Unstable(sym::nvptx_target_feature), &["sm_61"]),
-    ("sm_70", Unstable(sym::nvptx_target_feature), &["sm_62"]),
+    ("sm_70", Unstable(sym::nvptx_target_feature), &[]),
     ("sm_72", Unstable(sym::nvptx_target_feature), &["sm_70"]),
     ("sm_75", Unstable(sym::nvptx_target_feature), &["sm_72"]),
     ("sm_80", Unstable(sym::nvptx_target_feature), &["sm_75"]),
@@ -567,19 +555,7 @@ const NVPTX_FEATURES: &[(&str, Stability, ImpliedFeatures)] = &[
     ("sm_120a", Unstable(sym::nvptx_target_feature), &["sm_120"]),
     // tidy-alphabetical-end
     // tidy-alphabetical-start
-    ("ptx32", Unstable(sym::nvptx_target_feature), &[]),
-    ("ptx40", Unstable(sym::nvptx_target_feature), &["ptx32"]),
-    ("ptx41", Unstable(sym::nvptx_target_feature), &["ptx40"]),
-    ("ptx42", Unstable(sym::nvptx_target_feature), &["ptx41"]),
-    ("ptx43", Unstable(sym::nvptx_target_feature), &["ptx42"]),
-    ("ptx50", Unstable(sym::nvptx_target_feature), &["ptx43"]),
-    ("ptx60", Unstable(sym::nvptx_target_feature), &["ptx50"]),
-    ("ptx61", Unstable(sym::nvptx_target_feature), &["ptx60"]),
-    ("ptx62", Unstable(sym::nvptx_target_feature), &["ptx61"]),
-    ("ptx63", Unstable(sym::nvptx_target_feature), &["ptx62"]),
-    ("ptx64", Unstable(sym::nvptx_target_feature), &["ptx63"]),
-    ("ptx65", Unstable(sym::nvptx_target_feature), &["ptx64"]),
-    ("ptx70", Unstable(sym::nvptx_target_feature), &["ptx65"]),
+    ("ptx70", Unstable(sym::nvptx_target_feature), &[]),
     ("ptx71", Unstable(sym::nvptx_target_feature), &["ptx70"]),
     ("ptx72", Unstable(sym::nvptx_target_feature), &["ptx71"]),
     ("ptx73", Unstable(sym::nvptx_target_feature), &["ptx72"]),

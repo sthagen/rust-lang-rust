@@ -43,8 +43,8 @@ use rustc_middle::ty::{
     const_lit_matches_ty, fold_regions,
 };
 use rustc_middle::{bug, span_bug};
+use rustc_session::errors::feature_err;
 use rustc_session::lint::builtin::AMBIGUOUS_ASSOCIATED_ITEMS;
-use rustc_session::parse::feature_err;
 use rustc_span::{DUMMY_SP, Ident, Span, kw, sym};
 use rustc_trait_selection::infer::InferCtxtExt;
 use rustc_trait_selection::traits::wf::object_region_bounds;
@@ -2174,28 +2174,51 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
             // Case 2. Reference to a variant constructor.
             DefKind::Ctor(CtorOf::Variant, ..) | DefKind::Variant => {
                 let (generics_def_id, index) = if let Some(self_ty) = self_ty {
+                    // We have something like `<module::Enum>::Variant`.
+
                     let adt_def = self.probe_adt(span, self_ty).unwrap();
                     debug_assert!(adt_def.is_enum());
+
+                    // FIXME: Stating that the last segment (here: `Variant`) is allowed to have
+                    // generic args is a lie! We should set the index to `None` instead as it's
+                    // the *self type* that's allowed to have args.
+                    // HIR typeck's `instantiate_value_path` actually contains a special case to
+                    // reject args on `DefKind::Ctor` segments (see `is_alias_variant_ctor`).
+                    // Using `None` here for this should allow us to get rid of that workaround.
+                    //
+                    // (For additional context, `DefKind::Variant` segments never actually reach
+                    // this branch as they're interpreted as `TypeRelative` paths whose lowering
+                    // routines manually reject args on them).
+
                     (adt_def.did(), last)
-                } else if last >= 1 && segments[last - 1].args.is_some() {
-                    // Everything but the penultimate segment should have no
-                    // parameters at all.
-                    let mut def_id = def_id;
+                } else if let [.., second_to_last, _] = segments
+                    && second_to_last.args.is_some()
+                    && let Res::Def(DefKind::Enum, _) = second_to_last.res
+                {
+                    // We have something like `module::Enum::<…>::Variant`.
+                    // No segment other than the penultimate one is allowed to have generic args.
+
+                    // We had to check that the second to last segment actually referred to an enum
+                    // since at this stage it could very well refer to a module in which case we
+                    // certainly don't want to allow generic args on it!
 
                     // `DefKind::Ctor` -> `DefKind::Variant`
-                    if let DefKind::Ctor(..) = kind {
-                        def_id = tcx.parent(def_id);
-                    }
+                    let def_id = match kind {
+                        DefKind::Ctor(..) => tcx.parent(def_id),
+                        _ => def_id,
+                    };
 
                     // `DefKind::Variant` -> `DefKind::Enum`
                     let enum_def_id = tcx.parent(def_id);
+
                     (enum_def_id, last - 1)
                 } else {
+                    // We have something like `module::Enum::Variant` or `module::Variant`.
+                    // No segment other than the final one is allowed to have generic args.
+
                     // FIXME: lint here recommending `Enum::<...>::Variant` form
                     // instead of `Enum::Variant::<...>` form.
 
-                    // Everything but the final segment should have no
-                    // parameters at all.
                     let generics = tcx.generics_of(def_id);
                     // Variant and struct constructors use the
                     // generics of their parent type definition.
@@ -3590,7 +3613,7 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
 
         let fn_sig_kind = FnSigKind::default()
             .set_abi(abi)
-            .set_safe(safety.is_safe())
+            .set_safety(safety)
             .set_c_variadic(decl.fn_decl_kind.c_variadic());
         let fn_ty = tcx.mk_fn_sig(input_tys, output_ty, fn_sig_kind);
         let fn_ptr_ty = ty::Binder::bind_with_vars(fn_ty, bound_vars);

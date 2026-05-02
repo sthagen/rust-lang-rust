@@ -736,13 +736,15 @@ impl<'a> Linker for GccLinker<'a> {
     fn enable_profiling(&mut self) {
         // This flag is also used when linking to choose target specific
         // libraries needed to enable profiling.
-        self.cc_arg("-pg");
-        // On windows-gnu targets, libgmon also needs to be linked, and this
-        // requires readding libraries to satisfy its dependencies.
-        if self.sess.target.is_like_windows {
-            self.cc_arg("-lgmon");
-            self.cc_arg("-lkernel32");
-            self.cc_arg("-lmsvcrt");
+        if !self.is_ld {
+            self.cc_arg("-pg");
+            // On windows-gnu targets, libgmon also needs to be linked, and this
+            // requires readding libraries to satisfy its dependencies.
+            if self.sess.target.is_like_windows {
+                self.cc_arg("-lgmon");
+                self.cc_arg("-lkernel32");
+                self.cc_arg("-lmsvcrt");
+            }
         }
     }
 

@@ -692,6 +692,15 @@ fn is_windows_gnu_ld(sess: &Session) -> bool {
     sess.target.is_like_windows
         && !sess.target.is_like_msvc
         && matches!(flavor, LinkerFlavor::Gnu(_, Lld::No))
+        && sess.target.options.cfg_abi != CfgAbi::Llvm
+}
+
+fn is_windows_gnu_clang(sess: &Session) -> bool {
+    let (_, flavor) = linker_and_flavor(sess);
+    sess.target.is_like_windows
+        && !sess.target.is_like_msvc
+        && matches!(flavor, LinkerFlavor::Gnu(Cc::Yes, Lld::No))
+        && sess.target.options.cfg_abi == CfgAbi::Llvm
 }
 
 fn report_linker_output(sess: &Session, levels: CodegenLintLevels, stdout: &[u8], stderr: &[u8]) {
@@ -720,9 +729,10 @@ fn report_linker_output(sess: &Session, levels: CodegenLintLevels, stdout: &[u8]
         escaped_stdout = for_each(&stdout, |line, output| {
             // Hide some progress messages from link.exe that we don't care about.
             // See https://github.com/chromium/chromium/blob/bfa41e41145ffc85f041384280caf2949bb7bd72/build/toolchain/win/tool_wrapper.py#L144-L146
-            if line.starts_with("   Creating library")
-                || line.starts_with("Generating code")
-                || line.starts_with("Finished generating code")
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("Creating library")
+                || trimmed.starts_with("Generating code")
+                || trimmed.starts_with("Finished generating code")
             {
                 linker_info += line;
                 linker_info += "\r\n";
@@ -781,7 +791,18 @@ fn report_linker_output(sess: &Session, levels: CodegenLintLevels, stdout: &[u8]
                 *output += "\n"
             }
         });
-    }
+    } else if is_windows_gnu_clang(sess) {
+        info!("inferred Windows Clang (GNU ABI)");
+        escaped_stderr = for_each(&stderr, |line, output| {
+            if line.contains("argument unused during compilation: '-nolibc'") {
+                linker_info += line;
+                linker_info += "\n";
+            } else {
+                *output += line;
+                *output += "\n"
+            }
+        });
+    };
 
     let lint_msg = |msg| {
         emit_lint_base(
@@ -805,10 +826,10 @@ fn report_linker_output(sess: &Session, levels: CodegenLintLevels, stdout: &[u8]
             .strip_prefix("Warning: ")
             .unwrap_or(&escaped_stderr)
             .replace(": warning: ", ": ");
-        lint_msg(format!("linker stderr: {escaped_stderr}"));
+        lint_msg(format!("linker stderr: {}", escaped_stderr.trim_end()));
     }
     if !escaped_stdout.is_empty() {
-        lint_msg(format!("linker stdout: {}", escaped_stdout))
+        lint_msg(format!("linker stdout: {}", escaped_stdout.trim_end()))
     }
     if !linker_info.is_empty() {
         lint_info(linker_info);

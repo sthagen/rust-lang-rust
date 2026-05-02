@@ -1,6 +1,7 @@
+use std::collections::hash_map::Entry;
 use std::ops::Deref;
 
-use rustc_data_structures::fx::FxHashSet;
+use rustc_data_structures::fx::FxHashMap;
 use rustc_hir::LangItem;
 use rustc_hir::def_id::{CRATE_DEF_ID, DefId};
 use rustc_infer::infer::canonical::query_response::make_query_region_constraints;
@@ -112,6 +113,7 @@ impl<'tcx> rustc_next_trait_solver::delegate::SolverDelegate for SolverDelegate<
                     SubregionOrigin::RelateRegionParamBound(span, None),
                     outlives.1,
                     outlives.0,
+                    ty::VisibleForLeakCheck::Yes,
                 );
                 Some(Certainty::Yes)
             }
@@ -204,7 +206,9 @@ impl<'tcx> rustc_next_trait_solver::delegate::SolverDelegate for SolverDelegate<
         .map(|obligations| obligations.into_iter().map(|obligation| obligation.as_goal()).collect())
     }
 
-    fn make_deduplicated_region_constraints(&self) -> Vec<ty::RegionConstraint<'tcx>> {
+    fn make_deduplicated_region_constraints(
+        &self,
+    ) -> Vec<(ty::RegionConstraint<'tcx>, ty::VisibleForLeakCheck)> {
         // Cannot use `take_registered_region_obligations` as we may compute the response
         // inside of a `probe` whenever we have multiple choices inside of the solver.
         let region_obligations = self.0.inner.borrow().region_obligations().to_owned();
@@ -217,13 +221,23 @@ impl<'tcx> rustc_next_trait_solver::delegate::SolverDelegate for SolverDelegate<
             )
         });
 
-        let mut seen = FxHashSet::default();
-        region_constraints
-            .constraints
-            .into_iter()
-            .filter(|&(outlives, _)| seen.insert(outlives))
-            .map(|(outlives, _)| outlives)
-            .collect()
+        let mut seen = FxHashMap::default();
+        let mut constraints = vec![];
+        for (outlives, _, vis) in region_constraints.constraints {
+            match seen.entry(outlives) {
+                Entry::Occupied(occupied) => {
+                    let idx = occupied.get();
+                    let (_, prev_vis): &mut (_, ty::VisibleForLeakCheck) =
+                        constraints.get_mut(*idx).unwrap();
+                    *prev_vis = (*prev_vis).or(vis);
+                }
+                Entry::Vacant(vacant) => {
+                    vacant.insert(constraints.len());
+                    constraints.push((outlives, vis));
+                }
+            }
+        }
+        constraints
     }
 
     fn instantiate_canonical<V>(

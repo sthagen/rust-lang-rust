@@ -51,12 +51,31 @@ fn add_only_cfg_attributes(attrs: &mut Vec<Attribute>, new_attrs: &[Attribute]) 
     }
 }
 
+/// This function goes through the attributes list (`new_attrs`) and extracts the attributes that
+/// affect the cfg state propagated to detached items.
+fn add_cfg_state_attributes(attrs: &mut Vec<Attribute>, new_attrs: &[Attribute]) {
+    for attr in new_attrs {
+        if let Attribute::Parsed(AttributeKind::Doc(d)) = attr
+            && (!d.cfg.is_empty() || !d.auto_cfg.is_empty() || !d.auto_cfg_change.is_empty())
+        {
+            let mut new_attr = DocAttribute::default();
+            new_attr.cfg = d.cfg.clone();
+            new_attr.auto_cfg = d.auto_cfg.clone();
+            new_attr.auto_cfg_change = d.auto_cfg_change.clone();
+            attrs.push(Attribute::Parsed(AttributeKind::Doc(Box::new(new_attr))));
+        } else if let Attribute::Parsed(AttributeKind::CfgTrace(..)) = attr {
+            // If it's a `cfg()` attribute, we keep it.
+            attrs.push(attr.clone());
+        }
+    }
+}
+
 impl CfgPropagator<'_, '_> {
     // Some items need to merge their attributes with their parents' otherwise a few of them
     // (mostly `cfg` ones) will be missing.
     fn merge_with_parent_attributes(&mut self, item: &mut Item) {
         let mut attrs = Vec::new();
-        // We only need to merge an item attributes with its parent's in case it's an impl as an
+        // We need to merge an item attributes with its parent's in case it's an impl as an
         // impl might not be defined in the same module as the item it implements.
         //
         // Otherwise, `cfg_info` already tracks everything we need so nothing else to do!
@@ -67,6 +86,27 @@ impl CfgPropagator<'_, '_> {
                 let x = load_attrs(self.cx.tcx, parent_def_id.to_def_id());
                 add_only_cfg_attributes(&mut attrs, x);
                 next_def_id = parent_def_id;
+            }
+        }
+        // We also need to merge an item attributes with its parent's in case it's a macro with
+        // the `#[macro_export]` attribute, because it might not be defined at crate root.
+        if matches!(item.kind, ItemKind::MacroItem(_))
+            && item.inner.attrs.other_attrs.iter().any(|attr| {
+                matches!(
+                    attr,
+                    rustc_hir::Attribute::Parsed(
+                        rustc_hir::attrs::AttributeKind::MacroExport { .. }
+                    )
+                )
+            })
+        {
+            for parent_def_id in &item.cfg_parent_ids_for_detached_item(self.cx.tcx) {
+                let mut parent_attrs = Vec::new();
+                add_cfg_state_attributes(
+                    &mut parent_attrs,
+                    load_attrs(self.cx.tcx, parent_def_id.to_def_id()),
+                );
+                merge_attrs(self.cx.tcx, &[], Some((&parent_attrs, None)), &mut self.cfg_info);
             }
         }
 

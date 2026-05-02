@@ -698,8 +698,9 @@ impl<'tcx> InferCtxt<'tcx> {
         origin: SubregionOrigin<'tcx>,
         a: ty::Region<'tcx>,
         b: ty::Region<'tcx>,
+        vis: ty::VisibleForLeakCheck,
     ) {
-        self.inner.borrow_mut().unwrap_region_constraints().make_subregion(origin, a, b);
+        self.inner.borrow_mut().unwrap_region_constraints().make_subregion(origin, a, b, vis);
     }
 
     #[instrument(skip(self), level = "debug")]
@@ -708,8 +709,9 @@ impl<'tcx> InferCtxt<'tcx> {
         origin: SubregionOrigin<'tcx>,
         a: ty::Region<'tcx>,
         b: ty::Region<'tcx>,
+        vis: ty::VisibleForLeakCheck,
     ) {
-        self.inner.borrow_mut().unwrap_region_constraints().make_eqregion(origin, a, b);
+        self.inner.borrow_mut().unwrap_region_constraints().make_eqregion(origin, a, b, vis);
     }
 
     /// Processes a `Coerce` predicate from the fulfillment context.

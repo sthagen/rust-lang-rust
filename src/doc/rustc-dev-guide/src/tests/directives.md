@@ -163,6 +163,9 @@ The following directives will check rustc build settings and target settings:
   For tests that cross-compile to explicit targets
   via `--target`, use `needs-llvm-components` instead to ensure the appropriate
   backend is available.
+- `needs-asm-mnemonic: <MNEMONIC>` — ignores if the target backend does not
+  support the specified assembly mnemonic (e.g., `RET`, `NOP`).
+  Only supported with the LLVM backend.
 - `needs-profiler-runtime` — ignores the test if the profiler runtime was not
   enabled for the target (`build.profiler = true` in `bootstrap.toml`)
 - `needs-sanitizer-support` — ignores if the sanitizer support was not enabled
@@ -180,8 +183,7 @@ The following directives will check rustc build settings and target settings:
 - `needs-threads` — ignores if the target does not have threading support
 - `needs-subprocess`  — ignores if the target does not have subprocess support
 - `needs-symlink` — ignores if the target does not support symlinks.
-  This can be the case on Windows if the developer did not enable privileged symlink
-  permissions.
+  This can be the case on Windows if the developer did not enable privileged symlink permissions.
 - `ignore-std-debug-assertions` — ignores if std was built with debug assertions.
 - `needs-std-debug-assertions` — ignores if std was not built with debug assertions.
 - `ignore-std-remap-debuginfo` — ignores if std was built with remapping of it's sources.

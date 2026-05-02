@@ -13,14 +13,15 @@ use rustc_parse::parser::{ForceCollect, Parser, Recovery};
 use rustc_parse::{exp, parse_in};
 use rustc_session::Session;
 use rustc_session::config::ExpectedValues;
+use rustc_session::errors::feature_err;
 use rustc_session::lint::builtin::UNEXPECTED_CFGS;
-use rustc_session::parse::{ParseSess, feature_err};
+use rustc_session::parse::ParseSess;
 use rustc_span::{ErrorGuaranteed, Span, Symbol, sym};
 use thin_vec::ThinVec;
 
 use crate::attributes::AttributeSafety;
 use crate::attributes::diagnostic::check_cfg;
-use crate::context::{AcceptContext, ShouldEmit, Stage};
+use crate::context::{AcceptContext, ShouldEmit};
 use crate::parser::{
     AllowExprMetavar, ArgParser, MetaItemListParser, MetaItemOrLitParser, NameValueParser,
 };
@@ -40,10 +41,7 @@ const CFG_ATTR_TEMPLATE: AttributeTemplate = template!(
     "https://doc.rust-lang.org/reference/conditional-compilation.html#the-cfg_attr-attribute"
 );
 
-pub fn parse_cfg<S: Stage>(
-    cx: &mut AcceptContext<'_, '_, S>,
-    args: &ArgParser,
-) -> Option<CfgEntry> {
+pub fn parse_cfg(cx: &mut AcceptContext<'_, '_>, args: &ArgParser) -> Option<CfgEntry> {
     let list = cx.expect_list(args, cx.attr_span)?;
 
     let Some(single) = list.as_single() else {
@@ -81,8 +79,8 @@ pub fn parse_cfg<S: Stage>(
     parse_cfg_entry(cx, single).ok()
 }
 
-pub fn parse_cfg_entry<S: Stage>(
-    cx: &mut AcceptContext<'_, '_, S>,
+pub fn parse_cfg_entry(
+    cx: &mut AcceptContext<'_, '_>,
     item: &MetaItemOrLitParser,
 ) -> Result<CfgEntry, ErrorGuaranteed> {
     Ok(match item {
@@ -116,7 +114,7 @@ pub fn parse_cfg_entry<S: Stage>(
                 else {
                     return Err(cx.adcx().expected_identifier(meta.path().span()));
                 };
-                parse_name_value(name, meta.path().span(), a.name_value(), meta.span(), cx)?
+                parse_name_value(name, meta.path().span(), a.as_name_value(), meta.span(), cx)?
             }
         },
         MetaItemOrLitParser::Lit(lit) => match lit.kind {
@@ -126,8 +124,8 @@ pub fn parse_cfg_entry<S: Stage>(
     })
 }
 
-fn parse_cfg_entry_version<S: Stage>(
-    cx: &mut AcceptContext<'_, '_, S>,
+fn parse_cfg_entry_version(
+    cx: &mut AcceptContext<'_, '_>,
     list: &MetaItemListParser,
     meta_span: Span,
 ) -> Result<CfgEntry, ErrorGuaranteed> {
@@ -158,8 +156,8 @@ fn parse_cfg_entry_version<S: Stage>(
     Ok(CfgEntry::Version(min_version, list.span))
 }
 
-fn parse_cfg_entry_target<S: Stage>(
-    cx: &mut AcceptContext<'_, '_, S>,
+fn parse_cfg_entry_target(
+    cx: &mut AcceptContext<'_, '_>,
     list: &MetaItemListParser,
     meta_span: Span,
 ) -> Result<CfgEntry, ErrorGuaranteed> {
@@ -178,35 +176,28 @@ fn parse_cfg_entry_target<S: Stage>(
     let mut result = ThinVec::new();
     for sub_item in list.mixed() {
         // First, validate that this is a NameValue item
-        let Some(sub_item) = sub_item.meta_item() else {
-            cx.adcx().expected_name_value(sub_item.span(), None);
-            continue;
-        };
-        let Some(nv) = sub_item.args().name_value() else {
-            cx.adcx().expected_name_value(sub_item.span(), None);
+        let Some((name, value)) = cx.expect_name_value(sub_item, sub_item.span(), None) else {
             continue;
         };
 
         // Then, parse it as a name-value item
-        let Some(name) = sub_item.path().word_sym().filter(|s| !s.is_path_segment_keyword()) else {
-            return Err(cx.adcx().expected_identifier(sub_item.path().span()));
-        };
+        if name.is_path_segment_keyword() {
+            return Err(cx.adcx().expected_identifier(name.span));
+        }
         let name = Symbol::intern(&format!("target_{name}"));
-        if let Ok(cfg) =
-            parse_name_value(name, sub_item.path().span(), Some(nv), sub_item.span(), cx)
-        {
+        if let Ok(cfg) = parse_name_value(name, sub_item.span(), Some(value), sub_item.span(), cx) {
             result.push(cfg);
         }
     }
     Ok(CfgEntry::All(result, list.span))
 }
 
-pub(crate) fn parse_name_value<S: Stage>(
+pub(crate) fn parse_name_value(
     name: Symbol,
     name_span: Span,
     value: Option<&NameValueParser>,
     span: Span,
-    cx: &mut AcceptContext<'_, '_, S>,
+    cx: &mut AcceptContext<'_, '_>,
 ) -> Result<CfgEntry, ErrorGuaranteed> {
     try_gate_cfg(name, span, cx.sess(), cx.features_option());
 
@@ -222,9 +213,9 @@ pub(crate) fn parse_name_value<S: Stage>(
         }
     };
 
-    match cx.sess.psess.check_config.expecteds.get(&name) {
+    match cx.sess.check_config.expecteds.get(&name) {
         Some(ExpectedValues::Some(values)) if !values.contains(&value.map(|(v, _)| v)) => cx
-            .emit_dyn_lint_with_sess(
+            .emit_lint_with_sess(
                 UNEXPECTED_CFGS,
                 move |dcx, level, sess| {
                     check_cfg::unexpected_cfg_value(sess, (name, name_span), value)
@@ -232,7 +223,7 @@ pub(crate) fn parse_name_value<S: Stage>(
                 },
                 span,
             ),
-        None if cx.sess.psess.check_config.exhaustive_names => cx.emit_dyn_lint_with_sess(
+        None if cx.sess.check_config.exhaustive_names => cx.emit_lint_with_sess(
             UNEXPECTED_CFGS,
             move |dcx, level, sess| {
                 check_cfg::unexpected_cfg_name(sess, (name, name_span), value).into_diag(dcx, level)
@@ -280,7 +271,7 @@ pub fn eval_config_entry(sess: &Session, cfg_entry: &CfgEntry) -> EvalConfigResu
             }
         }
         CfgEntry::NameValue { name, value, span } => {
-            if sess.psess.config.contains(&(*name, *value)) {
+            if sess.config.contains(&(*name, *value)) {
                 EvalConfigResult::True
             } else {
                 EvalConfigResult::False { reason: cfg_entry.clone(), reason_span: *span }
@@ -294,7 +285,7 @@ pub fn eval_config_entry(sess: &Session, cfg_entry: &CfgEntry) -> EvalConfigResu
                 };
             };
             // See https://github.com/rust-lang/rust/issues/64796#issuecomment-640851454 for details
-            let min_version_ok = if sess.psess.assume_incomplete_release {
+            let min_version_ok = if sess.opts.unstable_opts.assume_incomplete_release {
                 RustcVersion::current_overridable() > *min_version
             } else {
                 RustcVersion::current_overridable() >= *min_version

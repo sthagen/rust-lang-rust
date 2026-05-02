@@ -30,11 +30,11 @@ use rustc_data_structures::fx::FxIndexMap;
 use rustc_errors::{DiagCtxtHandle, Diagnostic, LintBuffer};
 use rustc_feature::Features;
 use rustc_session::Session;
+use rustc_session::errors::feature_err;
 use rustc_session::lint::builtin::{
     DEPRECATED_WHERE_CLAUSE_LOCATION, MISSING_ABI, MISSING_UNSAFE_ON_EXTERN,
     PATTERNS_IN_FNS_WITHOUT_BODY, UNUSED_VISIBILITIES,
 };
-use rustc_session::parse::feature_err;
 use rustc_span::{Ident, Span, kw, sym};
 use rustc_target::spec::{AbiMap, AbiMapping};
 use thin_vec::thin_vec;
@@ -762,12 +762,23 @@ impl<'a> AstValidator<'a> {
         match fn_ctxt {
             FnCtxt::Foreign => return,
             FnCtxt::Free | FnCtxt::Assoc(_) => {
-                if !self.sess.target.supports_c_variadic_definitions() {
-                    self.dcx().emit_err(errors::CVariadicNotSupported {
-                        variadic_span: variadic_param.span,
-                        target: &*self.sess.target.llvm_target,
-                    });
-                    return;
+                match self.sess.target.supports_c_variadic_definitions() {
+                    CVariadicStatus::NotSupported => {
+                        self.dcx().emit_err(errors::CVariadicNotSupported {
+                            variadic_span: variadic_param.span,
+                            target: &*self.sess.target.llvm_target,
+                        });
+                        return;
+                    }
+                    CVariadicStatus::Unstable { feature } if !self.features.enabled(feature) => {
+                        let msg =
+                            format!("C-variadic function definitions on this target are unstable");
+                        feature_err(&self.sess, feature, variadic_param.span, msg).emit();
+                        return;
+                    }
+                    CVariadicStatus::Unstable { .. } | CVariadicStatus::Stable => {
+                        /* fall through */
+                    }
                 }
 
                 match sig.header.ext {
@@ -1117,8 +1128,8 @@ fn validate_generic_param_order(dcx: DiagCtxtHandle<'_>, generics: &[GenericPara
             dcx.emit_err(errors::OutOfOrderParams {
                 spans: spans.clone(),
                 sugg_span: span,
-                param_ord,
-                max_param,
+                param_ord: param_ord.to_string(),
+                max_param: max_param.to_string(),
                 ordered_params: &ordered_params,
             });
         }

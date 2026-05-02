@@ -940,10 +940,6 @@ Issue #{number} "{title}" has been added.
 # Mentions
 # ------------------------------------------------------------------------------
 
-[mentions."triagebot.toml"]
-message = "`triagebot.toml` has been modified, there may have been changes to the review queue."
-cc = ["@davidtwco", "@wesleywiser"]
-
 [mentions."compiler/rustc_codegen_cranelift"]
 message = "The Cranelift subtree was changed"
 cc = ["@bjorn3"]
@@ -1594,7 +1590,7 @@ dep-bumps = [
 "/compiler/rustc_codegen_llvm/src/debuginfo" =           ["compiler", "debuginfo"]
 "/compiler/rustc_codegen_ssa" =                          ["compiler", "codegen"]
 "/compiler/rustc_middle/src/dep_graph" =                 ["compiler", "incremental", "query-system"]
-"/compiler/rustc_middle/src/ich" =                       ["compiler", "incremental", "query-system"]
+"/compiler/rustc_middle/src/ich.rs" =                    ["compiler", "incremental", "query-system"]
 "/compiler/rustc_middle/src/mir" =                       ["compiler", "mir"]
 "/compiler/rustc_middle/src/traits" =                    ["compiler", "types"]
 "/compiler/rustc_middle/src/query" =                     ["compiler", "query-system"]

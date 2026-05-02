@@ -25,9 +25,8 @@ fn sort_and_truncate_possibilities(
     } else {
         match filter_well_known_names {
             FilterWellKnownNames::Yes => {
-                possibilities.retain(|cfg_name| {
-                    !sess.psess.check_config.well_known_names.contains(cfg_name)
-                });
+                possibilities
+                    .retain(|cfg_name| !sess.check_config.well_known_names.contains(cfg_name));
             }
             FilterWellKnownNames::No => {}
         };
@@ -105,13 +104,12 @@ pub(crate) fn unexpected_cfg_name(
     value: Option<(Symbol, Span)>,
 ) -> errors::UnexpectedCfgName {
     #[allow(rustc::potential_query_instability)]
-    let possibilities: Vec<Symbol> = sess.psess.check_config.expecteds.keys().copied().collect();
+    let possibilities: Vec<Symbol> = sess.check_config.expecteds.keys().copied().collect();
 
     let mut names_possibilities: Vec<_> = if value.is_none() {
         // We later sort and display all the possibilities, so the order here does not matter.
         #[allow(rustc::potential_query_instability)]
-        sess.psess
-            .check_config
+        sess.check_config
             .expecteds
             .iter()
             .filter_map(|(k, v)| match v {
@@ -167,7 +165,7 @@ pub(crate) fn unexpected_cfg_name(
         is_feature_cfg |= best_match == sym::feature;
 
         if let Some(ExpectedValues::Some(best_match_values)) =
-            sess.psess.check_config.expecteds.get(&best_match)
+            sess.check_config.expecteds.get(&best_match)
         {
             // We will soon sort, so the initial order does not matter.
             #[allow(rustc::potential_query_instability)]
@@ -285,7 +283,7 @@ pub(crate) fn unexpected_cfg_value(
     (name, name_span): (Symbol, Span),
     value: Option<(Symbol, Span)>,
 ) -> errors::UnexpectedCfgValue {
-    let Some(ExpectedValues::Some(values)) = &sess.psess.check_config.expecteds.get(&name) else {
+    let Some(ExpectedValues::Some(values)) = &sess.check_config.expecteds.get(&name) else {
         panic!(
             "it shouldn't be possible to have a diagnostic on a value whose name is not in values"
         );
@@ -305,7 +303,7 @@ pub(crate) fn unexpected_cfg_value(
     let is_from_external_macro = name_span.in_external_macro(sess.source_map());
 
     let code_sugg = if let Some((value, _)) = value
-        && sess.psess.check_config.well_known_names.contains(&name)
+        && sess.check_config.well_known_names.contains(&name)
         && let valid_names = possible_well_known_names_for_cfg_value(sess, value)
         && !valid_names.is_empty()
     {
@@ -378,12 +376,12 @@ pub(crate) fn unexpected_cfg_value(
     // We don't want to encourage people to add values to a well-known names, as these are
     // defined by rustc/Rust itself. Users can still do this if they wish, but should not be
     // encouraged to do so.
-    let can_suggest_adding_value = !sess.psess.check_config.well_known_names.contains(&name)
+    let can_suggest_adding_value = !sess.check_config.well_known_names.contains(&name)
         // Except when working on rustc or the standard library itself, in which case we want to
         // suggest adding these cfgs to the "normal" place because of bootstrapping reasons. As a
         // basic heuristic, we use the "cheat" unstable feature enable method and the
         // non-ui-testing enabled option.
-        || (matches!(sess.psess.unstable_features, rustc_feature::UnstableFeatures::Cheat)
+        || (matches!(sess.unstable_features, rustc_feature::UnstableFeatures::Cheat)
             && !sess.opts.unstable_opts.ui_testing);
 
     let inst = |escape_quotes| {
@@ -429,13 +427,11 @@ pub(crate) fn unexpected_cfg_value(
 fn possible_well_known_names_for_cfg_value(sess: &Session, value: Symbol) -> Vec<Symbol> {
     #[allow(rustc::potential_query_instability)]
     let mut names = sess
-        .psess
         .check_config
         .well_known_names
         .iter()
         .filter(|name| {
-            sess.psess
-                .check_config
+            sess.check_config
                 .expecteds
                 .get(*name)
                 .map(|expected_values| expected_values.contains(&Some(value)))

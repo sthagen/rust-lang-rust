@@ -2099,7 +2099,7 @@ impl<'tcx> ProofTreeVisitor<'tcx> for CoerceVisitor<'_, 'tcx> {
                     ControlFlow::Break(())
                 }
             }
-            Ok(Certainty::Maybe { .. }) => {
+            Ok(Certainty::Maybe(_)) => {
                 // FIXME: structurally normalize?
                 if self.fcx.tcx.is_lang_item(pred.def_id(), LangItem::Unsize)
                     && let ty::Dynamic(..) = pred.skip_binder().trait_ref.args.type_at(1).kind()

@@ -32,8 +32,7 @@ pub(crate) struct Module<'hir> {
     pub(crate) def_id: LocalDefId,
     pub(crate) renamed: Option<Symbol>,
     pub(crate) import_id: Option<LocalDefId>,
-    /// The key is the item `ItemId` and the value is: (item, renamed, Vec<import_id>).
-    /// We use `FxIndexMap` to keep the insert order.
+    /// The key is the item `ItemId`. We use `FxIndexMap` to keep the insert order.
     ///
     /// `import_id` needs to be a `Vec` because we live in a dark world where you can have code
     /// like:
@@ -52,12 +51,9 @@ pub(crate) struct Module<'hir> {
     /// So in this case, we don't want to have two items but just one with attributes from all
     /// non-glob imports to be merged. Glob imports attributes are always ignored, whether they're
     /// shadowed or not.
-    pub(crate) items: FxIndexMap<
-        (LocalDefId, Option<Symbol>),
-        (&'hir hir::Item<'hir>, Option<Symbol>, Vec<LocalDefId>),
-    >,
+    pub(crate) items: FxIndexMap<(LocalDefId, Option<Symbol>), ItemEntry<'hir>>,
 
-    /// (def_id, renamed) -> (res, local_import_id)
+    /// The key is `(def_id, renamed)`.
     ///
     /// `inlined_foreigns` only contains `extern` items
     /// that are cross-crate inlined.
@@ -65,9 +61,29 @@ pub(crate) struct Module<'hir> {
     /// Locally inlined `extern` items are
     /// stored in `foreigns` with the `import_id` set,
     /// analogous to how `items` is.
-    pub(crate) inlined_foreigns: FxIndexMap<(DefId, Option<Symbol>), (Res, LocalDefId)>,
+    pub(crate) inlined_foreigns: FxIndexMap<(DefId, Option<Symbol>), InlinedForeign>,
     /// (item, renamed, import_id)
-    pub(crate) foreigns: Vec<(&'hir hir::ForeignItem<'hir>, Option<Symbol>, Option<LocalDefId>)>,
+    pub(crate) foreigns: Vec<Foreign<'hir>>,
+}
+
+#[derive(Debug)]
+pub(crate) struct ItemEntry<'hir> {
+    pub(crate) item: &'hir hir::Item<'hir>,
+    pub(crate) renamed: Option<Symbol>,
+    pub(crate) import_ids: Vec<LocalDefId>,
+}
+
+#[derive(Debug)]
+pub(crate) struct InlinedForeign {
+    pub(crate) res: Res,
+    pub(crate) import_id: LocalDefId,
+}
+
+#[derive(Debug)]
+pub(crate) struct Foreign<'hir> {
+    pub(crate) item: &'hir hir::ForeignItem<'hir>,
+    pub(crate) renamed: Option<Symbol>,
+    pub(crate) import_id: Option<LocalDefId>,
 }
 
 impl Module<'_> {
@@ -172,9 +188,10 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
             {
                 let item = self.cx.tcx.hir_expect_item(local_def_id);
                 let (ident, _, _) = item.expect_macro();
-                top_level_module
-                    .items
-                    .insert((local_def_id, Some(ident.name)), (item, None, Vec::new()));
+                top_level_module.items.insert(
+                    (local_def_id, Some(ident.name)),
+                    ItemEntry { item, renamed: None, import_ids: Vec::new() },
+                );
             }
         }
 
@@ -278,7 +295,7 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
                 .last_mut()
                 .unwrap()
                 .inlined_foreigns
-                .insert((ori_res_did, renamed), (res, def_id));
+                .insert((ori_res_did, renamed), InlinedForeign { res, import_id: def_id });
             return true;
         };
 
@@ -413,10 +430,14 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
                     .unwrap()
                     .items
                     .entry(key)
-                    .and_modify(|v| v.2.push(import_id))
-                    .or_insert_with(|| (item, renamed, vec![import_id]));
+                    .and_modify(|v| v.import_ids.push(import_id))
+                    .or_insert_with(|| ItemEntry { item, renamed, import_ids: vec![import_id] });
             } else {
-                self.modules.last_mut().unwrap().items.insert(key, (item, renamed, Vec::new()));
+                self.modules
+                    .last_mut()
+                    .unwrap()
+                    .items
+                    .insert(key, ItemEntry { item, renamed, import_ids: Vec::new() });
             }
         }
     }
@@ -566,7 +587,7 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
     ) {
         // If inlining we only want to include public functions.
         if !self.inlining || self.cx.tcx.visibility(item.owner_id).is_public() {
-            self.modules.last_mut().unwrap().foreigns.push((item, renamed, import_id));
+            self.modules.last_mut().unwrap().foreigns.push(Foreign { item, renamed, import_id });
         }
     }
 

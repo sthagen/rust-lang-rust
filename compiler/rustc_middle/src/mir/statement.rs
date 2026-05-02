@@ -12,7 +12,7 @@ use crate::ty::CoroutineArgsExt;
 // Statements
 
 /// A statement in a basic block, including information about its source code.
-#[derive(Clone, TyEncodable, TyDecodable, HashStable, TypeFoldable, TypeVisitable)]
+#[derive(Clone, TyEncodable, TyDecodable, StableHash, TypeFoldable, TypeVisitable)]
 #[non_exhaustive]
 pub struct Statement<'tcx> {
     pub source_info: SourceInfo,
@@ -478,6 +478,12 @@ impl From<Local> for Place<'_> {
 }
 
 impl<'tcx> PlaceRef<'tcx> {
+    pub fn is_prefix_of(&self, other: PlaceRef<'tcx>) -> bool {
+        self.local == other.local
+            && self.projection.len() <= other.projection.len()
+            && self.projection == &other.projection[..self.projection.len()]
+    }
+
     /// Finds the innermost `Local` from this `Place`, *if* it is either a local itself or
     /// a single deref of a local.
     pub fn local_or_deref_local(&self) -> Option<Local> {
@@ -1014,7 +1020,7 @@ impl RawPtrKind {
     }
 }
 
-#[derive(Default, Debug, Clone, TyEncodable, TyDecodable, HashStable, TypeFoldable, TypeVisitable)]
+#[derive(Default, Debug, Clone, TyEncodable, TyDecodable, StableHash, TypeFoldable, TypeVisitable)]
 pub struct StmtDebugInfos<'tcx>(Vec<StmtDebugInfo<'tcx>>);
 
 impl<'tcx> StmtDebugInfos<'tcx> {
@@ -1077,7 +1083,7 @@ impl<'tcx> ops::DerefMut for StmtDebugInfos<'tcx> {
     }
 }
 
-#[derive(Clone, TyEncodable, TyDecodable, HashStable, TypeFoldable, TypeVisitable)]
+#[derive(Clone, TyEncodable, TyDecodable, StableHash, TypeFoldable, TypeVisitable)]
 pub enum StmtDebugInfo<'tcx> {
     AssignRef(Local, Place<'tcx>),
     InvalidAssign(Local),

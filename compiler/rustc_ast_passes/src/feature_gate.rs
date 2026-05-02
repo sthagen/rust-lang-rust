@@ -6,7 +6,7 @@ use rustc_feature::{AttributeGate, BUILTIN_ATTRIBUTE_MAP, BuiltinAttribute, Feat
 use rustc_hir::Attribute;
 use rustc_hir::attrs::AttributeKind;
 use rustc_session::Session;
-use rustc_session::parse::{feature_err, feature_warn};
+use rustc_session::errors::{feature_err, feature_warn};
 use rustc_span::{Span, Spanned, Symbol, sym};
 use thin_vec::ThinVec;
 
@@ -510,6 +510,7 @@ pub fn check_crate(krate: &ast::Crate, sess: &Session, features: &Features) {
     gate_all!(try_blocks_heterogeneous, "`try bikeshed` expression is experimental");
     gate_all!(unsafe_binders, "unsafe binder types are experimental");
     gate_all!(unsafe_fields, "`unsafe` fields are experimental");
+    gate_all!(view_types, "view types are experimental");
     gate_all!(where_clause_attrs, "attributes in `where` clause are unstable");
     gate_all!(yeet_expr, "`do yeet` expression is experimental");
     // tidy-alphabetical-end

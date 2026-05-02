@@ -183,12 +183,7 @@ impl<'tcx> CleanVisitor<'tcx> {
         item_id: LocalDefId,
         attr: &RustcCleanAttribute,
     ) -> Option<Assertion> {
-        self.tcx
-            .sess
-            .psess
-            .config
-            .contains(&(attr.cfg, None))
-            .then(|| self.assertion_auto(item_id, attr))
+        self.tcx.sess.config.contains(&(attr.cfg, None)).then(|| self.assertion_auto(item_id, attr))
     }
 
     /// Gets the "auto" assertion on pre-validated attr, along with the `except` labels.
@@ -406,7 +401,7 @@ struct FindAllAttrs<'tcx> {
 
 impl<'tcx> FindAllAttrs<'tcx> {
     fn is_active_attr(&self, attr: &RustcCleanAttribute) -> bool {
-        self.tcx.sess.psess.config.contains(&(attr.cfg, None))
+        self.tcx.sess.config.contains(&(attr.cfg, None))
     }
 
     fn report_unchecked_attrs(&self, mut checked_attrs: FxHashSet<Span>) {

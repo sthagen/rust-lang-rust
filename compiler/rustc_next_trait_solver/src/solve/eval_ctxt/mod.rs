@@ -2,13 +2,13 @@ use std::mem;
 use std::ops::ControlFlow;
 
 #[cfg(feature = "nightly")]
-use rustc_macros::HashStable_NoContext;
+use rustc_macros::StableHash;
 use rustc_type_ir::data_structures::{HashMap, HashSet};
 use rustc_type_ir::inherent::*;
 use rustc_type_ir::relate::Relate;
 use rustc_type_ir::relate::solver_relating::RelateExt;
 use rustc_type_ir::search_graph::{CandidateHeadUsages, PathKind};
-use rustc_type_ir::solve::OpaqueTypesJank;
+use rustc_type_ir::solve::{MaybeInfo, OpaqueTypesJank};
 use rustc_type_ir::{
     self as ty, CanonicalVarValues, InferCtxtLike, Interner, TypeFoldable, TypeFolder,
     TypeSuperFoldable, TypeSuperVisitable, TypeVisitable, TypeVisitableExt, TypeVisitor,
@@ -30,7 +30,8 @@ use crate::solve::ty::may_use_unstable_feature;
 use crate::solve::{
     CanonicalInput, CanonicalResponse, Certainty, ExternalConstraintsData, FIXPOINT_STEP_LIMIT,
     Goal, GoalEvaluation, GoalSource, GoalStalledOn, HasChanged, MaybeCause,
-    NestedNormalizationGoals, NoSolution, QueryInput, QueryResult, Response, inspect,
+    NestedNormalizationGoals, NoSolution, QueryInput, QueryResult, Response, VisibleForLeakCheck,
+    inspect,
 };
 
 mod probe;
@@ -137,7 +138,7 @@ where
 }
 
 #[derive(PartialEq, Eq, Debug, Hash, Clone, Copy)]
-#[cfg_attr(feature = "nightly", derive(HashStable_NoContext))]
+#[cfg_attr(feature = "nightly", derive(StableHash))]
 pub enum GenerateProofTree {
     Yes,
     No,
@@ -217,7 +218,11 @@ where
             })
             .is_ok_and(|r| match r.certainty {
                 Certainty::Yes => true,
-                Certainty::Maybe { cause: _, opaque_types_jank } => match opaque_types_jank {
+                Certainty::Maybe(MaybeInfo {
+                    cause: _,
+                    opaque_types_jank,
+                    stalled_on_coroutines: _,
+                }) => match opaque_types_jank {
                     OpaqueTypesJank::AllGood => true,
                     OpaqueTypesJank::ErrorIfRigidSelfTy => false,
                 },
@@ -480,11 +485,29 @@ where
         let has_changed =
             if !has_only_region_constraints(response) { HasChanged::Yes } else { HasChanged::No };
 
+        // FIXME: We should revisit and consider removing this after
+        // *assumptions on binders* is available, like once we had done in the
+        // stabilization of `-Znext-solver=coherence`(#121848).
+        // We ignore constraints from the nested goals in leak check. This is to match
+        // with the old solver's behavior, which has separated evaluation and fulfillment,
+        // and the former doesn't consider outlives obligations from the later.
+        let vis = match goal.predicate.kind().skip_binder() {
+            ty::PredicateKind::Clause(_)
+            | ty::PredicateKind::DynCompatible(_)
+            | ty::PredicateKind::Subtype(_)
+            | ty::PredicateKind::Coerce(_)
+            | ty::PredicateKind::ConstEquate(_, _)
+            | ty::PredicateKind::Ambiguous
+            | ty::PredicateKind::NormalizesTo(_) => VisibleForLeakCheck::No,
+            ty::PredicateKind::AliasRelate(_, _, _) => VisibleForLeakCheck::Yes,
+        };
+
         let (normalization_nested_goals, certainty) = instantiate_and_apply_query_response(
             self.delegate,
             goal.param_env,
             &orig_values,
             response,
+            vis,
             self.origin_span,
         );
 
@@ -1096,9 +1119,14 @@ where
         self.delegate.register_ty_outlives(ty, lt, self.origin_span);
     }
 
-    pub(super) fn register_region_outlives(&self, a: I::Region, b: I::Region) {
+    pub(super) fn register_region_outlives(
+        &self,
+        a: I::Region,
+        b: I::Region,
+        vis: VisibleForLeakCheck,
+    ) {
         // `'a: 'b` ==> `'b <= 'a`
-        self.delegate.sub_regions(b, a, self.origin_span);
+        self.delegate.sub_regions(b, a, vis, self.origin_span);
     }
 
     /// Computes the list of goals required for `arg` to be well-formed
@@ -1268,10 +1296,13 @@ where
                 }
             };
 
-        if let Certainty::Maybe {
-            cause: cause @ MaybeCause::Overflow { keep_constraints: false, .. },
-            opaque_types_jank,
-        } = certainty
+        if let Certainty::Maybe(
+            maybe_info @ MaybeInfo {
+                cause: MaybeCause::Overflow { keep_constraints: false, .. },
+                opaque_types_jank: _,
+                stalled_on_coroutines: _,
+            },
+        ) = certainty
         {
             // If we have overflow, it's probable that we're substituting a type
             // into itself infinitely and any partial substitutions in the query
@@ -1284,7 +1315,7 @@ where
             //
             // Changing this to retain some constraints in the future
             // won't be a breaking change, so this is good enough for now.
-            return Ok(self.make_ambiguous_response_no_constraints(cause, opaque_types_jank));
+            return Ok(self.make_ambiguous_response_no_constraints(maybe_info));
         }
 
         let external_constraints =
@@ -1296,7 +1327,7 @@ where
         let mut unique = HashSet::default();
         external_constraints
             .region_constraints
-            .retain(|outlives| !outlives.is_trivial() && unique.insert(*outlives));
+            .retain(|(outlives, _)| !outlives.is_trivial() && unique.insert(*outlives));
 
         let canonical = canonicalize_response(
             self.delegate,
@@ -1317,14 +1348,13 @@ where
     /// ambiguity but return constrained variables to guide inference.
     pub(in crate::solve) fn make_ambiguous_response_no_constraints(
         &self,
-        cause: MaybeCause,
-        opaque_types_jank: OpaqueTypesJank,
+        maybe: MaybeInfo,
     ) -> CanonicalResponse<I> {
         response_no_constraints_raw(
             self.cx(),
             self.max_input_universe,
             self.var_kinds,
-            Certainty::Maybe { cause, opaque_types_jank },
+            Certainty::Maybe(maybe),
         )
     }
 
@@ -1527,6 +1557,7 @@ pub(super) fn evaluate_root_goal_for_proof_tree<D: SolverDelegate<Interner = I>,
         goal.param_env,
         &proof_tree.orig_values,
         response,
+        VisibleForLeakCheck::Yes,
         origin_span,
     );
 

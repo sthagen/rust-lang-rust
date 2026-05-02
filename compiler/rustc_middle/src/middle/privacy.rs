@@ -6,18 +6,18 @@ use std::cmp::Ordering;
 use std::hash::Hash;
 
 use rustc_data_structures::fx::{FxIndexMap, IndexEntry};
-use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
+use rustc_data_structures::stable_hasher::{StableHash, StableHashCtxt, StableHasher};
 use rustc_hir::def::DefKind;
-use rustc_macros::HashStable;
+use rustc_hir::{ItemKind, Node, UseKind};
+use rustc_macros::StableHash;
 use rustc_span::def_id::{CRATE_DEF_ID, LocalDefId};
 
-use crate::ich::StableHashingContext;
 use crate::ty::{TyCtxt, Visibility};
 
 /// Represents the levels of effective visibility an item can have.
 ///
 /// The variants are sorted in ascending order of directness.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, HashStable)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, StableHash)]
 pub enum Level {
     /// Superset of `Reachable` including items leaked through return position `impl Trait`.
     ReachableThroughImplTrait,
@@ -38,7 +38,7 @@ impl Level {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, HashStable)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, StableHash)]
 pub struct EffectiveVisibility {
     direct: Visibility,
     reexported: Visibility,
@@ -185,13 +185,20 @@ impl EffectiveVisibilities {
             if !is_impl && tcx.trait_impl_of_assoc(def_id.to_def_id()).is_none() {
                 let nominal_vis = tcx.visibility(def_id);
                 if ev.reachable.greater_than(nominal_vis, tcx) {
-                    span_bug!(
-                        span,
-                        "{:?}: reachable {:?} > nominal {:?}",
-                        def_id,
-                        ev.reachable,
-                        nominal_vis,
-                    );
+                    if let Node::Item(item) = tcx.hir_node_by_def_id(def_id)
+                        && let ItemKind::Use(_, UseKind::Glob) = item.kind
+                    {
+                        // Glob import visibilities can be increased by other
+                        // more public glob imports in cases of ambiguity.
+                    } else {
+                        span_bug!(
+                            span,
+                            "{:?}: reachable {:?} > nominal {:?}",
+                            def_id,
+                            ev.reachable,
+                            nominal_vis,
+                        );
+                    }
                 }
             }
         }
@@ -207,12 +214,11 @@ impl<Id: Eq + Hash> EffectiveVisibilities<Id> {
         self.map.get(&id)
     }
 
-    // FIXME: Share code with `fn update`.
     pub fn effective_vis_or_private(
         &mut self,
         id: Id,
         lazy_private_vis: impl FnOnce() -> Visibility,
-    ) -> &EffectiveVisibility {
+    ) -> &mut EffectiveVisibility {
         self.map.entry(id).or_insert_with(|| EffectiveVisibility::from_vis(lazy_private_vis()))
     }
 
@@ -226,11 +232,7 @@ impl<Id: Eq + Hash> EffectiveVisibilities<Id> {
         tcx: TyCtxt<'_>,
     ) -> bool {
         let mut changed = false;
-        let mut current_effective_vis = self
-            .map
-            .get(&id)
-            .copied()
-            .unwrap_or_else(|| EffectiveVisibility::from_vis(lazy_private_vis()));
+        let current_effective_vis = self.effective_vis_or_private(id, lazy_private_vis);
 
         let mut inherited_effective_vis_at_prev_level = *inherited_effective_vis.at_level(level);
         let mut calculated_effective_vis = inherited_effective_vis_at_prev_level;
@@ -268,7 +270,6 @@ impl<Id: Eq + Hash> EffectiveVisibilities<Id> {
             }
         }
 
-        self.map.insert(id, current_effective_vis);
         changed
     }
 }
@@ -279,9 +280,9 @@ impl<Id> Default for EffectiveVisibilities<Id> {
     }
 }
 
-impl<'a> HashStable<StableHashingContext<'a>> for EffectiveVisibilities {
-    fn hash_stable(&self, hcx: &mut StableHashingContext<'a>, hasher: &mut StableHasher) {
+impl StableHash for EffectiveVisibilities {
+    fn stable_hash<Hcx: StableHashCtxt>(&self, hcx: &mut Hcx, hasher: &mut StableHasher) {
         let EffectiveVisibilities { ref map } = *self;
-        map.hash_stable(hcx, hasher);
+        map.stable_hash(hcx, hasher);
     }
 }

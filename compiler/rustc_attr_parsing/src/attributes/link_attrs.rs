@@ -3,8 +3,8 @@ use rustc_feature::Features;
 use rustc_hir::attrs::AttributeKind::{LinkName, LinkOrdinal, LinkSection};
 use rustc_hir::attrs::*;
 use rustc_session::Session;
+use rustc_session::errors::feature_err;
 use rustc_session::lint::builtin::ILL_FORMED_ATTRIBUTE_INPUT;
-use rustc_session::parse::feature_err;
 use rustc_span::edition::Edition::Edition2024;
 use rustc_span::kw;
 use rustc_target::spec::{Arch, BinaryFormat};
@@ -23,9 +23,9 @@ use crate::session_diagnostics::{
 
 pub(crate) struct LinkNameParser;
 
-impl<S: Stage> SingleAttributeParser<S> for LinkNameParser {
+impl SingleAttributeParser for LinkNameParser {
     const PATH: &[Symbol] = &[sym::link_name];
-    const ON_DUPLICATE: OnDuplicate<S> = OnDuplicate::WarnButFutureError;
+    const ON_DUPLICATE: OnDuplicate = OnDuplicate::WarnButFutureError;
     const ALLOWED_TARGETS: AllowedTargets = AllowedTargets::AllowListWarnRest(&[
         Allow(Target::ForeignFn),
         Allow(Target::ForeignStatic),
@@ -35,12 +35,8 @@ impl<S: Stage> SingleAttributeParser<S> for LinkNameParser {
         "https://doc.rust-lang.org/reference/items/external-blocks.html#the-link_name-attribute"
     );
 
-    fn convert(cx: &mut AcceptContext<'_, '_, S>, args: &ArgParser) -> Option<AttributeKind> {
-        let Some(nv) = args.name_value() else {
-            let attr_span = cx.attr_span;
-            cx.adcx().expected_name_value(attr_span, None);
-            return None;
-        };
+    fn convert(cx: &mut AcceptContext<'_, '_>, args: &ArgParser) -> Option<AttributeKind> {
+        let nv = cx.expect_name_value(args, cx.attr_span, None)?;
         let Some(name) = nv.value_as_str() else {
             cx.adcx().expected_string_literal(nv.value_span, Some(nv.value_as_lit()));
             return None;
@@ -52,7 +48,7 @@ impl<S: Stage> SingleAttributeParser<S> for LinkNameParser {
 
 pub(crate) struct LinkParser;
 
-impl<S: Stage> CombineAttributeParser<S> for LinkParser {
+impl CombineAttributeParser for LinkParser {
     type Item = LinkEntry;
     const PATH: &[Symbol] = &[sym::link];
     const CONVERT: ConvertFn<Self::Item> = AttributeKind::Link;
@@ -66,7 +62,7 @@ impl<S: Stage> CombineAttributeParser<S> for LinkParser {
     const ALLOWED_TARGETS: AllowedTargets = AllowedTargets::AllowList(ALL_TARGETS); //FIXME Still checked fully in `check_attr.rs`
 
     fn extend(
-        cx: &mut AcceptContext<'_, '_, S>,
+        cx: &mut AcceptContext<'_, '_>,
         args: &ArgParser,
     ) -> impl IntoIterator<Item = Self::Item> {
         let items = match args {
@@ -252,21 +248,20 @@ impl<S: Stage> CombineAttributeParser<S> for LinkParser {
 }
 
 impl LinkParser {
-    fn parse_link_name<S: Stage>(
+    fn parse_link_name(
         item: &MetaItemParser,
         name: &mut Option<(Symbol, Span)>,
-        cx: &mut AcceptContext<'_, '_, S>,
+        cx: &mut AcceptContext<'_, '_>,
     ) -> bool {
         if name.is_some() {
             cx.adcx().duplicate_key(item.span(), sym::name);
             return true;
         }
-        let Some(nv) = item.args().name_value() else {
-            cx.adcx().expected_name_value(item.span(), Some(sym::name));
+        let Some(nv) = cx.expect_name_value(item.args(), item.span(), Some(sym::name)) else {
             return false;
         };
         let Some(link_name) = nv.value_as_str() else {
-            cx.adcx().expected_name_value(item.span(), Some(sym::name));
+            cx.adcx().expected_string_literal(nv.args_span(), Some(nv.value_as_lit()));
             return false;
         };
 
@@ -277,10 +272,10 @@ impl LinkParser {
         true
     }
 
-    fn parse_link_kind<S: Stage>(
+    fn parse_link_kind(
         item: &MetaItemParser,
         kind: &mut Option<NativeLibKind>,
-        cx: &mut AcceptContext<'_, '_, S>,
+        cx: &mut AcceptContext<'_, '_>,
         sess: &Session,
         features: &Features,
     ) -> bool {
@@ -288,12 +283,11 @@ impl LinkParser {
             cx.adcx().duplicate_key(item.span(), sym::kind);
             return true;
         }
-        let Some(nv) = item.args().name_value() else {
-            cx.adcx().expected_name_value(item.span(), Some(sym::kind));
+        let Some(nv) = cx.expect_name_value(item.args(), item.span(), Some(sym::kind)) else {
             return true;
         };
         let Some(link_kind) = nv.value_as_str() else {
-            cx.adcx().expected_name_value(item.span(), Some(sym::kind));
+            cx.adcx().expected_string_literal(item.span(), Some(nv.value_as_lit()));
             return true;
         };
 
@@ -359,31 +353,30 @@ impl LinkParser {
         true
     }
 
-    fn parse_link_modifiers<S: Stage>(
+    fn parse_link_modifiers(
         item: &MetaItemParser,
         modifiers: &mut Option<(Symbol, Span)>,
-        cx: &mut AcceptContext<'_, '_, S>,
+        cx: &mut AcceptContext<'_, '_>,
     ) -> bool {
         if modifiers.is_some() {
             cx.adcx().duplicate_key(item.span(), sym::modifiers);
             return true;
         }
-        let Some(nv) = item.args().name_value() else {
-            cx.adcx().expected_name_value(item.span(), Some(sym::modifiers));
+        let Some(nv) = cx.expect_name_value(item.args(), item.span(), Some(sym::modifiers)) else {
             return true;
         };
         let Some(link_modifiers) = nv.value_as_str() else {
-            cx.adcx().expected_name_value(item.span(), Some(sym::modifiers));
+            cx.adcx().expected_string_literal(item.span(), Some(nv.value_as_lit()));
             return true;
         };
         *modifiers = Some((link_modifiers, nv.value_span));
         true
     }
 
-    fn parse_link_cfg<S: Stage>(
+    fn parse_link_cfg(
         item: &MetaItemParser,
         cfg: &mut Option<CfgEntry>,
-        cx: &mut AcceptContext<'_, '_, S>,
+        cx: &mut AcceptContext<'_, '_>,
         sess: &Session,
         features: &Features,
     ) -> bool {
@@ -401,42 +394,43 @@ impl LinkParser {
         true
     }
 
-    fn parse_link_wasm_import_module<S: Stage>(
+    fn parse_link_wasm_import_module(
         item: &MetaItemParser,
         wasm_import_module: &mut Option<(Symbol, Span)>,
-        cx: &mut AcceptContext<'_, '_, S>,
+        cx: &mut AcceptContext<'_, '_>,
     ) -> bool {
         if wasm_import_module.is_some() {
             cx.adcx().duplicate_key(item.span(), sym::wasm_import_module);
             return true;
         }
-        let Some(nv) = item.args().name_value() else {
-            cx.adcx().expected_name_value(item.span(), Some(sym::wasm_import_module));
+        let Some(nv) =
+            cx.expect_name_value(item.args(), item.span(), Some(sym::wasm_import_module))
+        else {
             return true;
         };
         let Some(link_wasm_import_module) = nv.value_as_str() else {
-            cx.adcx().expected_name_value(item.span(), Some(sym::wasm_import_module));
+            cx.adcx().expected_string_literal(item.span(), Some(nv.value_as_lit()));
             return true;
         };
         *wasm_import_module = Some((link_wasm_import_module, item.span()));
         true
     }
 
-    fn parse_link_import_name_type<S: Stage>(
+    fn parse_link_import_name_type(
         item: &MetaItemParser,
         import_name_type: &mut Option<(PeImportNameType, Span)>,
-        cx: &mut AcceptContext<'_, '_, S>,
+        cx: &mut AcceptContext<'_, '_>,
     ) -> bool {
         if import_name_type.is_some() {
             cx.adcx().duplicate_key(item.span(), sym::import_name_type);
             return true;
         }
-        let Some(nv) = item.args().name_value() else {
-            cx.adcx().expected_name_value(item.span(), Some(sym::import_name_type));
+        let Some(nv) = cx.expect_name_value(item.args(), item.span(), Some(sym::import_name_type))
+        else {
             return true;
         };
         let Some(link_import_name_type) = nv.value_as_str() else {
-            cx.adcx().expected_name_value(item.span(), Some(sym::import_name_type));
+            cx.adcx().expected_string_literal(nv.value_span, Some(nv.value_as_lit()));
             return true;
         };
         if cx.sess().target.arch != Arch::X86 {
@@ -486,9 +480,9 @@ fn check_link_section_macho(name: Symbol) -> Result<(), InvalidMachoSectionReaso
     Ok(())
 }
 
-impl<S: Stage> SingleAttributeParser<S> for LinkSectionParser {
+impl SingleAttributeParser for LinkSectionParser {
     const PATH: &[Symbol] = &[sym::link_section];
-    const ON_DUPLICATE: OnDuplicate<S> = OnDuplicate::WarnButFutureError;
+    const ON_DUPLICATE: OnDuplicate = OnDuplicate::WarnButFutureError;
     const SAFETY: AttributeSafety = AttributeSafety::Unsafe { unsafe_since: Some(Edition2024) };
     const ALLOWED_TARGETS: AllowedTargets = AllowedTargets::AllowListWarnRest(&[
         Allow(Target::Static),
@@ -502,12 +496,8 @@ impl<S: Stage> SingleAttributeParser<S> for LinkSectionParser {
         "https://doc.rust-lang.org/reference/abi.html#the-link_section-attribute"
     );
 
-    fn convert(cx: &mut AcceptContext<'_, '_, S>, args: &ArgParser) -> Option<AttributeKind> {
-        let Some(nv) = args.name_value() else {
-            let attr_span = cx.attr_span;
-            cx.adcx().expected_name_value(attr_span, None);
-            return None;
-        };
+    fn convert(cx: &mut AcceptContext<'_, '_>, args: &ArgParser) -> Option<AttributeKind> {
+        let nv = cx.expect_name_value(args, cx.attr_span, None)?;
         let Some(name) = nv.value_as_str() else {
             cx.adcx().expected_string_literal(nv.value_span, Some(nv.value_as_lit()));
             return None;
@@ -536,14 +526,14 @@ impl<S: Stage> SingleAttributeParser<S> for LinkSectionParser {
 }
 
 pub(crate) struct ExportStableParser;
-impl<S: Stage> NoArgsAttributeParser<S> for ExportStableParser {
+impl NoArgsAttributeParser for ExportStableParser {
     const PATH: &[Symbol] = &[sym::export_stable];
     const ALLOWED_TARGETS: AllowedTargets = AllowedTargets::AllowList(ALL_TARGETS); //FIXME Still checked fully in `check_attr.rs`
     const CREATE: fn(Span) -> AttributeKind = |_| AttributeKind::ExportStable;
 }
 
 pub(crate) struct FfiConstParser;
-impl<S: Stage> NoArgsAttributeParser<S> for FfiConstParser {
+impl NoArgsAttributeParser for FfiConstParser {
     const PATH: &[Symbol] = &[sym::ffi_const];
     const SAFETY: AttributeSafety = AttributeSafety::Unsafe { unsafe_since: None };
     const ALLOWED_TARGETS: AllowedTargets = AllowedTargets::AllowList(&[Allow(Target::ForeignFn)]);
@@ -551,7 +541,7 @@ impl<S: Stage> NoArgsAttributeParser<S> for FfiConstParser {
 }
 
 pub(crate) struct FfiPureParser;
-impl<S: Stage> NoArgsAttributeParser<S> for FfiPureParser {
+impl NoArgsAttributeParser for FfiPureParser {
     const PATH: &[Symbol] = &[sym::ffi_pure];
     const SAFETY: AttributeSafety = AttributeSafety::Unsafe { unsafe_since: None };
     const ALLOWED_TARGETS: AllowedTargets = AllowedTargets::AllowList(&[Allow(Target::ForeignFn)]);
@@ -559,7 +549,7 @@ impl<S: Stage> NoArgsAttributeParser<S> for FfiPureParser {
 }
 
 pub(crate) struct RustcStdInternalSymbolParser;
-impl<S: Stage> NoArgsAttributeParser<S> for RustcStdInternalSymbolParser {
+impl NoArgsAttributeParser for RustcStdInternalSymbolParser {
     const PATH: &[Symbol] = &[sym::rustc_std_internal_symbol];
     const ALLOWED_TARGETS: AllowedTargets = AllowedTargets::AllowList(&[
         Allow(Target::Fn),
@@ -572,7 +562,7 @@ impl<S: Stage> NoArgsAttributeParser<S> for RustcStdInternalSymbolParser {
 
 pub(crate) struct LinkOrdinalParser;
 
-impl<S: Stage> SingleAttributeParser<S> for LinkOrdinalParser {
+impl SingleAttributeParser for LinkOrdinalParser {
     const PATH: &[Symbol] = &[sym::link_ordinal];
     const ALLOWED_TARGETS: AllowedTargets = AllowedTargets::AllowList(&[
         Allow(Target::ForeignFn),
@@ -584,7 +574,7 @@ impl<S: Stage> SingleAttributeParser<S> for LinkOrdinalParser {
         "https://doc.rust-lang.org/reference/items/external-blocks.html#the-link_ordinal-attribute"
     );
 
-    fn convert(cx: &mut AcceptContext<'_, '_, S>, args: &ArgParser) -> Option<AttributeKind> {
+    fn convert(cx: &mut AcceptContext<'_, '_>, args: &ArgParser) -> Option<AttributeKind> {
         let ordinal = parse_single_integer(cx, args)?;
 
         // According to the table at
@@ -611,7 +601,7 @@ impl<S: Stage> SingleAttributeParser<S> for LinkOrdinalParser {
 
 pub(crate) struct LinkageParser;
 
-impl<S: Stage> SingleAttributeParser<S> for LinkageParser {
+impl SingleAttributeParser for LinkageParser {
     const PATH: &[Symbol] = &[sym::linkage];
 
     const ALLOWED_TARGETS: AllowedTargets = AllowedTargets::AllowList(&[
@@ -637,12 +627,8 @@ impl<S: Stage> SingleAttributeParser<S> for LinkageParser {
         "weak_odr",
     ]);
 
-    fn convert(cx: &mut AcceptContext<'_, '_, S>, args: &ArgParser) -> Option<AttributeKind> {
-        let Some(name_value) = args.name_value() else {
-            let attr_span = cx.attr_span;
-            cx.adcx().expected_name_value(attr_span, Some(sym::linkage));
-            return None;
-        };
+    fn convert(cx: &mut AcceptContext<'_, '_>, args: &ArgParser) -> Option<AttributeKind> {
+        let name_value = cx.expect_name_value(args, cx.attr_span, Some(sym::linkage))?;
 
         let Some(value) = name_value.value_as_str() else {
             cx.adcx()
@@ -694,7 +680,7 @@ impl<S: Stage> SingleAttributeParser<S> for LinkageParser {
 
 pub(crate) struct NeedsAllocatorParser;
 
-impl<S: Stage> NoArgsAttributeParser<S> for NeedsAllocatorParser {
+impl NoArgsAttributeParser for NeedsAllocatorParser {
     const PATH: &[Symbol] = &[sym::needs_allocator];
     const ALLOWED_TARGETS: AllowedTargets = AllowedTargets::AllowList(&[Allow(Target::Crate)]);
     const CREATE: fn(Span) -> AttributeKind = |_| AttributeKind::NeedsAllocator;
@@ -702,7 +688,7 @@ impl<S: Stage> NoArgsAttributeParser<S> for NeedsAllocatorParser {
 
 pub(crate) struct CompilerBuiltinsParser;
 
-impl<S: Stage> NoArgsAttributeParser<S> for CompilerBuiltinsParser {
+impl NoArgsAttributeParser for CompilerBuiltinsParser {
     const PATH: &[Symbol] = &[sym::compiler_builtins];
     const ALLOWED_TARGETS: AllowedTargets = AllowedTargets::AllowList(&[Allow(Target::Crate)]);
     const CREATE: fn(Span) -> AttributeKind = |_| AttributeKind::CompilerBuiltins;

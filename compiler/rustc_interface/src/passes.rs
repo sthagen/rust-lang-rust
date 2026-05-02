@@ -6,7 +6,7 @@ use std::sync::{Arc, LazyLock, OnceLock};
 use std::{env, fs, iter};
 
 use rustc_ast::{self as ast, CRATE_NODE_ID};
-use rustc_attr_parsing::{AttributeParser, Early, ShouldEmit};
+use rustc_attr_parsing::{AttributeParser, ShouldEmit};
 use rustc_codegen_ssa::traits::CodegenBackend;
 use rustc_codegen_ssa::{CompiledModules, CrateInfo};
 use rustc_data_structures::indexmap::IndexMap;
@@ -39,8 +39,8 @@ use rustc_resolve::{Resolver, ResolverOutputs};
 use rustc_session::Session;
 use rustc_session::config::{CrateType, Input, OutFileName, OutputFilenames, OutputType};
 use rustc_session::cstore::Untracked;
+use rustc_session::errors::feature_err;
 use rustc_session::output::{filename_for_input, invalid_output_for_target};
-use rustc_session::parse::feature_err;
 use rustc_session::search_paths::PathKind;
 use rustc_span::{
     DUMMY_SP, ErrorGuaranteed, ExpnKind, SourceFileHash, SourceFileHashAlgorithm, Span, Symbol, sym,
@@ -1016,23 +1016,38 @@ pub fn create_and_enter_global_ctxt<T, F: for<'tcx> FnOnce(TyCtxt<'tcx>) -> T>(
             feed.crate_for_resolver(tcx.arena.alloc(Steal::new((krate, pre_configured_attrs))));
             feed.output_filenames(Arc::new(outputs));
 
-            let res = f(tcx);
-            // FIXME maybe run finish even when a fatal error occurred? or at least
-            // tcx.alloc_self_profile_query_strings()?
+            // There are two paths out of `f`.
+            // - Normal exit.
+            // - Panic, e.g. triggered by `abort_if_errors` or a fatal error.
+            //
+            // If a panic occurs, we still need to wind down the self-profiler to correctly record
+            // the query events that are still in flight. Otherwise, they will be invalid and will
+            // show up as "<unknown>" in the profiling data.
+            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(tcx)));
+            let res = match res {
+                Ok(res) => res,
+                Err(err) => {
+                    tcx.alloc_self_profile_query_strings();
+
+                    // Resume unwinding if a panic happened.
+                    std::panic::resume_unwind(err);
+                }
+            };
+
             tcx.finish();
             res
         },
     )
 }
 
-struct DiagCallback<'a, 'tcx> {
-    callback: &'a Box<
-        dyn for<'b> Fn(DiagCtxtHandle<'b>, Level, &dyn Any) -> Diag<'b, ()> + DynSend + DynSync,
+struct DiagCallback<'tcx> {
+    callback: Box<
+        dyn for<'b> FnOnce(DiagCtxtHandle<'b>, Level, &dyn Any) -> Diag<'b, ()> + DynSend + DynSync,
     >,
     tcx: TyCtxt<'tcx>,
 }
 
-impl<'a, 'b, 'tcx> Diagnostic<'a, ()> for DiagCallback<'b, 'tcx> {
+impl<'a, 'tcx> Diagnostic<'a, ()> for DiagCallback<'tcx> {
     fn into_diag(self, dcx: DiagCtxtHandle<'a>, level: Level) -> Diag<'a, ()> {
         (self.callback)(dcx, level, self.tcx.sess)
     }
@@ -1041,12 +1056,12 @@ impl<'a, 'b, 'tcx> Diagnostic<'a, ()> for DiagCallback<'b, 'tcx> {
 pub fn emit_delayed_lints(tcx: TyCtxt<'_>) {
     for owner_id in tcx.hir_crate_items(()).delayed_lint_items() {
         if let Some(delayed_lints) = tcx.opt_ast_lowering_delayed_lints(owner_id) {
-            for lint in delayed_lints {
+            for lint in delayed_lints.steal() {
                 tcx.emit_node_span_lint(
                     lint.lint_id.lint,
                     lint.id,
                     lint.span.clone(),
-                    DiagCallback { callback: &lint.callback, tcx },
+                    DiagCallback { callback: lint.callback, tcx },
                 );
             }
         }
@@ -1117,7 +1132,7 @@ fn run_required_analyses(tcx: TyCtxt<'_>) {
             let hir_items = tcx.hir_crate_items(());
             for owner_id in hir_items.owners() {
                 if let Some(delayed_lints) = tcx.opt_ast_lowering_delayed_lints(owner_id)
-                    && !delayed_lints.is_empty()
+                    && !delayed_lints.borrow().is_empty()
                 {
                     // Assert that delayed_lint_items also picked up this item to have lints.
                     assert!(hir_items.delayed_lint_items().any(|i| i == owner_id));
@@ -1419,7 +1434,7 @@ pub fn collect_crate_types(
     let mut base = session.opts.crate_types.clone();
     if base.is_empty() {
         if let Some(Attribute::Parsed(AttributeKind::CrateType(crate_type))) =
-            AttributeParser::<Early>::parse_limited_should_emit(
+            AttributeParser::parse_limited_should_emit(
                 session,
                 attrs,
                 &[sym::crate_type],

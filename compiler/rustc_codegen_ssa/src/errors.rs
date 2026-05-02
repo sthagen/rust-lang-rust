@@ -13,8 +13,8 @@ use rustc_errors::{
     Level, msg,
 };
 use rustc_macros::{Diagnostic, Subdiagnostic};
+use rustc_middle::ty::Ty;
 use rustc_middle::ty::layout::LayoutError;
-use rustc_middle::ty::{FloatTy, Ty};
 use rustc_span::{Span, Symbol};
 
 use crate::assert_module_sources::CguReuse;
@@ -541,6 +541,12 @@ pub(crate) struct InsufficientVSCodeProduct;
 pub(crate) struct CpuRequired;
 
 #[derive(Diagnostic)]
+#[diag("target cpu `{$target_cpu}` is known but unsupported")]
+pub(crate) struct CpuUnsupported {
+    pub target_cpu: String,
+}
+
+#[derive(Diagnostic)]
 #[diag("processing debug info with `dsymutil` failed: {$status}")]
 #[note("{$output}")]
 pub(crate) struct ProcessingDymutilFailed {
@@ -672,6 +678,18 @@ pub(crate) struct UnknownArchiveKind<'a> {
 }
 
 #[derive(Diagnostic)]
+#[diag("archive `{$path}` was built as {$actual} format, but the target expects {$expected}")]
+#[help(
+    "this often occurs when using BSD-format archive tools on a Linux target; \
+    rebuild the archive with the correct format for the target platform"
+)]
+pub(crate) struct IncompatibleArchiveFormat {
+    pub path: PathBuf,
+    pub actual: String,
+    pub expected: String,
+}
+
+#[derive(Diagnostic)]
 #[diag("linking static libraries is not supported for BPF")]
 pub(crate) struct BpfStaticlibNotSupported;
 
@@ -730,7 +748,7 @@ pub enum InvalidMonomorphization<'tcx> {
         #[primary_span]
         span: Span,
         name: Symbol,
-        f_ty: FloatTy,
+        f_ty: String,
         in_ty: Ty<'tcx>,
     },
 
