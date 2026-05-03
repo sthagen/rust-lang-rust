@@ -376,6 +376,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                                             state_place,
                                             Rvalue::Use(
                                                 this.consume_by_copy_or_move(state_result_place),
+                                                WithRetag::Yes,
                                             ),
                                         );
                                         block.unit()
@@ -465,7 +466,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                             source_info,
                             destination,
                             // Move from `b` so that does not get dropped any more.
-                            Rvalue::Use(Operand::Move(b)),
+                            Rvalue::Use(Operand::Move(b), WithRetag::Yes),
                         );
                         block.unit()
                     }
@@ -518,7 +519,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                         block,
                         source_info,
                         destination,
-                        Rvalue::Use(Operand::Copy(place)),
+                        Rvalue::Use(Operand::Copy(place), WithRetag::Yes),
                     );
                     block.unit()
                 } else if this.infcx.type_is_use_cloned_modulo_regions(this.param_env, ty) {
@@ -555,7 +556,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                         block,
                         source_info,
                         destination,
-                        Rvalue::Use(Operand::Move(place)),
+                        Rvalue::Use(Operand::Move(place), WithRetag::Yes),
                     );
                     block.unit()
                 }
@@ -837,7 +838,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 debug_assert!(Category::of(&expr.kind) == Some(Category::Place));
 
                 let place = unpack!(block = this.as_place(block, expr_id));
-                let rvalue = Rvalue::Use(this.consume_by_copy_or_move(place));
+                let rvalue = Rvalue::Use(this.consume_by_copy_or_move(place), WithRetag::Yes);
                 this.cfg.push_assign(block, source_info, destination, rvalue);
                 block.unit()
             }
@@ -852,7 +853,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 }
 
                 let place = unpack!(block = this.as_place(block, expr_id));
-                let rvalue = Rvalue::Use(this.consume_by_copy_or_move(place));
+                let rvalue = Rvalue::Use(this.consume_by_copy_or_move(place), WithRetag::Yes);
                 this.cfg.push_assign(block, source_info, destination, rvalue);
                 block.unit()
             }

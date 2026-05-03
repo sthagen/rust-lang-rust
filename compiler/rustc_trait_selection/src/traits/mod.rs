@@ -258,7 +258,11 @@ fn do_normalize_predicates<'tcx>(
     elaborated_env: ty::ParamEnv<'tcx>,
     predicates: Vec<ty::Clause<'tcx>>,
 ) -> Result<Vec<ty::Clause<'tcx>>, ErrorGuaranteed> {
-    let span = cause.span;
+    // Even if we move back to eager normalization elsewhere,
+    // param env normalization remains lazy in the next solver.
+    if tcx.next_trait_solver_globally() {
+        return Ok(predicates);
+    }
 
     // FIXME. We should really... do something with these region
     // obligations. But this call just continues the older
@@ -273,6 +277,7 @@ fn do_normalize_predicates<'tcx>(
     // by wfcheck anyway, so I'm not sure we have to check
     // them here too, and we will remove this function when
     // we move over to lazy normalization *anyway*.
+    let span = cause.span;
     let infcx = tcx.infer_ctxt().ignoring_regions().build(TypingMode::non_body_analysis());
     let ocx = ObligationCtxt::new_with_diagnostics(&infcx);
     let predicates = ocx.normalize(&cause, elaborated_env, Unnormalized::new_wip(predicates));
