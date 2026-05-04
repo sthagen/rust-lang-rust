@@ -480,7 +480,7 @@ impl<'tcx> PrettyPrinter<'tcx> for LegacySymbolMangler<'tcx> {
     // Identical to `PrettyPrinter::comma_sep` except there is no space after each comma.
     fn comma_sep<T>(&mut self, mut elems: impl Iterator<Item = T>) -> Result<(), PrintError>
     where
-        T: Print<'tcx, Self>,
+        T: Print<Self>,
     {
         if let Some(first) = elems.next() {
             first.print(self)?;
