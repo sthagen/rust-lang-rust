@@ -339,7 +339,7 @@ impl<'ra, 'tcx> ResolverExpand for Resolver<'ra, 'tcx> {
     }
 
     fn record_macro_rule_usage(&mut self, id: NodeId, rule_i: usize) {
-        if let Some(rules) = self.unused_macro_rules.get_mut(&id) {
+        if let Some((_, rules)) = self.unused_macro_rules.get_mut(&id) {
             rules.remove(rule_i);
         }
     }
@@ -356,11 +356,10 @@ impl<'ra, 'tcx> ResolverExpand for Resolver<'ra, 'tcx> {
             self.unused_macro_rules.swap_remove(&node_id);
         }
 
-        for (&node_id, unused_arms) in self.unused_macro_rules.iter() {
+        for (&node_id, (def_id, unused_arms)) in self.unused_macro_rules.iter() {
             if unused_arms.is_empty() {
                 continue;
             }
-            let def_id = self.local_def_id(node_id);
             let m = &self.local_macro_map[&def_id];
             let SyntaxExtensionKind::MacroRules(ref m) = m.ext.kind else {
                 continue;
@@ -882,7 +881,7 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                 }
                 _ => None,
             },
-            None => self.get_macro(res).map(|macro_data| Arc::clone(&macro_data.ext)),
+            None => self.get_macro(res).map(Arc::clone),
         };
         Ok((ext, res))
     }
@@ -1212,7 +1211,7 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
         // Reserve some names that are not quite covered by the general check
         // performed on `Resolver::builtin_attrs`.
         if name == sym::cfg || name == sym::cfg_attr {
-            let macro_kinds = self.get_macro(res).map(|macro_data| macro_data.ext.macro_kinds());
+            let macro_kinds = res.macro_kinds();
             if macro_kinds.is_some() && sub_namespace_match(macro_kinds, Some(MacroKind::Attr)) {
                 self.dcx().emit_err(errors::NameReservedInAttributeNamespace { span, ident: name });
             }

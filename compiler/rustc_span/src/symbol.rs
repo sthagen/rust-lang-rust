@@ -8,7 +8,7 @@ use std::{fmt, str};
 use rustc_arena::DroplessArena;
 use rustc_data_structures::fx::{FxHashSet, FxIndexSet};
 use rustc_data_structures::stable_hasher::{
-    StableCompare, StableHash, StableHashCtxt, StableHasher, ToStableHashKey,
+    StableCompare, StableHash, StableHashCtxt, StableHasher,
 };
 use rustc_data_structures::sync::Lock;
 use rustc_macros::{Decodable, Encodable, StableHash, symbols};
@@ -753,6 +753,7 @@ symbols! {
         d32,
         dbg_macro,
         dead_code,
+        dead_code_pub_in_binary,
         dealloc,
         debug,
         debug_assert_eq_macro,
@@ -835,6 +836,7 @@ symbols! {
         dreg_low8,
         dreg_low16,
         drop,
+        drop_glue,
         drop_in_place,
         drop_types_in_const,
         dropck_eyepatch,
@@ -1927,6 +1929,7 @@ symbols! {
         sinf128,
         size,
         size_of,
+        size_of_type_id,
         size_of_val,
         sized,
         sized_hierarchy,
@@ -2636,14 +2639,6 @@ impl StableHash for Symbol {
     #[inline]
     fn stable_hash<Hcx: StableHashCtxt>(&self, hcx: &mut Hcx, hasher: &mut StableHasher) {
         self.as_str().stable_hash(hcx, hasher);
-    }
-}
-
-impl ToStableHashKey for Symbol {
-    type KeyType = String;
-    #[inline]
-    fn to_stable_hash_key<Hcx>(&self, _: &mut Hcx) -> String {
-        self.as_str().to_string()
     }
 }
 

@@ -38,8 +38,8 @@ use crate::ref_mut::CmCell;
 use crate::{
     BindingKey, Decl, DeclData, DeclKind, DelayedVisResolutionError, ExternModule,
     ExternPreludeEntry, Finalize, IdentKey, LocalModule, MacroData, Module, ModuleKind,
-    ModuleOrUniformRoot, ParentScope, PathResult, Res, Resolver, Segment, Used, VisResolutionError,
-    errors,
+    ModuleOrUniformRoot, ParentScope, PathResult, Res, Resolver, Segment, SyntaxExtension, Used,
+    VisResolutionError, errors,
 };
 
 impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
@@ -207,10 +207,11 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
         }
     }
 
-    pub(crate) fn get_macro(&self, res: Res) -> Option<&'ra MacroData> {
+    /// Gets the `SyntaxExtension` corresponding to `res`.
+    pub(crate) fn get_macro(&self, res: Res) -> Option<&Arc<SyntaxExtension>> {
         match res {
-            Res::Def(DefKind::Macro(..), def_id) => Some(self.get_macro_by_def_id(def_id)),
-            Res::NonMacroAttr(_) => Some(self.non_macro_attr),
+            Res::Def(DefKind::Macro(..), def_id) => Some(&self.get_macro_by_def_id(def_id).ext),
+            Res::NonMacroAttr(_) => Some(&self.non_macro_attr),
             _ => None,
         }
     }
@@ -720,13 +721,15 @@ impl<'a, 'ra, 'tcx> DefCollector<'a, 'ra, 'tcx> {
                     decls: Default::default(),
                     nested,
                     id,
+                    def_id: feed.def_id(),
                 };
 
                 self.add_import(module_path, kind, use_tree.span(), item, root_span, item.id, vis);
             }
             ast::UseTreeKind::Glob(_) => {
                 if !ast::attr::contains_name(&item.attrs, sym::prelude_import) {
-                    let kind = ImportKind::Glob { max_vis: CmCell::new(None), id };
+                    let kind =
+                        ImportKind::Glob { max_vis: CmCell::new(None), id, def_id: feed.def_id() };
                     self.add_import(prefix, kind, use_tree.span(), item, root_span, item.id, vis);
                 } else {
                     // Resolve the prelude import early.
@@ -1018,7 +1021,12 @@ impl<'a, 'ra, 'tcx> DefCollector<'a, 'ra, 'tcx> {
         })
         .unwrap_or((true, None, self.r.dummy_decl));
         let import = self.r.arenas.alloc_import(ImportData {
-            kind: ImportKind::ExternCrate { source: orig_name, target: orig_ident, id: item.id },
+            kind: ImportKind::ExternCrate {
+                source: orig_name,
+                target: orig_ident,
+                id: item.id,
+                def_id: local_def_id,
+            },
             root_id: item.id,
             parent_scope,
             imported_module: CmCell::new(module),
@@ -1270,7 +1278,7 @@ impl<'a, 'ra, 'tcx> DefCollector<'a, 'ra, 'tcx> {
         if !ident.as_str().starts_with('_') {
             self.r.unused_macros.insert(def_id, (node_id, ident));
             let nrules = self.r.local_macro_map[&def_id].nrules;
-            self.r.unused_macro_rules.insert(node_id, DenseBitSet::new_filled(nrules));
+            self.r.unused_macro_rules.insert(node_id, (def_id, DenseBitSet::new_filled(nrules)));
         }
     }
 

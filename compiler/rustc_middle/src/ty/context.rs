@@ -106,6 +106,10 @@ impl<'tcx> rustc_type_ir::inherent::Features<TyCtxt<'tcx>> for &'tcx rustc_featu
         self.generic_const_exprs()
     }
 
+    fn generic_const_args(self) -> bool {
+        self.generic_const_args()
+    }
+
     fn coroutine_clone(self) -> bool {
         self.coroutine_clone()
     }
@@ -2655,6 +2659,10 @@ impl<'tcx> TyCtxt<'tcx> {
 
     pub fn next_trait_solver_in_coherence(self) -> bool {
         self.sess.opts.unstable_opts.next_solver.coherence
+    }
+
+    pub fn disable_trait_solver_fast_paths(self) -> bool {
+        self.sess.opts.unstable_opts.disable_fast_paths
     }
 
     #[allow(rustc::bad_opt_access)]

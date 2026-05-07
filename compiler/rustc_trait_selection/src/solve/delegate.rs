@@ -9,13 +9,13 @@ use rustc_infer::infer::canonical::{
     Canonical, CanonicalExt as _, CanonicalQueryInput, CanonicalVarKind, CanonicalVarValues,
 };
 use rustc_infer::infer::{InferCtxt, RegionVariableOrigin, SubregionOrigin, TyCtxtInferExt};
-use rustc_infer::traits::solve::Goal;
+use rustc_infer::traits::solve::{FetchEligibleAssocItemResponse, Goal};
 use rustc_middle::traits::query::NoSolution;
 use rustc_middle::traits::solve::Certainty;
 use rustc_middle::ty::{
-    self, Ty, TyCtxt, TypeFlags, TypeFoldable, TypeVisitableExt as _, TypingMode,
+    self, MayBeErased, Ty, TyCtxt, TypeFlags, TypeFoldable, TypeVisitableExt as _, TypingMode,
 };
-use rustc_span::{DUMMY_SP, ErrorGuaranteed, Span};
+use rustc_span::{DUMMY_SP, Span};
 
 use crate::traits::{EvaluateConstErr, ObligationCause, sizedness_fast_path, specialization_graph};
 
@@ -34,6 +34,15 @@ impl<'tcx> Deref for SolverDelegate<'tcx> {
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl<'tcx> SolverDelegate<'tcx> {
+    fn known_no_opaque_types_in_storage(&self) -> bool {
+        self.inner.borrow_mut().opaque_types().is_empty()
+            // in erased mode, observing that opaques are empty aren't enough to give a result
+            // here, so let's try the slow path instead.
+            && !self.typing_mode_raw().is_erased_not_coherence()
     }
 }
 
@@ -70,7 +79,7 @@ impl<'tcx> rustc_next_trait_solver::delegate::SolverDelegate for SolverDelegate<
                 // eventually use opaques to incompletely guide inference via ty var
                 // self types.
                 // FIXME: Properly consider opaques here.
-                && self.inner.borrow_mut().opaque_types().is_empty()
+                && self.known_no_opaque_types_in_storage()
             {
                 return Some(Certainty::AMBIGUOUS);
             }
@@ -277,8 +286,14 @@ impl<'tcx> rustc_next_trait_solver::delegate::SolverDelegate for SolverDelegate<
         goal_trait_ref: ty::TraitRef<'tcx>,
         trait_assoc_def_id: DefId,
         impl_def_id: DefId,
-    ) -> Result<Option<DefId>, ErrorGuaranteed> {
-        let node_item = specialization_graph::assoc_def(self.tcx, impl_def_id, trait_assoc_def_id)?;
+    ) -> FetchEligibleAssocItemResponse<'tcx> {
+        let node_item =
+            match specialization_graph::assoc_def(self.tcx, impl_def_id, trait_assoc_def_id) {
+                Ok(i) => i,
+                Err(guar) => return FetchEligibleAssocItemResponse::Err(guar),
+            };
+
+        let typing_mode = self.typing_mode_raw();
 
         let eligible = if node_item.is_final() {
             // Non-specializable items are always projectable.
@@ -288,7 +303,7 @@ impl<'tcx> rustc_next_trait_solver::delegate::SolverDelegate for SolverDelegate<
             // and the obligation is monomorphic, otherwise passes such as
             // transmute checking and polymorphic MIR optimizations could
             // get a result which isn't correct for all monomorphizations.
-            match self.typing_mode() {
+            match typing_mode {
                 TypingMode::Coherence
                 | TypingMode::Analysis { .. }
                 | TypingMode::Borrowck { .. }
@@ -297,11 +312,20 @@ impl<'tcx> rustc_next_trait_solver::delegate::SolverDelegate for SolverDelegate<
                     let poly_trait_ref = self.resolve_vars_if_possible(goal_trait_ref);
                     !poly_trait_ref.still_further_specializable()
                 }
+                TypingMode::ErasedNotCoherence(MayBeErased) => {
+                    return FetchEligibleAssocItemResponse::NotFoundBecauseErased;
+                }
             }
         };
 
         // FIXME: Check for defaultness here may cause diagnostics problems.
-        if eligible { Ok(Some(node_item.item.def_id)) } else { Ok(None) }
+        if eligible {
+            FetchEligibleAssocItemResponse::Found(node_item.item.def_id)
+        } else {
+            // We know it's not erased since then we'd have returned in the match above,
+            // or node_item.final() was true and eligible is always true.
+            FetchEligibleAssocItemResponse::NotFound(typing_mode.assert_not_erased())
+        }
     }
 
     // FIXME: This actually should destructure the `Result` we get from transmutability and
