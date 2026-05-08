@@ -1,3 +1,4 @@
+//! Regression test for <https://github.com/rust-lang/rust/issues/38437>
 //@ run-pass
 #![allow(dead_code)]
 // Check that drop elaboration clears the "master" discriminant

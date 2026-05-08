@@ -1,3 +1,4 @@
+//! Regression test for <https://github.com/rust-lang/rust/issues/31910>
 enum Enum<T: Trait> {
     //~^ ERROR: `T` is never used
     //~| NOTE: unused type parameter

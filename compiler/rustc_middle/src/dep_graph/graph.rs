@@ -331,16 +331,15 @@ impl DepGraphData {
             format!("forcing query with already existing `DepNode`: {dep_node:?}")
         });
 
-        let with_deps = |task_deps| with_deps(task_deps, op);
         let (result, edges) = if tcx.is_eval_always(dep_node.kind) {
-            (with_deps(TaskDepsRef::EvalAlways), EdgesVec::new())
+            (with_deps(TaskDepsRef::EvalAlways, op), EdgesVec::new())
         } else {
             let task_deps = Lock::new(TaskDeps::new(
                 #[cfg(debug_assertions)]
                 Some(dep_node),
                 0,
             ));
-            (with_deps(TaskDepsRef::Allow(&task_deps)), task_deps.into_inner().reads)
+            (with_deps(TaskDepsRef::Allow(&task_deps), op), task_deps.into_inner().reads)
         };
 
         let dep_node_index =
@@ -396,10 +395,10 @@ impl DepGraphData {
             }
             _ => {
                 // The dep node indices are hashed here instead of hashing the dep nodes of the
-                // dependencies. These indices may refer to different nodes per session, but this isn't
-                // a problem here because we that ensure the final dep node hash is per session only by
-                // combining it with the per session random number `anon_id_seed`. This hash only need
-                // to map the dependencies to a single value on a per session basis.
+                // dependencies. These indices may refer to different nodes per session, but this
+                // isn't a problem here because we that ensure the final dep node hash is per
+                // session only by combining it with the per session `anon_id_seed`. This hash only
+                // need to map the dependencies to a single value on a per session basis.
                 let mut hasher = StableHasher::new();
                 reads.hash(&mut hasher);
 
@@ -629,7 +628,7 @@ impl DepGraphData {
             let ok = match color {
                 DepNodeColor::Unknown => true,
                 DepNodeColor::Red => false,
-                DepNodeColor::Green(..) => sess.threads() > 1, // Other threads may mark this green
+                DepNodeColor::Green(..) => sess.threads().is_some(), // Other threads may mark this green
             };
             if !ok {
                 panic!("{}", msg())
@@ -1223,13 +1222,14 @@ pub struct TaskDeps {
     #[cfg(debug_assertions)]
     node: Option<DepNode>,
 
-    /// A vector of `DepNodeIndex`, basically.
+    /// A vector of `DepNodeIndex`, basically. Contains no duplicates.
     reads: EdgesVec,
 
-    /// When adding new edges to `reads` in `DepGraph::read_index` we need to determine if the edge
-    /// has been seen before. If the number of elements in `reads` is small, we just do a linear
-    /// scan. If the number is higher, a hashset has better perf. This field is that hashset. It's
-    /// only used if the number of elements in `reads` exceeds `LINEAR_SCAN_MAX`.
+    /// When adding a new edge to `reads` in `DepGraph::read_index` we must determine if the edge
+    /// has been seen before. We just do a linear scan of `reads` if its length is less than or
+    /// equal to `LINEAR_SCAN_MAX`. Otherwise, we use this hashset for better performance. Note:
+    /// `reads` is always the canonical edges representation; this field is just to speed up the
+    /// seen-before test.
     read_set: FxHashSet<DepNodeIndex>,
 }
 

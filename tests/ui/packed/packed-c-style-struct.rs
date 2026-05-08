@@ -1,3 +1,4 @@
+//! Regression test for <https://github.com/rust-lang/rust/issues/48159>
 //@ run-pass
 #![allow(non_camel_case_types)]
 

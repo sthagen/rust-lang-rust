@@ -1595,6 +1595,20 @@ impl<'tcx> OwnerNodes<'tcx> {
         // Indexing must ensure it is an OwnerNode.
         self.nodes[ItemLocalId::ZERO].node.as_owner().unwrap()
     }
+
+    /// Return an instance of `OwnerNodes` suitable for definitions that have no corresponding AST.
+    pub fn synthetic() -> OwnerNodes<'tcx> {
+        OwnerNodes {
+            // There is no reason to bother computing a hash for a synthetic body.
+            // Just use a constant value.
+            opt_hash_including_bodies: Some(Fingerprint::ZERO),
+            nodes: IndexVec::from_elem_n(
+                ParentedNode { parent: ItemLocalId::INVALID, node: OwnerNode::Synthetic.into() },
+                1,
+            ),
+            bodies: SortedMap::new(),
+        }
+    }
 }
 
 impl fmt::Debug for OwnerNodes<'_> {
