@@ -1,7 +1,9 @@
+//! Regression test for https://github.com/rust-lang/rust/issues/44239
+
 //@ run-rustfix
 #![allow(dead_code, non_upper_case_globals)]
 fn main() {
-    const n: usize = 0;
+    let n: usize = 0;
 
     struct Foo;
     impl Foo {

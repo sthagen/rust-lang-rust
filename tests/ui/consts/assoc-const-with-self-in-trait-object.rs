@@ -1,3 +1,5 @@
+//! Regression test for https://github.com/rust-lang/rust/issues/50518
+
 //@ check-pass
 use std::marker::PhantomData;
 

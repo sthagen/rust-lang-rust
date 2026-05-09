@@ -1,3 +1,5 @@
+//! Regression test for https://github.com/rust-lang/rust/issues/49955
+
 //@ run-pass
 
 const ALL_THE_NUMS: [u32; 1] = [

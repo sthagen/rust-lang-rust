@@ -1,3 +1,5 @@
+//! Regression test for https://github.com/rust-lang/rust/issues/30891
+
 //@ run-pass
 const ERROR_CONST: bool = true;
 

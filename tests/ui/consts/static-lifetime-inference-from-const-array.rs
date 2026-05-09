@@ -1,6 +1,6 @@
 //@ run-pass
 #![allow(unused_variables)]
-// Regression test for #40951.
+// Regression test for https://github.com/rust-lang/rust/issues/40951.
 
 const FOO: [&'static str; 1] = ["foo"];
 

@@ -1,3 +1,5 @@
+//! Regression test for https://github.com/rust-lang/rust/issues/25757
+
 //@ run-pass
 struct Foo {
     a: u32
