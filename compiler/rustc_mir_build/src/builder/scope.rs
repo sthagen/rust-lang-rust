@@ -892,7 +892,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
 
         let expr = &self.thir[value];
         let constant = match &expr.kind {
-            ExprKind::Adt(box AdtExpr { variant_index, fields, base, .. }) => {
+            ExprKind::Adt(AdtExpr { variant_index, fields, base, .. }) => {
                 assert!(matches!(base, AdtExprBase::None));
                 assert!(fields.is_empty());
                 ConstOperand {

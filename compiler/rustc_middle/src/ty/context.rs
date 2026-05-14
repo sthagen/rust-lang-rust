@@ -2652,6 +2652,10 @@ impl<'tcx> TyCtxt<'tcx> {
         self.next_trait_solver_globally() || self.sess.opts.unstable_opts.typing_mode_borrowck
     }
 
+    pub fn assumptions_on_binders(self) -> bool {
+        self.sess.opts.unstable_opts.assumptions_on_binders
+    }
+
     pub fn is_impl_trait_in_trait(self, def_id: DefId) -> bool {
         self.opt_rpitit_info(def_id).is_some()
     }

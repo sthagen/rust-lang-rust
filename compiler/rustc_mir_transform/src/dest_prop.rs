@@ -282,7 +282,7 @@ impl<'tcx> MutVisitor<'tcx> for Merger<'tcx> {
         };
         self.super_statement(statement, location);
         match &statement.kind {
-            StatementKind::Assign(box (dest, rvalue)) => {
+            StatementKind::Assign((dest, rvalue)) => {
                 match rvalue {
                     Rvalue::Use(Operand::Copy(place) | Operand::Move(place), _) => {
                         // These might've been turned into self-assignments by the replacement
@@ -396,10 +396,8 @@ struct FindAssignments<'a, 'tcx> {
 
 impl<'tcx> Visitor<'tcx> for FindAssignments<'_, 'tcx> {
     fn visit_statement(&mut self, statement: &Statement<'tcx>, _: Location) {
-        if let StatementKind::Assign(box (
-            lhs,
-            Rvalue::Use(Operand::Copy(rhs) | Operand::Move(rhs), _),
-        )) = &statement.kind
+        if let StatementKind::Assign((lhs, Rvalue::Use(Operand::Copy(rhs) | Operand::Move(rhs), _))) =
+            &statement.kind
             && let Some(src) = lhs.as_local()
             && let Some(dest) = rhs.as_local()
         {
@@ -571,7 +569,7 @@ fn save_as_intervals<'tcx>(
             // We make an exception for simple assignments `_a.stuff = {copy|move} _b.stuff`,
             // as marking `_b` live here would prevent unification.
             let is_simple_assignment = match stmt.kind {
-                StatementKind::Assign(box (
+                StatementKind::Assign((
                     lhs,
                     Rvalue::CopyForDeref(rhs)
                     | Rvalue::Use(Operand::Copy(rhs) | Operand::Move(rhs), _),

@@ -229,7 +229,8 @@ impl<'tcx> AdtDef<'tcx> {
             ty::Adt(base_def, base_args) => {
                 let variant = base_def.variant(variant_idx);
                 let field = &variant.fields[field_idx];
-                (field.ty(tcx, base_args), base_def.is_enum().then_some(variant.name), field.name)
+                let ty = field.ty(tcx, base_args).skip_norm_wip();
+                (ty, base_def.is_enum().then_some(variant.name), field.name)
             }
             ty::Tuple(tys) => {
                 if variant_idx != FIRST_VARIANT {
@@ -349,7 +350,7 @@ impl AdtDefData {
             debug!("found non-exhaustive variant list for {:?}", did);
             flags = flags | AdtFlags::IS_VARIANT_LIST_NON_EXHAUSTIVE;
         }
-        if find_attr!(tcx, did, PinV2) {
+        if find_attr!(tcx, did, PinV2(..)) {
             debug!("found pin-project type {:?}", did);
             flags |= AdtFlags::IS_PIN_PROJECT;
         }

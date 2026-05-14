@@ -231,7 +231,7 @@ impl<'a> MaybeTransitiveLiveLocals<'a> {
     ) -> Option<Place<'tcx>> {
         // Compute the place that we are storing to, if any
         let destination = match stmt_kind {
-            StatementKind::Assign(box (place, rvalue)) => (rvalue.is_safe_to_remove()
+            StatementKind::Assign((place, rvalue)) => (rvalue.is_safe_to_remove()
                 // FIXME: We are not sure how we should represent this debugging information for some statements,
                 // keep it for now.
                 && (!debuginfo_locals.contains(place.local)
