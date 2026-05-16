@@ -8,7 +8,6 @@ use rustc_hir::def::*;
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_hir::{self as hir, BindingMode, ByRef, HirId, MatchSource};
 use rustc_infer::infer::TyCtxtInferExt;
-use rustc_lint_defs::Level;
 use rustc_middle::bug;
 use rustc_middle::thir::visit::Visitor;
 use rustc_middle::thir::*;
@@ -1026,7 +1025,7 @@ fn find_fallback_pattern_typo<'tcx>(
     pat: &Pat<'tcx>,
     lint: &mut UnreachablePattern<'_>,
 ) {
-    if let Level::Allow = cx.tcx.lint_level_at_node(UNREACHABLE_PATTERNS, hir_id).level {
+    if cx.tcx.lint_level_spec_at_node(UNREACHABLE_PATTERNS, hir_id).is_allow() {
         // This is because we use `with_no_trimmed_paths` later, so if we never emit the lint we'd
         // ICE. At the same time, we don't really need to do all of this if we won't emit anything.
         return;
