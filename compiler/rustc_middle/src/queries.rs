@@ -1118,7 +1118,7 @@ rustc_queries! {
     }
 
     /// Unsafety-check this `LocalDefId`.
-    query check_transmutes(key: LocalDefId) {
+    query check_transmutes(key: LocalDefId) -> Result<(), ErrorGuaranteed> {
         desc { "check transmute calls inside `{}`", tcx.def_path_str(key) }
     }
 
@@ -2063,6 +2063,10 @@ rustc_queries! {
 
     query inherit_sig_for_delegation_item(def_id: LocalDefId) -> &'tcx [Ty<'tcx>] {
         desc { "inheriting delegation signature" }
+    }
+
+    query delegation_user_specified_args(def_id: LocalDefId) -> (&'tcx [GenericArg<'tcx>], &'tcx [GenericArg<'tcx>]) {
+        desc { "getting delegation user-specified args" }
     }
 
     /// Does lifetime resolution on items. Importantly, we can't resolve
