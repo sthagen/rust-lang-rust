@@ -325,7 +325,8 @@ where
                         ty::TypingMode::Analysis { .. }
                         | ty::TypingMode::Borrowck { .. }
                         | ty::TypingMode::PostBorrowckAnalysis { .. }
-                        | ty::TypingMode::PostAnalysis => {
+                        | ty::TypingMode::PostAnalysis
+                        | ty::TypingMode::Codegen => {
                             ecx.structurally_instantiate_normalizes_to_term(
                                 goal,
                                 goal.predicate.alias,
@@ -389,7 +390,7 @@ where
                 impl_def_id,
                 impl_args,
                 impl_trait_ref,
-                target_container_def_id.into(),
+                target_container_def_id,
             )?;
 
             if !cx.check_args_compatible(target_item_def_id.into(), target_args) {

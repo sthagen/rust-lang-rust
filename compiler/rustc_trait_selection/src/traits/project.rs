@@ -275,10 +275,13 @@ pub fn normalize_projection_term<'a, 'b, 'tcx>(
             // and a deferred predicate to resolve this when more type
             // information is available.
 
-            selcx
-                .infcx
-                .projection_term_to_infer(param_env, alias_term, cause, depth + 1, obligations)
-                .into()
+            selcx.infcx.projection_term_to_infer(
+                param_env,
+                alias_term,
+                cause,
+                depth + 1,
+                obligations,
+            )
         })
 }
 
@@ -962,7 +965,7 @@ fn assemble_candidates_from_impls<'cx, 'tcx>(
                                     );
                                     false
                                 }
-                                TypingMode::PostAnalysis => {
+                                TypingMode::PostAnalysis | TypingMode::Codegen => {
                                     // NOTE(eddyb) inference variables can resolve to parameters, so
                                     // assume `poly_trait_ref` isn't monomorphic, if it contains any.
                                     let poly_trait_ref =
