@@ -3908,6 +3908,13 @@ pub struct EiiImpl {
     pub is_default: bool,
 }
 
+#[derive(Clone, Encodable, Decodable, Debug, Walkable, PartialEq, Eq)]
+pub enum DelegationSource {
+    Single,
+    List,
+    Glob,
+}
+
 #[derive(Clone, Encodable, Decodable, Debug, Walkable)]
 pub struct Delegation {
     /// Path resolution id.
@@ -3918,7 +3925,13 @@ pub struct Delegation {
     pub rename: Option<Ident>,
     pub body: Option<Box<Block>>,
     /// The item was expanded from a glob delegation item.
-    pub from_glob: bool,
+    pub source: DelegationSource,
+}
+
+impl Delegation {
+    pub fn last_segment_span(&self) -> Span {
+        self.path.segments.last().unwrap().ident.span
+    }
 }
 
 #[derive(Clone, Encodable, Decodable, Debug, Walkable)]
