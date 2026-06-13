@@ -1633,10 +1633,8 @@ pub(super) fn check_where_clauses<'tcx>(wfcx: &WfCheckingCtxt<'_, 'tcx>, def_id:
             let pred_binder = proj
                 .map_bound(|pred| {
                     pred.term.as_const().map(|ct| {
-                        let assoc_const_ty = tcx
-                            .type_of(pred.projection_term.def_id())
-                            .instantiate(tcx, pred.projection_term.args)
-                            .skip_norm_wip();
+                        let assoc_const_ty =
+                            pred.projection_term.expect_ct().type_of(tcx).skip_norm_wip();
                         ty::ClauseKind::ConstArgHasType(ct, assoc_const_ty)
                     })
                 })
@@ -1711,8 +1709,9 @@ fn check_fn_or_method<'tcx>(
 
     if sig.abi() == ExternAbi::RustCall {
         let span = tcx.def_span(def_id);
-        let has_implicit_self = hir_decl.implicit_self() != hir::ImplicitSelfKind::None;
+        let has_implicit_self = hir_decl.implicit_self().has_implicit_self();
         let mut inputs = sig.inputs().iter().skip(if has_implicit_self { 1 } else { 0 });
+        // FIXME(splat): use `sig.splatted()` once FnSig has it
         // Check that the argument is a tuple and is sized
         if let Some(ty) = inputs.next() {
             wfcx.register_bound(
@@ -2049,12 +2048,6 @@ pub(super) fn check_variances_for_type_defn<'tcx>(tcx: TyCtxt<'tcx>, def_id: Loc
         DefKind::Enum | DefKind::Struct | DefKind::Union => {
             // Ok
         }
-        DefKind::TyAlias => {
-            assert!(
-                tcx.type_alias_is_lazy(def_id),
-                "should not be computing variance of non-free type alias"
-            );
-        }
         kind => span_bug!(tcx.def_span(def_id), "cannot compute the variances of {kind:?}"),
     }
 
@@ -2206,7 +2199,6 @@ fn report_bivariance<'tcx>(
                 errors::UnusedGenericParameterHelp::AdtNoPhantomData { param_name }
             }
         }
-        ItemKind::TyAlias(..) => errors::UnusedGenericParameterHelp::TyAlias { param_name },
         item_kind => bug!("report_bivariance: unexpected item kind: {item_kind:?}"),
     };
 
@@ -2288,9 +2280,6 @@ impl<'tcx> IsProbablyCyclical<'tcx> {
                         .visit_with(self)
                 })
             }
-            DefKind::TyAlias if self.tcx.type_alias_is_lazy(def_id) => {
-                self.tcx.type_of(def_id).instantiate_identity().skip_norm_wip().visit_with(self)
-            }
             _ => ControlFlow::Continue(()),
         }
     }
@@ -2300,17 +2289,12 @@ impl<'tcx> TypeVisitor<TyCtxt<'tcx>> for IsProbablyCyclical<'tcx> {
     type Result = ControlFlow<(), ()>;
 
     fn visit_ty(&mut self, ty: Ty<'tcx>) -> ControlFlow<(), ()> {
-        let def_id = match ty.kind() {
-            ty::Adt(adt_def, _) => Some(adt_def.did()),
-            &ty::Alias(ty::AliasTy { kind: ty::Free { def_id }, .. }) => Some(def_id),
-            _ => None,
-        };
-        if let Some(def_id) = def_id {
-            if def_id == self.item_def_id {
+        if let Some(adt_def) = ty.ty_adt_def() {
+            if adt_def.did() == self.item_def_id {
                 return ControlFlow::Break(());
             }
-            if self.seen.insert(def_id) {
-                self.visit_def(def_id)?;
+            if self.seen.insert(adt_def.did()) {
+                self.visit_def(adt_def.did())?;
             }
         }
         ty.super_visit_with(self)
