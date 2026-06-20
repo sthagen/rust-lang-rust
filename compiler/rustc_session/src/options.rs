@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::str;
 
 use rustc_abi::Align;
+use rustc_ast::attr::version::RustcVersion;
 use rustc_data_structures::fx::FxIndexMap;
 use rustc_data_structures::profiling::TimePassesFormat;
 use rustc_data_structures::stable_hash::StableHasher;
@@ -726,7 +727,25 @@ fn build_options<O: Default>(
                 }
                 if let Some(tmod) = *tmod {
                     let v = value.map_or(String::new(), ToOwned::to_owned);
-                    collected_options.target_modifiers.insert(tmod, v);
+
+                    // Accumulate all the -Zsanitizer flags into a single target modifier.
+                    match tmod {
+                        OptionsTargetModifiers::UnstableOptions(
+                            UnstableOptionsTargetModifiers::Sanitizer,
+                        ) => {
+                            collected_options
+                                .target_modifiers
+                                .entry(tmod)
+                                .and_modify(|existing| {
+                                    existing.push(',');
+                                    existing.push_str(&v);
+                                })
+                                .or_insert(v);
+                        }
+                        _ => {
+                            collected_options.target_modifiers.insert(tmod, v);
+                        }
+                    }
                 }
                 if let Some(mitigation) = mitigation {
                     collected_options.mitigations.reset_mitigation(*mitigation, index);
@@ -846,6 +865,7 @@ mod desc {
         super::mitigation_coverage::DeniedPartialMitigationKind::KINDS;
     pub(crate) const parse_deny_partial_mitigations: &str =
         super::mitigation_coverage::DeniedPartialMitigationKind::KINDS;
+    pub(crate) const parse_rust_version: &str = "a rust version (`xx.yy.zz`)";
 }
 
 pub mod parse {
@@ -2054,6 +2074,18 @@ pub mod parse {
         };
         true
     }
+
+    pub(crate) fn parse_rust_version(slot: &mut Option<RustcVersion>, v: Option<&str>) -> bool {
+        let Some(v) = v else {
+            return false;
+        };
+        if let Some(version) = RustcVersion::parse_str_strict(v) {
+            *slot = Some(version);
+            true
+        } else {
+            false
+        }
+    }
 }
 
 options! {
@@ -2386,6 +2418,8 @@ options! {
         "allow deducing higher-ranked outlives assumptions from coroutines when proving auto traits"),
     hint_mostly_unused: bool = (false, parse_bool, [TRACKED],
         "hint that most of this crate will go unused, to minimize work for uncalled functions"),
+    hint_msrv: Option<RustcVersion> = (None, parse_rust_version, [TRACKED],
+        "control the minimum rust version for lints"),
     human_readable_cgu_names: bool = (false, parse_bool, [TRACKED],
         "generate human-readable, predictable names for codegen units (default: no)"),
     identify_regions: bool = (false, parse_bool, [UNTRACKED],
@@ -2697,7 +2731,9 @@ written to standard error output)"),
     staticlib_allow_rdylib_deps: bool = (false, parse_bool, [TRACKED],
         "allow staticlibs to have rust dylib dependencies"),
     staticlib_hide_internal_symbols: bool = (false, parse_bool, [TRACKED],
-        "hide non-exported symbols in ELF static libraries by setting STV_HIDDEN"),
+        "hide non-exported Rust symbols when building staticlibs by setting STV_HIDDEN"),
+    staticlib_rename_internal_symbols: bool = (false, parse_bool, [TRACKED],
+        "rename non-exported Rust symbols when building staticlibs to avoid conflicts"),
     staticlib_prefer_dynamic: bool = (false, parse_bool, [TRACKED],
         "prefer dynamic linking to static linking for staticlibs (default: no)"),
     strict_init_checks: bool = (false, parse_bool, [TRACKED],
