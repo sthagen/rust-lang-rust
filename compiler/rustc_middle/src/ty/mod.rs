@@ -85,7 +85,7 @@ pub use self::context::{
     CtxtInterners, CurrentGcx, FreeRegionInfo, GlobalCtxt, Lift, TyCtxt, TyCtxtFeed, tls,
 };
 pub use self::fold::*;
-pub use self::instance::{Instance, InstanceKind, ReifyReason};
+pub use self::instance::{Instance, InstanceKind, ReifyReason, ShimKind};
 pub(crate) use self::list::RawList;
 pub use self::list::{List, ListWithCachedTypeInfo};
 pub use self::opaque_types::OpaqueTypeKey;
@@ -688,12 +688,25 @@ impl<'tcx> Term<'tcx> {
     pub fn to_alias_term(self) -> Option<AliasTerm<'tcx>> {
         match self.kind() {
             TermKind::Ty(ty) => match *ty.kind() {
-                ty::Alias(alias_ty) => Some(alias_ty.into()),
+                ty::Alias(_, alias_ty) => Some(alias_ty.into()),
                 _ => None,
             },
             TermKind::Const(ct) => match ct.kind() {
-                ConstKind::Unevaluated(uv) => Some(uv.into()),
+                ConstKind::Unevaluated(_, uv) => Some(uv.into()),
                 _ => None,
+            },
+        }
+    }
+
+    pub fn is_non_rigid_alias(self) -> bool {
+        match self.kind() {
+            ty::TermKind::Ty(ty) => match ty.kind() {
+                ty::Alias(ty::IsRigid::No, _) => true,
+                _ => false,
+            },
+            ty::TermKind::Const(ct) => match ct.kind() {
+                ty::ConstKind::Unevaluated(ty::IsRigid::No, _) => true,
+                _ => false,
             },
         }
     }
@@ -926,7 +939,7 @@ impl<'tcx> ProvisionalHiddenType<'tcx> {
         if cfg!(debug_assertions) && matches!(defining_scope_kind, DefiningScopeKind::HirTypeck) {
             assert_eq!(result_ty, fold_regions(tcx, result_ty, |_, _| tcx.lifetimes.re_erased));
         }
-        DefinitionSiteHiddenType { span: self.span, ty: ty::EarlyBinder::bind(result_ty) }
+        DefinitionSiteHiddenType { span: self.span, ty: ty::EarlyBinder::bind(tcx, result_ty) }
     }
 }
 
@@ -954,7 +967,7 @@ impl<'tcx> DefinitionSiteHiddenType<'tcx> {
     pub fn new_error(tcx: TyCtxt<'tcx>, guar: ErrorGuaranteed) -> DefinitionSiteHiddenType<'tcx> {
         DefinitionSiteHiddenType {
             span: DUMMY_SP,
-            ty: ty::EarlyBinder::bind(Ty::new_error(tcx, guar)),
+            ty: ty::EarlyBinder::bind(tcx, Ty::new_error(tcx, guar)),
         }
     }
 
@@ -1803,20 +1816,9 @@ impl<'tcx> TyCtxt<'tcx> {
                     _ => self.optimized_mir(def),
                 }
             }
-            ty::InstanceKind::VTableShim(..)
-            | ty::InstanceKind::ReifyShim(..)
-            | ty::InstanceKind::Intrinsic(..)
-            | ty::InstanceKind::FnPtrShim(..)
-            | ty::InstanceKind::Virtual(..)
-            | ty::InstanceKind::ClosureOnceShim { .. }
-            | ty::InstanceKind::ConstructCoroutineInClosureShim { .. }
-            | ty::InstanceKind::FutureDropPollShim(..)
-            | ty::InstanceKind::DropGlue(..)
-            | ty::InstanceKind::CloneShim(..)
-            | ty::InstanceKind::ThreadLocalShim(..)
-            | ty::InstanceKind::FnPtrAddrShim(..)
-            | ty::InstanceKind::AsyncDropGlueCtorShim(..)
-            | ty::InstanceKind::AsyncDropGlue(..) => self.mir_shims(instance),
+            ty::InstanceKind::Intrinsic(..) => bug!("intrinsics have no instance MIR"),
+            ty::InstanceKind::Virtual(..) => bug!("virtual dispatches have no instance MIR"),
+            ty::InstanceKind::Shim(shim) => self.mir_shims(shim),
         };
 
         assert!(
@@ -1942,7 +1944,7 @@ impl<'tcx> TyCtxt<'tcx> {
         if args[0].has_placeholders() || args[0].has_non_region_param() {
             return Err(self.layout_error(LayoutError::TooGeneric(ty())));
         }
-        let instance = InstanceKind::AsyncDropGlue(def_id, Ty::new_coroutine(self, def_id, args));
+        let instance = ShimKind::AsyncDropGlue(def_id, Ty::new_coroutine(self, def_id, args));
         self.mir_shims(instance)
             .coroutine_layout_raw()
             .ok_or_else(|| self.layout_error(LayoutError::Unknown(ty())))
