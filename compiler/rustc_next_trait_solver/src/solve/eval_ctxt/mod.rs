@@ -462,7 +462,7 @@ where
                 Ok(i) => Ok(i),
                 Err(NoSolutionOrRerunNonErased::NoSolution(NoSolution)) => Err(NoSolution),
                 Err(NoSolutionOrRerunNonErased::RerunNonErased(_)) => {
-                    // check th t the opaque_accesses state mirrors the result we got.
+                    // Check that the opaque_accesses state mirrors the result we got.
                     assert!(opaque_accesses.should_bail().is_err());
                     Err(NoSolution)
                 }
@@ -1439,13 +1439,13 @@ where
     pub(super) fn evaluate_const(
         &mut self,
         param_env: I::ParamEnv,
-        uv: ty::UnevaluatedConst<I>,
+        alias_const: ty::AliasConst<I>,
     ) -> Result<Option<I::Const>, RerunNonErased> {
         if self.typing_mode().is_erased_not_coherence() {
-            self.opaque_accesses.rerun_always(RerunReason::EvaluateConst)?;
+            match self.opaque_accesses.rerun_always(RerunReason::EvaluateConst)? {}
         }
 
-        Ok(self.delegate.evaluate_const(param_env, uv))
+        Ok(self.delegate.evaluate_const(param_env, alias_const))
     }
 
     pub(super) fn evaluate_const_and_instantiate_projection_term(
@@ -1453,9 +1453,9 @@ where
         param_env: I::ParamEnv,
         projection_term: ty::AliasTerm<I>,
         expected_term: I::Term,
-        uv: ty::UnevaluatedConst<I>,
+        alias_const: ty::AliasConst<I>,
     ) -> QueryResultOrRerunNonErased<I> {
-        match self.evaluate_const(param_env, uv)? {
+        match self.evaluate_const(param_env, alias_const)? {
             Some(evaluated) => {
                 self.eq(param_env, expected_term, evaluated.into())?;
                 self.evaluate_added_goals_and_make_canonical_response(Certainty::Yes)
@@ -1468,11 +1468,11 @@ where
                 // Perhaps we could split EvaluateConstErr::HasGenericsOrInfers into HasGenerics and
                 // HasInfers or something, make evaluate_const return that, and make this branch be
                 // based on that, rather than checking `has_non_region_infer`.
-                if self.resolve_vars_if_possible(uv).has_non_region_infer() {
+                if self.resolve_vars_if_possible(alias_const).has_non_region_infer() {
                     self.evaluate_added_goals_and_make_canonical_response(Certainty::AMBIGUOUS)
                 } else {
-                    // We do not instantiate to the `uv` passed in, but rather
-                    // `goal.predicate.alias`. The `uv` passed in might correspond to the `impl`
+                    // We do not instantiate to the `alias_const` passed in, but rather
+                    // `goal.predicate.alias`. The `alias_const` passed in might correspond to the `impl`
                     // form of a constant (with generic arguments corresponding to the impl block),
                     // however, we want to structurally instantiate to the original, non-rebased,
                     // trait `Self` form of the constant (with generic arguments being the trait
@@ -1515,7 +1515,7 @@ where
         symbol: I::Symbol,
     ) -> Result<bool, RerunNonErased> {
         if self.typing_mode().is_erased_not_coherence() {
-            self.opaque_accesses.rerun_always(RerunReason::MayUseUnstableFeature)?;
+            match self.opaque_accesses.rerun_always(RerunReason::MayUseUnstableFeature)? {}
         }
 
         Ok(may_use_unstable_feature(&**self.delegate, param_env, symbol))

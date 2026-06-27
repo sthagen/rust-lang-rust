@@ -1435,6 +1435,8 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
                             p.pretty_print_fn_sig(
                                 tys,
                                 false,
+                                // FIXME(splat): support splatted arguments here?
+                                None,
                                 proj.skip_binder().term.as_type().expect("Return type was a const"),
                             )?;
                             resugared = true;
@@ -1538,10 +1540,19 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
         &mut self,
         inputs: &[Ty<'tcx>],
         c_variadic: bool,
+        splatted: Option<u8>,
         output: Ty<'tcx>,
     ) -> Result<(), PrintError> {
         write!(self, "(")?;
-        self.comma_sep(inputs.iter().copied())?;
+        let splatted_arg_index = splatted.map(usize::from);
+        let mut input_iter = inputs.iter().copied();
+        if let Some(index) = splatted_arg_index {
+            self.comma_sep((&mut input_iter).take(usize::from(index)))?;
+            write!(self, ", #[splat]")?;
+            self.comma_sep(input_iter)?;
+        } else {
+            self.comma_sep(input_iter)?;
+        }
         if c_variadic {
             if !inputs.is_empty() {
                 write!(self, ", ")?;
@@ -1568,14 +1579,14 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
         }
 
         match ct.kind() {
-            ty::ConstKind::Unevaluated(_, ty::UnevaluatedConst { kind, args, .. }) => {
+            ty::ConstKind::Alias(_, ty::AliasConst { kind, args, .. }) => {
                 match kind {
-                    ty::UnevaluatedConstKind::Projection { def_id }
-                    | ty::UnevaluatedConstKind::Inherent { def_id }
-                    | ty::UnevaluatedConstKind::Free { def_id } => {
+                    ty::AliasConstKind::Projection { def_id }
+                    | ty::AliasConstKind::Inherent { def_id }
+                    | ty::AliasConstKind::Free { def_id } => {
                         self.pretty_print_value_path(def_id, args)?;
                     }
-                    ty::UnevaluatedConstKind::Anon { def_id } => {
+                    ty::AliasConstKind::Anon { def_id } => {
                         if def_id.is_local()
                             && let span = self.tcx().def_span(def_id)
                             && let Ok(snip) = self.tcx().sess.source_map().span_to_snippet(span)
@@ -3150,7 +3161,7 @@ define_print! {
         }
 
         write!(p, "fn")?;
-        p.pretty_print_fn_sig(self.inputs(), self.c_variadic(), self.output())?;
+        p.pretty_print_fn_sig(self.inputs(), self.c_variadic(), self.splatted(), self.output())?;
     }
 
     ty::TraitRef<'tcx> {
