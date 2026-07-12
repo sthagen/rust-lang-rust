@@ -712,7 +712,6 @@ impl<'tcx> EmbargoVisitor<'tcx> {
             | DefKind::AssocConst { .. }
             | DefKind::TyParam
             | DefKind::AnonConst
-            | DefKind::InlineConst
             | DefKind::OpaqueTy
             | DefKind::Closure
             | DefKind::SyntheticCoroutineBody
@@ -814,7 +813,6 @@ impl ReachEverythingInTheInterfaceVisitor<'_, '_> {
             | DefKind::Macro(_)
             | DefKind::TyParam
             | DefKind::AnonConst
-            | DefKind::InlineConst
             | DefKind::OpaqueTy
             | DefKind::SyntheticCoroutineBody
             | DefKind::ConstParam
@@ -948,7 +946,8 @@ impl<'tcx> NamePrivacyVisitor<'tcx> {
 
         // definition of the field
         let ident = Ident::new(sym::dummy, use_ctxt);
-        let (_, def_id) = self.tcx.adjust_ident_and_get_scope(ident, def.did(), hir_id);
+        let (_, def_id) =
+            self.tcx.adjust_ident_and_get_scope(ident, def.did(), hir_id.owner.def_id);
         !field.vis.is_accessible_from(def_id, self.tcx)
     }
 

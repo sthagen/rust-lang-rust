@@ -22,7 +22,7 @@ use rustc_span::{ErrorGuaranteed, Ident, Span, Symbol, kw, with_metavar_spans};
 use crate::hir::{ModuleItems, ProjectedMaybeOwner, nested_filter};
 use crate::middle::debugger_visualizer::DebuggerVisualizerFile;
 use crate::query::{IntoQueryKey, LocalCrate};
-use crate::ty::TyCtxt;
+use crate::ty::{self, TyCtxt};
 
 /// An iterator that walks up the ancestor tree of a given `HirId`.
 /// Constructed using `tcx.hir_parent_iter(hir_id)`.
@@ -322,10 +322,12 @@ impl<'tcx> TyCtxt<'tcx> {
     pub fn hir_body_owner_kind(self, def_id: impl Into<DefId>) -> BodyOwnerKind {
         let def_id = def_id.into();
         match self.def_kind(def_id) {
-            DefKind::Const { .. } | DefKind::AssocConst { .. } | DefKind::AnonConst => {
+            DefKind::Const { .. } | DefKind::AssocConst { .. } => {
                 BodyOwnerKind::Const { inline: false }
             }
-            DefKind::InlineConst => BodyOwnerKind::Const { inline: true },
+            DefKind::AnonConst => BodyOwnerKind::Const {
+                inline: self.anon_const_kind(def_id) == ty::AnonConstKind::NonTypeSystemInline,
+            },
             DefKind::Ctor(..) | DefKind::Fn | DefKind::AssocFn => BodyOwnerKind::Fn,
             DefKind::Closure | DefKind::SyntheticCoroutineBody => BodyOwnerKind::Closure,
             DefKind::Static { safety: _, mutability, nested: false } => {
@@ -877,13 +879,6 @@ impl<'tcx> TyCtxt<'tcx> {
 
     pub fn hir_delegation_info(self, delegation_id: LocalDefId) -> &'tcx DelegationInfo {
         self.hir_opt_delegation_info(delegation_id).expect("processing delegation")
-    }
-
-    pub fn hir_is_delegation_child_segment(self, segment: &PathSegment<'_>) -> bool {
-        let parent_def = self.hir_get_parent_item(segment.hir_id).def_id;
-
-        self.hir_opt_delegation_info(parent_def)
-            .is_some_and(|info| info.child_seg_id == segment.hir_id)
     }
 
     #[inline]

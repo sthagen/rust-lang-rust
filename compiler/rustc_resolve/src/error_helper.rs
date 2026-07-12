@@ -109,7 +109,7 @@ impl TypoSuggestion {
 }
 
 /// A free importable items suggested in case of resolution failure.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct ImportSuggestion {
     pub did: Option<DefId>,
     pub descr: &'static str,
@@ -1288,9 +1288,11 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                     span,
                     name,
                     param_kind: is_type,
-                    help: self.tcx.sess.is_nightly_build(),
+                    help: self.tcx.sess.is_nightly_build()
+                        && !self.tcx.features().min_generic_const_args(),
                     is_gca,
                     help_gca: is_gca,
+                    help_suggest_gca: self.tcx.sess.is_nightly_build() && !is_gca,
                 })
             }
             ResolutionError::ParamInEnumDiscriminant { name, param_kind: is_type } => {
@@ -1469,13 +1471,11 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                 Scope::DeriveHelpers(expn_id) => {
                     let res = Res::NonMacroAttr(NonMacroAttrKind::DeriveHelper);
                     if filter_fn(res) {
-                        suggestions.extend(
-                            this.helper_attrs.get(&expn_id).into_iter().flatten().map(
-                                |&(ident, orig_ident_span, _)| {
-                                    TypoSuggestion::new(ident.name, orig_ident_span, res)
-                                },
-                            ),
-                        );
+                        suggestions.extend(this.helper_attrs.get(&expn_id).into_flat_iter().map(
+                            |&(ident, orig_ident_span, _)| {
+                                TypoSuggestion::new(ident.name, orig_ident_span, res)
+                            },
+                        ));
                     }
                 }
                 Scope::DeriveHelpersCompat => {
@@ -1692,7 +1692,7 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                     segms.append(&mut path_segments.clone());
 
                     segms.push(ast::PathSegment::from_ident(ident.orig(orig_ident_span)));
-                    let path = Path { span: name_binding.span, segments: segms, tokens: None };
+                    let path = Path { span: name_binding.span, segments: segms };
 
                     if child_accessible
                         // Remove invisible match if exists
@@ -2515,7 +2515,7 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
             return;
         }
 
-        suggestion.path = Path { span: suggestion.path.span, segments: new_segments, tokens: None };
+        suggestion.path = Path { span: suggestion.path.span, segments: new_segments };
     }
 
     fn report_privacy_error(&mut self, privacy_error: &PrivacyError<'ra>) {
@@ -2904,7 +2904,7 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                         .unwrap_or_default();
                     let segments =
                         (start_index..len).map(|s| candidate.path.segments[s].clone()).collect();
-                    Path { segments, span: Span::default(), tokens: None }
+                    Path { segments, span: Span::default() }
                 };
                 (
                     message,

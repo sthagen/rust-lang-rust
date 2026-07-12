@@ -204,9 +204,6 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
             AttributeKind::Deprecated { span: attr_span, .. } => {
                 self.check_deprecated(hir_id, *attr_span, target)
             }
-            AttributeKind::TargetFeature { attr_span, .. } => {
-                self.check_target_feature(hir_id, *attr_span, target, attrs)
-            }
             AttributeKind::RustcDumpObjectLifetimeDefaults => {
                 self.check_dump_object_lifetime_defaults(hir_id);
             }
@@ -236,8 +233,8 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
             AttributeKind::OnUnimplemented { directive } => {
                 self.check_diagnostic_on_unimplemented(hir_id, directive.as_deref())
             }
-            AttributeKind::OnConst { span, .. } => {
-                self.check_diagnostic_on_const(*span, hir_id, target, item)
+            AttributeKind::OnConst { span, directive } => {
+                self.check_diagnostic_on_const(*span, hir_id, target, item, directive.as_deref())
             }
             AttributeKind::OnMove { directive } => {
                 self.check_diagnostic_on_move(hir_id, directive.as_deref())
@@ -406,6 +403,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
             AttributeKind::ShouldPanic { .. } => (),
             AttributeKind::Splat(..) => (),
             AttributeKind::Stability { .. } => (),
+            AttributeKind::TargetFeature { .. } => {}
             AttributeKind::TestRunner(..) => (),
             AttributeKind::ThreadLocal => (),
             AttributeKind::TypeLengthLimit { .. } => (),
@@ -547,10 +545,36 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
         hir_id: HirId,
         target: Target,
         item: Option<ItemLike<'_>>,
+        directive: Option<&Directive>,
     ) {
         // We only check the non-constness here. A diagnostic for use
         // on not-trait impl items is issued during attribute parsing.
         if target == (Target::Impl { of_trait: true }) {
+            if let Some(directive) = directive
+                && let Node::Item(Item { kind: ItemKind::Impl(hir::Impl { generics, .. }), .. }) =
+                    self.tcx.hir_node(hir_id)
+            {
+                directive.visit_params(&mut |argument_name, span| {
+                    let has_generic = generics.params.iter().any(|p| {
+                        if !matches!(p.kind, GenericParamKind::Lifetime { .. })
+                            && let ParamName::Plain(name) = p.name
+                            && name.name == argument_name
+                        {
+                            true
+                        } else {
+                            false
+                        }
+                    });
+                    if !has_generic {
+                        self.tcx.emit_node_span_lint(
+                            MALFORMED_DIAGNOSTIC_FORMAT_LITERALS,
+                            hir_id,
+                            span,
+                            diagnostics::OnConstMalformedFormatLiterals { name: argument_name },
+                        )
+                    }
+                });
+            }
             match item.unwrap() {
                 ItemLike::Item(it) => match it.expect_impl().constness {
                     Constness::Const { .. } => {
@@ -568,9 +592,6 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                 ItemLike::ForeignItem => {}
             }
         }
-        // FIXME(#155570) Can we do something with generic args here?
-        // regardless, we don't check the validity of generic args here
-        // ...whose generics would that be, anyway? The traits' or the impls'?
     }
 
     /// Checks use of generic formatting parameters in `#[diagnostic::on_move]`
@@ -792,37 +813,6 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                     self.dcx().emit_err(diagnostics::NonExhaustiveWithDefaultFieldValues {
                         attr_span,
                         defn_span: span,
-                    });
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// Checks if the `#[target_feature]` attribute on `item` is valid.
-    fn check_target_feature(
-        &self,
-        hir_id: HirId,
-        attr_span: Span,
-        target: Target,
-        attrs: &[Attribute],
-    ) {
-        match target {
-            Target::Method(MethodKind::Trait { body: true } | MethodKind::Inherent)
-            | Target::Fn => {
-                // `#[target_feature]` is not allowed in lang items.
-                if let Some(lang_item) = find_attr!(attrs, Lang(lang ) => lang)
-                    // Calling functions with `#[target_feature]` is
-                    // not unsafe on WASM, see #84988
-                    && !self.tcx.sess.target.is_like_wasm
-                    && !self.tcx.sess.opts.actually_rustdoc
-                {
-                    let sig = self.tcx.hir_node(hir_id).fn_sig().unwrap();
-
-                    self.dcx().emit_err(diagnostics::LangItemWithTargetFeature {
-                        attr_span,
-                        name: lang_item.name(),
-                        sig_span: sig.span,
                     });
                 }
             }

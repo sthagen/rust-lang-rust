@@ -248,11 +248,8 @@ impl<'hir> LoweringContext<'_, 'hir> {
             }
             ItemKind::Use(use_tree) => {
                 // Start with an empty prefix.
-                let prefix = Path {
-                    segments: ThinVec::new(),
-                    span: use_tree.prefix.span.shrink_to_lo(),
-                    tokens: None,
-                };
+                let prefix =
+                    Path { segments: ThinVec::new(), span: use_tree.prefix.span.shrink_to_lo() };
 
                 self.lower_use_tree(use_tree, &prefix, id, vis_span, attrs)
             }
@@ -567,7 +564,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                 hir::ItemKind::Macro(ident, macro_def, macro_kinds)
             }
             ItemKind::Delegation(delegation) => {
-                let delegation_results = self.lower_delegation(delegation, id);
+                let delegation_results = self.lower_delegation(delegation);
                 hir::ItemKind::Fn {
                     sig: delegation_results.sig,
                     ident: delegation_results.ident,
@@ -609,7 +606,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                 let mut ident = tree.ident();
 
                 // First, apply the prefix to the path.
-                let mut path = Path { segments, span: path.span, tokens: None };
+                let mut path = Path { segments, span: path.span };
 
                 // Correctly resolve `self` imports.
                 if path.segments.len() > 1
@@ -644,7 +641,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                     }
                     _ => span_bug!(path.span, "bad glob res {:?}", res),
                 };
-                let path = Path { segments, span: path.span, tokens: None };
+                let path = Path { segments, span: path.span };
                 let path = self.lower_use_path(res, &path, ParamMode::Explicit);
                 hir::ItemKind::Use(path, hir::UseKind::Glob)
             }
@@ -674,7 +671,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                 // `ListStem`).
 
                 let span = prefix.span.to(path.span);
-                let prefix = Path { segments, span, tokens: None };
+                let prefix = Path { segments, span };
 
                 // Add all the nested `PathListItem`s to the HIR.
                 for &(ref use_tree, id) in trees {
@@ -900,6 +897,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                 None => Ident::new(sym::integer(index), self.lower_span(f.span)),
             },
             vis_span: self.lower_span(f.vis.span),
+            mut_restriction: self.lower_mut_restriction(&f.mut_restriction),
             default: f
                 .default
                 .as_ref()
@@ -1052,7 +1050,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                 (*ident, generics, kind, ty.is_some())
             }
             AssocItemKind::Delegation(delegation) => {
-                let delegation_results = self.lower_delegation(delegation, i.id);
+                let delegation_results = self.lower_delegation(delegation);
                 let item_kind = hir::TraitItemKind::Fn(
                     delegation_results.sig,
                     hir::TraitFn::Provided(delegation_results.body_id),
@@ -1264,7 +1262,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                 )
             }
             AssocItemKind::Delegation(delegation) => {
-                let delegation_results = self.lower_delegation(delegation, i.id);
+                let delegation_results = self.lower_delegation(delegation);
                 (
                     delegation.ident,
                     (
@@ -1795,11 +1793,8 @@ impl<'hir> LoweringContext<'_, 'hir> {
         }
     }
 
-    pub(super) fn lower_impl_restriction(
-        &mut self,
-        r: &ImplRestriction,
-    ) -> &'hir hir::ImplRestriction<'hir> {
-        let kind = match &r.kind {
+    fn lower_restriction_kind(&mut self, kind: &RestrictionKind) -> hir::RestrictionKind<'hir> {
+        match kind {
             RestrictionKind::Unrestricted => hir::RestrictionKind::Unrestricted,
             RestrictionKind::Restricted { path, id, shorthand: _ } => {
                 let res = self.get_partial_res(*id);
@@ -1823,8 +1818,23 @@ impl<'hir> LoweringContext<'_, 'hir> {
                     hir::RestrictionKind::Unrestricted
                 }
             }
-        };
+        }
+    }
+
+    pub(super) fn lower_impl_restriction(
+        &mut self,
+        r: &ImplRestriction,
+    ) -> &'hir hir::ImplRestriction<'hir> {
+        let kind = self.lower_restriction_kind(&r.kind);
         self.arena.alloc(hir::ImplRestriction { kind, span: self.lower_span(r.span) })
+    }
+
+    pub(super) fn lower_mut_restriction(
+        &mut self,
+        r: &MutRestriction,
+    ) -> &'hir hir::MutRestriction<'hir> {
+        let kind = self.lower_restriction_kind(&r.kind);
+        self.arena.alloc(hir::MutRestriction { kind, span: self.lower_span(r.span) })
     }
 
     /// Return the pair of the lowered `generics` as `hir::Generics` and the evaluation of `f` with

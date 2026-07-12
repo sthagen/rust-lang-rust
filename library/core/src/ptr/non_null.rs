@@ -736,9 +736,8 @@ impl<T: PointeeSized> NonNull<T> {
     /// needed for `const`-compatibility: the distance between pointers into *different* allocated
     /// objects is not known at compile-time. However, the requirement also exists at
     /// runtime and may be exploited by optimizations. If you wish to compute the difference between
-    /// pointers that are not guaranteed to be from the same allocation, use `(self as isize -
-    /// origin as isize) / size_of::<T>()`.
-    // FIXME: recommend `addr()` instead of `as usize` once that is stable.
+    /// pointers that are not guaranteed to be from the same allocation, use
+    /// `(self.addr() as isize - origin.addr() as isize) / size_of::<T>()`.
     ///
     /// [`add`]: #method.add
     /// [allocation]: crate::ptr#allocation
@@ -1573,9 +1572,10 @@ impl<T> NonNull<[T]> {
     /// Returns a raw pointer to an element or subslice, without doing bounds
     /// checking.
     ///
-    /// Calling this method with an out-of-bounds index or when `self` is not dereferenceable
+    /// Calling this method with an [out-of-bounds index] or when `self` is not dereferenceable
     /// is *[undefined behavior]* even if the resulting pointer is not used.
     ///
+    /// [out-of-bounds index]: #method.add
     /// [undefined behavior]: https://doc.rust-lang.org/reference/behavior-considered-undefined.html
     ///
     /// # Examples

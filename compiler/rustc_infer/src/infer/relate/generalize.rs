@@ -5,10 +5,7 @@ use rustc_data_structures::stack::ensure_sufficient_stack;
 use rustc_hir::def_id::DefId;
 use rustc_middle::bug;
 use rustc_middle::ty::error::TypeError;
-use rustc_middle::ty::{
-    self, AliasRelationDirection, InferConst, Term, Ty, TyCtxt, TypeSuperVisitable, TypeVisitable,
-    TypeVisitableExt, TypeVisitor,
-};
+use rustc_middle::ty::{self, InferConst, Term, Ty, TyCtxt, TypeVisitableExt};
 use rustc_span::Span;
 use tracing::{debug, instrument, warn};
 
@@ -168,25 +165,61 @@ impl<'tcx> InferCtxt<'tcx> {
             // cyclic type. We instead delay the unification in case
             // the alias can be normalized to something which does not
             // mention `?0`.
+            let Some(source_alias) = source_term.to_alias_term() else {
+                bug!("generalized `{source_term:?} to infer, not an alias");
+            };
             if self.next_trait_solver() {
-                let (lhs, rhs, direction) = match instantiation_variance {
-                    ty::Invariant => {
-                        (generalized_term, source_term, AliasRelationDirection::Equate)
+                if let Some(generalized_ty) = generalized_term.as_type() {
+                    match instantiation_variance {
+                        ty::Invariant => relation.register_predicates([ty::ProjectionPredicate {
+                            projection_term: source_alias.into(),
+                            term: generalized_ty.into(),
+                        }]),
+                        ty::Covariant => {
+                            // Generate a new var, then do:
+                            // `source_alias == ?A && ?A <: generalized_ty`
+                            let new_var = self.next_ty_var(relation.span());
+                            relation.register_predicates([
+                                ty::PredicateKind::Subtype(ty::SubtypePredicate {
+                                    a_is_expected: !target_is_expected,
+                                    a: new_var,
+                                    b: generalized_ty,
+                                }),
+                                ty::PredicateKind::Clause(ty::ClauseKind::Projection(
+                                    ty::ProjectionPredicate {
+                                        projection_term: source_alias.into(),
+                                        term: new_var.into(),
+                                    },
+                                )),
+                            ]);
+                        }
+                        ty::Contravariant => {
+                            // a :> b is b <: a
+                            let new_var = self.next_ty_var(relation.span());
+                            relation.register_predicates([
+                                ty::PredicateKind::Subtype(ty::SubtypePredicate {
+                                    a_is_expected: target_is_expected,
+                                    a: generalized_ty,
+                                    b: new_var,
+                                }),
+                                ty::PredicateKind::Clause(ty::ClauseKind::Projection(
+                                    ty::ProjectionPredicate {
+                                        projection_term: source_alias.into(),
+                                        term: new_var.into(),
+                                    },
+                                )),
+                            ]);
+                        }
+                        ty::Bivariant => unreachable!("bivariant generalization"),
                     }
-                    ty::Covariant => {
-                        (generalized_term, source_term, AliasRelationDirection::Subtype)
-                    }
-                    ty::Contravariant => {
-                        (source_term, generalized_term, AliasRelationDirection::Subtype)
-                    }
-                    ty::Bivariant => unreachable!("bivariant generalization"),
-                };
-
-                relation.register_predicates([ty::PredicateKind::AliasRelate(lhs, rhs, direction)]);
+                } else {
+                    debug_assert_eq!(instantiation_variance, ty::Variance::Invariant);
+                    relation.register_predicates([ty::ProjectionPredicate {
+                        projection_term: source_alias,
+                        term: generalized_term,
+                    }]);
+                }
             } else {
-                let Some(source_alias) = source_term.to_alias_term() else {
-                    bug!("generalized `{source_term:?} to infer, not an alias");
-                };
                 match source_alias.kind {
                     ty::AliasTermKind::ProjectionTy { .. }
                     | ty::AliasTermKind::ProjectionConst { .. } => {
@@ -326,45 +359,6 @@ impl<'tcx> InferCtxt<'tcx> {
     }
 }
 
-/// Finds the max universe present
-struct MaxUniverse {
-    max_universe: ty::UniverseIndex,
-}
-
-impl MaxUniverse {
-    fn new() -> Self {
-        MaxUniverse { max_universe: ty::UniverseIndex::ROOT }
-    }
-
-    fn max_universe(self) -> ty::UniverseIndex {
-        self.max_universe
-    }
-}
-
-impl<'tcx> TypeVisitor<TyCtxt<'tcx>> for MaxUniverse {
-    fn visit_ty(&mut self, t: Ty<'tcx>) {
-        if let ty::Placeholder(placeholder) = t.kind() {
-            self.max_universe = self.max_universe.max(placeholder.universe);
-        }
-
-        t.super_visit_with(self)
-    }
-
-    fn visit_const(&mut self, c: ty::Const<'tcx>) {
-        if let ty::ConstKind::Placeholder(placeholder) = c.kind() {
-            self.max_universe = self.max_universe.max(placeholder.universe);
-        }
-
-        c.super_visit_with(self)
-    }
-
-    fn visit_region(&mut self, r: ty::Region<'tcx>) {
-        if let ty::RePlaceholder(placeholder) = r.kind() {
-            self.max_universe = self.max_universe.max(placeholder.universe);
-        }
-    }
-}
-
 /// The "generalizer" is used when handling inference variables.
 ///
 /// The basic strategy for handling a constraint like `?A <: B` is to
@@ -475,10 +469,9 @@ impl<'tcx> Generalizer<'_, 'tcx> {
                 if is_nested_alias {
                     return Err(e);
                 } else {
-                    let mut visitor = MaxUniverse::new();
-                    alias.visit_with(&mut visitor);
+                    let alias_max_universe = ty::max_universe_of_placeholders(self.infcx, alias);
                     let infer_replacement_is_complete =
-                        self.for_universe.can_name(visitor.max_universe())
+                        self.for_universe.can_name(alias_max_universe)
                             && !alias.has_escaping_bound_vars();
                     if !infer_replacement_is_complete {
                         warn!("may incompletely handle alias type: {alias:?}");

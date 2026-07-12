@@ -8,9 +8,9 @@ use rustc_span::edition::Edition::Edition2024;
 use super::prelude::*;
 use crate::attributes::AttributeSafety;
 use crate::session_diagnostics::{
-    EmptyExportName, NakedFunctionIncompatibleAttribute, NullOnExport, NullOnObjcClass,
-    NullOnObjcSelector, ObjcClassExpectedStringLiteral, ObjcSelectorExpectedStringLiteral,
-    SanitizeInvalidStatic,
+    EmptyExportName, EmptySection, NakedFunctionIncompatibleAttribute, NullOnExport,
+    NullOnObjcClass, NullOnObjcSelector, NullOnSection, ObjcClassExpectedStringLiteral,
+    ObjcSelectorExpectedStringLiteral, SanitizeInvalidStatic, TargetFeatureOnLangItem,
 };
 use crate::target_checking::Policy::AllowSilent;
 
@@ -524,15 +524,6 @@ impl CombineAttributeParser for TargetFeatureParser {
         was_forced: false,
     };
     const TEMPLATE: AttributeTemplate = template!(List: &["enable = \"feat1, feat2\""]);
-    const STABILITY: AttributeStability = AttributeStability::Stable;
-
-    fn extend(
-        cx: &mut AcceptContext<'_, '_>,
-        args: &ArgParser,
-    ) -> impl IntoIterator<Item = Self::Item> {
-        parse_tf_attribute(cx, args)
-    }
-
     const ALLOWED_TARGETS: AllowedTargets<'_> = AllowedTargets::AllowList(&[
         Allow(Target::Fn),
         Allow(Target::Method(MethodKind::Inherent)),
@@ -544,6 +535,29 @@ impl CombineAttributeParser for TargetFeatureParser {
         Warn(Target::MacroDef),
         Warn(Target::MacroCall),
     ]);
+    const STABILITY: AttributeStability = AttributeStability::Stable;
+
+    fn extend(
+        cx: &mut AcceptContext<'_, '_>,
+        args: &ArgParser,
+    ) -> impl IntoIterator<Item = Self::Item> {
+        parse_tf_attribute(cx, args)
+    }
+
+    fn finalize_check(cx: &FinalizeContext<'_, '_>, attr_span: Span) {
+        // `#[target_feature]` is incompatible with lang item functions,
+        // except on WASM where calling target-feature functions is safe (see #84988).
+        if !cx.sess().target.is_like_wasm && !cx.sess().opts.actually_rustdoc {
+            // `#[panic_handler]` is checked first so it takes priority in the diagnostic.
+            let lang_kind = cx
+                .all_attrs
+                .iter()
+                .find_map(|a| [sym::panic_handler, sym::lang].into_iter().find(|&s| a.word_is(s)));
+            if let Some(kind) = lang_kind {
+                cx.emit_err(TargetFeatureOnLangItem { attr_span, kind, item_span: cx.target_span });
+            }
+        }
+    }
 }
 
 pub(crate) struct ForceTargetFeatureParser;
@@ -781,7 +795,8 @@ pub(crate) struct PatchableFunctionEntryParser;
 impl SingleAttributeParser for PatchableFunctionEntryParser {
     const PATH: &[Symbol] = &[sym::patchable_function_entry];
     const ALLOWED_TARGETS: AllowedTargets<'_> = AllowedTargets::AllowList(&[Allow(Target::Fn)]);
-    const TEMPLATE: AttributeTemplate = template!(List: &["prefix_nops = m, entry_nops = n"]);
+    const TEMPLATE: AttributeTemplate =
+        template!(List: &["prefix_nops = m, entry_nops = n, section = \"section\""]);
     const STABILITY: AttributeStability = unstable!(patchable_function_entry);
 
     fn convert(cx: &mut AcceptContext<'_, '_>, args: &ArgParser) -> Option<AttributeKind> {
@@ -789,74 +804,85 @@ impl SingleAttributeParser for PatchableFunctionEntryParser {
 
         let mut prefix = None;
         let mut entry = None;
+        let mut section = None;
 
         if meta_item_list.len() == 0 {
             cx.adcx().expected_at_least_one_argument(meta_item_list.span);
             return None;
         }
 
-        let mut errored = false;
-
         for item in meta_item_list.mixed() {
             let Some((ident, value)) = cx.expect_name_value(item, item.span(), None) else {
-                continue;
+                return None;
             };
 
             let attrib_to_write = match ident.name {
                 sym::prefix_nops => {
                     // Duplicate prefixes are not allowed
                     if prefix.is_some() {
-                        errored = true;
                         cx.adcx().duplicate_key(ident.span, sym::prefix_nops);
-                        continue;
+                        return None;
                     }
                     &mut prefix
                 }
                 sym::entry_nops => {
                     // Duplicate entries are not allowed
                     if entry.is_some() {
-                        errored = true;
                         cx.adcx().duplicate_key(ident.span, sym::entry_nops);
-                        continue;
+                        return None;
                     }
                     &mut entry
                 }
+                sym::section => {
+                    // Duplicate entries are not allowed
+                    if section.is_some() {
+                        cx.adcx().duplicate_key(ident.span, sym::section);
+                        return None;
+                    }
+                    // Only a string type value is allowed.
+                    let Some(value_str) = value.value_as_str() else {
+                        cx.adcx().expect_string_literal(value);
+                        return None;
+                    };
+                    // The section name does not allow null characters.
+                    if value_str.as_str().contains('\0') {
+                        cx.emit_err(NullOnSection { span: value.value_span });
+                    }
+                    // The section name is not allowed to be empty, LLVM does
+                    // not allow them.
+                    if value_str.is_empty() {
+                        cx.emit_err(EmptySection { span: value.value_span });
+                    }
+                    section = Some(value_str);
+                    // Integer parsing is not needed, process next item.
+                    continue;
+                }
                 _ => {
-                    errored = true;
                     cx.adcx().expected_specific_argument(
                         ident.span,
                         &[sym::prefix_nops, sym::entry_nops],
                     );
-                    continue;
+                    return None;
                 }
             };
 
             let rustc_ast::LitKind::Int(val, _) = value.value_as_lit().kind else {
-                errored = true;
                 cx.adcx().expected_integer_literal(value.value_span);
-                continue;
+                return None;
             };
 
             let Ok(val) = val.get().try_into() else {
-                errored = true;
                 cx.adcx().expected_integer_literal_in_range(
                     value.value_span,
                     u8::MIN as isize,
                     u8::MAX as isize,
                 );
-                continue;
+                return None;
             };
 
             *attrib_to_write = Some(val);
         }
 
-        if errored {
-            None
-        } else {
-            Some(AttributeKind::PatchableFunctionEntry {
-                prefix: prefix.unwrap_or(0),
-                entry: entry.unwrap_or(0),
-            })
-        }
+        Some(AttributeKind::PatchableFunctionEntry { prefix, entry, section })
     }
 }

@@ -602,6 +602,7 @@ impl<'tcx> TyCtxt<'tcx> {
     /// to the only allowed case.
     pub fn feed_anon_const_type(self, key: LocalDefId, value: ty::EarlyBinder<'tcx, Ty<'tcx>>) {
         debug_assert_eq!(self.def_kind(key), DefKind::AnonConst);
+        debug_assert!(self.anon_const_kind(key) != ty::AnonConstKind::NonTypeSystemInline);
         TyCtxtFeed { tcx: self, key }.type_of(value)
     }
 
@@ -848,7 +849,6 @@ impl<'tcx> TyCtxt<'tcx> {
             DefKind::AnonConst
                 | DefKind::AssocConst { .. }
                 | DefKind::Const { .. }
-                | DefKind::InlineConst
                 | DefKind::GlobalAsm
         ) {
             CodegenFnAttrs::EMPTY
@@ -2690,6 +2690,10 @@ impl<'tcx> TyCtxt<'tcx> {
 
     pub fn disable_trait_solver_fast_paths(self) -> bool {
         self.sess.opts.unstable_opts.disable_fast_paths
+    }
+
+    pub fn disable_param_env_normalization_hack(self) -> bool {
+        self.sess.opts.unstable_opts.disable_param_env_normalization_hack
     }
 
     pub fn renormalize_rigid_aliases(self) -> bool {

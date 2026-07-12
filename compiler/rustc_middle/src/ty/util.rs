@@ -597,7 +597,39 @@ impl<'tcx> TyCtxt<'tcx> {
     /// Returns `true` if `def_id` refers to a definition that does not have its own
     /// type-checking context, i.e. closure, coroutine or inline const.
     pub fn is_typeck_child(self, def_id: DefId) -> bool {
-        self.def_kind(def_id).is_typeck_child()
+        match self.def_kind(def_id) {
+            DefKind::AnonConst => {
+                self.anon_const_kind(def_id) == ty::AnonConstKind::NonTypeSystemInline
+            }
+            DefKind::Closure | DefKind::SyntheticCoroutineBody => true,
+            DefKind::Mod
+            | DefKind::Struct
+            | DefKind::Union
+            | DefKind::Enum
+            | DefKind::Variant
+            | DefKind::Trait
+            | DefKind::TyAlias
+            | DefKind::ForeignTy
+            | DefKind::TraitAlias
+            | DefKind::AssocTy
+            | DefKind::TyParam
+            | DefKind::Fn
+            | DefKind::Const { .. }
+            | DefKind::ConstParam
+            | DefKind::Static { .. }
+            | DefKind::Ctor(_, _)
+            | DefKind::AssocFn
+            | DefKind::AssocConst { .. }
+            | DefKind::Macro(_)
+            | DefKind::ExternCrate
+            | DefKind::Use
+            | DefKind::ForeignMod
+            | DefKind::OpaqueTy
+            | DefKind::Field
+            | DefKind::LifetimeParam
+            | DefKind::GlobalAsm
+            | DefKind::Impl { .. } => false,
+        }
     }
 
     /// Returns `true` if `def_id` refers to a trait (i.e., `trait Foo { ... }`).

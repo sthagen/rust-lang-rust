@@ -8,7 +8,7 @@ use rustc_macros::{Diagnostic, Subdiagnostic};
 use rustc_span::{Ident, Span, Spanned, Symbol};
 
 use crate::Res;
-use crate::late::PatternSource;
+use crate::late::{PatternSource, ResolvingRestrictionKind};
 
 #[derive(Diagnostic)]
 #[diag("can't use {$is_self ->
@@ -407,6 +407,10 @@ pub(crate) struct ParamInNonTrivialAnonConst {
         "consider factoring the expression into a `type const` item and use it as the const argument instead"
     )]
     pub(crate) help_gca: bool,
+    #[help(
+        "alternatively, you can use `#![feature(generic_const_args)]` and extract the expression into a `type const` item"
+    )]
+    pub(crate) help_suggest_gca: bool,
 }
 
 #[derive(Debug)]
@@ -542,8 +546,17 @@ pub(crate) struct ExpectedModuleFound {
 pub(crate) struct Indeterminate(#[primary_span] pub(crate) Span);
 
 #[derive(Diagnostic)]
-#[diag("trait implementation can only be restricted to ancestor modules")]
-pub(crate) struct RestrictionAncestorOnly(#[primary_span] pub(crate) Span);
+#[diag(
+    "{$kind ->
+    [impl] trait implementation
+    *[mut] field mutation
+} can only be restricted to ancestor modules"
+)]
+pub(crate) struct RestrictionAncestorOnly {
+    #[primary_span]
+    pub(crate) span: Span,
+    pub(crate) kind: ResolvingRestrictionKind,
+}
 
 #[derive(Diagnostic)]
 #[diag("cannot use a tool module through an import")]
@@ -1659,28 +1672,6 @@ pub(crate) struct UnusedQualifications {
         applicability = "machine-applicable"
     )]
     pub removal_span: Span,
-}
-
-#[derive(Diagnostic)]
-#[diag(
-    "{$elided ->
-        [true] `&` without an explicit lifetime name cannot be used here
-        *[false] `'_` cannot be used here
-    }"
-)]
-pub(crate) struct AssociatedConstElidedLifetime {
-    #[suggestion(
-        "use the `'static` lifetime",
-        style = "verbose",
-        code = "{code}",
-        applicability = "machine-applicable"
-    )]
-    pub span: Span,
-
-    pub code: &'static str,
-    pub elided: bool,
-    #[note("cannot automatically infer `'static` because of other lifetimes in scope")]
-    pub lifetimes_in_scope: MultiSpan,
 }
 
 #[derive(Diagnostic)]

@@ -81,6 +81,26 @@ pub(crate) struct DocAttributeNotAttribute {
 }
 
 #[derive(Diagnostic)]
+#[diag(
+    "`#[target_feature]` cannot be applied to a {$kind ->
+        [panic_handler] `#[panic_handler]`
+        *[other] lang item
+    } function"
+)]
+pub(crate) struct TargetFeatureOnLangItem {
+    #[primary_span]
+    pub attr_span: Span,
+    pub kind: Symbol,
+    #[label(
+        "{$kind ->
+            [panic_handler] `#[panic_handler]`
+            *[other] lang item
+        } function is not allowed to have `#[target_feature]`"
+    )]
+    pub item_span: Span,
+}
+
+#[derive(Diagnostic)]
 #[diag("missing 'since'", code = E0542)]
 pub(crate) struct MissingSince {
     #[primary_span]
@@ -273,6 +293,13 @@ pub(crate) struct EmptyExportName {
 }
 
 #[derive(Diagnostic)]
+#[diag("`section` may not be empty")]
+pub(crate) struct EmptySection {
+    #[primary_span]
+    pub span: Span,
+}
+
+#[derive(Diagnostic)]
 #[diag("`export_name` may not contain null characters", code = E0648)]
 pub(crate) struct NullOnExport {
     #[primary_span]
@@ -303,6 +330,13 @@ pub(crate) struct NullOnObjcClass {
 #[derive(Diagnostic)]
 #[diag("`objc::selector!` may not contain null characters")]
 pub(crate) struct NullOnObjcSelector {
+    #[primary_span]
+    pub span: Span,
+}
+
+#[derive(Diagnostic)]
+#[diag("`section` may not contain null characters", code = E0648)]
+pub(crate) struct NullOnSection {
     #[primary_span]
     pub span: Span,
 }
