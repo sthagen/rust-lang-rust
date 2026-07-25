@@ -3,7 +3,7 @@ use rustc_feature::{AttributeStability, Features};
 use rustc_hir::attrs::AttributeKind::{LinkName, LinkOrdinal, LinkSection};
 use rustc_hir::attrs::*;
 use rustc_session::Session;
-use rustc_session::errors::feature_err;
+use rustc_session::diagnostics::feature_err;
 use rustc_session::lint::builtin::ILL_FORMED_ATTRIBUTE_INPUT;
 use rustc_span::edition::Edition::Edition2024;
 use rustc_span::kw;
@@ -576,7 +576,7 @@ impl NoArgsAttributeParser for FfiPureParser {
     const STABILITY: AttributeStability = unstable!(ffi_pure);
     const CREATE: fn(Span) -> AttributeKind = AttributeKind::FfiPure;
 
-    fn finalize_check(cx: &FinalizeContext<'_, '_>, attr_span: Span) {
+    fn finalize_check(cx: &FinalizeCheckContext<'_, '_>, attr_span: Span) {
         // `#[ffi_const]` functions cannot be `#[ffi_pure]`.
         if cx.all_attrs.iter().any(|a| a.word_is(sym::ffi_const)) {
             cx.emit_err(BothFfiConstAndPure { attr_span });

@@ -26,6 +26,8 @@ define_config! {
     #[derive(Default)]
     struct Pgo {
         rustc: Option<PgoConfig> = "rustc",
+        rustdoc: Option<PgoConfig> = "rustdoc",
+        cargo: Option<PgoConfig> = "cargo",
         llvm: Option<PgoConfig> = "llvm",
     }
 }

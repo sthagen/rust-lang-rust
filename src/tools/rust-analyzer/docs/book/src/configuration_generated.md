@@ -991,7 +991,7 @@ to always show them).
 
 Default: `false`
 
-Show inlay hints for closure captures.
+Show inlay hints for closure and coroutine captures.
 
 
 ## rust-analyzer.inlayHints.closureReturnTypeHints.enable {#inlayHints.closureReturnTypeHints.enable}
@@ -1368,7 +1368,7 @@ This config takes a map of crate names with the exported proc-macro names to ign
 
 ## rust-analyzer.procMacro.processes {#procMacro.processes}
 
-Default: `1`
+Default: `2`
 
 Number of proc-macro server processes to spawn.
 

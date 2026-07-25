@@ -30,7 +30,7 @@ use rustc_data_structures::fx::FxIndexMap;
 use rustc_errors::{DiagCtxtHandle, Diagnostic, LintBuffer};
 use rustc_feature::Features;
 use rustc_session::Session;
-use rustc_session::errors::feature_err;
+use rustc_session::diagnostics::feature_err;
 use rustc_session::lint::builtin::{
     DEPRECATED_WHERE_CLAUSE_LOCATION, MISSING_ABI, MISSING_UNSAFE_ON_EXTERN,
     PATTERNS_IN_FNS_WITHOUT_BODY, UNUSED_VISIBILITIES,
@@ -514,22 +514,19 @@ impl<'a> AstValidator<'a> {
     }
 
     fn check_decl_attrs(&self, fn_decl: &FnDecl) {
+        use SyntheticAttr::*;
         fn_decl
             .inputs
             .iter()
             .flat_map(|i| i.attrs.as_ref())
-            .filter(|attr| {
-                let arr = [
-                    sym::allow,
-                    sym::cfg_trace,
-                    sym::cfg_attr_trace,
-                    sym::deny,
-                    sym::expect,
-                    sym::forbid,
-                    sym::splat,
-                    sym::warn,
-                ];
-                !attr.has_any_name(&arr) && rustc_attr_parsing::is_builtin_attr(*attr)
+            .filter(|attr| match &attr.kind {
+                AttrKind::Normal(normal) => {
+                    let arr =
+                        [sym::allow, sym::deny, sym::expect, sym::forbid, sym::splat, sym::warn];
+                    !attr.has_any_name(&arr) && rustc_attr_parsing::is_builtin_attr(&normal.item)
+                }
+                AttrKind::Synthetic(CfgTrace(_) | CfgAttrTrace(_)) => false,
+                AttrKind::DocComment(..) => true,
             })
             .for_each(|attr| {
                 if attr.is_doc_comment() {
@@ -1205,6 +1202,48 @@ impl<'a> AstValidator<'a> {
         self.visit_vis(vis);
         self.visit_ident(ident);
     }
+
+    // Check EII implementation attributes against an allowlist.
+    fn check_eii_impl_attrs(&self, attrs: &[Attribute], eii_impls: &[EiiImpl]) {
+        if eii_impls.is_empty() {
+            return;
+        }
+
+        let allowed_attrs: &[Symbol] = &[
+            sym::allow,
+            sym::warn,
+            sym::deny,
+            sym::forbid,
+            sym::expect,
+            sym::doc,
+            sym::inline,
+            sym::cold,
+            sym::optimize,
+            sym::coverage,
+            sym::sanitize,
+            sym::must_use,
+            sym::deprecated,
+        ];
+
+        for attr in attrs {
+            let AttrKind::Normal(normal) = &attr.kind else {
+                continue;
+            };
+            if attr.has_any_name(allowed_attrs) {
+                continue;
+            }
+
+            let attr_name = pprust::path_to_string(&normal.item.path);
+            for eii_impl in eii_impls {
+                self.dcx().emit_err(diagnostics::EiiImplAttributeNotSupported {
+                    attr_span: attr.span,
+                    attr_name: &attr_name,
+                    eii_span: eii_impl.span,
+                    eii_name: pprust::path_to_string(&eii_impl.eii_macro_path),
+                });
+            }
+        }
+    }
 }
 
 /// Checks that generic parameters are in the correct order,
@@ -1394,6 +1433,7 @@ impl Visitor<'_> for AstValidator<'_> {
                 for EiiImpl { eii_macro_path, .. } in eii_impls {
                     self.visit_path(eii_macro_path);
                 }
+                self.check_eii_impl_attrs(&item.attrs, eii_impls);
 
                 let is_intrinsic = item.attrs.iter().any(|a| a.has_name(sym::rustc_intrinsic));
                 if body.is_none() && !is_intrinsic && !self.is_sdylib_interface {
@@ -1517,7 +1557,7 @@ impl Visitor<'_> for AstValidator<'_> {
                 }
                 visit::walk_item(self, item)
             }
-            ItemKind::Struct(ident, generics, vdata) => {
+            ItemKind::Struct(.., vdata) => {
                 self.with_tilde_const(Some(TildeConstReason::Struct { span: item.span }), |this| {
                     // Scalable vectors can only be tuple structs
                     let scalable_vector_attr =
@@ -1536,34 +1576,20 @@ impl Visitor<'_> for AstValidator<'_> {
                         }
                     }
 
-                    match vdata {
-                        VariantData::Struct { fields, .. } => {
-                            this.visit_attrs_vis_ident(&item.attrs, &item.vis, ident);
-                            this.visit_generics(generics);
-                            walk_list!(this, visit_field_def, fields);
-                        }
-                        _ => visit::walk_item(this, item),
-                    }
+                    visit::walk_item(this, item);
                 })
             }
-            ItemKind::Union(ident, generics, vdata) => {
+            ItemKind::Union(.., vdata) => {
                 if vdata.fields().is_empty() {
                     self.dcx().emit_err(diagnostics::FieldlessUnion { span: item.span });
                 }
                 self.with_tilde_const(Some(TildeConstReason::Union { span: item.span }), |this| {
-                    match vdata {
-                        VariantData::Struct { fields, .. } => {
-                            this.visit_attrs_vis_ident(&item.attrs, &item.vis, ident);
-                            this.visit_generics(generics);
-                            walk_list!(this, visit_field_def, fields);
-                        }
-                        _ => visit::walk_item(this, item),
-                    }
+                    visit::walk_item(this, item)
                 });
             }
-            ItemKind::Const(ConstItem { defaultness, ident, rhs_kind, .. }) => {
+            ItemKind::Const(ConstItem { defaultness, ident, body, .. }) => {
                 self.check_defaultness(item.span, *defaultness, AllowDefault::No, AllowFinal::No);
-                if !rhs_kind.has_expr() {
+                if body.is_none() {
                     self.dcx().emit_err(diagnostics::ConstWithoutBody {
                         span: item.span,
                         replace_span: self.ending_semi_or_hi(item.span),
@@ -1583,8 +1609,9 @@ impl Visitor<'_> for AstValidator<'_> {
 
                 visit::walk_item(self, item);
             }
-            ItemKind::Static(StaticItem { expr, safety, .. }) => {
+            ItemKind::Static(StaticItem { expr, safety, eii_impls, .. }) => {
                 self.check_item_safety(item.span, *safety);
+                self.check_eii_impl_attrs(&item.attrs, eii_impls);
                 if matches!(safety, Safety::Unsafe(_)) {
                     self.dcx().emit_err(diagnostics::UnsafeStatic { span: item.span });
                 }
@@ -1609,7 +1636,7 @@ impl Visitor<'_> for AstValidator<'_> {
                 }
                 self.check_type_no_bounds(bounds, "this context");
 
-                if self.features.lazy_type_alias() {
+                if self.features.checked_type_aliases() {
                     if let Err(err) = self.check_type_alias_where_clause_location(ty_alias) {
                         self.dcx().emit_err(err);
                     }
@@ -1958,8 +1985,8 @@ impl Visitor<'_> for AstValidator<'_> {
 
         if let AssocCtxt::Impl { .. } = ctxt {
             match &item.kind {
-                AssocItemKind::Const(ConstItem { rhs_kind, .. }) => {
-                    if !rhs_kind.has_expr() {
+                AssocItemKind::Const(ConstItem { body, .. }) => {
+                    if body.is_none() {
                         self.dcx().emit_err(diagnostics::AssocConstWithoutBody {
                             span: item.span,
                             replace_span: self.ending_semi_or_hi(item.span),

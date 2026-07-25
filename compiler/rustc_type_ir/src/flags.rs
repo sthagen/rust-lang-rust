@@ -1,6 +1,6 @@
 use crate::inherent::*;
 use crate::visit::Flags;
-use crate::{self as ty, Interner};
+use crate::{self as ty, Interner, Region};
 
 bitflags::bitflags! {
     /// Flags that we track on types. These flags are propagated upwards
@@ -360,7 +360,7 @@ impl<I: Interner> FlagComputation<I> {
             }
 
             ty::FnDef(_, args) => {
-                self.add_args(args.as_slice());
+                self.add_binder_args(args);
             }
 
             ty::FnPtr(sig_tys, _) => self.bound_computation(sig_tys, |computation, sig_tys| {
@@ -459,7 +459,7 @@ impl<I: Interner> FlagComputation<I> {
         }
     }
 
-    fn add_region(&mut self, r: I::Region) {
+    fn add_region(&mut self, r: Region<I>) {
         self.add_flags(r.flags());
         if let ty::ReBound(ty::BoundVarIndexKind::Bound(debruijn), _) = r.kind() {
             self.add_bound_var(debruijn);
@@ -536,6 +536,18 @@ impl<I: Interner> FlagComputation<I> {
                 ty::GenericArgKind::Const(ct) => self.add_const(ct),
             }
         }
+    }
+
+    fn add_binder_args(&mut self, args: ty::Binder<I, I::GenericArgs>) {
+        self.bound_computation(args, |this, args| {
+            for arg in args.iter() {
+                match arg.kind() {
+                    ty::GenericArgKind::Type(ty) => this.add_ty(ty),
+                    ty::GenericArgKind::Lifetime(r) => this.add_region(r),
+                    ty::GenericArgKind::Const(ct) => this.add_const(ct),
+                }
+            }
+        });
     }
 
     fn add_is_rigid(&mut self, is_rigid: ty::IsRigid) {

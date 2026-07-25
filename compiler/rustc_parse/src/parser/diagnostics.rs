@@ -15,7 +15,7 @@ use rustc_errors::{
     Applicability, Diag, DiagCtxtHandle, ErrorGuaranteed, PResult, Subdiagnostic, Suggestions, msg,
     pluralize,
 };
-use rustc_session::errors::ExprParenthesesNeeded;
+use rustc_session::diagnostics::ExprParenthesesNeeded;
 use rustc_span::symbol::used_keywords;
 use rustc_span::{BytePos, DUMMY_SP, Ident, Span, SpanSnippetError, Spanned, Symbol, kw, sym};
 use thin_vec::{ThinVec, thin_vec};
@@ -597,7 +597,7 @@ impl<'a> Parser<'a> {
                 .iter()
                 .any(|tok| matches!(tok, TokenType::FatArrow | TokenType::CloseBrace))
         {
-            err.span_suggestion(
+            err.span_suggestion_verbose(
                 self.token.span,
                 "you might have meant to write a \"greater than or equal to\" comparison",
                 ">=",
@@ -873,7 +873,7 @@ impl<'a> Parser<'a> {
                 && let ast::AttrKind::Normal(next_attr_kind) = next_attr.kind
                 && let Some(next_attr_args_span) = next_attr_kind.item.args.span()
                 && let [next_segment] = &next_attr_kind.item.path.segments[..]
-                && segment.ident.name == sym::cfg
+                && next_segment.ident.name == sym::cfg
             {
                 let next_expr = match snapshot.parse_expr() {
                     Ok(next_expr) => next_expr,
@@ -942,7 +942,7 @@ impl<'a> Parser<'a> {
                     count += 1;
                 }
                 err.span(span);
-                err.span_suggestion(
+                err.span_suggestion_verbose(
                     span,
                     format!("remove the extra `#`{}", pluralize!(count)),
                     "",
@@ -2062,7 +2062,15 @@ impl<'a> Parser<'a> {
                     Applicability::MachineApplicable,
                 );
             }
-            err.span_suggestion(lo.shrink_to_lo(), format!("{prefix}you can still access the deprecated `try!()` macro using the \"raw identifier\" syntax"), "r#", Applicability::MachineApplicable);
+            err.span_suggestion_verbose(
+                lo.shrink_to_lo(),
+                format!(
+                    "{prefix}you can still access the deprecated `try!()` macro using the \
+                     \"raw identifier\" syntax"
+                ),
+                "r#",
+                Applicability::MachineApplicable,
+            );
             let guar = err.emit();
             Ok(self.mk_expr_err(lo.to(hi), guar))
         } else {
@@ -2243,7 +2251,7 @@ impl<'a> Parser<'a> {
             let ident = self.parse_ident_common(true).unwrap();
             let span = pat.span.with_hi(ident.span.hi());
 
-            err.span_suggestion(
+            err.span_suggestion_verbose(
                 span,
                 "declare the type after the parameter binding",
                 "<identifier>: <type>",
@@ -2641,7 +2649,7 @@ impl<'a> Parser<'a> {
             Ok((expr, _)) => {
                 // Find a mistake like `MyTrait<Assoc == S::Assoc>`.
                 if snapshot.token == token::EqEq {
-                    err.span_suggestion(
+                    err.span_suggestion_verbose(
                         snapshot.token.span,
                         "if you meant to use an associated type binding, replace `==` with `=`",
                         "=",
@@ -2655,7 +2663,7 @@ impl<'a> Parser<'a> {
                     && matches!(expr.kind, ExprKind::Path(..))
                 {
                     // Find a mistake like "foo::var:A".
-                    err.span_suggestion(
+                    err.span_suggestion_verbose(
                         snapshot.token.span,
                         "write a path separator here",
                         "::",
@@ -2938,7 +2946,7 @@ impl<'a> Parser<'a> {
             Applicability::MachineApplicable,
         );
         if let CommaRecoveryMode::EitherTupleOrPipe = rt {
-            err.span_suggestion(
+            err.span_suggestion_verbose(
                 comma_span,
                 "...or a vertical bar to match on alternatives",
                 " |",
@@ -2975,7 +2983,7 @@ impl<'a> Parser<'a> {
             && (self.expected_token_types.contains(TokenType::Gt)
                 || matches!(self.token.kind, token::Literal(..)))
         {
-            err.span_suggestion(
+            err.span_suggestion_verbose(
                 maybe_lt.span,
                 "remove the `<` to write an exclusive range",
                 "",

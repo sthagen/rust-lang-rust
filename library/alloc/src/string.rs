@@ -785,7 +785,7 @@ impl String {
     /// assert!(String::from_utf16le(v).is_err());
     /// ```
     #[cfg(not(no_global_oom_handling))]
-    #[stable(feature = "str_from_utf16_endian", since = "CURRENT_RUSTC_VERSION")]
+    #[stable(feature = "str_from_utf16_endian", since = "1.98.0")]
     pub fn from_utf16le(v: &[u8]) -> Result<String, FromUtf16Error> {
         let (chunks, []) = v.as_chunks::<2>() else {
             return Err(FromUtf16Error { kind: FromUtf16ErrorKind::OddBytes });
@@ -823,7 +823,7 @@ impl String {
     ///            String::from_utf16le_lossy(v));
     /// ```
     #[cfg(not(no_global_oom_handling))]
-    #[stable(feature = "str_from_utf16_endian", since = "CURRENT_RUSTC_VERSION")]
+    #[stable(feature = "str_from_utf16_endian", since = "1.98.0")]
     pub fn from_utf16le_lossy(v: &[u8]) -> String {
         match (cfg!(target_endian = "little"), unsafe { v.align_to::<u16>() }) {
             (true, ([], v, [])) => Self::from_utf16_lossy(v),
@@ -858,7 +858,7 @@ impl String {
     /// assert!(String::from_utf16be(v).is_err());
     /// ```
     #[cfg(not(no_global_oom_handling))]
-    #[stable(feature = "str_from_utf16_endian", since = "CURRENT_RUSTC_VERSION")]
+    #[stable(feature = "str_from_utf16_endian", since = "1.98.0")]
     pub fn from_utf16be(v: &[u8]) -> Result<String, FromUtf16Error> {
         let (chunks, []) = v.as_chunks::<2>() else {
             return Err(FromUtf16Error { kind: FromUtf16ErrorKind::OddBytes });
@@ -896,7 +896,7 @@ impl String {
     ///            String::from_utf16be_lossy(v));
     /// ```
     #[cfg(not(no_global_oom_handling))]
-    #[stable(feature = "str_from_utf16_endian", since = "CURRENT_RUSTC_VERSION")]
+    #[stable(feature = "str_from_utf16_endian", since = "1.98.0")]
     pub fn from_utf16be_lossy(v: &[u8]) -> String {
         match (cfg!(target_endian = "big"), unsafe { v.align_to::<u16>() }) {
             (true, ([], v, [])) => Self::from_utf16_lossy(v),
@@ -1103,6 +1103,19 @@ impl String {
     #[rustc_diagnostic_item = "string_push_str"]
     pub fn push_str(&mut self, string: &str) {
         self.vec.extend_from_slice(string.as_bytes())
+    }
+
+    /// Appends a given string slice onto the end of this `String`, returning
+    /// [`TryReserveError`] otherwise.
+    #[cfg_attr(
+        not(no_global_oom_handling),
+        expect(
+            dead_code,
+            reason = "currently only used in IO module when global OOM handling is disabled"
+        )
+    )]
+    pub(crate) fn try_push_str(&mut self, string: &str) -> Result<(), TryReserveError> {
+        self.vec.try_extend_from_slice_of_bytes(string.as_bytes())
     }
 
     #[cfg(not(no_global_oom_handling))]

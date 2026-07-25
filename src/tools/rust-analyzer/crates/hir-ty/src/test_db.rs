@@ -43,7 +43,7 @@ impl Default for TestDB {
             crates_map: Default::default(),
             nonce: Nonce::new(),
         };
-        hir_def::db::set_expand_proc_attr_macros(&mut this, true);
+        hir_def::set_expand_proc_attr_macros(&mut this, true);
         // This needs to be here otherwise `CrateGraphBuilder` panics.
         set_all_crates_with_durability(&mut this, std::iter::empty(), Durability::HIGH);
         _ = base_db::LibraryRoots::builder(Default::default())
@@ -64,7 +64,7 @@ impl Clone for TestDB {
             files: self.files.clone(),
             crates_map: self.crates_map.clone(),
             events: self.events.clone(),
-            nonce: Nonce::new(),
+            nonce: self.nonce,
         }
     }
 }

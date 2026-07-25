@@ -39,12 +39,13 @@ use rustc_macros::{TypeFoldable, TypeVisitable};
 use rustc_middle::middle::stability::AllowUnstable;
 use rustc_middle::ty::{
     self, Const, FnSigKind, GenericArgKind, GenericArgsRef, GenericParamDefKind, LitToConstInput,
-    Ty, TyCtxt, TypeSuperFoldable, TypeVisitableExt, TypingMode, Unnormalized, Upcast,
+    RegionExt, Ty, TyCtxt, TypeSuperFoldable, TypeVisitableExt, TypingMode, Unnormalized, Upcast,
     const_lit_matches_ty, fold_regions,
 };
 use rustc_middle::{bug, span_bug};
-use rustc_session::errors::feature_err;
+use rustc_session::diagnostics::feature_err;
 use rustc_session::lint::builtin::AMBIGUOUS_ASSOCIATED_ITEMS;
+use rustc_span::def_id::ModId;
 use rustc_span::{DUMMY_SP, Ident, Span, kw, sym};
 use rustc_trait_selection::infer::InferCtxtExt;
 use rustc_trait_selection::traits::{self, FulfillmentError};
@@ -116,7 +117,7 @@ pub enum RegionInferReason<'a> {
 pub struct InherentAssocCandidate {
     pub impl_: DefId,
     pub assoc_item: DefId,
-    pub scope: DefId,
+    pub scope: ModId,
 }
 
 pub struct ResolvedStructPath<'tcx> {
@@ -1214,10 +1215,10 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
         let args = self.lower_generic_args_of_path_segment(span, def_id, item_segment);
 
         if let DefKind::TyAlias = tcx.def_kind(def_id)
-            && tcx.type_alias_is_lazy(def_id)
+            && tcx.type_alias_is_checked(def_id)
         {
             // Type aliases defined in crates that have the
-            // feature `lazy_type_alias` enabled get encoded as a type alias that normalization will
+            // feature `checked_type_alias` enabled get encoded as a type alias that normalization will
             // then actually instantiate the where bounds of.
             let alias_ty = ty::AliasTy::new_from_args(tcx, ty::Free { def_id }, args);
             Ty::new_alias(tcx, ty::IsRigid::No, alias_ty)
@@ -1483,7 +1484,11 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
             }
             TypeRelativePath::Ctor { ctor_def_id, args } => match tcx.def_kind(ctor_def_id) {
                 DefKind::Ctor(_, CtorKind::Fn) => {
-                    Ok(ty::Const::zero_sized(tcx, Ty::new_fn_def(tcx, ctor_def_id, args)))
+                    // FIXME(156581): actually instantiate the binder correctly (turbofishing/fndef changes)
+                    Ok(ty::Const::zero_sized(
+                        tcx,
+                        Ty::new_fn_def(tcx, ctor_def_id, ty::Binder::dummy(args)),
+                    ))
                 }
                 DefKind::Ctor(ctor_of, CtorKind::Const) => {
                     Ok(self.construct_const_ctor_value(ctor_def_id, ctor_of, args))
@@ -1802,7 +1807,7 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
         ident: Ident,
         assoc_tag: ty::AssocTag,
         scope: DefId,
-    ) -> Option<(ty::AssocItem, /*scope*/ DefId)> {
+    ) -> Option<(ty::AssocItem, /*scope*/ ModId)> {
         let tcx = self.tcx();
 
         let (ident, def_scope) = tcx.adjust_ident_and_get_scope(ident, scope, self.item_def_id());
@@ -1822,7 +1827,7 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
         &self,
         item_def_id: DefId,
         ident: Ident,
-        scope: DefId,
+        scope: ModId,
         block: HirId,
         span: Span,
     ) {
@@ -2581,7 +2586,9 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
             .map(|(field_def, arg)| {
                 self.lower_const_arg(
                     arg,
-                    tcx.type_of(field_def.did).instantiate(tcx, adt_args).skip_norm_wip(),
+                    tcx.type_of(field_def.did)
+                        .instantiate(tcx, adt_args.no_bound_vars().unwrap())
+                        .skip_norm_wip(),
                 )
             })
             .collect::<Vec<_>>();
@@ -2594,7 +2601,7 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
         };
 
         let valtree = ty::ValTree::from_branches(tcx, opt_discr_const.into_iter().chain(fields));
-        let adt_ty = Ty::new_adt(tcx, adt_def, adt_args);
+        let adt_ty = Ty::new_adt(tcx, adt_def, adt_args.no_bound_vars().unwrap());
         ty::Const::new_value(tcx, valtree, adt_ty)
     }
 
@@ -2906,7 +2913,8 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
                     &path.segments[generic_segments[0].1],
                 );
 
-                ty::Const::zero_sized(tcx, Ty::new_fn_def(tcx, did, args))
+                // FIXME(156581): actually instantiate the binder correctly (turbofishing/fndef changes)
+                ty::Const::zero_sized(tcx, Ty::new_fn_def(tcx, did, ty::Binder::dummy(args)))
             }
             Res::Def(DefKind::AssocConst { .. }, did) => {
                 let trait_segment = if let [modules @ .., trait_, _item] = path.segments {
@@ -2925,7 +2933,10 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
                 .unwrap_or_else(|guar| Const::new_error(tcx, guar))
             }
             Res::Def(DefKind::Static { .. }, _) => {
-                span_bug!(span, "use of bare `static` ConstArgKind::Path's not yet supported")
+                let guar = self
+                    .dcx()
+                    .span_err(path.span, "static items cannot be used as const arguments");
+                return Const::new_error(tcx, guar);
             }
             // FIXME(const_generics): create real const to allow fn items as const paths
             Res::Def(DefKind::Fn | DefKind::AssocFn, did) => {
@@ -2937,7 +2948,8 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
                 );
 
                 if self.tcx().generics_of(did).own_synthetic_params_count() == 0 {
-                    ty::Const::zero_sized(tcx, Ty::new_fn_def(tcx, did, args))
+                    // FIXME(156581): actually instantiate the binder correctly (turbofishing/fndef changes)
+                    ty::Const::zero_sized(tcx, Ty::new_fn_def(tcx, did, ty::Binder::dummy(args)))
                 } else {
                     let tcx = self.tcx();
                     let generics = tcx.generics_of(did);
@@ -2954,7 +2966,11 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
                         }
                     });
 
-                    ty::Const::zero_sized(tcx, Ty::new_fn_def(tcx, did, args))
+                    // FIXME(156581): actually instantiate the binder correctly (turbofishing/fndef changes)
+                    ty::Const::zero_sized(
+                        tcx,
+                        Ty::new_fn_def(tcx, did, ty::Binder::dummy(args.collect::<Box<_>>())),
+                    )
                 }
             }
 

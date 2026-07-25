@@ -604,9 +604,7 @@ impl File {
     #[unstable(feature = "file_buffered", issue = "130804")]
     pub fn open_buffered<P: AsRef<Path>>(path: P) -> io::Result<io::BufReader<File>> {
         // Allocate the buffer *first* so we don't affect the filesystem otherwise.
-        let buffer = io::BufReader::<Self>::try_new_buffer()?;
-        let file = File::open(path)?;
-        Ok(io::BufReader::with_buffer(file, buffer))
+        io::BufReader::try_new_with(|| File::open(path))
     }
 
     /// Opens a file in write-only mode.
@@ -672,9 +670,7 @@ impl File {
     #[unstable(feature = "file_buffered", issue = "130804")]
     pub fn create_buffered<P: AsRef<Path>>(path: P) -> io::Result<io::BufWriter<File>> {
         // Allocate the buffer *first* so we don't affect the filesystem otherwise.
-        let buffer = io::BufWriter::<Self>::try_new_buffer()?;
-        let file = File::create(path)?;
-        Ok(io::BufWriter::with_buffer(file, buffer))
+        io::BufWriter::try_new_with(|| File::create(path))
     }
 
     /// Creates a new file in read-write mode; error if the file exists.
@@ -1547,6 +1543,8 @@ impl crate::io::IoHandle for File {}
 impl Dir {
     /// Attempts to open a directory at `path` in read-only mode.
     ///
+    /// This function opens a directory. To open a file instead, see [`File::open`].
+    ///
     /// # Errors
     ///
     /// This function will return an error if `path` does not point to an existing directory.
@@ -1572,7 +1570,29 @@ impl Dir {
             .map(|inner| Self { inner })
     }
 
+    /// Queries metadata about the underlying directory.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// #![feature(dirfd)]
+    /// use std::fs::Dir;
+    ///
+    /// fn main() -> std::io::Result<()> {
+    ///     let dir = Dir::open("foo")?;
+    ///     let metadata = dir.metadata()?;
+    ///     Ok(())
+    /// }
+    /// ```
+    #[unstable(feature = "dirfd", issue = "120426")]
+    pub fn metadata(&self) -> io::Result<Metadata> {
+        self.inner.metadata().map(Metadata)
+    }
+
     /// Attempts to open a file in read-only mode relative to this directory.
+    ///
+    /// This function interprets `path` relative to the directory provided by `self`. To open a file
+    /// relative to the current working directory, or at an absolute path, see [`File::open`].
     ///
     /// # Errors
     ///
@@ -1600,7 +1620,47 @@ impl Dir {
             .map(|f| File { inner: f })
     }
 
-    /// Queries metadata about the underlying directory.
+    /// Attempts to open a file according to `opts` relative to this directory.
+    ///
+    /// This function interprets `path` relative to the directory provided by `self`. To open a file
+    /// relative to the current working directory, or at an absolute path, see [`File::open`].
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if `path` does not point to an existing file.
+    /// Other errors may also be returned according to [`OpenOptions::open`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// #![feature(dirfd)]
+    /// use std::{fs::{Dir, OpenOptions}, io::{self, Write}};
+    ///
+    /// fn main() -> io::Result<()> {
+    ///     let dir = Dir::open("foo")?;
+    ///     let mut opts = OpenOptions::new();
+    ///     opts.read(true).write(true);
+    ///     let mut f = dir.open_file_with("bar.txt", &opts)?;
+    ///     f.write_all(b"Hello, world!")?;
+    ///     let contents = io::read_to_string(f)?;
+    ///     assert_eq!(contents, "Hello, world!");
+    ///     Ok(())
+    /// }
+    /// ```
+    #[unstable(feature = "dirfd", issue = "120426")]
+    pub fn open_file_with<P: AsRef<Path>>(&self, path: P, opts: &OpenOptions) -> io::Result<File> {
+        self.inner.open_file(path.as_ref(), &opts.0).map(|f| File { inner: f })
+    }
+
+    /// Attempts to remove a file relative to this directory.
+    ///
+    /// This function interprets `path` relative to the directory provided by `self`. To remove a file
+    /// relative to the current working directory, or at an absolute path, see [`fs::remove_file`][remove_file].
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if `path` does not point to an existing file.
+    /// Other errors may also be returned according to [`OpenOptions::open`].
     ///
     /// # Examples
     ///
@@ -1610,13 +1670,46 @@ impl Dir {
     ///
     /// fn main() -> std::io::Result<()> {
     ///     let dir = Dir::open("foo")?;
-    ///     let metadata = dir.metadata()?;
+    ///     dir.remove_file("bar.txt")?;
     ///     Ok(())
     /// }
     /// ```
     #[unstable(feature = "dirfd", issue = "120426")]
-    pub fn metadata(&self) -> io::Result<Metadata> {
-        self.inner.metadata().map(Metadata)
+    pub fn remove_file<P: AsRef<Path>>(&self, path: P) -> io::Result<()> {
+        self.inner.remove_file(path.as_ref())
+    }
+
+    /// Attempts to rename a file or directory relative to this directory to a new name, replacing
+    /// the destination file if present.
+    ///
+    /// This function interprets `from` relative to the directory provided by `self` and `to` relative to the directory
+    /// provided by `to_dir`. To rename a file relative to the current working directory, or at an absolute path, see [`fs::rename`][rename].
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if `from` does not point to an existing file or directory.
+    /// Other errors may also be returned according to [`OpenOptions::open`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// #![feature(dirfd)]
+    /// use std::fs::Dir;
+    ///
+    /// fn main() -> std::io::Result<()> {
+    ///     let dir = Dir::open("foo")?;
+    ///     dir.rename("bar.txt", &dir, "quux.txt")?;
+    ///     Ok(())
+    /// }
+    /// ```
+    #[unstable(feature = "dirfd", issue = "120426")]
+    pub fn rename<P: AsRef<Path>, Q: AsRef<Path>>(
+        &self,
+        from: P,
+        to_dir: &Self,
+        to: Q,
+    ) -> io::Result<()> {
+        self.inner.rename(from.as_ref(), &to_dir.inner, to.as_ref())
     }
 }
 
@@ -2872,7 +2965,7 @@ pub fn copy<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<u64> {
 ///
 /// This function currently corresponds to the `CreateHardLink` function on Windows.
 /// On most Unix systems, it corresponds to the `linkat` function with no flags.
-/// On Android, VxWorks, and Redox, it instead corresponds to the `link` function.
+/// On VxWorks and Redox, it instead corresponds to the `link` function.
 /// On MacOS, it uses the `linkat` function if it is available, but on very old
 /// systems where `linkat` is not available, `link` is selected at runtime instead.
 /// Note that, this [may change in the future][changes].

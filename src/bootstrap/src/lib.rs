@@ -15,7 +15,7 @@
 //!
 //! More documentation can be found in each respective module below, and you can
 //! also check out the `src/bootstrap/README.md` file for more information.
-#![cfg_attr(test, allow(unused))]
+#![allow(clippy::assertions_on_constants, reason = "false positive for `assert!(cfg!(..))`")]
 
 use std::cell::Cell;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -866,8 +866,10 @@ impl Build {
             crates.is_empty() || possible_features_by_crates.contains(feature)
         };
         let mut features = vec![];
-        if self.config.jemalloc(target) && check("jemalloc") {
-            features.push("jemalloc");
+        if let Some(allocator) = self.config.override_allocator(target)
+            && check(allocator.feature_name())
+        {
+            features.push(allocator.feature_name());
         }
         if (self.config.llvm_enabled(target) || kind == Kind::Check) && check("llvm") {
             features.push("llvm");
@@ -1735,7 +1737,9 @@ impl Build {
                 }
             }
         }
-        ret.sort_unstable_by_key(|krate| krate.name.clone()); // reproducible order needed for tests
+
+        // Sort the crates so that bootstrap unit tests can assume a deterministic order.
+        ret.sort_unstable_by(|a, b| Ord::cmp(&a.name, &b.name));
         ret
     }
 

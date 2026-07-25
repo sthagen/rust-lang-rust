@@ -289,7 +289,7 @@ where
         _ecx: &mut EvalCtxt<'_, D>,
         _goal: Goal<I, Self>,
     ) -> Result<Candidate<I>, NoSolutionOrRerunNonErased> {
-        todo!("Fn* are not yet const")
+        unimplemented!("Fn* are not yet const")
     }
 
     #[instrument(level = "trace", skip_all, ret)]
@@ -347,7 +347,7 @@ where
         _goal: Goal<I, Self>,
         _kind: rustc_type_ir::ClosureKind,
     ) -> Result<Candidate<I>, NoSolutionOrRerunNonErased> {
-        todo!("AsyncFn* are not yet const")
+        unimplemented!("AsyncFn* are not yet const")
     }
 
     fn consider_builtin_async_fn_kind_helper_candidate(
@@ -449,6 +449,13 @@ where
         _goal: Goal<I, Self>,
     ) -> Result<Candidate<I>, NoSolutionOrRerunNonErased> {
         unreachable!("BikeshedGuaranteedNoDrop is not const");
+    }
+
+    fn consider_builtin_try_as_dyn_candidate(
+        _ecx: &mut EvalCtxt<'_, D>,
+        goal: Goal<I, Self>,
+    ) -> Result<Candidate<I>, NoSolutionOrRerunNonErased> {
+        unreachable!("`TryAsDynCompat` is not const: {:?}", goal)
     }
 
     fn consider_structural_builtin_unsize_candidates(

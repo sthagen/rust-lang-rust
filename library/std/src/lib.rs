@@ -322,10 +322,12 @@
 #![feature(borrowed_buf_init)]
 #![feature(bstr)]
 #![feature(bstr_internals)]
+#![feature(c_size_t)]
 #![feature(can_vector)]
 #![feature(cast_maybe_uninit)]
 #![feature(char_internals)]
 #![feature(clone_to_uninit)]
+#![feature(const_clone)]
 #![feature(const_convert)]
 #![feature(const_default)]
 #![feature(core_float_math)]
@@ -335,6 +337,7 @@
 #![feature(core_io_internals)]
 #![feature(cstr_display)]
 #![feature(cursor_split)]
+#![feature(derive_const)]
 #![feature(drop_guard)]
 #![feature(duration_constants)]
 #![feature(error_generic_member_access)]
@@ -398,9 +401,11 @@
 // tidy-alphabetical-start
 #![feature(alloc_io)]
 #![feature(allocator_api)]
+#![feature(buf_read_has_data_left)]
 #![feature(clone_from_ref)]
 #![feature(get_mut_unchecked)]
 #![feature(map_try_insert)]
+#![feature(read_buf)]
 #![feature(slice_concat_trait)]
 #![feature(thin_box)]
 #![feature(try_reserve_kind)]
@@ -422,7 +427,6 @@
 // Only for re-exporting:
 // tidy-alphabetical-start
 #![feature(async_iterator)]
-#![feature(c_variadic)]
 #![feature(cfg_accessible)]
 #![feature(cfg_eval)]
 #![feature(concat_bytes)]
@@ -804,25 +808,6 @@ include!("../../core/src/primitive_docs.rs");
 // is unconditional, so the unstable feature needs to be defined somewhere.
 #[unstable(feature = "restricted_std", issue = "none")]
 mod __restricted_std_workaround {}
-
-// FIXME(jhpratt) This is currently only used by portable SIMD. Once rust-lang/portable-simd#529 is
-// merged, this should be able to be removed.
-mod sealed {
-    /// This trait being unreachable from outside the crate
-    /// prevents outside implementations of our extension traits.
-    /// This allows adding more trait methods in the future.
-    #[unstable(feature = "sealed", issue = "none")]
-    pub trait Sealed {}
-}
-
-macro_rules! impl_sealed {
-    ($($t:ty)*) => {$(
-        /// Allows implementations within `std`.
-        #[unstable(feature = "sealed", issue = "none")]
-        impl crate::sealed::Sealed for $t {}
-    )*}
-}
-impl_sealed! { isize i8 i16 i32 i64 i128 usize u8 u16 u32 u64 u128 f32 f64 }
 
 #[cfg(test)]
 #[allow(dead_code)] // Not used in all configurations.

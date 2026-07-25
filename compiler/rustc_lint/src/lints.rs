@@ -1,4 +1,4 @@
-// ignore-tidy-filelength
+// ignore-tidy-file-filelength
 
 use std::num::NonZero;
 
@@ -266,7 +266,7 @@ impl<'a> Diagnostic<'a, ()> for BuiltinUngatedAsyncFnTrackCaller<'_> {
     fn into_diag(self, dcx: DiagCtxtHandle<'a>, level: Level) -> Diag<'a, ()> {
         let mut diag = Diag::new(dcx, level, "`#[track_caller]` on async functions is a no-op")
             .with_span_label(self.label, "this function will not propagate the caller location");
-        rustc_session::errors::add_feature_diagnostics(
+        rustc_session::diagnostics::add_feature_diagnostics(
             &mut diag,
             self.session,
             sym::async_fn_track_caller,
@@ -319,7 +319,7 @@ impl<'a> Diagnostic<'a, ()> for BuiltinTypeAliasBounds<'_> {
                 see issue #112792 <https://github.com/rust-lang/rust/issues/112792> for more information"
             ));
         if self.enable_feat_help {
-            diag.help(msg!("add `#![feature(lazy_type_alias)]` to the crate attributes to enable the desired semantics"));
+            diag.help(msg!("add `#![feature(checked_type_aliases)]` to the crate attributes to enable the desired semantics"));
         }
 
         // We perform the walk in here instead of in `<TypeAliasBounds as LateLintPass>` to
@@ -601,8 +601,6 @@ pub(crate) struct BuiltinDerefNullptr {
     pub label: Span,
 }
 
-// FIXME: migrate fluent::lint::builtin_asm_labels
-
 #[derive(Diagnostic)]
 pub(crate) enum BuiltinSpecialModuleNameUsed {
     #[diag("found module declaration for lib.rs")]
@@ -848,7 +846,7 @@ pub(crate) enum RedefiningRuntimeSymbolsDiag<'tcx> {
     #[help(
         "either fix the signature or remove any attributes like `#[unsafe(no_mangle)]`, `#[unsafe(export_name = \"{$symbol_name}\")]`, or `#[link_name = \"{$symbol_name}\"]`"
     )]
-    FnDefInvalid { symbol_name: String, expected_fn_sig: Ty<'tcx>, found_fn_sig: Ty<'tcx> },
+    Invalid { symbol_name: String, expected_fn_sig: Ty<'tcx>, found_fn_sig: Ty<'tcx> },
     #[diag(
         "suspicious definition of the runtime `{$symbol_name}` symbol used by the standard library"
     )]
@@ -860,18 +858,7 @@ pub(crate) enum RedefiningRuntimeSymbolsDiag<'tcx> {
         "either fix the signature or remove any attributes like `#[unsafe(no_mangle)]`, `#[unsafe(export_name = \"{$symbol_name}\")]`, or `#[link_name = \"{$symbol_name}\"]`"
     )]
     #[help("allow this lint if the signature is compatible")]
-    FnDefSuspicious { symbol_name: String, expected_fn_sig: Ty<'tcx>, found_fn_sig: Ty<'tcx> },
-    #[diag(
-        "invalid definition of the runtime `{$symbol_name}` symbol used by the standard library"
-    )]
-    #[note(
-        "expected `{$expected_fn_sig}`
-    found    `static {$symbol_name}: {$static_ty}`"
-    )]
-    #[help(
-        "either fix the signature or remove any attributes `#[unsafe(no_mangle)]` or `#[unsafe(export_name = \"{$symbol_name}\")]`"
-    )]
-    Static { symbol_name: String, static_ty: Ty<'tcx>, expected_fn_sig: Ty<'tcx> },
+    Suspicious { symbol_name: String, expected_fn_sig: Ty<'tcx>, found_fn_sig: Ty<'tcx> },
 }
 
 // drop_forget_useless.rs
@@ -2728,7 +2715,7 @@ pub(crate) enum MutRefSugg {
 
 #[derive(Subdiagnostic)]
 #[suggestion(
-    "this type already provides \"interior mutability\", so its binding doesn't need to be declared as mutable",
+    "this type already provides \"interior mutability\", so its binding doesn't need to be declared as mutable when borrowed with a shared reference",
     style = "verbose",
     applicability = "maybe-incorrect",
     code = ""

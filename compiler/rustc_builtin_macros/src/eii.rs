@@ -203,6 +203,13 @@ fn split_attrs(
                 foreign_item_attributes.push(attr.clone());
                 macro_attributes.push(attr);
             }
+            // `#[track_caller]` goes on the foreign item only: it's the symbol callers link
+            // against, so it must carry the flag for call sites to pass the caller location.
+            // Implementations derive it during codegen (see `EiiImpls` in `codegen_attrs.rs`),
+            // so it must not be routed onto the default impl here.
+            Some(sym::track_caller) => {
+                foreign_item_attributes.push(attr);
+            }
             // Doc attributes should be forwarded to the macro and the foreign item, since those are
             // the two items you interact with as a user.
             // FIXME: idk yet how EIIs show up in docs, might want to customize
@@ -302,15 +309,12 @@ fn generate_default_impl(
         },
         span: eii_attr_span,
         is_default: true,
-        known_eii_macro_resolution: Some(ast::EiiDecl {
-            foreign_item: ecx.path(
-                foreign_item_name.span,
-                // prefix self to explicitly escape the const block generated below
-                // NOTE: this is why EIIs can't be used on statements
-                vec![Ident::from_str_and_span("self", foreign_item_name.span), foreign_item_name],
-            ),
-            impl_unsafe,
-        }),
+        known_eii_macro_resolution: Some(ecx.path(
+            foreign_item_name.span,
+            // prefix self to explicitly escape the const block generated below
+            // NOTE: this is why EIIs can't be used on statements
+            vec![Ident::from_str_and_span("self", foreign_item_name.span), foreign_item_name],
+        )),
     };
 
     let mut item_kind = item_kind.clone();
@@ -331,7 +335,8 @@ fn generate_default_impl(
             span,
             underscore,
             unit,
-            ast::ConstItemRhsKind::new_body(ecx.expr_block(ecx.block(span, stmts))),
+            Some(ecx.expr_block(ecx.block(span, stmts))),
+            ast::ConstItemKind::Body,
         )
     };
 

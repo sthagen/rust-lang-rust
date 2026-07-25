@@ -5,8 +5,8 @@ use rustc_middle::ty::{self, Ty};
 use rustc_middle::{bug, mir, span_bug};
 
 use super::FunctionCx;
-use crate::errors;
-use crate::mir::operand::OperandRef;
+use crate::diagnostics;
+use crate::mir::operand::{OperandRef, OperandValue};
 use crate::traits::*;
 
 impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
@@ -17,6 +17,10 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
     ) -> OperandRef<'tcx, Bx::Value> {
         let val = self.eval_mir_constant(constant);
         let ty = self.monomorphize(constant.ty());
+        if val.all_bytes_uninit(self.cx.tcx()) {
+            let layout = bx.layout_of(ty);
+            return OperandRef { val: OperandValue::Uninit, layout, move_annotation: None };
+        }
         OperandRef::from_const(bx, val, ty)
     }
 
@@ -98,7 +102,9 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
                 bx.const_vector(&values)
             })
             .unwrap_or_else(|| {
-                bx.tcx().dcx().emit_err(errors::ShuffleIndicesEvaluation { span: constant.span });
+                bx.tcx()
+                    .dcx()
+                    .emit_err(diagnostics::ShuffleIndicesEvaluation { span: constant.span });
                 // We've errored, so we don't have to produce working code.
                 let llty = bx.backend_type(bx.layout_of(ty));
                 bx.const_undef(llty)

@@ -6,7 +6,7 @@ use rustc_ast::{self as ast, NodeId};
 use rustc_errors::ErrorGuaranteed;
 use rustc_hir::def::{DefKind, MacroKinds, Namespace, NonMacroAttrKind, PartialRes, PerNS};
 use rustc_middle::{bug, span_bug};
-use rustc_session::errors::feature_err;
+use rustc_session::diagnostics::feature_err;
 use rustc_session::lint::builtin::PROC_MACRO_DERIVE_RESOLUTION_FALLBACK;
 use rustc_span::edition::Edition;
 use rustc_span::hygiene::{ExpnId, ExpnKind, LocalExpnId, MacroKind, SyntaxContext};
@@ -142,9 +142,11 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                     // used to avoid long scope chains, see the comments on `MacroRulesScopeRef`.
                     // As another consequence of this optimization visitors never observe invocation
                     // scopes for macros that were already expanded.
-                    while let MacroRulesScope::Invocation(invoc_id) = macro_rules_scope.get() {
-                        if let Some(next_scope) = self.output_macro_rules_scopes.get(&invoc_id) {
-                            macro_rules_scope.set(next_scope.get());
+                    let mut scope = macro_rules_scope.get();
+                    while let MacroRulesScope::Invocation(invoc_id) = scope {
+                        if let Some(next) = self.output_macro_rules_scopes.get(&invoc_id) {
+                            scope = next.get();
+                            macro_rules_scope.set(scope);
                         } else {
                             break;
                         }
@@ -1831,7 +1833,9 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
     ) -> PathResult<'ra> {
         let mut module = None;
         let mut module_had_parse_errors = !self.mods_with_parse_errors.is_empty()
-            && self.mods_with_parse_errors.contains(&parent_scope.module.nearest_parent_mod());
+            && self
+                .mods_with_parse_errors
+                .contains(&parent_scope.module.nearest_parent_mod().to_def_id());
         let mut allow_super = true;
         let mut second_binding = None;
 

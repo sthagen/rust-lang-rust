@@ -807,29 +807,25 @@ impl<'a> TraitDef<'a> {
                     rustc_ast::AttrItem {
                         unsafety: Safety::Default,
                         path: rustc_const_unstable,
-                        args: rustc_ast::ast::AttrItemKind::Unparsed(AttrArgs::Delimited(
-                            DelimArgs {
-                                dspan: DelimSpan::from_single(self.span),
-                                delim: rustc_ast::token::Delimiter::Parenthesis,
-                                tokens: [
-                                    TokenKind::Ident(sym::feature, IdentIsRaw::No),
-                                    TokenKind::Eq,
-                                    TokenKind::lit(LitKind::Str, sym::derive_const, None),
-                                    TokenKind::Comma,
-                                    TokenKind::Ident(sym::issue, IdentIsRaw::No),
-                                    TokenKind::Eq,
-                                    TokenKind::lit(LitKind::Str, sym::derive_const_issue, None),
-                                ]
-                                .into_iter()
-                                .map(|kind| {
-                                    TokenTree::Token(
-                                        Token { kind, span: self.span },
-                                        Spacing::Alone,
-                                    )
-                                })
-                                .collect(),
-                            },
-                        )),
+                        args: AttrArgs::Delimited(DelimArgs {
+                            dspan: DelimSpan::from_single(self.span),
+                            delim: rustc_ast::token::Delimiter::Parenthesis,
+                            tokens: [
+                                TokenKind::Ident(sym::feature, IdentIsRaw::No),
+                                TokenKind::Eq,
+                                TokenKind::lit(LitKind::Str, sym::derive_const, None),
+                                TokenKind::Comma,
+                                TokenKind::Ident(sym::issue, IdentIsRaw::No),
+                                TokenKind::Eq,
+                                TokenKind::lit(LitKind::Str, sym::derive_const_issue, None),
+                            ]
+                            .into_iter()
+                            .map(|kind| {
+                                TokenTree::Token(Token { kind, span: self.span }, Spacing::Alone)
+                            })
+                            .collect(),
+                        }),
+                        span: self.span,
                     },
                     self.span,
                 ),
@@ -1480,7 +1476,7 @@ impl<'a> TraitDef<'a> {
         for field in struct_def.fields() {
             let sp = field.span.with_ctxt(self.span.ctxt());
             match field.ident {
-                Some(ident) => named_idents.push((ident, sp, field.default.as_ref())),
+                Some(ident) => named_idents.push((ident, sp, field.default_value())),
                 _ => just_spans.push(sp),
             }
         }

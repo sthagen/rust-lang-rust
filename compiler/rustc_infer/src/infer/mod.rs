@@ -10,7 +10,6 @@ pub use opaque_types::{OpaqueTypeStorage, OpaqueTypeStorageEntries, OpaqueTypeTa
 use region_constraints::{
     GenericKind, RegionConstraintCollector, RegionConstraintStorage, VarInfos, VerifyBound,
 };
-pub use relate::StructurallyRelateAliases;
 pub use relate::combine::PredicateEmittingRelation;
 use rustc_data_structures::fx::{FxHashSet, FxIndexMap};
 use rustc_data_structures::undo_log::{Rollback, UndoLogs};
@@ -30,8 +29,9 @@ use rustc_middle::ty::error::{ExpectedFound, TypeError};
 use rustc_middle::ty::{
     self, BoundVarReplacerDelegate, ConstVid, FloatVid, GenericArg, GenericArgKind, GenericArgs,
     GenericArgsRef, GenericParamDefKind, InferConst, IntVid, OpaqueTypeKey, ProvisionalHiddenType,
-    PseudoCanonicalInput, Term, TermKind, Ty, TyCtxt, TyVid, TypeFoldable, TypeFolder,
-    TypeSuperFoldable, TypeVisitable, TypeVisitableExt, TypingEnv, TypingMode, fold_regions,
+    PseudoCanonicalInput, RegionExt, RegionUtilitiesExt, Term, TermKind, Ty, TyCtxt, TyVid,
+    TypeFoldable, TypeFolder, TypeSuperFoldable, TypeVisitable, TypeVisitableExt, TypingEnv,
+    TypingMode, fold_regions,
 };
 use rustc_span::{DUMMY_SP, Span, Symbol};
 use rustc_type_ir::MayBeErased;
@@ -354,6 +354,7 @@ impl<'tcx> Drop for InferCtxt<'tcx> {
             TypingMode::Coherence
             | TypingMode::Typeck { .. }
             | TypingMode::PostBorrowck { .. }
+            | TypingMode::Reflection
             | TypingMode::PostAnalysis
             | TypingMode::Codegen => {}
             // In erased mode, the opaque type storage is always empty
@@ -1171,6 +1172,7 @@ impl<'tcx> InferCtxt<'tcx> {
             // and post-borrowck analysis mode. We may need to modify its uses
             // to support PostBorrowck in the old solver as well.
             TypingMode::Coherence
+            | TypingMode::Reflection
             | TypingMode::PostBorrowck { .. }
             | TypingMode::PostAnalysis
             | TypingMode::Codegen => false,
@@ -1505,6 +1507,7 @@ impl<'tcx> InferCtxt<'tcx> {
             mode @ (ty::TypingMode::Coherence
             | ty::TypingMode::PostBorrowck { .. }
             | ty::TypingMode::PostAnalysis
+            | ty::TypingMode::Reflection
             | ty::TypingMode::Codegen) => mode,
             ty::TypingMode::ErasedNotCoherence(MayBeErased) => unreachable!(),
         };

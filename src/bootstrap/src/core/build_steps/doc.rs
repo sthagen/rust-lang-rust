@@ -70,7 +70,7 @@ macro_rules! book {
 // adding a build step in `src/bootstrap/code/builder/mod.rs`!
 // NOTE: Make sure to add the corresponding submodule when adding a new book.
 book!(
-    CargoBook, "src/tools/cargo/src/doc", "cargo", &[];
+    CargoBook, "src/tools/cargo/doc/book", "cargo", &[];
     ClippyBook, "src/tools/clippy/book", "clippy", &[];
     EditionGuide, "src/doc/edition-guide", "edition-guide", &[];
     EmbeddedBook, "src/doc/embedded-book", "embedded-book", &[];
@@ -667,7 +667,7 @@ impl Step for Std {
     }
 
     fn make_run(run: RunConfig<'_>) {
-        let crates = compile::std_crates_for_run_make(&run);
+        let crates = compile::std_crates_for_make_run(&run);
         let target_is_no_std = run.builder.no_std(run.target).unwrap_or(false);
         if crates.is_empty() && target_is_no_std {
             return;
@@ -721,7 +721,7 @@ impl Step for Std {
             DocumentationFormat::Html => {
                 vec!["--markdown-css", "rust.css", "--markdown-no-toc", "--index-page", &index_page]
             }
-            DocumentationFormat::Json => vec!["--output-format", "json"],
+            DocumentationFormat::Json => vec![],
         };
 
         if !builder.config.docs_minification {
@@ -730,7 +730,47 @@ impl Step for Std {
         // For `--index-page` and `--output-format=json`.
         extra_args.push("-Zunstable-options");
 
-        doc_std(builder, self.format, self.build_compiler, target, &out, &extra_args, &crates);
+        let target_doc_dir_name =
+            if self.format == DocumentationFormat::Json { "json-doc" } else { "doc" };
+        let target_dir = builder
+            .stage_out(self.build_compiler, Mode::Std)
+            .join(target)
+            .join(target_doc_dir_name);
+
+        // This is directory where the compiler will place the output of the command.
+        // We will then copy the files from this directory into the final `out` directory, the specified
+        // as a function parameter.
+        let out_dir = target_dir.join(target).join("doc");
+
+        let mut cargo = doc_std(
+            builder,
+            self.format,
+            self.build_compiler,
+            target,
+            &target_dir,
+            &extra_args,
+            &crates,
+        );
+        match self.format {
+            DocumentationFormat::Html => {}
+            DocumentationFormat::Json => {
+                // We have to pass these directly to cargo, rather than through RUSTDOCFLAGS,
+                // otherwise Cargo will not detect freshness of the output correctly, and keep
+                // rebuilding the docs on every invocation.
+                cargo.args(["-Zunstable-options", "--output-format", "json"]);
+            }
+        }
+
+        let description =
+            format!("library{} in {} format", crate_description(&crates), self.format.as_str());
+
+        {
+            let _guard =
+                builder.msg(Kind::Doc, description, Mode::Std, self.build_compiler, target);
+
+            cargo.into_cmd().run(builder);
+            builder.cp_link_r(&out_dir, &out);
+        }
 
         // Open if the format is HTML
         if let DocumentationFormat::Html = self.format {
@@ -787,25 +827,16 @@ impl DocumentationFormat {
     }
 }
 
-/// Build the documentation for public standard library crates.
+/// Prepare a Cargo command for building the documentation for public standard library crates.
 fn doc_std(
     builder: &Builder<'_>,
     format: DocumentationFormat,
     build_compiler: Compiler,
     target: TargetSelection,
-    out: &Path,
+    target_dir: &Path,
     extra_args: &[&str],
     requested_crates: &[String],
-) {
-    let target_doc_dir_name = if format == DocumentationFormat::Json { "json-doc" } else { "doc" };
-    let target_dir =
-        builder.stage_out(build_compiler, Mode::Std).join(target).join(target_doc_dir_name);
-
-    // This is directory where the compiler will place the output of the command.
-    // We will then copy the files from this directory into the final `out` directory, the specified
-    // as a function parameter.
-    let out_dir = target_dir.join(target).join("doc");
-
+) -> builder::Cargo {
     let mut cargo = builder::Cargo::new(
         builder,
         build_compiler,
@@ -831,16 +862,12 @@ fn doc_std(
         cargo.rustdocflag(arg);
     }
 
-    if builder.config.library_docs_private_items {
+    // This is needed for cargo-semver-checks and potentially other downstream tools that consume
+    // the JSON data.
+    if format == DocumentationFormat::Json || builder.config.library_docs_private_items {
         cargo.rustdocflag("--document-private-items").rustdocflag("--document-hidden-items");
     }
-
-    let description =
-        format!("library{} in {} format", crate_description(requested_crates), format.as_str());
-    let _guard = builder.msg(Kind::Doc, description, Mode::Std, build_compiler, target);
-
-    cargo.into_cmd().run(builder);
-    builder.cp_link_r(&out_dir, out);
+    cargo
 }
 
 /// Prepare a compiler that will be able to document something for `target` at `stage`.
@@ -1317,6 +1344,10 @@ impl Step for UnstableBookGen {
         cmd.arg(rustc_path);
         cmd.arg(out);
 
+        // Running rustc requires the library path if rust.rpath = false
+        // or any other libraries are in a custom location.
+        builder.add_rustc_lib_path(self.build_compiler, &mut cmd);
+
         cmd.run(builder);
     }
 }
@@ -1393,8 +1424,8 @@ impl Step for RustcBook {
     /// "rustbook" is used to convert it to HTML.
     fn run(self, builder: &Builder<'_>) {
         // FIXME: Temporary workaround for https://github.com/rust-lang/rust/issues/158378
-        #[cfg(not(test))] // So this check doesn't affect the bootstrap tests
-        if self.target == "i686-pc-windows-msvc" {
+        // Make sure this workaround doesn't break unit tests on the affected host.
+        if cfg!(not(test)) && self.target == "i686-pc-windows-msvc" {
             eprintln!("WARNING: Skipping rustc book build to work around #158378");
             return;
         }

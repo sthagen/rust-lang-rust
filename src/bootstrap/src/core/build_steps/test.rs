@@ -4,7 +4,7 @@
 //! However, this contains ~all test parts we expect people to be able to build and run locally.
 
 // (This file should be split up, but having tidy block all changes is not helpful.)
-// ignore-tidy-filelength
+// ignore-tidy-file-filelength
 
 use std::collections::HashSet;
 use std::env::split_paths;
@@ -997,6 +997,9 @@ impl Step for StdarchVerify {
 /// First runs the `intrinsic-test` binary, which generates C wrapper programs
 /// and a Rust Cargo workspace. Then runs `cargo test` on that workspace
 /// which compiles both versions and compares their outputs on random inputs.
+///
+/// On `x86_64`, it requires a very recent version of GCC (e.g. GCC 15+)
+/// as well as the Intel SDE emulator to successfully run the tests.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct IntrinsicTest {
     host: TargetSelection,
@@ -1010,24 +1013,49 @@ impl Step for IntrinsicTest {
         run.path("library/stdarch/crates/intrinsic-test")
     }
 
+    fn is_default_step(_builder: &Builder<'_>) -> bool {
+        true
+    }
+
     fn make_run(run: RunConfig<'_>) {
         let target = run.target;
-        if !target.contains("aarch64-unknown-linux") && !target.contains("x86_64-unknown-linux") {
-            return;
+        let builder = run.builder;
+
+        let is_explicit =
+            builder.config.paths.iter().any(|p| p.to_string_lossy() == "intrinsic-test");
+
+        if target.contains("x86_64-unknown-linux") && builder.config.sde.is_none() && is_explicit {
+            panic!(
+                "SDE is required to run intrinsic-test. Please configure `build.sde` in config.toml."
+            );
         }
-        run.builder.ensure(IntrinsicTest { host: target });
+
+        builder.ensure(IntrinsicTest { host: target });
     }
 
     fn run(self, builder: &Builder<'_>) {
         let host = self.host;
+        if cfg!(test)
+            || (!host.contains("aarch64-unknown-linux") && !host.contains("x86_64-unknown-linux"))
+        {
+            builder.info(&format!("Skipping intrinsic-test, as it is not available for {host}"));
+            return;
+        }
 
         let (input_file, skip_file, cflags, sde_runner) = if host.contains("x86_64-unknown-linux") {
+            let Some(sde) = &builder.config.sde else {
+                builder.info("Skipping intrinsic-test because `build.sde` is not configured");
+                return;
+            };
+
             let cpuid_def =
                 builder.src.join("library/stdarch/ci/docker/x86_64-unknown-linux-gnu/cpuid.def");
             let sde_runner = format!(
-                "/intel-sde/sde64 -cpuid-in {} -rtm-mode full -tsx --",
+                "{} -cpuid-in {} -rtm-mode full -tsx --",
+                sde.display(),
                 cpuid_def.display()
             );
+
             (
                 builder.src.join("library/stdarch/intrinsics_data/x86-intel.xml"),
                 [
@@ -1085,10 +1113,12 @@ impl Step for IntrinsicTest {
         cmd.env("CFLAGS", cflags);
         // intrinsic-test shells out to `cargo` and `rustfmt` make bootstrap's
         // managed binaries findable by prepending their dirs to PATH.
-        let rustfmt_path = builder.config.initial_rustfmt.clone().unwrap_or_else(|| {
-            eprintln!("intrinsic-test: rustfmt is required but not available on this channel");
-            crate::exit!(1);
-        });
+        let Some(rustfmt_path) = builder.config.initial_rustfmt.clone() else {
+            eprintln!(
+                "WARNING: intrinsic-test skipped because rustfmt is required but not available on this channel"
+            );
+            return;
+        };
 
         let mut path_dirs: Vec<PathBuf> = Vec::new();
         if let Some(cargo_dir) = builder.initial_cargo.parent() {
@@ -1122,6 +1152,10 @@ impl Step for IntrinsicTest {
             cargo.env("CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER", runner);
         }
         cargo.run(builder);
+    }
+
+    fn metadata(&self) -> Option<StepMetadata> {
+        Some(StepMetadata::test("intrinsic-test", self.host))
     }
 }
 
@@ -1975,6 +2009,12 @@ impl Step for Coverage {
         for mode in Self::ALL_MODES {
             run = run.alias(mode.as_str());
         }
+
+        // Allow `./x test --skip=tests` to properly skip the coverage tests,
+        // by not treating the `coverage-map` and `coverage-run` aliases as
+        // implied command-line arguments.
+        run = run.default_to_suites_only();
+
         run
     }
 
@@ -2015,13 +2055,6 @@ impl Step for Coverage {
         modes.retain(|mode| {
             !run.builder.config.skip.iter().any(|skip| skip == Path::new(mode.as_str()))
         });
-
-        // FIXME(Zalathar): Make these commands skip all coverage tests, as expected:
-        // - `./x test --skip=tests`
-        // - `./x test --skip=tests/coverage`
-        // - `./x test --skip=coverage`
-        // Skip handling currently doesn't have a way to know that skipping the coverage
-        // suite should also skip the `coverage-map` and `coverage-run` aliases.
 
         for mode in modes {
             run.builder.ensure(Coverage { compiler, target, mode });

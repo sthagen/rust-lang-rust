@@ -118,7 +118,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 Some(&f) => self.pointer_kind(f, span)?,
             },
 
-            ty::UnsafeBinder(_) => todo!("FIXME(unsafe_binder)"),
+            ty::UnsafeBinder(_) => unimplemented!("FIXME(unsafe_binder)"),
 
             // Pointers to foreign types are thin, despite being unsized
             ty::Foreign(..) => Some(PointerKind::Thin),
@@ -591,7 +591,12 @@ impl<'a, 'tcx> CastCheck<'tcx> {
                     err.span_label(self.span, "invalid cast");
                 }
 
-                fcx.suggest_no_capture_closure(&mut err, self.cast_ty, self.expr_ty);
+                fcx.suggest_closure_to_fn_ptr_coercion(
+                    &mut err,
+                    self.expr,
+                    self.cast_ty,
+                    self.expr_ty,
+                );
                 self.try_suggest_collection_to_bool(fcx, &mut err);
 
                 err.emit();
@@ -731,6 +736,10 @@ impl<'a, 'tcx> CastCheck<'tcx> {
     }
 
     fn trivial_cast_lint(&self, fcx: &FnCtxt<'a, 'tcx>) {
+        if self.is_non_trivial_ref_trait_object_upcast(fcx) {
+            return;
+        }
+
         let (numeric, lint) = if self.cast_ty.is_numeric() && self.expr_ty.is_numeric() {
             (true, lint::builtin::TRIVIAL_NUMERIC_CASTS)
         } else {
@@ -744,6 +753,35 @@ impl<'a, 'tcx> CastCheck<'tcx> {
             self.span,
             diagnostics::TrivialCast { numeric, expr_ty, cast_ty },
         );
+    }
+
+    // A trait-object upcast from a method receiver, such as
+    // `(other as &dyn Any).downcast_ref::<u32>()`,
+    // is not trivial, because it may change the method resolution, we want to skip the lint in this case.
+    // see issue #148219
+    fn is_non_trivial_ref_trait_object_upcast(&self, fcx: &FnCtxt<'a, 'tcx>) -> bool {
+        if !matches!(
+            (self.expr_ty.kind(), self.cast_ty.kind()),
+            (ty::Ref(_, from_ty, _), ty::Ref(_, to_ty, _))
+                if matches!(
+                    (from_ty.kind(), to_ty.kind()),
+                    (ty::Dynamic(from_data, _), ty::Dynamic(to_data, _)) if from_data != to_data
+                )
+        ) {
+            return false;
+        }
+
+        let hir::Node::Expr(cast_expr) = fcx.tcx.parent_hir_node(self.expr.hir_id) else {
+            return false;
+        };
+        let hir::Node::Expr(parent) = fcx.tcx.parent_hir_node(cast_expr.hir_id) else {
+            return false;
+        };
+
+        matches!(
+            parent.kind,
+            hir::ExprKind::MethodCall(_, receiver, ..) if receiver.hir_id == cast_expr.hir_id
+        )
     }
 
     fn expr_span_for_type_resolution(&self, fcx: &FnCtxt<'a, 'tcx>) -> Span {

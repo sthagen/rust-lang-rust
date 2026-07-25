@@ -1,4 +1,4 @@
-// ignore-tidy-filelength
+// ignore-tidy-file-filelength
 use std::borrow::Cow;
 use std::fmt;
 use std::ops::Not;
@@ -1376,13 +1376,6 @@ impl Attribute {
     pub fn get_normal_item(&self) -> &AttrItem {
         match &self {
             Attribute::Unparsed(normal) => &normal,
-            _ => panic!("unexpected parsed attribute"),
-        }
-    }
-
-    pub fn unwrap_normal_item(self) -> AttrItem {
-        match self {
-            Attribute::Unparsed(normal) => *normal,
             _ => panic!("unexpected parsed attribute"),
         }
     }

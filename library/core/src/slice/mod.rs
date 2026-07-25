@@ -906,16 +906,12 @@ impl<T> [T] {
     #[inline]
     #[track_caller]
     pub const fn swap(&mut self, a: usize, b: usize) {
-        // FIXME: use swap_unchecked here (https://github.com/rust-lang/rust/pull/88540#issuecomment-944344343)
-        // Can't take two mutable loans from one vector, so instead use raw pointers.
-        let pa = &raw mut self[a];
-        let pb = &raw mut self[b];
-        // SAFETY: `pa` and `pb` have been created from safe mutable references and refer
-        // to elements in the slice and therefore are guaranteed to be valid and aligned.
-        // Note that accessing the elements behind `a` and `b` is checked and will
-        // panic when out of bounds.
+        // Bounds checks that panic exactly like indexing would.
+        let _ = &self[a];
+        let _ = &self[b];
+        // SAFETY: `a` and `b` were checked to be in bounds above.
         unsafe {
-            ptr::swap(pa, pb);
+            self.swap_unchecked(a, b);
         }
     }
 
@@ -2759,7 +2755,7 @@ impl<T> [T] {
     /// assert_eq!(v.strip_circumfix(&[10, 50, 40], &[50, 40, 30]), None);
     /// ```
     #[must_use = "returns the subslice without modifying the original"]
-    #[stable(feature = "strip_circumfix", since = "CURRENT_RUSTC_VERSION")]
+    #[stable(feature = "strip_circumfix", since = "1.98.0")]
     pub fn strip_circumfix<S, P>(&self, prefix: &P, suffix: &S) -> Option<&[T]>
     where
         T: PartialEq,
@@ -2921,12 +2917,13 @@ impl<T> [T] {
     /// s.insert(idx, num);
     /// assert_eq!(s, [0, 1, 1, 1, 1, 2, 3, 5, 8, 13, 21, 34, 42, 55]);
     /// ```
+    #[rustc_const_unstable(feature = "const_binary_search", issue = "159532")]
     #[stable(feature = "rust1", since = "1.0.0")]
-    pub fn binary_search(&self, x: &T) -> Result<usize, usize>
+    pub const fn binary_search(&self, x: &T) -> Result<usize, usize>
     where
-        T: Ord,
+        T: [const] Ord,
     {
-        self.binary_search_by(|p| p.cmp(x))
+        self.binary_search_by(const |p| p.cmp(x))
     }
 
     /// Binary searches this slice with a comparator function.
@@ -2971,11 +2968,12 @@ impl<T> [T] {
     /// let r = s.binary_search_by(|probe| probe.cmp(&seek));
     /// assert!(match r { Ok(1..=4) => true, _ => false, });
     /// ```
+    #[rustc_const_unstable(feature = "const_binary_search", issue = "159532")]
     #[stable(feature = "rust1", since = "1.0.0")]
     #[inline]
-    pub fn binary_search_by<'a, F>(&'a self, mut f: F) -> Result<usize, usize>
+    pub const fn binary_search_by<'a, F>(&'a self, mut f: F) -> Result<usize, usize>
     where
-        F: FnMut(&'a T) -> Ordering,
+        F: [const] FnMut(&'a T) -> Ordering + [const] Destruct,
     {
         let mut size = self.len();
         if size == 0 {
@@ -3072,14 +3070,15 @@ impl<T> [T] {
     // This breaks links when slice is displayed in core, but changing it to use relative links
     // would break when the item is re-exported. So allow the core links to be broken for now.
     #[allow(rustdoc::broken_intra_doc_links)]
+    #[rustc_const_unstable(feature = "const_binary_search", issue = "159532")]
     #[stable(feature = "slice_binary_search_by_key", since = "1.10.0")]
     #[inline]
-    pub fn binary_search_by_key<'a, B, F>(&'a self, b: &B, mut f: F) -> Result<usize, usize>
+    pub const fn binary_search_by_key<'a, B, F>(&'a self, b: &B, mut f: F) -> Result<usize, usize>
     where
-        F: FnMut(&'a T) -> B,
-        B: Ord,
+        F: [const] FnMut(&'a T) -> B + [const] Destruct,
+        B: [const] Ord + [const] Destruct,
     {
-        self.binary_search_by(|k| f(k).cmp(b))
+        self.binary_search_by(const |k| f(k).cmp(b))
     }
 
     /// Sorts the slice in ascending order **without** preserving the initial order of equal elements.
@@ -4860,13 +4859,15 @@ impl<T> [T] {
     /// s.insert(idx, num);
     /// assert_eq!(s, [0, 1, 1, 1, 1, 2, 3, 5, 8, 13, 21, 34, 42, 55]);
     /// ```
+    #[rustc_const_unstable(feature = "const_binary_search", issue = "159532")]
     #[stable(feature = "partition_point", since = "1.52.0")]
     #[must_use]
-    pub fn partition_point<P>(&self, mut pred: P) -> usize
+    pub const fn partition_point<P>(&self, mut pred: P) -> usize
     where
-        P: FnMut(&T) -> bool,
+        P: [const] FnMut(&T) -> bool + [const] Destruct,
     {
-        self.binary_search_by(|x| if pred(x) { Less } else { Greater }).unwrap_or_else(|i| i)
+        self.binary_search_by(const |x| if pred(x) { Less } else { Greater })
+            .unwrap_or_else(const |i| i)
     }
 
     /// Removes the subslice corresponding to the given range
@@ -5321,7 +5322,7 @@ impl<T> [T] {
     /// assert_eq!(iter.next(), Some(Range { start: 5, end: 6 }));
     /// ```
     #[must_use]
-    #[stable(feature = "substr_range", since = "CURRENT_RUSTC_VERSION")]
+    #[stable(feature = "substr_range", since = "1.98.0")]
     pub fn subslice_range(&self, subslice: &[T]) -> Option<core::range::Range<usize>> {
         if T::IS_ZST {
             panic!("elements are zero-sized");

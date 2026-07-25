@@ -47,7 +47,8 @@ use rustc_hir_analysis::{lower_const_arg_for_rustdoc, lower_ty};
 use rustc_middle::metadata::Reexport;
 use rustc_middle::middle::resolve_bound_vars as rbv;
 use rustc_middle::ty::{
-    self, AdtKind, GenericArgsRef, Ty, TyCtxt, TypeVisitableExt, TypingMode, Unnormalized,
+    self, AdtKind, GenericArgsRef, RegionUtilitiesExt, Ty, TyCtxt, TypeVisitableExt, TypingMode,
+    Unnormalized,
 };
 use rustc_middle::{bug, span_bug};
 use rustc_span::ExpnKind;
@@ -2322,7 +2323,7 @@ pub(crate) fn clean_middle_ty<'tcx>(
         }
 
         ty::Alias(_, ty::AliasTy { kind: ty::Free { def_id }, args, .. }) => {
-            if cx.tcx.features().lazy_type_alias() {
+            if cx.tcx.features().checked_type_aliases() {
                 // Free type alias `data` represents the `type X` in `type X = Y`. If we need `Y`,
                 // we need to use `type_of`.
                 let path =

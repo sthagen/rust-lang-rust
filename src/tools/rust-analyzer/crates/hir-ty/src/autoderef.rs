@@ -1,7 +1,9 @@
 //! In certain situations, rust automatically inserts derefs as necessary: for
 //! example, field accesses `foo.bar` still work when `foo` is actually a
 //! reference to a type with the field `bar`. This is an approximation of the
-//! logic in rustc (which lives in rustc_hir_analysis/check/autoderef.rs).
+//! logic in rustc (which lives in [`rustc_hir_typeck/autoderef.rs`]).
+//!
+//! [`rustc_hir_typeck/autoderef.rs`]: https://github.com/rust-lang/rust/blob/5503df87342a73d0c29126a7e08dc9c1255c46ad/compiler/rustc_hir_typeck/src/autoderef.rs
 
 use std::fmt;
 
@@ -207,11 +209,10 @@ where
                 } else {
                     (AutoderefKind::Builtin, ty)
                 }
-            } else if let Some(ty) = self.overloaded_deref_ty(self.state.cur_ty) {
+            } else {
+                let ty = self.overloaded_deref_ty(self.state.cur_ty)?;
                 // The overloaded deref check already normalizes the pointee type.
                 (AutoderefKind::Overloaded, ty)
-            } else {
-                return None;
             };
 
         self.state.steps.push(self.state.cur_ty, kind);

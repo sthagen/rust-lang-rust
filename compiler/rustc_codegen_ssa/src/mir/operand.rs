@@ -28,25 +28,43 @@ use crate::traits::*;
 pub enum OperandValue<V> {
     /// A reference to the actual operand. The data is guaranteed
     /// to be valid for the operand's lifetime.
-    /// The second value, if any, is the extra data (vtable or length)
+    /// The [`PlaceValue::llextra`], if any, is the extra data (vtable or length)
     /// which indicates that it refers to an unsized rvalue.
     ///
     /// An `OperandValue` *must* be this variant for any type for which
-    /// [`LayoutTypeCodegenMethods::is_backend_ref`] returns `true`.
+    /// [`rustc_abi::LayoutData::is_ssa_standalone`] returns `false`.
     /// (That basically amounts to "isn't one of the other variants".)
     ///
     /// This holds a [`PlaceValue`] (like a [`PlaceRef`] does) with a pointer
     /// to the location holding the value. The type behind that pointer is the
     /// one returned by [`LayoutTypeCodegenMethods::backend_type`].
+    ///
+    /// Note that a [`load_operand`] which produces this variant didn't actually
+    /// *load* anything; it just put the pointer-to-place into this variant.
+    ///
+    /// [`load_operand`]: BuilderMethods::load_operand
     Ref(PlaceValue<V>),
     /// A single LLVM immediate value.
     ///
-    /// An `OperandValue` *must* be this variant for any type for which
-    /// [`LayoutTypeCodegenMethods::is_backend_immediate`] returns `true`.
+    /// An `OperandValue` *must* be this variant for any type that's
+    /// [`BackendRepr::Scalar`], [`BackendRepr::SimdVector`], or
+    /// [`BackendRepr::SimdScalableVector`].
+    ///
     /// The backend value in this variant must be the *immediate* backend type,
     /// as returned by [`LayoutTypeCodegenMethods::immediate_backend_type`].
+    ///
+    /// Notably, that means that in LLVM a `bool` is `i1` here, even though we
+    /// load and store `bool`s as LLVM's `i8` type. Methods such as
+    /// [`BuilderMethods::load_operand`] and [`OperandRef::store_with_annotation`]
+    /// will handle that correctly, but if you're using the value directly or
+    /// implementing such methods, be sure to convert using
+    /// [`BuilderMethods::from_immediate`] and [`BuilderMethods::to_immediate_scalar`]
+    /// in the appropriate places.
     Immediate(V),
-    /// A pair of immediate LLVM values. Used by wide pointers too.
+    /// A pair of immediate LLVM values.
+    ///
+    /// Notably this includes wide pointers, where the two values are the pointer
+    /// and the metadata (slice length, vtable pointer, etc).
     ///
     /// # Invariants
     /// - For `Pair(a, b)`, `a` is always at offset 0, but may have `FieldIdx(1..)`
@@ -54,11 +72,10 @@ pub enum OperandValue<V> {
     /// - `a` and `b` will have a different FieldIdx, but otherwise `b`'s may be lower
     ///   or they may not be adjacent, due to arbitrary numbers of 1ZST fields that
     ///   will not affect the shape of the data which determines if `Pair` will be used.
-    /// - An `OperandValue` *must* be this variant for any type for which
-    /// [`LayoutTypeCodegenMethods::is_backend_scalar_pair`] returns `true`.
+    /// - An `OperandValue` *must* be this variant for any type that's [`BackendRepr::ScalarPair`].
     /// - The backend values in this variant must be the *immediate* backend types,
     /// as returned by [`LayoutTypeCodegenMethods::scalar_pair_element_backend_type`]
-    /// with `immediate: true`.
+    /// with `immediate: true`. See the note in [`Self::Immediate`].
     Pair(V, V),
     /// A value taking no bytes, and which therefore needs no LLVM value at all.
     ///
@@ -69,6 +86,12 @@ pub enum OperandValue<V> {
     /// `is_zst` on its `Layout` returns `true`. Note however that
     /// these values can still require alignment.
     ZeroSized,
+    /// A value for which all bytes are entirely uninitialized.
+    ///
+    /// Storing this value is a no-op; it propagates through field extraction.
+    /// Used to avoid emitting memcpys from uninit globals (which LLVM may
+    /// otherwise materialize as zero-fills) for `const <uninit>` operands.
+    Uninit,
 }
 
 impl<V: CodegenObject> OperandValue<V> {
@@ -78,7 +101,7 @@ impl<V: CodegenObject> OperandValue<V> {
         match self {
             OperandValue::Immediate(llptr) => Some((llptr, None)),
             OperandValue::Pair(llptr, llextra) => Some((llptr, Some(llextra))),
-            OperandValue::Ref(_) | OperandValue::ZeroSized => None,
+            OperandValue::Ref(_) | OperandValue::ZeroSized | OperandValue::Uninit => None,
         }
     }
 
@@ -104,16 +127,19 @@ impl<V: CodegenObject> OperandValue<V> {
     }
 
     #[must_use]
-    pub(crate) fn is_expected_variant_for_type<'tcx, Cx: LayoutTypeCodegenMethods<'tcx>>(
-        &self,
-        cx: &Cx,
-        ty: TyAndLayout<'tcx>,
-    ) -> bool {
-        match self {
-            OperandValue::ZeroSized => ty.is_zst(),
-            OperandValue::Immediate(_) => cx.is_backend_immediate(ty),
-            OperandValue::Pair(_, _) => cx.is_backend_scalar_pair(ty),
-            OperandValue::Ref(_) => cx.is_backend_ref(ty),
+    pub(crate) fn is_expected_variant_for_type<'tcx>(&self, ty: TyAndLayout<'tcx>) -> bool {
+        match (self, ty.backend_repr) {
+            (OperandValue::Uninit, _) => true,
+            (OperandValue::ZeroSized, BackendRepr::Memory { .. }) => ty.is_zst(),
+            (OperandValue::Ref(_), BackendRepr::Memory { .. }) => !ty.is_zst(),
+            (
+                OperandValue::Immediate(_),
+                BackendRepr::Scalar(..)
+                | BackendRepr::SimdVector { .. }
+                | BackendRepr::SimdScalableVector { .. },
+            ) => true,
+            (OperandValue::Pair(_, _), BackendRepr::ScalarPair { .. }) => true,
+            _ => false,
         }
     }
 }
@@ -370,15 +396,17 @@ impl<'a, 'tcx, V: CodegenObject> OperandRef<'tcx, V> {
         let field = self.layout.field(bx.cx(), i);
         let offset = self.layout.fields.offset(i);
 
-        if !bx.is_backend_ref(self.layout) && bx.is_backend_ref(field) {
+        if self.layout.is_ssa_standalone() && !field.is_ssa_standalone() {
             // Part of https://github.com/rust-lang/compiler-team/issues/838
             span_bug!(
                 fx.mir.span,
-                "Non-ref type {self:?} cannot project to ref field type {field:?}",
+                "Standalone type {self:?} cannot project to memory-dependent field type {field:?}",
             );
         }
 
-        let val = if field.is_zst() {
+        let val = if let OperandValue::Uninit = self.val {
+            OperandValue::Uninit
+        } else if field.is_zst() {
             OperandValue::ZeroSized
         } else if field.size == self.layout.size {
             assert_eq!(offset.bytes(), 0);
@@ -477,6 +505,7 @@ impl<'a, 'tcx, V: CodegenObject> OperandRef<'tcx, V> {
         // Read the tag/niche-encoded discriminant from memory.
         let tag_op = match self.val {
             OperandValue::ZeroSized => bug!(),
+            OperandValue::Uninit => return bx.cx().const_poison(cast_to),
             OperandValue::Immediate(_) | OperandValue::Pair(_, _) => {
                 self.extract_field(fx, bx, tag_field.as_usize())
             }
@@ -759,12 +788,15 @@ impl<'a, 'tcx, V: CodegenObject> OperandRefBuilder<'tcx, V> {
         field: FieldIdx,
         field_operand: OperandRef<'tcx, V>,
     ) {
-        if let OperandValue::ZeroSized = field_operand.val {
+        if matches!(field_operand.val, OperandValue::ZeroSized | OperandValue::Uninit) {
             // A ZST never adds any state, so just ignore it.
             // This special-casing is worth it because of things like
             // `Result<!, !>` where `Ok(never)` is legal to write,
             // but the type shows as FieldShape::Primitive so we can't
             // actually look at the layout for the field being set.
+            //
+            // Likewise, an uninit field does not contribute any value;
+            // the builder's unset slots will produce `const_undef` in `build()`.
             return;
         }
 
@@ -944,18 +976,23 @@ impl<'a, 'tcx, V: CodegenObject> OperandValue<V> {
         layout: TyAndLayout<'tcx>,
     ) -> OperandValue<V> {
         assert!(layout.is_sized());
-        if layout.is_zst() {
-            OperandValue::ZeroSized
-        } else if bx.cx().is_backend_immediate(layout) {
-            let ibty = bx.cx().immediate_backend_type(layout);
-            OperandValue::Immediate(bx.const_poison(ibty))
-        } else if bx.cx().is_backend_scalar_pair(layout) {
-            let ibty0 = bx.cx().scalar_pair_element_backend_type(layout, 0, true);
-            let ibty1 = bx.cx().scalar_pair_element_backend_type(layout, 1, true);
-            OperandValue::Pair(bx.const_poison(ibty0), bx.const_poison(ibty1))
-        } else {
-            let ptr = bx.cx().type_ptr();
-            OperandValue::Ref(PlaceValue::new_sized(bx.const_poison(ptr), layout.align.abi))
+        match layout.backend_repr {
+            _ if layout.is_zst() => OperandValue::ZeroSized,
+            BackendRepr::Scalar(_)
+            | BackendRepr::SimdVector { .. }
+            | BackendRepr::SimdScalableVector { .. } => {
+                let ibty = bx.cx().immediate_backend_type(layout);
+                OperandValue::Immediate(bx.const_poison(ibty))
+            }
+            BackendRepr::ScalarPair { .. } => {
+                let ibty0 = bx.cx().scalar_pair_element_backend_type(layout, 0, true);
+                let ibty1 = bx.cx().scalar_pair_element_backend_type(layout, 1, true);
+                OperandValue::Pair(bx.const_poison(ibty0), bx.const_poison(ibty1))
+            }
+            BackendRepr::Memory { .. } => {
+                let ptr = bx.cx().type_ptr();
+                OperandValue::Ref(PlaceValue::new_sized(bx.const_poison(ptr), layout.align.abi))
+            }
         }
     }
 
@@ -994,6 +1031,10 @@ impl<'a, 'tcx, V: CodegenObject> OperandValue<V> {
             OperandValue::ZeroSized => {
                 // Avoid generating stores of zero-sized values, because the only way to have a
                 // zero-sized value is through `undef`/`poison`, and the store itself is useless.
+            }
+            OperandValue::Uninit => {
+                // Storing an entirely uninit value is a no-op: the destination is left
+                // uninitialized, which is valid since the value itself is uninit.
             }
             OperandValue::Ref(val) => {
                 assert!(dest.layout.is_sized(), "cannot directly store unsized values");

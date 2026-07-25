@@ -2,14 +2,13 @@
 //! type inference-related queries.
 
 use arrayvec::ArrayVec;
-use base_db::{Crate, target::TargetLoadError};
+use base_db::{Crate, SourceDatabase, target::TargetLoadError};
 use either::Either;
 use hir_def::{
     AdtId, BuiltinDeriveImplId, CallableDefId, ConstId, ConstParamId, EnumVariantId,
     ExpressionStoreOwnerId, FunctionId, GenericDefId, HasModule, ImplId, LocalFieldId, ModuleId,
     StaticId, TraitId, TypeAliasId, VariantId,
     builtin_derive::BuiltinDeriveImplMethod,
-    db::DefDatabase,
     expr_store::ExpressionStore,
     hir::{ClosureKind, ExprId, generics::LocalTypeOrConstParamId},
     layout::TargetDataLayout,
@@ -28,7 +27,7 @@ use crate::{
     dyn_compatibility::DynCompatibilityViolation,
     layout::{Layout, LayoutError},
     lower::{GenericDefaults, TrackedStructToken, TypeAliasBounds},
-    mir::{BorrowckResult, MirBody, MirLowerError},
+    mir::{MirBody, MirLowerError},
     next_solver::{
         Allocation, Clause, EarlyBinder, GenericArgs, ParamEnv, PolyFnSig, StoredClauses,
         StoredEarlyBinder, StoredGenericArgs, StoredPolyFnSig, StoredTraitRef, StoredTy, TraitRef,
@@ -38,19 +37,19 @@ use crate::{
 };
 
 #[query_group::query_group]
-pub trait HirDatabase: DefDatabase + std::fmt::Debug {
+pub trait HirDatabase: SourceDatabase + std::fmt::Debug {
     // region:mir
 
-    // FXME: Collapse `mir_body_for_closure` into `mir_body`
+    // FIXME: Collapse `mir_body_for_closure` into `mir_body`
     // and `monomorphized_mir_body_for_closure` into `monomorphized_mir_body`
     #[salsa::transparent]
     fn mir_body(&self, def: InferBodyId) -> Result<&MirBody, MirLowerError> {
-        crate::mir::mir_body_query(self, def).as_ref().map_err(|err| err.clone())
+        crate::mir::mir_body_query(self, def).map_err(|err| err.clone())
     }
 
     #[salsa::transparent]
     fn mir_body_for_closure(&self, def: InternedClosureId) -> Result<&MirBody, MirLowerError> {
-        crate::mir::mir_body_for_closure_query(self, def).as_ref().map_err(|err| err.clone())
+        crate::mir::mir_body_for_closure_query(self, def).map_err(|err| err.clone())
     }
 
     #[salsa::transparent]
@@ -60,9 +59,7 @@ pub trait HirDatabase: DefDatabase + std::fmt::Debug {
         subst: StoredGenericArgs,
         env: StoredParamEnvAndCrate,
     ) -> Result<&MirBody, MirLowerError> {
-        crate::mir::monomorphized_mir_body_query(self, def, subst, env)
-            .as_ref()
-            .map_err(|err| err.clone())
+        crate::mir::monomorphized_mir_body_query(self, def, subst, env).map_err(|err| err.clone())
     }
 
     #[salsa::transparent]
@@ -73,13 +70,7 @@ pub trait HirDatabase: DefDatabase + std::fmt::Debug {
         env: StoredParamEnvAndCrate,
     ) -> Result<&MirBody, MirLowerError> {
         crate::mir::monomorphized_mir_body_for_closure_query(self, def, subst, env)
-            .as_ref()
             .map_err(|err| err.clone())
-    }
-
-    #[salsa::transparent]
-    fn borrowck(&self, def: InferBodyId) -> Result<&[BorrowckResult], MirLowerError> {
-        crate::mir::borrowck_query(self, def).as_ref().map(|it| &**it).map_err(|err| err.clone())
     }
 
     #[salsa::invoke(crate::consteval::const_eval)]
@@ -105,7 +96,7 @@ pub trait HirDatabase: DefDatabase + std::fmt::Debug {
     fn const_eval_static<'db>(&'db self, def: StaticId) -> Result<Allocation<'db>, ConstEvalError>;
 
     #[salsa::invoke(crate::consteval::const_eval_discriminant_variant)]
-    #[salsa::cycle(cycle_result = crate::consteval::const_eval_discriminant_cycle_result)]
+    #[salsa::transparent]
     fn const_eval_discriminant(&self, def: EnumVariantId) -> Result<i128, ConstEvalError>;
 
     #[salsa::invoke(crate::method_resolution::lookup_impl_method_query)]
@@ -120,7 +111,7 @@ pub trait HirDatabase: DefDatabase + std::fmt::Debug {
     // endregion:mir
 
     #[salsa::invoke(crate::layout::layout_of_adt_query)]
-    #[salsa::cycle(cycle_result = crate::layout::layout_of_adt_cycle_result)]
+    #[salsa::transparent]
     fn layout_of_adt(
         &self,
         def: AdtId,
@@ -129,7 +120,7 @@ pub trait HirDatabase: DefDatabase + std::fmt::Debug {
     ) -> Result<Arc<Layout>, LayoutError>;
 
     #[salsa::invoke(crate::layout::layout_of_ty_query)]
-    #[salsa::cycle(cycle_result = crate::layout::layout_of_ty_cycle_result)]
+    #[salsa::transparent]
     fn layout_of_ty(
         &self,
         ty: StoredTy,
@@ -138,7 +129,7 @@ pub trait HirDatabase: DefDatabase + std::fmt::Debug {
 
     #[salsa::transparent]
     fn target_data_layout(&self, krate: Crate) -> Result<&TargetDataLayout, TargetLoadError> {
-        crate::layout::target_data_layout_query(self, krate).as_ref().map_err(|err| err.clone())
+        crate::layout::target_data_layout_query(self, krate).map_err(|err| err.clone())
     }
 
     #[salsa::invoke(crate::dyn_compatibility::dyn_compatibility_of_trait_query)]
@@ -416,20 +407,24 @@ pub struct AnonConstId {
 }
 
 impl AnonConstId {
-    pub(crate) fn new(db: &dyn DefDatabase, loc: AnonConstLoc, token: TrackedStructToken) -> Self {
+    pub(crate) fn new(
+        db: &dyn SourceDatabase,
+        loc: AnonConstLoc,
+        token: TrackedStructToken,
+    ) -> Self {
         _ = token;
         AnonConstId::new_(db, loc)
     }
 }
 
 impl HasModule for AnonConstId {
-    fn module(&self, db: &dyn DefDatabase) -> ModuleId {
+    fn module(&self, db: &dyn SourceDatabase) -> ModuleId {
         self.loc(db).owner.module(db)
     }
 }
 
 impl HasResolver for AnonConstId {
-    fn resolver(self, db: &dyn DefDatabase) -> Resolver<'_> {
+    fn resolver(self, db: &dyn SourceDatabase) -> Resolver<'_> {
         self.loc(db).owner.resolver(db)
     }
 }
@@ -492,7 +487,7 @@ impl GeneralConstId {
         }
     }
 
-    pub fn name(self, db: &dyn DefDatabase) -> String {
+    pub fn name(self, db: &dyn SourceDatabase) -> String {
         match self {
             GeneralConstId::StaticId(it) => {
                 StaticSignature::of(db, it).name.display(db, Edition::CURRENT).to_string()

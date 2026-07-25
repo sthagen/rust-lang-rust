@@ -24,7 +24,7 @@ use super::diagnostics::{
 use super::stability::{enabled_names, gate_unstable_abi};
 use super::{
     FnDeclKind, GenericArgsMode, ImplTraitContext, ImplTraitPosition, LoweringContext, ParamMode,
-    RelaxedBoundForbiddenReason, RelaxedBoundPolicy, ResolverAstLoweringExt,
+    RelaxedBoundForbiddenReason, RelaxedBoundPolicy,
 };
 use crate::diagnostics::ConstComptimeFn;
 
@@ -141,13 +141,9 @@ impl<'hir> LoweringContext<'_, 'hir> {
         }: &EiiImpl,
     ) -> hir::attrs::EiiImpl {
         let resolution = if let Some(target) = known_eii_macro_resolution
-            && let Some(decl) = self.lower_eii_decl(
-                *node_id,
-                // the expect is ok here since we always generate this path in the eii macro.
-                eii_macro_path.segments.last().expect("at least one segment").ident,
-                target,
-            ) {
-            EiiImplResolution::Known(decl)
+            && let Some(foreign_item_did) = self.lower_path_simple_eii(*node_id, target)
+        {
+            EiiImplResolution::Known(foreign_item_did)
         } else if let Some(macro_did) = self.lower_path_simple_eii(*node_id, eii_macro_path) {
             EiiImplResolution::Macro(macro_did)
         } else {
@@ -274,7 +270,8 @@ impl<'hir> LoweringContext<'_, 'hir> {
                 ident,
                 generics,
                 ty,
-                rhs_kind,
+                body,
+                kind,
                 define_opaque,
             }) => {
                 let ident = self.lower_ident(*ident);
@@ -286,7 +283,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                             ty,
                             ImplTraitContext::Disallowed(ImplTraitPosition::ConstTy),
                         );
-                        let rhs = this.lower_const_item_rhs(rhs_kind, span);
+                        let rhs = this.lower_const_item_rhs(body, *kind, span);
                         (ty, rhs)
                     },
                 );
@@ -479,7 +476,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                     .arena
                     .alloc_from_iter(impl_items.iter().map(|item| self.lower_impl_item_ref(item)));
 
-                let constness = self.lower_constness(*constness);
+                let constness = self.lower_constness(attrs, *constness);
 
                 hir::ItemKind::Impl(hir::Impl {
                     generics,
@@ -499,7 +496,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                 bounds,
                 items,
             }) => {
-                let constness = self.lower_constness(*constness);
+                let constness = self.lower_constness(attrs, *constness);
                 let impl_restriction = self.lower_impl_restriction(impl_restriction);
                 let ident = self.lower_ident(*ident);
                 let (generics, (safety, items, bounds)) = self.lower_generics(
@@ -530,7 +527,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                 }
             }
             ItemKind::TraitAlias(TraitAlias { constness, ident, generics, bounds }) => {
-                let constness = self.lower_constness(*constness);
+                let constness = self.lower_constness(attrs, *constness);
                 let ident = self.lower_ident(*ident);
                 let (generics, bounds) = self.lower_generics(
                     generics,
@@ -897,13 +894,12 @@ impl<'hir> LoweringContext<'_, 'hir> {
                 None => Ident::new(sym::integer(index), self.lower_span(f.span)),
             },
             vis_span: self.lower_span(f.vis.span),
-            mut_restriction: self.lower_mut_restriction(&f.mut_restriction),
+            mut_restriction: self.lower_mut_restriction(f.mut_restriction()),
             default: f
-                .default
-                .as_ref()
+                .default_value()
                 .map(|v| self.lower_anon_const_to_anon_const(v, v.value.span)),
             ty,
-            safety: self.lower_safety(f.safety, hir::Safety::Safe),
+            safety: self.lower_safety(f.safety(), hir::Safety::Safe),
         }
     }
 
@@ -922,7 +918,8 @@ impl<'hir> LoweringContext<'_, 'hir> {
                 ident,
                 generics,
                 ty,
-                rhs_kind,
+                body,
+                kind,
                 define_opaque,
                 ..
             }) => {
@@ -935,8 +932,8 @@ impl<'hir> LoweringContext<'_, 'hir> {
                             ImplTraitContext::Disallowed(ImplTraitPosition::ConstTy),
                         );
                         // Trait associated consts don't need an expression/body.
-                        let rhs = if rhs_kind.has_expr() {
-                            Some(this.lower_const_item_rhs(rhs_kind, i.span))
+                        let rhs = if body.is_some() {
+                            Some(this.lower_const_item_rhs(body, *kind, i.span))
                         } else {
                             None
                         };
@@ -945,7 +942,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                 );
 
                 if define_opaque.is_some() {
-                    if rhs_kind.has_expr() {
+                    if body.is_some() {
                         self.lower_define_opaque(hir_id, &define_opaque);
                     } else {
                         self.dcx().span_err(
@@ -955,7 +952,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                     }
                 }
 
-                (*ident, generics, kind, rhs_kind.has_expr())
+                (*ident, generics, kind, body.is_some())
             }
             AssocItemKind::Fn(Fn { sig, ident, generics, body: None, define_opaque, .. }) => {
                 // FIXME(contracts): Deny contract here since it won't apply to
@@ -1184,7 +1181,8 @@ impl<'hir> LoweringContext<'_, 'hir> {
                 ident,
                 generics,
                 ty,
-                rhs_kind,
+                body,
+                kind,
                 define_opaque,
                 ..
             }) => (
@@ -1198,7 +1196,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                             ImplTraitContext::Disallowed(ImplTraitPosition::ConstTy),
                         );
                         this.lower_define_opaque(hir_id, &define_opaque);
-                        let rhs = this.lower_const_item_rhs(rhs_kind, i.span);
+                        let rhs = this.lower_const_item_rhs(body, *kind, i.span);
                         hir::ImplItemKind::Const(ty, rhs)
                     },
                 ),
@@ -1702,21 +1700,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
             safety.into()
         };
 
-        let mut constness = self.lower_constness(h.constness);
-        if let Some(&attr_span) = find_attr!(attrs, RustcComptime(span) => span) {
-            match std::mem::replace(&mut constness, rustc_hir::Constness::Const { always: true }) {
-                rustc_hir::Constness::Const { always: true } => {
-                    unreachable!("lower_constness cannot produce comptime")
-                }
-                // A function can't be `const` and `comptime` at the same time
-                rustc_hir::Constness::Const { always: false } => {
-                    let Const::Yes(span) = h.constness else { unreachable!() };
-                    self.dcx().emit_err(ConstComptimeFn { span, attr_span });
-                }
-                // Good
-                rustc_hir::Constness::NotConst => {}
-            }
-        }
+        let constness = self.lower_constness(attrs, h.constness);
 
         hir::FnHeader { safety, asyncness, constness, abi: self.lower_extern(h.ext) }
     }
@@ -1778,11 +1762,30 @@ impl<'hir> LoweringContext<'_, 'hir> {
         });
     }
 
-    pub(super) fn lower_constness(&mut self, c: Const) -> hir::Constness {
-        match c {
+    /// Lowers constness or comptime attribute.
+    /// Whether `const` is allowed here is checked by ast validation.
+    /// Whether `comptime` is allowed here is checked by the `comptime` attribute parser.
+    pub(super) fn lower_constness(&mut self, attrs: &[hir::Attribute], c: Const) -> hir::Constness {
+        let mut constness = match c {
             Const::Yes(_) => hir::Constness::Const { always: false },
             Const::No => hir::Constness::NotConst,
+        };
+
+        if let Some(&attr_span) = find_attr!(attrs, RustcComptime(span) => span) {
+            match std::mem::replace(&mut constness, hir::Constness::Const { always: true }) {
+                hir::Constness::Const { always: true } => {
+                    unreachable!("lower_constness cannot produce comptime")
+                }
+                // A function can't be `const` and `comptime` at the same time
+                hir::Constness::Const { always: false } => {
+                    let Const::Yes(span) = c else { unreachable!() };
+                    self.dcx().emit_err(ConstComptimeFn { span, attr_span });
+                }
+                // Good
+                hir::Constness::NotConst => {}
+            }
         }
+        constness
     }
 
     pub(super) fn lower_safety(&self, s: Safety, default: hir::Safety) -> hir::Safety {
@@ -1877,7 +1880,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
             .collect();
 
         // Introduce extra lifetimes if late resolution tells us to.
-        let extra_lifetimes = self.resolver.extra_lifetime_params(self.owner.id);
+        let extra_lifetimes = self.owner.extra_lifetime_params(self.owner.id);
         params.extend(extra_lifetimes.into_iter().map(|&(ident, node_id, kind)| {
             self.lifetime_res_to_generic_param(
                 ident,

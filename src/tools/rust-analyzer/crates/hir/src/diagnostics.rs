@@ -36,7 +36,7 @@ use crate::{AssocItem, Field, Function, GenericDef, Local, Trait, Type, TypeOwne
 
 pub use hir_def::VariantId;
 pub use hir_ty::{
-    GenericArgsProhibitedReason, IncorrectGenericsLenKind,
+    GenericArgsProhibitedReason, IncorrectGenericsLenKind, ReturnKind,
     diagnostics::{CaseType, IncorrectCase},
 };
 
@@ -181,6 +181,7 @@ diagnostics![AnyDiagnostic<'db> ->
     UnionPatHasRest,
     UnimplementedTrait<'db>,
     YieldOutsideCoroutine,
+    ReturnOutsideFunction,
 ];
 
 #[derive(Debug)]
@@ -689,6 +690,12 @@ pub struct YieldOutsideCoroutine {
     pub expr: InFile<ExprOrPatPtr>,
 }
 
+#[derive(Debug)]
+pub struct ReturnOutsideFunction {
+    pub expr: InFile<ExprOrPatPtr>,
+    pub kind: ReturnKind,
+}
+
 impl<'db> AnyDiagnostic<'db> {
     pub(crate) fn body_validation_diagnostic(
         db: &'db dyn HirDatabase,
@@ -1013,7 +1020,7 @@ impl<'db> AnyDiagnostic<'db> {
             }
             InferenceDiagnostic::PathDiagnostic { node, diag } => {
                 let source = expr_or_pat_syntax(*node)?;
-                let syntax = source.value.to_node(&db.parse_or_expand(source.file_id));
+                let syntax = source.value.to_node(&source.file_id.parse_or_expand(db));
                 let path = match_ast! {
                     match (syntax.syntax()) {
                         ast::RecordExpr(it) => it.path()?,
@@ -1130,6 +1137,9 @@ impl<'db> AnyDiagnostic<'db> {
             }
             &InferenceDiagnostic::YieldOutsideCoroutine { expr } => {
                 YieldOutsideCoroutine { expr: expr_syntax(expr)? }.into()
+            }
+            &InferenceDiagnostic::ReturnOutsideFunction { expr, kind } => {
+                ReturnOutsideFunction { expr: expr_syntax(expr)?, kind }.into()
             }
         })
     }
@@ -1316,7 +1326,7 @@ impl<'db> AnyDiagnostic<'db> {
         Some(match diag {
             TyLoweringDiagnostic::PathDiagnostic { source, diag } => {
                 let source = Self::type_syntax(*source, source_map)?;
-                let syntax = source.value.to_node(&db.parse_or_expand(source.file_id));
+                let syntax = source.value.to_node(&source.file_id.parse_or_expand(db));
                 let ast::Type::PathType(syntax) = syntax else { return None };
                 Self::path_diagnostic(diag, source.with_value(syntax.path()?))?
             }

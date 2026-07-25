@@ -1,4 +1,4 @@
-// ignore-tidy-filelength
+// ignore-tidy-file-filelength
 
 use core::mem;
 use core::ops::{Bound, ControlFlow};
@@ -7,7 +7,6 @@ use ast::mut_visit::{self, MutVisitor};
 use ast::token::IdentIsRaw;
 use ast::{CoroutineKind, ForLoopKind, GenBlockKind, MatchKind, Pat, Path, PathSegment, Recovered};
 use rustc_ast::token::{self, Delimiter, InvisibleOrigin, MetaVarKind, Token, TokenKind};
-use rustc_ast::tokenstream::TokenTree;
 use rustc_ast::util::case::Case;
 use rustc_ast::util::classify;
 use rustc_ast::util::parser::{AssocOp, ExprPrecedence, Fixity, prec_let_scrutinee_needs_par};
@@ -15,14 +14,14 @@ use rustc_ast::visit::{Visitor, walk_expr};
 use rustc_ast::{
     self as ast, AnonConst, Arm, AssignOp, AssignOpKind, AttrStyle, AttrVec, BinOp, BinOpKind,
     BlockCheckMode, CaptureBy, ClosureBinder, DUMMY_NODE_ID, Expr, ExprField, ExprKind, FnDecl,
-    FnRetTy, Guard, Label, MacCall, MetaItemLit, Movability, Param, RangeLimits, StmtKind, Ty,
-    TyKind, UnOp, UnsafeBinderCastKind, YieldKind,
+    FnRetTy, ForLoop, Guard, Label, MacCall, MetaItemLit, Movability, Param, RangeLimits, StmtKind,
+    Ty, TyKind, UnOp, UnsafeBinderCastKind, YieldKind,
 };
 use rustc_ast_pretty::pprust;
 use rustc_data_structures::stack::ensure_sufficient_stack;
 use rustc_errors::{Applicability, Diag, PResult, StashKey, Subdiagnostic};
 use rustc_literal_escaper::unescape_char;
-use rustc_session::errors::{ExprParenthesesNeeded, report_lit_error};
+use rustc_session::diagnostics::{ExprParenthesesNeeded, report_lit_error};
 use rustc_session::lint::builtin::BREAK_WITH_LABEL_AND_LOOP;
 use rustc_span::edition::Edition;
 use rustc_span::{BytePos, ErrorGuaranteed, Ident, Pos, Span, Spanned, Symbol, kw, respan, sym};
@@ -1276,13 +1275,12 @@ impl<'a> Parser<'a> {
             None
         };
         let open_paren = self.token.span;
-        let call_depth = self.token_cursor.stack.len();
+        let call_depth = self.token_cursor.depth();
 
         let seq = match self.parse_expr_paren_seq() {
             Ok(args) => Ok(self.mk_expr(lo.to(self.prev_token.span), self.mk_call(fun, args))),
             Err(err)
-                if self.is_expected_raw_ref_mut()
-                    && self.token_cursor.stack.len() == call_depth =>
+                if self.is_expected_raw_ref_mut() && self.token_cursor.depth() == call_depth =>
             {
                 let guar = err.emit();
                 // Preserve the call expression so later passes can still diagnose the callee,
@@ -1699,7 +1697,12 @@ impl<'a> Parser<'a> {
                 // directly adjacent (i.e. '=<')
                 if maybe_eq_tok == TokenKind::Eq && maybe_eq_tok.span.hi() == lt_span.lo() {
                     let eq_lt = maybe_eq_tok.span.to(lt_span);
-                    err.span_suggestion(eq_lt, "did you mean", "<=", Applicability::Unspecified);
+                    err.span_suggestion_verbose(
+                        eq_lt,
+                        "you might have meant to write a \"less than or equal to\" comparison",
+                        "<=",
+                        Applicability::Unspecified,
+                    );
                 }
                 err
             })?;
@@ -1955,7 +1958,7 @@ impl<'a> Parser<'a> {
                 if label.is_some()
                     && match &expr.kind {
                         ExprKind::While(_, _, None)
-                        | ExprKind::ForLoop { label: None, .. }
+                        | ExprKind::ForLoop(ForLoop { label: None, .. })
                         | ExprKind::Loop(_, None, _) => true,
                         ExprKind::Block(block, None) => {
                             matches!(block.rules, BlockCheckMode::Default)
@@ -2510,8 +2513,7 @@ impl<'a> Parser<'a> {
         }
 
         if self.token == TokenKind::Semi
-            && let Some(last) = self.token_cursor.stack.last()
-            && let Some(TokenTree::Delimited(_, _, Delimiter::Parenthesis, _)) = last.curr()
+            && let Some((Delimiter::Parenthesis, _)) = self.token_cursor.parent_delim_and_span()
             && self.may_recover()
         {
             // It is likely that the closure body is a block but where the
@@ -2755,7 +2757,7 @@ impl<'a> Parser<'a> {
                             && let maybe_let = self.look_ahead(1, |t| t.clone())
                             && maybe_let.is_keyword(kw::Let)
                         {
-                            err.span_suggestion(
+                            err.span_suggestion_verbose(
                                 self.prev_token.span,
                                 "consider removing this semicolon to parse the `let` as part of the same chain",
                                 "",
@@ -2767,7 +2769,7 @@ impl<'a> Parser<'a> {
                         } else {
                             // Look for usages of '=>' where '>=' might be intended
                             if maybe_fatarrow == token::FatArrow {
-                                err.span_suggestion(
+                                err.span_suggestion_verbose(
                                     maybe_fatarrow.span,
                                     "you might have meant to write a \"greater than or equal to\" comparison",
                                     ">=",
@@ -3057,7 +3059,13 @@ impl<'a> Parser<'a> {
             let block = self.mk_block(thin_vec![], BlockCheckMode::Default, self.prev_token.span);
             return Ok(self.mk_expr(
                 lo.to(self.prev_token.span),
-                ExprKind::ForLoop { pat, iter: err_expr, body: block, label: opt_label, kind },
+                ExprKind::ForLoop(Box::new(ForLoop {
+                    pat,
+                    iter: err_expr,
+                    body: block,
+                    label: opt_label,
+                    kind,
+                })),
             ));
         }
 
@@ -3067,7 +3075,13 @@ impl<'a> Parser<'a> {
             opt_label.is_none().then_some(lo),
         )?;
 
-        let kind = ExprKind::ForLoop { pat, iter: expr, body: loop_block, label: opt_label, kind };
+        let kind = ExprKind::ForLoop(Box::new(ForLoop {
+            pat,
+            iter: expr,
+            body: loop_block,
+            label: opt_label,
+            kind,
+        }));
 
         self.recover_loop_else("for", lo)?;
 
@@ -3369,7 +3383,7 @@ impl<'a> Parser<'a> {
                 if let Err(mut err) = this.expect(exp!(FatArrow)) {
                     // We might have a `=>` -> `=` or `->` typo (issue #89396).
                     if is_almost_fat_arrow {
-                        err.span_suggestion(
+                        err.span_suggestion_verbose(
                             this.token.span,
                             "use a fat arrow to start a match arm",
                             "=>",

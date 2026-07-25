@@ -21,6 +21,15 @@ pub(crate) struct BothFfiConstAndPure {
 }
 
 #[derive(Diagnostic)]
+#[diag("attribute should be applied to `#[repr(transparent)]` types")]
+pub(crate) struct RustcPubTransparent {
+    #[primary_span]
+    pub attr_span: Span,
+    #[label("not a `#[repr(transparent)]` type")]
+    pub span: Span,
+}
+
+#[derive(Diagnostic)]
 #[diag("{$attr_str} attribute cannot have empty value")]
 pub(crate) struct DocAliasEmpty<'a> {
     #[primary_span]
@@ -363,17 +372,18 @@ pub(crate) struct EmptyConfusables {
 }
 
 #[derive(Diagnostic)]
-#[help("`#[{$name}{$attribute_args}]` can {$only}be applied to {$applied}")]
-#[diag("`#[{$name}{$attribute_args}]` attribute cannot be used on {$target}")]
+#[help("the `{$name}{$attribute_args}` attribute can {$only}be applied to {$applied}")]
+#[diag("the `{$name}{$attribute_args}` attribute cannot be used on {$target}")]
 pub(crate) struct InvalidTarget {
     #[primary_span]
+    pub span: Span,
     #[suggestion(
         "remove the attribute",
         code = "",
         applicability = "machine-applicable",
         style = "tool-only"
     )]
-    pub span: Span,
+    pub attr_span: Span,
     pub name: AttrPath,
     pub target: &'static str,
     pub applied: DiagArgValue,
@@ -500,6 +510,7 @@ pub enum ParsedDescription {
 pub(crate) struct AttributeParseError<'a> {
     pub(crate) span: Span,
     pub(crate) attr_span: Span,
+    pub(crate) inner_span: Span,
     pub(crate) template: AttributeTemplate,
     pub(crate) path: AttrPath,
     pub(crate) description: ParsedDescription,
@@ -610,8 +621,8 @@ impl<'a> AttributeParseError<'a> {
                 for Suggestion { msg, sp, code } in suggestions {
                     diag.span_suggestion_verbose(
                         *sp,
-                        msg.to_string(),
-                        code.to_string(),
+                        msg.clone(),
+                        code.clone(),
                         Applicability::MaybeIncorrect,
                     );
                 }
@@ -643,7 +654,7 @@ impl<'a, G: EmissionGuarantee> Diagnostic<'a, G> for AttributeParseError<'_> {
         let description = self.description();
 
         let mut diag = Diag::new(dcx, level, format!("malformed `{name}` {description} input"));
-        diag.span(self.attr_span);
+        diag.span(self.inner_span);
         diag.code(E0539);
         match &self.reason {
             AttributeParseErrorReason::ExpectedStringLiteral { byte_string } => {
@@ -659,9 +670,8 @@ impl<'a, G: EmissionGuarantee> Diagnostic<'a, G> for AttributeParseError<'_> {
                     // Avoid emitting an "attribute must be of the form" suggestion, as the
                     // attribute is likely to be well-formed already.
                     return diag;
-                } else {
-                    diag.span_label(self.span, "expected a string literal here");
                 }
+                diag.span_label(self.span, "expected a string literal here");
             }
             AttributeParseErrorReason::ExpectedFilenameLiteral => {
                 diag.span_label(self.span, "expected a filename string literal here");
@@ -719,12 +729,10 @@ impl<'a, G: EmissionGuarantee> Diagnostic<'a, G> for AttributeParseError<'_> {
                 diag.code(E0565);
             }
             AttributeParseErrorReason::ExpectedNameValue(None) => {
-                // If the span is the entire attribute, the suggestion we add below this match already contains enough information
-                if self.span != self.attr_span {
-                    diag.span_label(
-                        self.span,
-                        format!("expected this to be of the form `... = \"...\"`"),
-                    );
+                // If the span is the entire attribute inner, the suggestion we add below this
+                // match already contains enough information.
+                if self.span != self.inner_span {
+                    diag.span_label(self.span, "expected this to be of the form `... = \"...\"`");
                 }
             }
             AttributeParseErrorReason::ExpectedNameValue(Some(name)) => {
@@ -741,14 +749,14 @@ impl<'a, G: EmissionGuarantee> Diagnostic<'a, G> for AttributeParseError<'_> {
                 strings,
                 list: false,
             } => {
-                self.render_expected_specific_argument(&mut diag, *possibilities, *strings);
+                self.render_expected_specific_argument(&mut diag, possibilities, *strings);
             }
             AttributeParseErrorReason::ExpectedSpecificArgument {
                 possibilities,
                 strings,
                 list: true,
             } => {
-                self.render_expected_specific_argument_list(&mut diag, *possibilities, *strings);
+                self.render_expected_specific_argument_list(&mut diag, possibilities, *strings);
             }
             AttributeParseErrorReason::ExpectedIdentifier => {
                 diag.span_label(self.span, "expected a valid identifier here");

@@ -9,6 +9,7 @@ use rustc_ast::expand::autodiff_attrs::{DiffActivity, DiffMode};
 use rustc_ast::expand::typetree::TypeTree;
 use rustc_ast::token::DocFragmentKind;
 use rustc_ast::{AttrStyle, Path, ast};
+use rustc_data_structures::Limit;
 use rustc_data_structures::fx::FxIndexMap;
 use rustc_error_messages::{DiagArgValue, IntoDiagArg};
 use rustc_hir::LangItem;
@@ -21,7 +22,6 @@ use thin_vec::ThinVec;
 
 use crate::attrs::diagnostic::*;
 use crate::attrs::pretty_printing::PrintAttribute;
-use crate::limit::Limit;
 use crate::{DefaultBodyStability, PartialConstStability, RustcVersion, Stability};
 
 #[derive(Copy, Clone, Debug, StableHash, Encodable, Decodable, PrintAttribute)]
@@ -31,8 +31,8 @@ pub enum EiiImplResolution {
     /// what foreign item its associated with.
     Macro(DefId),
     /// Sometimes though, we already know statically and can skip some name resolution.
-    /// Stored together with the eii's name for diagnostics.
-    Known(EiiDecl),
+    /// DefId of the extern item that the EII implementation implements.
+    Known(DefId),
     /// For when resolution failed, but we want to continue compilation
     Error(ErrorGuaranteed),
 }
@@ -1011,7 +1011,7 @@ pub enum AttributeKind {
     AutomaticallyDerived,
 
     /// Represents the trace attribute of `#[cfg_attr]`
-    CfgAttrTrace,
+    CfgAttrTrace(ThinVec<(CfgEntry, Span)>),
 
     /// Represents the trace attribute of `#[cfg]`
     CfgTrace(ThinVec<(CfgEntry, Span)>),
@@ -1263,6 +1263,9 @@ pub enum AttributeKind {
         directive: Option<Box<Directive>>,
     },
 
+    /// Represents `#[diagnostic::opaque]`.
+    Opaque,
+
     /// Represents `#[optimize(size|speed)]`
     Optimize(OptimizeAttr, Span),
 
@@ -1369,6 +1372,10 @@ pub enum AttributeKind {
         builtin_name: Option<Symbol>,
         helper_attrs: ThinVec<Symbol>,
     },
+
+    /// Represents `#[rustc_canonical_symbol]`
+    RustcCanonicalSymbol,
+
     /// Represents `#[rustc_capture_analysis]`
     RustcCaptureAnalysis,
 
@@ -1635,6 +1642,9 @@ pub enum AttributeKind {
 
     /// Represents `#[rustc_strict_coherence]`.
     RustcStrictCoherence(Span),
+
+    /// Represents `#[rustc_test_entrypoint_marker]`
+    RustcTestEntrypointMarker,
 
     /// Represents `#[rustc_test_marker]`
     RustcTestMarker(Symbol),

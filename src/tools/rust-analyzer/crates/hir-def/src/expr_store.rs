@@ -14,6 +14,7 @@ use std::{
     ops::{Deref, Index},
 };
 
+use base_db::SourceDatabase;
 use cfg::{CfgExpr, CfgOptions};
 use either::Either;
 use hir_expand::{InFile, MacroCallId, mod_path::ModPath, name::Name};
@@ -27,7 +28,6 @@ use tt::TextRange;
 
 use crate::{
     AdtId, BlockId, ExpressionStoreOwnerId, GenericDefId, SyntheticSyntax,
-    db::DefDatabase,
     expr_store::path::{AssociatedTypeBinding, GenericArg, GenericArgs, NormalPath, Path},
     hir::{
         Array, AsmOperand, Binding, BindingId, Expr, ExprId, ExprOrPatId, InlineAsm, Label,
@@ -466,7 +466,7 @@ impl ExpressionStore {
         ExpressionStore::EMPTY
     }
 
-    pub fn of(db: &dyn DefDatabase, def: ExpressionStoreOwnerId) -> &ExpressionStore {
+    pub fn of(db: &dyn SourceDatabase, def: ExpressionStoreOwnerId) -> &ExpressionStore {
         match def {
             ExpressionStoreOwnerId::Signature(def) => {
                 use crate::signatures::{
@@ -494,7 +494,7 @@ impl ExpressionStore {
     }
 
     pub fn with_source_map(
-        db: &dyn DefDatabase,
+        db: &dyn SourceDatabase,
         def: ExpressionStoreOwnerId,
     ) -> (&ExpressionStore, &ExpressionStoreSourceMap) {
         match def {
@@ -589,7 +589,7 @@ impl ExpressionStore {
     /// Returns an iterator over all block expressions in this store that define inner items.
     pub fn blocks<'a>(
         &'a self,
-        db: &'a dyn DefDatabase,
+        db: &'a dyn SourceDatabase,
     ) -> impl Iterator<Item = (BlockId, &'a DefMap)> + 'a {
         self.expr_only
             .as_ref()
@@ -947,7 +947,7 @@ impl ExpressionStore {
     }
 }
 
-pub trait StoreVisitor {
+pub trait StoreVisitor: Sized {
     fn on_expr(&mut self, expr: ExprId) {
         let _ = expr;
     }
@@ -962,6 +962,26 @@ pub trait StoreVisitor {
     }
     fn on_lifetime(&mut self, lifetime: LifetimeRefId) {
         let _ = lifetime;
+    }
+
+    fn on_generic_args(&mut self, args: &GenericArgs) {
+        visit_generic_args(self, args);
+    }
+}
+
+pub(crate) fn visit_generic_args<V: StoreVisitor>(visitor: &mut V, args: &GenericArgs) {
+    let GenericArgs { args, bindings, parenthesized: _, has_self_type: _ } = args;
+    for arg in args {
+        match arg {
+            GenericArg::Type(arg) => visitor.on_type(*arg),
+            GenericArg::Const(ConstRef { expr }) => visitor.on_anon_const_expr(*expr),
+            GenericArg::Lifetime(arg) => visitor.on_lifetime(*arg),
+        }
+    }
+    for AssociatedTypeBinding { name: _, args, type_ref, bounds } in bindings {
+        visitor.on_generic_args_opt(args);
+        visitor.on_type_opt(*type_ref);
+        visitor.on_type_bounds(bounds);
     }
 }
 
@@ -981,25 +1001,13 @@ impl<V: StoreVisitor> StoreVisitor for &mut V {
     fn on_lifetime(&mut self, lifetime: LifetimeRefId) {
         V::on_lifetime(self, lifetime);
     }
+
+    fn on_generic_args(&mut self, args: &GenericArgs) {
+        V::on_generic_args(self, args);
+    }
 }
 
 trait StoreVisitorExt: StoreVisitor {
-    fn on_generic_args(&mut self, args: &GenericArgs) {
-        let GenericArgs { args, bindings, parenthesized: _, has_self_type: _ } = args;
-        for arg in args {
-            match arg {
-                GenericArg::Type(arg) => self.on_type(*arg),
-                GenericArg::Const(ConstRef { expr }) => self.on_anon_const_expr(*expr),
-                GenericArg::Lifetime(arg) => self.on_lifetime(*arg),
-            }
-        }
-        for AssociatedTypeBinding { name: _, args, type_ref, bounds } in bindings {
-            self.on_generic_args_opt(args);
-            self.on_type_opt(*type_ref);
-            self.on_type_bounds(bounds);
-        }
-    }
-
     fn on_type_bound(&mut self, bound: &TypeBound) {
         match bound {
             TypeBound::Path(path_id, _) => self.on_type(path_id.type_ref()),

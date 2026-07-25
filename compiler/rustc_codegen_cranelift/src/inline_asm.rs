@@ -117,7 +117,7 @@ pub(crate) fn codegen_inline_asm_terminator<'tcx>(
                         fx.tcx,
                         ty::TypingEnv::fully_monomorphized(),
                         def_id,
-                        args,
+                        args.no_bound_vars().unwrap(),
                     )
                     .unwrap();
                     let symbol = fx.tcx.symbol_name(instance);
@@ -847,7 +847,7 @@ fn call_inline_asm<'tcx>(
         stack_slot.offset(fx, i32::try_from(offset.bytes()).unwrap().into()).store(
             fx,
             value,
-            MemFlags::trusted(),
+            MemFlagsData::trusted(),
         );
     }
 
@@ -865,7 +865,7 @@ fn call_inline_asm<'tcx>(
         let value = stack_slot.offset(fx, i32::try_from(offset.bytes()).unwrap().into()).load(
             fx,
             ty,
-            MemFlags::trusted(),
+            MemFlagsData::trusted(),
         );
         place.write_cvalue(fx, CValue::by_val(value, place.layout()));
     }

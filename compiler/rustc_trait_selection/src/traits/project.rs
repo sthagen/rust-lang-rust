@@ -14,7 +14,8 @@ use rustc_middle::traits::select::OverflowError;
 use rustc_middle::traits::{BuiltinImplSource, ImplSource, ImplSourceUserDefinedData};
 use rustc_middle::ty::fast_reject::DeepRejectCtxt;
 use rustc_middle::ty::{
-    self, FieldInfo, Term, Ty, TyCtxt, TypeFoldable, TypeVisitableExt, TypingMode, Upcast,
+    self, FieldInfo, Term, Ty, TyCtxt, TypeFoldable, TypeVisitableExt, TypingMode, Unnormalized,
+    Upcast,
 };
 use rustc_middle::{bug, span_bug};
 use rustc_span::sym;
@@ -401,7 +402,10 @@ pub(super) fn opt_normalize_projection_term<'a, 'b, 'tcx>(
 
                 Normalized { value: normalized_ty, obligations: projected_obligations }
             } else {
-                Normalized { value: projected_term, obligations: projected_obligations }
+                Normalized {
+                    value: projected_term.skip_normalization(),
+                    obligations: projected_obligations,
+                }
             };
 
             let mut deduped = SsoHashSet::with_capacity(result.obligations.len());
@@ -523,6 +527,7 @@ pub fn normalize_inherent_projection<'a, 'b, 'tcx>(
     depth: usize,
     obligations: &mut PredicateObligations<'tcx>,
 ) -> ty::Term<'tcx> {
+    debug_assert!(!selcx.infcx.next_trait_solver());
     let tcx = selcx.tcx();
 
     if !tcx.recursion_limit().value_within_limit(depth) {
@@ -551,7 +556,7 @@ pub fn normalize_inherent_projection<'a, 'b, 'tcx>(
             param_env,
             cause.clone(),
             depth + 1,
-            predicate.skip_norm_wip(),
+            predicate,
             obligations,
         );
 
@@ -574,11 +579,15 @@ pub fn normalize_inherent_projection<'a, 'b, 'tcx>(
         ));
     }
 
-    let term: Term<'tcx> = if alias_term.kind.is_type() {
-        tcx.type_of(def_id).instantiate(tcx, args).skip_norm_wip().into()
+    let term = if alias_term.kind.is_type() {
+        tcx.type_of(def_id).instantiate(tcx, args).map(Into::into)
     } else {
-        tcx.const_of_item(def_id).instantiate(tcx, args).skip_norm_wip().into()
+        tcx.const_of_item(def_id).instantiate(tcx, args).map(Into::into)
     };
+
+    let term = selcx.infcx.resolve_vars_if_possible(term);
+    let term =
+        normalize_with_depth_to(selcx, param_env, cause.clone(), depth + 1, term, obligations);
 
     push_const_arg_has_type_obligation(
         tcx,
@@ -590,12 +599,6 @@ pub fn normalize_inherent_projection<'a, 'b, 'tcx>(
         def_id,
         args,
     );
-
-    let mut term = selcx.infcx.resolve_vars_if_possible(term);
-    if term.has_aliases() {
-        term =
-            normalize_with_depth_to(selcx, param_env, cause.clone(), depth + 1, term, obligations);
-    }
 
     term
 }
@@ -615,31 +618,21 @@ pub fn compute_inherent_assoc_term_args<'a, 'b, 'tcx>(
     let impl_def_id = tcx.parent(alias_def_id);
     let impl_args = selcx.infcx.fresh_args_for_item(cause.span, impl_def_id);
 
-    let mut impl_ty = tcx.type_of(impl_def_id).instantiate(tcx, impl_args).skip_norm_wip();
-    if !selcx.infcx.next_trait_solver() {
-        impl_ty = normalize_with_depth_to(
-            selcx,
-            param_env,
-            cause.clone(),
-            depth + 1,
-            impl_ty,
-            obligations,
-        );
-    }
+    let impl_ty = tcx.type_of(impl_def_id).instantiate(tcx, impl_args);
+    let impl_ty = if !selcx.infcx.next_trait_solver() {
+        normalize_with_depth_to(selcx, param_env, cause.clone(), depth + 1, impl_ty, obligations)
+    } else {
+        impl_ty.skip_norm_wip()
+    };
 
     // Infer the generic parameters of the impl by unifying the
     // impl type with the self type of the projection.
-    let mut self_ty = alias_term.self_ty();
-    if !selcx.infcx.next_trait_solver() {
-        self_ty = normalize_with_depth_to(
-            selcx,
-            param_env,
-            cause.clone(),
-            depth + 1,
-            self_ty,
-            obligations,
-        );
-    }
+    let self_ty = ty::Unnormalized::new_wip(alias_term.self_ty());
+    let self_ty = if !selcx.infcx.next_trait_solver() {
+        normalize_with_depth_to(selcx, param_env, cause.clone(), depth + 1, self_ty, obligations)
+    } else {
+        self_ty.skip_normalization()
+    };
 
     match selcx.infcx.at(&cause, param_env).eq(DefineOpaqueTypes::Yes, impl_ty, self_ty) {
         Ok(mut ok) => obligations.append(&mut ok.obligations),
@@ -660,7 +653,7 @@ enum Projected<'tcx> {
 }
 
 struct Progress<'tcx> {
-    term: ty::Term<'tcx>,
+    term: ty::Unnormalized<'tcx, ty::Term<'tcx>>,
     obligations: PredicateObligations<'tcx>,
 }
 
@@ -675,7 +668,10 @@ impl<'tcx> Progress<'tcx> {
         } else {
             ty::Const::new_error(tcx, guar).into()
         };
-        Progress { term: err_term, obligations: PredicateObligations::new() }
+        Progress {
+            term: ty::Unnormalized::dummy(err_term),
+            obligations: PredicateObligations::new(),
+        }
     }
 
     fn with_addl_obligations(mut self, mut obligations: PredicateObligations<'tcx>) -> Self {
@@ -995,6 +991,7 @@ fn assemble_candidates_from_impls<'cx, 'tcx>(
                                 TypingMode::Coherence
                                 | TypingMode::Typeck { .. }
                                 | TypingMode::PostTypeckUntilBorrowck { .. }
+                                | TypingMode::Reflection
                                 | TypingMode::PostBorrowck { .. } => {
                                     debug!(
                                         assoc_ty = ?selcx.tcx().def_path_str(node_item.item.def_id),
@@ -1084,7 +1081,7 @@ fn assemble_candidates_from_impls<'cx, 'tcx>(
                         // Integers and floats always have `u8` as their discriminant.
                         | ty::Infer(ty::InferTy::IntVar(_) | ty::InferTy::FloatVar(..)) => true,
 
-                        ty::UnsafeBinder(_) => todo!("FIXME(unsafe_binder)"),
+                        ty::UnsafeBinder(_) => unimplemented!("FIXME(unsafe_binder)"),
 
                         // type parameters, opaques, and unnormalized projections don't have
                         // a known discriminant and may need to be normalized further or rely
@@ -1108,7 +1105,7 @@ fn assemble_candidates_from_impls<'cx, 'tcx>(
                                     obligation.param_env,
                                     obligation.cause.clone(),
                                     obligation.recursion_depth + 1,
-                                    ty.skip_norm_wip(),
+                                    ty,
                                 )
                                 .value
                             },
@@ -1169,7 +1166,7 @@ fn assemble_candidates_from_impls<'cx, 'tcx>(
                                 true
                             }
 
-                            ty::UnsafeBinder(_) => todo!("FIXME(unsafe_binder)"),
+                            ty::UnsafeBinder(_) => unimplemented!("FIXME(unsafe_binder)"),
 
                             // FIXME(compiler-errors): are Bound and Placeholder types ever known sized?
                             ty::Param(_)
@@ -1346,7 +1343,7 @@ fn confirm_coroutine_candidate<'cx, 'tcx>(
             "expected coroutine self type for built-in coroutine candidate, found {self_ty}"
         )
     };
-    let coroutine_sig = args.as_coroutine().sig();
+    let coroutine_sig = Unnormalized::new_wip(args.as_coroutine().sig());
     let Normalized { value: coroutine_sig, obligations } = normalize_with_depth(
         selcx,
         obligation.param_env,
@@ -1402,7 +1399,7 @@ fn confirm_future_candidate<'cx, 'tcx>(
             "expected coroutine self type for built-in async future candidate, found {self_ty}"
         )
     };
-    let coroutine_sig = args.as_coroutine().sig();
+    let coroutine_sig = Unnormalized::new_wip(args.as_coroutine().sig());
     let Normalized { value: coroutine_sig, obligations } = normalize_with_depth(
         selcx,
         obligation.param_env,
@@ -1447,7 +1444,7 @@ fn confirm_iterator_candidate<'cx, 'tcx>(
     let ty::Coroutine(_, args) = self_ty.kind() else {
         unreachable!("expected coroutine self type for built-in gen candidate, found {self_ty}")
     };
-    let gen_sig = args.as_coroutine().sig();
+    let gen_sig = Unnormalized::new_wip(args.as_coroutine().sig());
     let Normalized { value: gen_sig, obligations } = normalize_with_depth(
         selcx,
         obligation.param_env,
@@ -1492,7 +1489,7 @@ fn confirm_async_iterator_candidate<'cx, 'tcx>(
     else {
         unreachable!()
     };
-    let gen_sig = args.as_coroutine().sig();
+    let gen_sig = Unnormalized::new_wip(args.as_coroutine().sig());
     let Normalized { value: gen_sig, obligations } = normalize_with_depth(
         selcx,
         obligation.param_env,
@@ -1563,7 +1560,7 @@ fn confirm_builtin_candidate<'cx, 'tcx>(
                 obligation.param_env,
                 obligation.cause.clone(),
                 obligation.recursion_depth + 1,
-                ty.skip_norm_wip(),
+                ty,
                 &mut obligations,
             )
         };
@@ -1626,7 +1623,7 @@ fn confirm_fn_pointer_candidate<'cx, 'tcx>(
 ) -> Progress<'tcx> {
     let tcx = selcx.tcx();
     let fn_type = selcx.infcx.shallow_resolve(obligation.predicate.self_ty());
-    let sig = fn_type.fn_sig(tcx);
+    let sig = fn_type.unnormalized_fn_sig(tcx);
     let Normalized { value: sig, obligations } = normalize_with_depth(
         selcx,
         obligation.param_env,
@@ -1648,58 +1645,24 @@ fn confirm_closure_candidate<'cx, 'tcx>(
     let tcx = selcx.tcx();
     let self_ty = selcx.infcx.shallow_resolve(obligation.predicate.self_ty());
     let closure_sig = match *self_ty.kind() {
-        ty::Closure(_, args) => args.as_closure().sig(),
+        ty::Closure(_, args) => Unnormalized::new_wip(args.as_closure().sig()),
 
         // Construct a "normal" `FnOnce` signature for coroutine-closure. This is
         // basically duplicated with the `AsyncFnOnce::CallOnce` confirmation, but
         // I didn't see a good way to unify those.
         ty::CoroutineClosure(def_id, args) => {
             let args = args.as_coroutine_closure();
-            let kind_ty = args.kind_ty();
-            args.coroutine_closure_sig().map_bound(|sig| {
-                // If we know the kind and upvars, use that directly.
-                // Otherwise, defer to `AsyncFnKindHelper::Upvars` to delay
-                // the projection, like the `AsyncFn*` traits do.
-                let output_ty = if let Some(_) = kind_ty.to_opt_closure_kind()
-                    // Fall back to projection if upvars aren't constrained
-                    && !args.tupled_upvars_ty().is_ty_var()
-                {
-                    sig.to_coroutine_given_kind_and_upvars(
-                        tcx,
-                        args.parent_args(),
-                        tcx.coroutine_for_closure(def_id),
-                        ty::ClosureKind::FnOnce,
-                        tcx.lifetimes.re_static,
-                        args.tupled_upvars_ty(),
-                        args.coroutine_captures_by_ref_ty(),
-                    )
-                } else {
-                    let upvars_projection_def_id =
-                        tcx.require_lang_item(LangItem::AsyncFnKindUpvars, obligation.cause.span);
-                    let tupled_upvars_ty = Ty::new_projection(
-                        tcx,
-                        ty::IsRigid::No,
-                        upvars_projection_def_id,
-                        [
-                            ty::GenericArg::from(kind_ty),
-                            Ty::from_closure_kind(tcx, ty::ClosureKind::FnOnce).into(),
-                            tcx.lifetimes.re_static.into(),
-                            sig.tupled_inputs_ty.into(),
-                            args.tupled_upvars_ty().into(),
-                            args.coroutine_captures_by_ref_ty().into(),
-                        ],
-                    );
-                    sig.to_coroutine(
-                        tcx,
-                        args.parent_args(),
-                        Ty::from_closure_kind(tcx, ty::ClosureKind::FnOnce),
-                        tcx.coroutine_for_closure(def_id),
-                        tupled_upvars_ty,
-                    )
-                };
-
+            Unnormalized::new_wip(args.coroutine_closure_sig().map_bound(|sig| {
+                let output_ty = coroutine_closure_output_coroutine(
+                    tcx,
+                    obligation,
+                    ty::ClosureKind::FnOnce,
+                    tcx.lifetimes.re_static,
+                    def_id,
+                    args,
+                );
                 tcx.mk_fn_sig([sig.tupled_inputs_ty], output_ty, sig.fn_sig_kind)
-            })
+            }))
         }
 
         _ => {
@@ -1774,60 +1737,12 @@ fn confirm_async_closure_candidate<'cx, 'tcx>(
     let poly_cache_entry = match *self_ty.kind() {
         ty::CoroutineClosure(def_id, args) => {
             let args = args.as_coroutine_closure();
-            let kind_ty = args.kind_ty();
             let sig = args.coroutine_closure_sig().skip_binder();
 
             let term = match item_name {
-                sym::CallOnceFuture | sym::CallRefFuture => {
-                    if let Some(closure_kind) = kind_ty.to_opt_closure_kind()
-                        // Fall back to projection if upvars aren't constrained
-                        && !args.tupled_upvars_ty().is_ty_var()
-                    {
-                        if !closure_kind.extends(goal_kind) {
-                            bug!("we should not be confirming if the closure kind is not met");
-                        }
-                        sig.to_coroutine_given_kind_and_upvars(
-                            tcx,
-                            args.parent_args(),
-                            tcx.coroutine_for_closure(def_id),
-                            goal_kind,
-                            env_region,
-                            args.tupled_upvars_ty(),
-                            args.coroutine_captures_by_ref_ty(),
-                        )
-                    } else {
-                        let upvars_projection_def_id = tcx
-                            .require_lang_item(LangItem::AsyncFnKindUpvars, obligation.cause.span);
-                        // When we don't know the closure kind (and therefore also the closure's upvars,
-                        // which are computed at the same time), we must delay the computation of the
-                        // generator's upvars. We do this using the `AsyncFnKindHelper`, which as a trait
-                        // goal functions similarly to the old `ClosureKind` predicate, and ensures that
-                        // the goal kind <= the closure kind. As a projection `AsyncFnKindHelper::Upvars`
-                        // will project to the right upvars for the generator, appending the inputs and
-                        // coroutine upvars respecting the closure kind.
-                        // N.B. No need to register a `AsyncFnKindHelper` goal here, it's already in `nested`.
-                        let tupled_upvars_ty = Ty::new_projection(
-                            tcx,
-                            ty::IsRigid::No,
-                            upvars_projection_def_id,
-                            [
-                                ty::GenericArg::from(kind_ty),
-                                Ty::from_closure_kind(tcx, goal_kind).into(),
-                                env_region.into(),
-                                sig.tupled_inputs_ty.into(),
-                                args.tupled_upvars_ty().into(),
-                                args.coroutine_captures_by_ref_ty().into(),
-                            ],
-                        );
-                        sig.to_coroutine(
-                            tcx,
-                            args.parent_args(),
-                            Ty::from_closure_kind(tcx, goal_kind),
-                            tcx.coroutine_for_closure(def_id),
-                            tupled_upvars_ty,
-                        )
-                    }
-                }
+                sym::CallOnceFuture | sym::CallRefFuture => coroutine_closure_output_coroutine(
+                    tcx, obligation, goal_kind, env_region, def_id, args,
+                ),
                 sym::Output => sig.return_ty,
                 name => bug!("no such associated type: {name}"),
             };
@@ -1916,6 +1831,72 @@ fn confirm_async_closure_candidate<'cx, 'tcx>(
         .with_addl_obligations(nested)
 }
 
+/// Given a `CoroutineClosure(def_id, args)`, interpret it as a closure,
+/// and return its output type for the given `goal_kind` and `env_region`.
+fn coroutine_closure_output_coroutine<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    obligation: &ProjectionTermObligation<'tcx>,
+    goal_kind: ty::ClosureKind,
+    env_region: ty::Region<'tcx>,
+    def_id: DefId,
+    args: ty::CoroutineClosureArgs<TyCtxt<'tcx>>,
+) -> Ty<'tcx> {
+    let kind_ty = args.kind_ty();
+    let sig = args.coroutine_closure_sig().skip_binder();
+
+    // If we know the kind and upvars, use that directly.
+    // Otherwise, defer to `AsyncFnKindHelper::Upvars` to delay
+    // the projection, like the `AsyncFn*` traits do.
+    if let Some(closure_kind) = kind_ty.to_opt_closure_kind()
+        // Fall back to projection if upvars aren't constrained
+        && !args.tupled_upvars_ty().is_ty_var()
+    {
+        if !closure_kind.extends(goal_kind) {
+            bug!("we should not be confirming if the closure kind is not met");
+        }
+        sig.to_coroutine_given_kind_and_upvars(
+            tcx,
+            args.parent_args(),
+            tcx.coroutine_for_closure(def_id),
+            goal_kind,
+            env_region,
+            args.tupled_upvars_ty(),
+            args.coroutine_captures_by_ref_ty(),
+        )
+    } else {
+        let upvars_projection_def_id =
+            tcx.require_lang_item(LangItem::AsyncFnKindUpvars, obligation.cause.span);
+        // When we don't know the closure kind (and therefore also the closure's upvars,
+        // which are computed at the same time), we must delay the computation of the
+        // generator's upvars. We do this using the `AsyncFnKindHelper`, which as a trait
+        // goal functions similarly to the old `ClosureKind` predicate, and ensures that
+        // the goal kind <= the closure kind. As a projection `AsyncFnKindHelper::Upvars`
+        // will project to the right upvars for the generator, appending the inputs and
+        // coroutine upvars respecting the closure kind.
+        // N.B. No need to register a `AsyncFnKindHelper` goal here, it's already in `nested`.
+        let tupled_upvars_ty = Ty::new_projection(
+            tcx,
+            ty::IsRigid::No,
+            upvars_projection_def_id,
+            [
+                ty::GenericArg::from(kind_ty),
+                Ty::from_closure_kind(tcx, goal_kind).into(),
+                env_region.into(),
+                sig.tupled_inputs_ty.into(),
+                args.tupled_upvars_ty().into(),
+                args.coroutine_captures_by_ref_ty().into(),
+            ],
+        );
+        sig.to_coroutine(
+            tcx,
+            args.parent_args(),
+            Ty::from_closure_kind(tcx, goal_kind),
+            tcx.coroutine_for_closure(def_id),
+            tupled_upvars_ty,
+        )
+    }
+}
+
 fn confirm_async_fn_kind_helper_candidate<'cx, 'tcx>(
     selcx: &mut SelectionContext<'cx, 'tcx>,
     obligation: &ProjectionTermObligation<'tcx>,
@@ -1968,7 +1949,7 @@ fn confirm_param_env_candidate<'cx, 'tcx>(
         poly_cache_entry,
     );
 
-    let cache_projection = cache_entry.projection_term;
+    let mut cache_projection = cache_entry.projection_term;
     let mut nested_obligations = PredicateObligations::new();
     let obligation_projection = obligation.predicate;
     let obligation_projection = ensure_sufficient_stack(|| {
@@ -1977,24 +1958,22 @@ fn confirm_param_env_candidate<'cx, 'tcx>(
             obligation.param_env,
             obligation.cause.clone(),
             obligation.recursion_depth + 1,
-            obligation_projection,
+            ty::Unnormalized::new_wip(obligation_projection),
             &mut nested_obligations,
         )
     });
-    let cache_projection = if potentially_unnormalized_candidate {
-        ensure_sufficient_stack(|| {
+    if potentially_unnormalized_candidate {
+        cache_projection = ensure_sufficient_stack(|| {
             normalize_with_depth_to(
                 selcx,
                 obligation.param_env,
                 obligation.cause.clone(),
                 obligation.recursion_depth + 1,
-                cache_projection,
+                ty::Unnormalized::new_wip(cache_projection),
                 &mut nested_obligations,
             )
-        })
-    } else {
-        cache_projection
-    };
+        });
+    }
 
     debug!(?cache_projection, ?obligation_projection);
 
@@ -2006,7 +1985,10 @@ fn confirm_param_env_candidate<'cx, 'tcx>(
         Ok(InferOk { value: _, obligations }) => {
             nested_obligations.extend(obligations);
             assoc_term_own_obligations(selcx, obligation, &mut nested_obligations);
-            Progress { term: cache_entry.term, obligations: nested_obligations }
+            Progress {
+                term: ty::Unnormalized::new(cache_entry.term),
+                obligations: nested_obligations,
+            }
         }
         Err(e) => {
             let msg = format!(
@@ -2014,7 +1996,10 @@ fn confirm_param_env_candidate<'cx, 'tcx>(
             );
             debug!("confirm_param_env_candidate: {}", msg);
             let err = Ty::new_error_with_message(infcx.tcx, obligation.cause.span, msg);
-            Progress { term: err.into(), obligations: PredicateObligations::new() }
+            Progress {
+                term: ty::Unnormalized::dummy(err.into()),
+                obligations: PredicateObligations::new(),
+            }
         }
     }
 }
@@ -2063,11 +2048,11 @@ fn confirm_impl_candidate<'cx, 'tcx>(
             return Ok(Projected::NoProgress(obligation.predicate.to_term(tcx, ty::IsRigid::No)));
         } else {
             return Ok(Projected::Progress(Progress {
-                term: if obligation.predicate.kind.is_type() {
+                term: ty::Unnormalized::dummy(if obligation.predicate.kind.is_type() {
                     Ty::new_misc_error(tcx).into()
                 } else {
                     ty::Const::new_misc_error(tcx).into()
-                },
+                }),
                 obligations: nested,
             }));
         }
@@ -2096,17 +2081,18 @@ fn confirm_impl_candidate<'cx, 'tcx>(
         } else {
             ty::Const::new_error_with_message(tcx, span, msg).into()
         };
-        Progress { term: err, obligations: nested }
+        Progress { term: ty::Unnormalized::dummy(err), obligations: nested }
     } else {
         assoc_term_own_obligations(selcx, obligation, &mut nested);
-        let instantiated_term: Term<'tcx> = term.instantiate(tcx, args).skip_norm_wip();
+        let instantiated_term = term.instantiate(tcx, args);
+        let term_for_obligation = instantiated_term.skip_norm_wip();
         push_const_arg_has_type_obligation(
             tcx,
             &mut nested,
             &obligation.cause,
             obligation.recursion_depth + 1,
             obligation.param_env,
-            instantiated_term,
+            term_for_obligation,
             assoc_term.item.def_id,
             args,
         );
@@ -2135,7 +2121,7 @@ fn assoc_term_own_obligations<'cx, 'tcx>(
             obligation.param_env,
             obligation.cause.clone(),
             obligation.recursion_depth + 1,
-            predicate.skip_norm_wip(),
+            predicate,
             nested,
         );
 

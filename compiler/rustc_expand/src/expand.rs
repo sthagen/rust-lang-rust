@@ -7,10 +7,10 @@ use rustc_ast::mut_visit::*;
 use rustc_ast::tokenstream::TokenStream;
 use rustc_ast::visit::{AssocCtxt, Visitor, VisitorResult, try_visit, walk_list};
 use rustc_ast::{
-    self as ast, AssocItemKind, AstNodeWrapper, AttrArgs, AttrItemKind, AttrStyle, AttrVec,
-    DUMMY_NODE_ID, DelegationSource, DelegationSuffixes, EarlyParsedAttribute, ExprKind,
-    ForeignItemKind, HasAttrs, HasNodeId, Inline, ItemKind, MacStmtStyle, MetaItemInner,
-    MetaItemKind, ModKind, NodeId, PatKind, StmtKind, TyKind, token,
+    self as ast, AssocItemKind, AstNodeWrapper, AttrArgs, AttrKind, AttrStyle, AttrVec,
+    DUMMY_NODE_ID, DelegationSource, DelegationSuffixes, ExprKind, ForeignItemKind, HasAttrs,
+    HasNodeId, Inline, ItemKind, MacStmtStyle, MetaItemInner, MetaItemKind, ModKind, NodeId,
+    PatKind, StmtKind, SyntheticAttr, TyKind, token,
 };
 use rustc_ast_pretty::pprust;
 use rustc_attr_parsing::parser::AllowExprMetavar;
@@ -18,25 +18,25 @@ use rustc_attr_parsing::{
     AttributeParser, AttributeSafety, CFG_TEMPLATE, EvalConfigResult, ShouldEmit,
     eval_config_entry, parse_cfg, validate_attr,
 };
+use rustc_data_structures::Limit;
 use rustc_data_structures::flat_map_in_place::FlatMapInPlace;
 use rustc_data_structures::stack::ensure_sufficient_stack;
 use rustc_errors::PResult;
 use rustc_feature::Features;
 use rustc_hir::Target;
 use rustc_hir::def::MacroKinds;
-use rustc_hir::limit::Limit;
 use rustc_parse::parser::{
     AllowConstBlockItems, AttemptLocalParseRecovery, CommaRecoveryMode, ForceCollect, Parser,
     RecoverColon, RecoverComma, Recovery, token_descr,
 };
-use rustc_session::errors::feature_err;
+use rustc_session::diagnostics::feature_err;
 use rustc_session::lint::builtin::{UNUSED_ATTRIBUTES, UNUSED_DOC_COMMENTS};
 use rustc_span::hygiene::SyntaxContext;
 use rustc_span::{ErrorGuaranteed, FileName, Ident, LocalExpnId, Span, Symbol, sym};
 use smallvec::SmallVec;
 
 use crate::base::*;
-use crate::config::{StripUnconfigured, attr_into_trace};
+use crate::config::StripUnconfigured;
 use crate::diagnostics::{
     EmptyDelegationMac, GlobDelegationOutsideImpls, GlobDelegationTraitlessQpath, IncompleteParse,
     RecursionLimitReached, RemoveExprNotSupported, RemoveNodeNotSupported, UnsupportedKeyValue,
@@ -791,10 +791,18 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
                                     )
                                 ) =>
                         {
-                            rustc_parse::fake_token_stream_for_item(&self.cx.sess.psess, item_inner)
+                            rustc_parse::fake_token_stream_for_item(
+                                &self.cx.sess.psess,
+                                item_inner,
+                                Some(&attr),
+                            )
                         }
                         Annotatable::Item(item_inner) if item_inner.tokens.is_none() => {
-                            rustc_parse::fake_token_stream_for_item(&self.cx.sess.psess, item_inner)
+                            rustc_parse::fake_token_stream_for_item(
+                                &self.cx.sess.psess,
+                                item_inner,
+                                None,
+                            )
                         }
                         // When a function has EII implementations attached (via `eii_impls`),
                         // use fake tokens so the pretty-printer re-emits the EII attribute
@@ -806,7 +814,11 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
                             if matches!(&item_inner.kind,
                                 ItemKind::Fn(f) if !f.eii_impls.is_empty()) =>
                         {
-                            rustc_parse::fake_token_stream_for_item(&self.cx.sess.psess, item_inner)
+                            rustc_parse::fake_token_stream_for_item(
+                                &self.cx.sess.psess,
+                                item_inner,
+                                None,
+                            )
                         }
                         Annotatable::ForeignItem(item_inner) if item_inner.tokens.is_none() => {
                             rustc_parse::fake_token_stream_for_foreign_item(
@@ -818,10 +830,10 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
                     };
                     let attr_item = attr.get_normal_item();
                     let safety = attr_item.unsafety;
-                    if let AttrArgs::Eq { .. } = attr_item.args.unparsed_ref().unwrap() {
+                    if let AttrArgs::Eq { .. } = attr_item.args {
                         self.cx.dcx().emit_err(UnsupportedKeyValue { span });
                     }
-                    let inner_tokens = attr_item.args.unparsed_ref().unwrap().inner_tokens();
+                    let inner_tokens = attr_item.args.inner_tokens();
                     match expander.expand_with_safety(self.cx, safety, span, inner_tokens, tokens) {
                         Ok(tok_result) => {
                             let fragment = self.parse_ast_fragment(
@@ -1324,8 +1336,6 @@ impl InvocationCollectorNode for Box<ast::Item> {
             return Ok(walk_flat_map(node, collector));
         }
 
-        // Work around borrow checker not seeing through `P`'s deref.
-        let (span, mut attrs) = (node.span, mem::take(&mut node.attrs));
         let ItemKind::Mod(_, ident, ref mut mod_kind) = node.kind else { unreachable!() };
         let ecx = &mut collector.cx;
         let (file_path, dir_path, dir_ownership) = match mod_kind {
@@ -1334,7 +1344,7 @@ impl InvocationCollectorNode for Box<ast::Item> {
                 let (dir_path, dir_ownership) = mod_dir_path(
                     ecx.sess,
                     ident,
-                    &attrs,
+                    &node.attrs,
                     &ecx.current_expansion.module,
                     ecx.current_expansion.dir_ownership,
                     *inline,
@@ -1343,14 +1353,13 @@ impl InvocationCollectorNode for Box<ast::Item> {
                 // This lets `parse_external_mod` catch cycles if it's self-referential.
                 let file_path = match inline {
                     Inline::Yes => None,
-                    Inline::No { .. } => mod_file_path_from_attr(ecx.sess, &attrs, &dir_path),
+                    Inline::No { .. } => mod_file_path_from_attr(ecx.sess, &node.attrs, &dir_path),
                 };
-                node.attrs = attrs;
                 (file_path, dir_path, dir_ownership)
             }
             ModKind::Unloaded => {
                 // We have an outline `mod foo;` so we need to parse the file.
-                let old_attrs_len = attrs.len();
+                let old_attrs_len = node.attrs.len();
                 let ParsedExternalMod {
                     items,
                     spans,
@@ -1361,10 +1370,10 @@ impl InvocationCollectorNode for Box<ast::Item> {
                 } = parse_external_mod(
                     ecx.sess,
                     ident,
-                    span,
+                    node.span,
                     &ecx.current_expansion.module,
                     ecx.current_expansion.dir_ownership,
-                    &mut attrs,
+                    &mut node.attrs,
                 );
 
                 if let Some(lint_store) = ecx.lint_store {
@@ -1373,14 +1382,13 @@ impl InvocationCollectorNode for Box<ast::Item> {
                         ecx.ecfg.features,
                         ecx.resolver.registered_tools(),
                         ecx.current_expansion.lint_node_id,
-                        &attrs,
+                        &node.attrs,
                         &items,
                         ident.name,
                     );
                 }
 
                 *mod_kind = ModKind::Loaded(items, Inline::No { had_parse_error }, spans);
-                node.attrs = attrs;
                 if node.attrs.len() > old_attrs_len {
                     // If we loaded an out-of-line module and added some inner attributes,
                     // then we need to re-configure it and re-collect attributes for
@@ -1905,7 +1913,7 @@ impl InvocationCollectorNode for ast::Pat {
         }
     }
     fn as_target(&self) -> Target {
-        todo!();
+        unimplemented!();
     }
 }
 
@@ -2163,7 +2171,9 @@ impl<'a, 'b> InvocationCollector<'a, 'b> {
         let mut cfg_pos = None;
         let mut attr_pos = None;
         for (pos, attr) in item.attrs().iter().enumerate() {
-            if !attr.is_doc_comment() && !self.cx.expanded_inert_attrs.is_marked(attr) {
+            if let AttrKind::Normal(..) = attr.kind
+                && !self.cx.expanded_inert_attrs.is_marked(attr)
+            {
                 let name = attr.name();
                 if name == Some(sym::cfg) || name == Some(sym::cfg_attr) {
                     cfg_pos = Some(pos); // a cfg attr found, no need to search anymore
@@ -2207,6 +2217,7 @@ impl<'a, 'b> InvocationCollector<'a, 'b> {
     // Detect use of feature-gated or invalid attributes on macro invocations
     // since they will not be detected after macro expansion.
     fn check_attributes(&self, attrs: &[ast::Attribute], call: &ast::MacCall) {
+        use SyntheticAttr::*;
         let features = self.cx.ecfg.features;
         let mut attrs = attrs.iter().peekable();
         let mut span: Option<Span> = None;
@@ -2239,21 +2250,30 @@ impl<'a, 'b> InvocationCollector<'a, 'b> {
                     self.cx.current_expansion.lint_node_id,
                     crate::diagnostics::MacroCallUnusedDocComment { span: attr.span },
                 );
-            } else if rustc_attr_parsing::is_builtin_attr(attr)
-                && !AttributeParser::is_parsed_attribute(&attr.path())
-            {
-                let attr_name = attr.name().unwrap();
-                self.cx.sess.psess.buffer_lint(
-                    UNUSED_ATTRIBUTES,
-                    attr.span,
-                    self.cx.current_expansion.lint_node_id,
-                    crate::diagnostics::UnusedBuiltinAttribute {
-                        attr_name,
-                        macro_name: pprust::path_to_string(&call.path),
-                        invoc_span: call.path.span,
-                        attr_span: attr.span,
-                    },
-                );
+                continue;
+            }
+
+            match &attr.kind {
+                AttrKind::Normal(normal)
+                    if rustc_attr_parsing::is_builtin_attr(&normal.item)
+                        && !AttributeParser::is_parsed_attribute(&attr.path()) =>
+                {
+                    let attr_name = attr.name().unwrap();
+                    self.cx.sess.psess.buffer_lint(
+                        UNUSED_ATTRIBUTES,
+                        attr.span,
+                        self.cx.current_expansion.lint_node_id,
+                        crate::diagnostics::UnusedBuiltinAttribute {
+                            attr_name,
+                            macro_name: pprust::path_to_string(&call.path),
+                            invoc_span: call.path.span,
+                            attr_span: attr.span,
+                        },
+                    );
+                }
+                AttrKind::Normal(_) => {}
+                AttrKind::Synthetic(CfgTrace(_) | CfgAttrTrace(_)) => {}
+                AttrKind::DocComment(..) => unreachable!(), // handled above
             }
         }
     }
@@ -2283,10 +2303,9 @@ impl<'a, 'b> InvocationCollector<'a, 'b> {
 
         let res = eval_config_entry(self.cfg().sess, &cfg);
         if res.as_bool() {
-            // A trace attribute left in AST in place of the original `cfg` attribute.
+            // A synthetic trace attribute left in AST in place of the original `cfg` attribute.
             // It can later be used by lints or other diagnostics.
-            let mut trace_attr = attr_into_trace(attr, sym::cfg_trace);
-            trace_attr.replace_args(AttrItemKind::Parsed(EarlyParsedAttribute::CfgTrace(cfg)));
+            let trace_attr = attr.convert_normal_to_synthetic(SyntheticAttr::CfgTrace(cfg));
             node.visit_attrs(|attrs| attrs.insert(pos, trace_attr));
         }
 

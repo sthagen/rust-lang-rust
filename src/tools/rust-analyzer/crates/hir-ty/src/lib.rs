@@ -61,11 +61,11 @@ mod tests;
 
 use std::{hash::Hash, ops::ControlFlow};
 
+use base_db::SourceDatabase;
 use hir_def::{
     CallableDefId, ConstId, DefWithBodyId, EnumVariantId, ExpressionStoreOwnerId, FunctionId,
     GenericDefId, HasModule, LifetimeParamId, ModuleId, StaticId, TypeAliasId, TypeOrConstParamId,
     TypeParamId,
-    db::DefDatabase,
     expr_store::{Body, ExpressionStore},
     hir::{BindingId, ExprId, ExprOrPatId, PatId},
     resolver::{HasResolver, Resolver, TypeNs},
@@ -106,13 +106,13 @@ pub use autoderef::autoderef;
 pub use infer::{
     Adjust, Adjustment, AutoBorrow, BindingMode, ByRef, ExplicitDropMethodUseKind,
     InferenceDiagnostic, InferenceResult, InferenceTyDiagnosticSource, OverloadedDeref,
-    PointerCast, cast::CastError, could_coerce, could_unify, could_unify_deeply,
+    PointerCast, ReturnKind, cast::CastError, could_coerce, could_unify, could_unify_deeply,
     infer_query_with_inspect,
 };
 pub use lower::{
     FieldType, GenericDefaults, GenericDefaultsRef, GenericPredicates, ImplTraits,
-    LifetimeElisionKind, LoweringMode, TyDefId, TyLoweringContext, TyLoweringInferVarsCtx,
-    TyLoweringResult, ValueTyDefId, diagnostics::*,
+    LifetimeElisionKind, LifetimeLoweringMode, LoweringMode, TyDefId, TyLoweringContext,
+    TyLoweringInferVarsCtx, TyLoweringResult, ValueTyDefId, diagnostics::*,
 };
 pub use next_solver::interner::{attach_db, attach_db_allow_change, with_attached_db};
 pub use target_feature::TargetFeatures;
@@ -221,7 +221,7 @@ pub fn type_or_const_param_idx(db: &dyn HirDatabase, id: TypeOrConstParamId) -> 
 }
 
 pub fn lifetime_param_idx(db: &dyn HirDatabase, id: LifetimeParamId) -> u32 {
-    generics::generics(db, id.parent).lifetime_param_idx(id)
+    generics::generics(db, id.parent).lifetime_param_idx(id, false).0
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
@@ -566,7 +566,7 @@ impl From<EnumVariantId> for InferBodyId {
 }
 
 impl HasModule for InferBodyId {
-    fn module(&self, db: &dyn DefDatabase) -> ModuleId {
+    fn module(&self, db: &dyn SourceDatabase) -> ModuleId {
         match self {
             InferBodyId::DefWithBodyId(id) => id.module(db),
             InferBodyId::AnonConstId(id) => id.module(db),
@@ -575,7 +575,7 @@ impl HasModule for InferBodyId {
 }
 
 impl HasResolver for InferBodyId {
-    fn resolver(self, db: &dyn DefDatabase) -> Resolver<'_> {
+    fn resolver(self, db: &dyn SourceDatabase) -> Resolver<'_> {
         match self {
             InferBodyId::DefWithBodyId(id) => id.resolver(db),
             InferBodyId::AnonConstId(id) => id.resolver(db),

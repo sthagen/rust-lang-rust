@@ -14,7 +14,7 @@ use cranelift_codegen::isa::CallConv;
 use cranelift_module::ModuleError;
 use rustc_abi::{CanonAbi, ExternAbi, X86Call};
 use rustc_codegen_ssa::base::is_call_from_compiler_builtins_to_upstream_monomorphization;
-use rustc_codegen_ssa::errors::CompilerBuiltinsCannotCall;
+use rustc_codegen_ssa::diagnostics::CompilerBuiltinsCannotCall;
 use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use rustc_middle::ty::layout::FnAbiOf;
 use rustc_middle::ty::print::with_no_trimmed_paths;
@@ -139,47 +139,56 @@ impl<'tcx> FunctionCx<'_, '_, 'tcx> {
         mut returns: Vec<AbiParam>,
         args: &[Value],
     ) -> Cow<'_, [Value]> {
+        // FIXME any way to reuse the abi adjustment code in rustc_target?
+
         // Pass i128 arguments by-ref on Windows.
-        let (params, args): (Vec<_>, Cow<'_, [_]>) = if self.tcx.sess.target.is_like_windows {
-            let (params, args): (Vec<_>, Vec<_>) = params
-                .into_iter()
-                .zip(args)
-                .map(|(param, &arg)| {
-                    if param.value_type == types::I128 {
-                        let arg_ptr = self.create_stack_slot(16, 16);
-                        arg_ptr.store(self, arg, MemFlags::trusted());
-                        (AbiParam::new(self.pointer_type), arg_ptr.get_addr(self))
-                    } else {
-                        (param, arg)
-                    }
-                })
-                .unzip();
+        let (params, args): (Vec<_>, Cow<'_, [_]>) =
+            if self.tcx.sess.target.is_like_windows || self.tcx.sess.target.arch == Arch::S390x {
+                let (params, args): (Vec<_>, Vec<_>) = params
+                    .into_iter()
+                    .zip(args)
+                    .map(|(param, &arg)| {
+                        if param.value_type == types::I128
+                            || (self.tcx.sess.target.arch == Arch::S390x
+                                && param.value_type == types::F128)
+                        {
+                            let arg_ptr = self.create_stack_slot(16, 16);
+                            arg_ptr.store(self, arg, MemFlagsData::trusted());
+                            (AbiParam::new(self.pointer_type), arg_ptr.get_addr(self))
+                        } else {
+                            (param, arg)
+                        }
+                    })
+                    .unzip();
 
-            (params, args.into())
-        } else {
-            (params, args.into())
-        };
+                (params, args.into())
+            } else {
+                (params, args.into())
+            };
 
-        let ret_single_i128 = returns.len() == 1 && returns[0].value_type == types::I128;
-        if ret_single_i128 && self.tcx.sess.target.is_like_windows {
+        if self.tcx.sess.target.is_like_windows
+            && matches!(*returns, [AbiParam { value_type: types::I128, .. }])
+        {
             // Return i128 using the vector ABI on Windows
             returns[0].value_type = types::I64X2;
 
             let ret = self.lib_call_unadjusted(name, params, returns, &args)[0];
 
             Cow::Owned(vec![codegen_bitcast(self, types::I128, ret)])
-        } else if ret_single_i128 && self.tcx.sess.target.arch == Arch::S390x {
-            // Return i128 using a return area pointer on s390x.
+        } else if self.tcx.sess.target.arch == Arch::S390x
+            && matches!(*returns, [AbiParam { value_type: types::I128 | types::F128, .. }])
+        {
+            // Return i128 and f128 using a return area pointer on s390x.
             let mut params = params;
             let mut args = args.to_vec();
 
-            params.insert(0, AbiParam::new(self.pointer_type));
+            params.insert(0, AbiParam::special(self.pointer_type, ArgumentPurpose::StructReturn));
             let ret_ptr = self.create_stack_slot(16, 16);
             args.insert(0, ret_ptr.get_addr(self));
 
             self.lib_call_unadjusted(name, params, vec![], &args);
 
-            Cow::Owned(vec![ret_ptr.load(self, types::I128, MemFlags::trusted())])
+            Cow::Owned(vec![ret_ptr.load(self, types::I128, MemFlagsData::trusted())])
         } else {
             Cow::Borrowed(self.lib_call_unadjusted(name, params, returns, &args))
         }
@@ -220,7 +229,7 @@ fn make_local_place<'tcx>(
         );
     }
     let place = if is_ssa {
-        if let BackendRepr::ScalarPair { a: _, b: _, b_offset: _ } = layout.backend_repr {
+        if let BackendRepr::ScalarPair { .. } = layout.backend_repr {
             CPlace::new_var_pair(fx, local, layout)
         } else {
             CPlace::new_var(fx, local, layout)
@@ -421,7 +430,7 @@ pub(crate) fn codegen_terminator_call<'tcx>(
             fx.tcx,
             ty::TypingEnv::fully_monomorphized(),
             def_id,
-            fn_args,
+            fn_args.no_bound_vars().unwrap(),
             source_info.span,
         );
 
@@ -440,18 +449,6 @@ pub(crate) fn codegen_terminator_call<'tcx>(
             }
         }
 
-        if fx.tcx.symbol_name(instance).name.starts_with("llvm.") {
-            crate::intrinsics::codegen_llvm_intrinsic_call(
-                fx,
-                fx.tcx.symbol_name(instance).name,
-                args,
-                ret_place,
-                target,
-                source_info.span,
-            );
-            return;
-        }
-
         match instance.def {
             InstanceKind::Intrinsic(_) => {
                 match crate::intrinsics::codegen_intrinsic_call(
@@ -465,6 +462,17 @@ pub(crate) fn codegen_terminator_call<'tcx>(
                     Ok(()) => return,
                     Err(instance) => Some(instance),
                 }
+            }
+            InstanceKind::LlvmIntrinsic(_) => {
+                crate::intrinsics::codegen_llvm_intrinsic_call(
+                    fx,
+                    fx.tcx.symbol_name(instance).name,
+                    args,
+                    ret_place,
+                    target,
+                    source_info.span,
+                );
+                return;
             }
             // We don't need AsyncDropGlueCtorShim here because it is not `noop func`,
             // it is `func returning noop future`
@@ -748,7 +756,7 @@ pub(crate) fn codegen_drop<'tcx>(
                 let ptr = ptr.get_addr(fx);
                 let drop_fn = crate::vtable::drop_fn_of_obj(fx, vtable);
 
-                let is_null = fx.bcx.ins().icmp_imm(IntCC::Equal, drop_fn, 0);
+                let is_null = fx.bcx.ins().icmp_imm_u(IntCC::Equal, drop_fn, 0);
                 let target_block = fx.get_block(target);
                 let continued = fx.bcx.create_block();
                 fx.bcx.ins().brif(is_null, target_block, &[], continued, &[]);

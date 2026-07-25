@@ -1,4 +1,4 @@
-// ignore-tidy-filelength
+// ignore-tidy-file-filelength
 
 use std::borrow::Cow;
 use std::path::PathBuf;
@@ -11,7 +11,7 @@ use rustc_errors::{
     Level, Subdiagnostic, SuggestionStyle, msg,
 };
 use rustc_macros::{Diagnostic, Subdiagnostic};
-use rustc_session::errors::ExprParenthesesNeeded;
+use rustc_session::diagnostics::ExprParenthesesNeeded;
 use rustc_span::edition::{Edition, LATEST_STABLE_EDITION};
 use rustc_span::{Ident, Span, Symbol};
 

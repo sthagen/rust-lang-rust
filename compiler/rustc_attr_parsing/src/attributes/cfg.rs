@@ -11,7 +11,7 @@ use rustc_parse::parser::{ForceCollect, Parser, Recovery};
 use rustc_parse::{exp, parse_in};
 use rustc_session::Session;
 use rustc_session::config::ExpectedValues;
-use rustc_session::errors::feature_err;
+use rustc_session::diagnostics::feature_err;
 use rustc_session::lint::builtin::UNEXPECTED_CFGS;
 use rustc_session::parse::ParseSess;
 use rustc_span::{ErrorGuaranteed, Span, Symbol, sym};
@@ -320,7 +320,7 @@ pub fn parse_cfg_attr(
     features: Option<&Features>,
     lint_node_id: ast::NodeId,
 ) -> Option<(CfgEntry, Vec<(WithTokens<AttrItem>, Span)>)> {
-    match cfg_attr.get_normal_item().args.unparsed_ref().unwrap() {
+    match &cfg_attr.get_normal_item().args {
         ast::AttrArgs::Delimited(ast::DelimArgs { dspan, delim, tokens }) if !tokens.is_empty() => {
             check_cfg_attr_bad_delim(&sess.psess, *dspan, *delim);
             match parse_in(&sess.psess, tokens.clone(), "`cfg_attr` input", |p| {
@@ -349,16 +349,17 @@ pub fn parse_cfg_attr(
         }
         _ => {
             let (span, reason) = if let ast::AttrArgs::Delimited(ast::DelimArgs { dspan, .. }) =
-                cfg_attr.get_normal_item().args.unparsed_ref()?
+                cfg_attr.get_normal_item().args
             {
                 (dspan.entire(), AttributeParseErrorReason::ExpectedAtLeastOneArgument)
             } else {
-                (cfg_attr.span, AttributeParseErrorReason::ExpectedList)
+                (cfg_attr.get_normal_item().span, AttributeParseErrorReason::ExpectedList)
             };
 
             sess.dcx().emit_err(AttributeParseError {
                 span,
                 attr_span: cfg_attr.span,
+                inner_span: cfg_attr.get_normal_item().span,
                 template: CFG_ATTR_TEMPLATE,
                 path: AttrPath::from_ast(&cfg_attr.get_normal_item().path, identity),
                 description: ParsedDescription::Attribute,
@@ -406,7 +407,7 @@ fn parse_cfg_attr_internal<'a>(
     let cfg_predicate = AttributeParser::parse_single_args(
         sess,
         attribute.span,
-        attribute.get_normal_item().span(),
+        attribute.get_normal_item().span,
         attribute.style,
         AttrPath { segments: attribute.path().into_boxed_slice(), span: attribute.span },
         Some(attribute.get_normal_item().unsafety),

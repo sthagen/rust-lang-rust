@@ -190,6 +190,17 @@ pub(crate) struct FnParamForbiddenAttr {
 }
 
 #[derive(Diagnostic)]
+#[diag("`#[{$eii_name}]` is not allowed to have `#[{$attr_name}]`")]
+pub(crate) struct EiiImplAttributeNotSupported<'a> {
+    #[primary_span]
+    pub attr_span: Span,
+    pub attr_name: &'a str,
+    pub eii_name: String,
+    #[label("`#[{$eii_name}]` is not allowed to have `#[{$attr_name}]`")]
+    pub eii_span: Span,
+}
+
+#[derive(Diagnostic)]
 #[diag("`self` parameter is only allowed in associated functions")]
 #[note("associated functions are those in `impl` or `trait` definitions")]
 pub(crate) struct FnParamForbiddenSelf {
@@ -743,7 +754,7 @@ pub(crate) struct FieldlessUnion {
 pub(crate) struct WhereClauseAfterTypeAlias {
     #[primary_span]
     pub span: Span,
-    #[help("add `#![feature(lazy_type_alias)]` to the crate attributes to enable")]
+    #[help("add `#![feature(checked_type_aliases)]` to the crate attributes to enable")]
     pub help: bool,
 }
 
@@ -999,6 +1010,7 @@ pub(crate) struct MatchArmWithNoBody {
     // resulting code to be correct.
     #[suggestion(
         "add a body after the pattern",
+        // ignore-tidy-todo
         code = " => {{ todo!() }}",
         applicability = "has-placeholders",
         style = "verbose"

@@ -3,15 +3,12 @@
 use quote::{ToTokens, format_ident, quote, quote_spanned};
 use syn::{Ident, PatType, Path, spanned::Spanned};
 
-use crate::Cycle;
-
 pub(crate) struct TrackedQuery {
     pub(crate) trait_name: Ident,
     pub(crate) signature: syn::Signature,
     pub(crate) pat_and_tys: Vec<PatType>,
     pub(crate) invoke: Option<Path>,
     pub(crate) default: Option<syn::Block>,
-    pub(crate) cycle: Option<Cycle>,
 }
 
 impl ToTokens for TrackedQuery {
@@ -28,20 +25,6 @@ impl ToTokens for TrackedQuery {
 
         let fn_ident = &sig.ident;
         let shim: Ident = format_ident!("{}_shim", fn_ident);
-
-        let options = self
-            .cycle
-            .as_ref()
-            .map(|Cycle { cycle_fn, cycle_initial, cycle_result }| {
-                let cycle_fn = cycle_fn.as_ref().map(|(ident, path)| quote!(#ident=#path));
-                let cycle_initial =
-                    cycle_initial.as_ref().map(|(ident, path)| quote!(#ident=#path));
-                let cycle_result = cycle_result.as_ref().map(|(ident, path)| quote!(#ident=#path));
-                let options = cycle_fn.into_iter().chain(cycle_initial).chain(cycle_result);
-                quote!(#(#options),*)
-            })
-            .into_iter();
-        let annotation = quote!(#[salsa_macros::tracked( #(#options),* )]);
 
         let pat_and_tys = &self.pat_and_tys;
         let params = self
@@ -60,7 +43,7 @@ impl ToTokens for TrackedQuery {
 
         let method = quote! {
             #sig {
-                #annotation
+                #[salsa_macros::tracked]
                 fn #shim<'db>(
                     db: &'db dyn #trait_name,
                     #(#pat_and_tys),*

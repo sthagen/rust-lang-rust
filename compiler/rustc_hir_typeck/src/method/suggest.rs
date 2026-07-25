@@ -1,7 +1,7 @@
 //! Give useful errors and suggestions to users when an item can't be
 //! found or is otherwise invalid.
 
-// ignore-tidy-filelength
+// ignore-tidy-file-filelength
 
 use core::ops::ControlFlow;
 use std::borrow::Cow;
@@ -31,7 +31,9 @@ use rustc_middle::ty::print::{
     PrintTraitRefExt as _, with_crate_prefix, with_forced_trimmed_paths,
     with_no_visible_paths_if_doc_hidden,
 };
-use rustc_middle::ty::{self, GenericArgKind, IsSuggestable, Ty, TyCtxt, TypeVisitableExt};
+use rustc_middle::ty::{
+    self, GenericArgKind, IsSuggestable, RegionExt, Ty, TyCtxt, TypeVisitableExt,
+};
 use rustc_span::def_id::DefIdSet;
 use rustc_span::{
     DUMMY_SP, ErrorGuaranteed, ExpnKind, FileName, Ident, MacroKind, Span, Symbol, edit_distance,

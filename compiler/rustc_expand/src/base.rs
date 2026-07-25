@@ -11,20 +11,19 @@ use rustc_ast::tokenstream::TokenStream;
 use rustc_ast::visit::{AssocCtxt, Visitor};
 use rustc_ast::{self as ast, AttrVec, Attribute, HasAttrs, Item, NodeId, PatKind, Safety};
 use rustc_data_structures::fx::{FxHashMap, FxIndexMap};
-use rustc_data_structures::sync;
+use rustc_data_structures::{Limit, sync};
 use rustc_errors::{BufferedEarlyLint, DiagCtxtHandle, ErrorGuaranteed, PResult};
 use rustc_feature::Features;
 use rustc_hir as hir;
 use rustc_hir::attrs::{CfgEntry, CollapseMacroDebuginfo, Deprecation};
 use rustc_hir::def::MacroKinds;
-use rustc_hir::limit::Limit;
 use rustc_hir::{Stability, find_attr};
 use rustc_lint_defs::RegisteredTools;
 use rustc_parse::MACRO_ARGUMENTS;
 use rustc_parse::parser::Parser;
 use rustc_session::Session;
 use rustc_session::parse::ParseSess;
-use rustc_span::def_id::{CrateNum, DefId, LocalDefId};
+use rustc_span::def_id::{CrateNum, DefId, LocalDefId, ModId};
 use rustc_span::edition::Edition;
 use rustc_span::hygiene::{AstPass, ExpnData, ExpnKind, LocalExpnId, MacroKind};
 use rustc_span::source_map::SourceMap;
@@ -38,9 +37,11 @@ use crate::mbe::macro_rules::ParserAnyMacro;
 use crate::module::DirOwnership;
 use crate::stats::MacroStat;
 
-// When adding new variants, make sure to
-// adjust the `visit_*` / `flat_map_*` calls in `InvocationCollector`
-// to use `assign_id!`
+/// This type encapsulates every AST node that can have attributes, i.e. those
+/// nodes with a non-trivial implementation of `HasAttrs`.
+///
+/// When adding new variants, make sure to adjust the `visit_*` / `flat_map_*`
+/// calls in `InvocationCollector` to use `assign_id!`
 #[derive(Debug, Clone)]
 pub enum Annotatable {
     Item(Box<ast::Item>),
@@ -117,6 +118,7 @@ impl Annotatable {
         }
     }
 
+    /// Converts the `Annotatable` to a token stream, e.g. to hand to a proc macro.
     pub fn to_tokens(&self) -> TokenStream {
         match self {
             Annotatable::Item(node) => TokenStream::from_ast(node),
@@ -274,11 +276,7 @@ impl<'cx> MacroExpanderResult<'cx> {
         arm_span: Span,
         macro_ident: Ident,
     ) -> Self {
-        // Emit the SEMICOLON_IN_EXPRESSIONS_FROM_MACROS deprecation lint.
-        let is_local = true;
-
-        let parser =
-            ParserAnyMacro::from_tts(cx, tts, site_span, arm_span, is_local, macro_ident, &[], &[]);
+        let parser = ParserAnyMacro::from_tts(cx, tts, site_span, arm_span, macro_ident, &[], &[]);
         ExpandResult::Ready(Box::new(parser))
     }
 }
@@ -797,9 +795,9 @@ pub struct SyntaxExtension {
     /// Should debuginfo for the macro be collapsed to the outermost expansion site (in other
     /// words, was the macro definition annotated with `#[collapse_debuginfo]`)?
     pub collapse_debuginfo: bool,
-    /// Suppresses the "this error originates in the macro" note when a diagnostic points at this
-    /// macro.
-    pub hide_backtrace: bool,
+    /// Prevents diagnostics pointing into this macro and suppresses the "this error originates in
+    /// the macro" note when a diagnostic points at this macro.
+    pub diagnostic_opaque: bool,
 }
 
 impl SyntaxExtension {
@@ -833,7 +831,7 @@ impl SyntaxExtension {
             allow_internal_unsafe: false,
             local_inner_macros: false,
             collapse_debuginfo: false,
-            hide_backtrace: false,
+            diagnostic_opaque: false,
         }
     }
 
@@ -861,12 +859,6 @@ impl SyntaxExtension {
             [true,  true,  true,  true],
         ];
         collapse_table[flag as usize][attr as usize]
-    }
-
-    fn get_hide_backtrace(attrs: &[hir::Attribute]) -> bool {
-        // FIXME(estebank): instead of reusing `#[rustc_diagnostic_item]` as a proxy, introduce a
-        // new attribute purely for this under the `#[diagnostic]` namespace.
-        find_attr!(attrs, RustcDiagnosticItem(..))
     }
 
     /// Constructs a syntax extension with the given properties
@@ -903,7 +895,8 @@ impl SyntaxExtension {
             // Not a built-in macro
             None => (None, helper_attrs),
         };
-        let hide_backtrace = builtin_name.is_some() || Self::get_hide_backtrace(attrs);
+        let diagnostic_opaque = builtin_name.is_some()
+            || (!sess.opts.unstable_opts.macro_backtrace && find_attr!(attrs, Opaque));
 
         let stability = find_attr!(attrs, Stability { stability, .. } => *stability);
 
@@ -931,7 +924,7 @@ impl SyntaxExtension {
             allow_internal_unsafe,
             local_inner_macros,
             collapse_debuginfo,
-            hide_backtrace,
+            diagnostic_opaque,
         }
     }
 
@@ -1003,7 +996,7 @@ impl SyntaxExtension {
         descr: Symbol,
         kind: MacroKind,
         macro_def_id: Option<DefId>,
-        parent_module: Option<DefId>,
+        parent_module: Option<ModId>,
     ) -> ExpnData {
         ExpnData::new(
             ExpnKind::Macro(kind, descr),
@@ -1017,7 +1010,7 @@ impl SyntaxExtension {
             self.allow_internal_unsafe,
             self.local_inner_macros,
             self.collapse_debuginfo,
-            self.hide_backtrace,
+            self.diagnostic_opaque,
         )
     }
 }

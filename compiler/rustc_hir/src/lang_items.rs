@@ -194,6 +194,8 @@ language_item_table! {
     CoerceUnsized,           sym::coerce_unsized,      coerce_unsized_trait,       Target::Trait,          GenericRequirement::Minimum(1);
     DispatchFromDyn,         sym::dispatch_from_dyn,   dispatch_from_dyn_trait,    Target::Trait,          GenericRequirement::Minimum(1);
 
+    TryAsDyn,                sym::try_as_dyn,          try_as_dyn,                 Target::Trait,          GenericRequirement::Exact(1);
+
     // lang items relating to transmutability
     TransmuteOpts,           sym::transmute_opts,      transmute_opts,             Target::Struct,         GenericRequirement::Exact(0);
     TransmuteTrait,          sym::transmute_trait,     transmute_trait,            Target::Trait,          GenericRequirement::Exact(2);
@@ -453,14 +455,6 @@ language_item_table! {
 
     // Used to fallback `{float}` to `f32` when `f32: From<{float}>`
     From,                    sym::From,                from_trait,                 Target::Trait,          GenericRequirement::Exact(1);
-
-    // Runtime symbols
-    MemCpy,                  sym::memcpy_fn,           memcpy_fn,                  Target::ForeignFn,             GenericRequirement::None;
-    MemMove,                 sym::memmove_fn,          memmove_fn,                 Target::ForeignFn,             GenericRequirement::None;
-    MemSet,                  sym::memset_fn,           memset_fn,                  Target::ForeignFn,             GenericRequirement::None;
-    MemCmp,                  sym::memcmp_fn,           memcmp_fn,                  Target::ForeignFn,             GenericRequirement::None;
-    Bcmp,                    sym::bcmp_fn,             bcmp_fn,                    Target::ForeignFn,             GenericRequirement::None;
-    StrLen,                  sym::strlen_fn,           strlen_fn,                  Target::ForeignFn,             GenericRequirement::None;
 }
 
 /// The requirement imposed on the generics of a lang item

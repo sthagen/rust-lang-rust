@@ -3,7 +3,7 @@ use rustc_type_ir::inherent::*;
 use rustc_type_ir::solve::{Goal, QueryInput};
 use rustc_type_ir::{
     self as ty, Canonical, CanonicalParamEnvCacheEntry, CanonicalVarKind, Flags, InferCtxtLike,
-    Interner, PlaceholderConst, PlaceholderType, TypeFlags, TypeFoldable, TypeFolder,
+    Interner, PlaceholderConst, PlaceholderType, Region, TypeFlags, TypeFoldable, TypeFolder,
     TypeSuperFoldable, TypeVisitableExt,
 };
 
@@ -409,7 +409,7 @@ impl<D: SolverDelegate<Interner = I>, I: Interner> TypeFolder<I> for Canonicaliz
         self.delegate.cx()
     }
 
-    fn fold_region(&mut self, r: I::Region) -> I::Region {
+    fn fold_region(&mut self, r: Region<I>) -> Region<I> {
         // We canonicalize free regions from the input into placeholder regions so that
         // region constraints created in nested contexts can be propagated back to the
         // caller, instead of unifying them.
@@ -541,7 +541,7 @@ impl<D: SolverDelegate<Interner = I>, I: Interner> TypeFolder<I> for Canonicaliz
                         }
                     }
                 }
-                ty::InferConst::Fresh(_) => todo!(),
+                ty::InferConst::Fresh(_) => unimplemented!(),
             },
             ty::ConstKind::Placeholder(placeholder) => match self.canonicalize_mode {
                 CanonicalizeMode::Input { .. } => {
