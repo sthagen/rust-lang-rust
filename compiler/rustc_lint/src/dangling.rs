@@ -7,7 +7,7 @@ use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_session::{declare_lint, impl_lint_pass};
 use rustc_span::{Span, sym};
 
-use crate::lints::{DanglingPointersFromLocals, DanglingPointersFromTemporaries};
+use crate::diagnostics::{DanglingPointersFromLocals, DanglingPointersFromTemporaries};
 use crate::{LateContext, LateLintPass};
 
 declare_lint! {
@@ -179,7 +179,7 @@ fn lint_addr_of_local<'a>(
     expr: &'a Expr<'a>,
 ) {
     // peel casts as they do not interest us here, we want the inner expression.
-    let (inner, _) = super::utils::peel_casts(cx, expr);
+    let inner = super::utils::peel_casts(cx, expr);
 
     if let ExprKind::AddrOf(_, _, inner_of) = inner.kind
         && let ExprKind::Path(ref qpath) = inner_of.peel_blocks().kind

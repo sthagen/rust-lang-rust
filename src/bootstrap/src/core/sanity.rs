@@ -14,7 +14,7 @@ use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 use std::{env, fs};
 
-use crate::builder::{Builder, Kind};
+use crate::builder::Builder;
 use crate::core::build_steps::tool;
 use crate::core::config::{CompilerBuiltins, DebuggerPath, Target};
 use crate::utils::exec::command;
@@ -34,6 +34,7 @@ pub struct Finder {
 /// when the newly-bumped stage 0 compiler now knows about the formerly-missing targets.
 const STAGE0_MISSING_TARGETS: &[&str] = &[
     // just a dummy comment so the list doesn't get onelined
+    "aarch64-unknown-l4re-uclibc",
 ];
 
 /// Minimum version threshold for libstdc++ required when using prebuilt LLVM
@@ -80,7 +81,7 @@ pub fn check(build: &mut Build) {
     let mut skip_target_sanity =
         env::var_os("BOOTSTRAP_SKIP_TARGET_SANITY").is_some_and(|s| s == "1" || s == "true");
 
-    skip_target_sanity |= build.config.cmd.kind() == Kind::Check;
+    skip_target_sanity |= matches!(build.config.cmd, Subcommand::Check { .. });
 
     // Skip target sanity checks when we are doing anything with mir-opt tests or Miri
     let skipped_paths = [OsStr::new("mir-opt"), OsStr::new("miri")];

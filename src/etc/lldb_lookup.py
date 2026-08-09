@@ -111,15 +111,6 @@ def __lldb_init_module(debugger: lldb.SBDebugger, _dict: LLDBOpaque):
 
     # RUST_CATEGORY.AddLanguage(lldb.eLanguageTypeRust)
 
-    global FEATURE_FLAGS
-    # Most feature checks should be possible via simple "does this API exist at all" checks.
-    if getattr(lldb.SBType, "GetStaticFieldWithName", None) is not None:
-        FEATURE_FLAGS |= LLDBFeature.StaticFields
-    if getattr(lldb, "eFormatterMatchCallback", None) is not None:
-        FEATURE_FLAGS |= LLDBFeature.TypeRecognizers
-    if getattr(lldb, "eBasicTypeFloat128", None) is not None:
-        FEATURE_FLAGS |= LLDBFeature.Float128
-
     register_providers_compatibility()
 
 
@@ -175,14 +166,28 @@ def register_providers_compatibility():
     register(
         StdSliceSyntheticProvider,
         StdStrSummaryProvider,
-        r"^&(mut )?str$",
+        r"^((&(mut )?)|(\*(const|mut) ))str$",
+    )
+
+    # Box<str> GNU
+    register(
+        StdSliceSyntheticProvider,
+        StdStrSummaryProvider,
+        r"^(alloc::([a-z_]+::)+)Box<str,.*>$",
     )
 
     # str MSVC
     register(
         MSVCStrSyntheticProvider,
         StdStrSummaryProvider,
-        r"^ref(_mut)?\$<str\$>$",
+        r"^((ref(_mut)?)|(ptr_(const|mut)))\$<str\$>$",
+    )
+
+    # Box<str> MSVC
+    register(
+        MSVCStrSyntheticProvider,
+        StdStrSummaryProvider,
+        r"^(alloc::([a-z_]+::)+)Box<str\$,.*>$",
     )
 
     # slice GNU

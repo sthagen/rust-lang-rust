@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use rustc_ast::AttrStyle;
+use rustc_ast::{AttrStyle, Safety};
 use rustc_errors::{DiagArgValue, MultiSpan, StashKey};
 use rustc_feature::Features;
 use rustc_hir::attrs::AttributeKind;
@@ -9,9 +9,9 @@ use rustc_span::{BytePos, FileName, RemapPathScopeComponents, Span, Symbol, sym}
 
 use crate::context::AcceptContext;
 use crate::diagnostics::{
-    InvalidAttrAtCrateLevel, ItemFollowingInnerAttr, UnsupportedAttributesInWhere,
+    InvalidAttrAtCrateLevel, InvalidTarget, InvalidTargetHelp, ItemFollowingInnerAttr,
+    UnsupportedAttributesInWhere,
 };
-use crate::session_diagnostics::{InvalidTarget, InvalidTargetHelp};
 use crate::target_checking::Policy::Allow;
 use crate::{AttributeParser, ShouldEmit};
 
@@ -187,6 +187,15 @@ impl<'sess> AttributeParser<'sess> {
         cx: &AcceptContext<'_, '_>,
     ) -> Option<InvalidTargetHelp> {
         match &*cx.attr_path.segments {
+            [sym::link_name] if cx.target == Target::Static => {
+                let needs_unsafe_wrapper = matches!(cx.attr_safety, Safety::Default);
+
+                Some(InvalidTargetHelp::UseExportName {
+                    unsafe_open: needs_unsafe_wrapper.then(|| cx.inner_span.shrink_to_lo()),
+                    name: cx.attr_path.span,
+                    unsafe_close: needs_unsafe_wrapper.then(|| cx.inner_span.shrink_to_hi()),
+                })
+            }
             [sym::repr] if attribute_args == "(align(...))" => match cx.target {
                 Target::Fn | Target::Method(..) if cx.features().fn_align() => {
                     Some(InvalidTargetHelp::UseRustcAlign)

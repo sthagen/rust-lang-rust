@@ -200,7 +200,7 @@ use core::ops::{
 };
 #[cfg(not(no_global_oom_handling))]
 use core::ops::{Residual, Try};
-use core::pin::{Pin, PinCoerceUnsized};
+use core::pin::{Pin, PinSafePointer};
 use core::ptr::{self, NonNull, Unique};
 use core::task::{Context, Poll};
 
@@ -291,7 +291,7 @@ impl<T> Box<T> {
         // Nothing below can panic so we do not have to worry about deallocating `ptr`.
         // SAFETY: we just allocated the box to store `x`.
         unsafe { core::intrinsics::write_via_move(ptr, x) };
-        // SAFETY: we just initialized `b`.
+        // SAFETY: we just initialized the memory `ptr` points to.
         unsafe { mem::transmute(ptr) }
     }
 
@@ -1353,22 +1353,18 @@ impl<T: ?Sized> Box<T> {
     /// Recreate a `Box` which was previously converted to a `NonNull`
     /// pointer using [`Box::into_non_null`]:
     /// ```
-    /// #![feature(box_vec_non_null)]
-    ///
     /// let x = Box::new(5);
     /// let non_null = Box::into_non_null(x);
     /// let x = unsafe { Box::from_non_null(non_null) };
     /// ```
     /// Manually create a `Box` from scratch by using the global allocator:
     /// ```
-    /// #![feature(box_vec_non_null)]
-    ///
     /// use std::alloc::{alloc, Layout};
     /// use std::ptr::NonNull;
     ///
     /// unsafe {
     ///     let non_null = NonNull::new(alloc(Layout::new::<i32>()).cast::<i32>())
-    ///         .expect("allocation failed");
+    ///         .expect("alloc should have successfully allocated memory");
     ///     // In general .write is required to avoid attempting to destruct
     ///     // the (uninitialized) previous contents of `non_null`.
     ///     non_null.write(5);
@@ -1378,7 +1374,7 @@ impl<T: ?Sized> Box<T> {
     ///
     /// [memory layout]: self#memory-layout
     /// [considerations for unsafe code]: self#considerations-for-unsafe-code
-    #[unstable(feature = "box_vec_non_null", issue = "130364")]
+    #[stable(feature = "box_vec_non_null", since = "CURRENT_RUSTC_VERSION")]
     #[inline]
     #[must_use = "call `drop(Box::from_non_null(ptr))` if you intend to drop the `Box`"]
     pub unsafe fn from_non_null(ptr: NonNull<T>) -> Self {
@@ -1467,8 +1463,6 @@ impl<T: ?Sized> Box<T> {
     /// Converting the `NonNull` pointer back into a `Box` with [`Box::from_non_null`]
     /// for automatic cleanup:
     /// ```
-    /// #![feature(box_vec_non_null)]
-    ///
     /// let x = Box::new(String::from("Hello"));
     /// let non_null = Box::into_non_null(x);
     /// let x = unsafe { Box::from_non_null(non_null) };
@@ -1476,8 +1470,6 @@ impl<T: ?Sized> Box<T> {
     /// Manual cleanup by explicitly running the destructor and deallocating
     /// the memory:
     /// ```
-    /// #![feature(box_vec_non_null)]
-    ///
     /// use std::alloc::{dealloc, Layout};
     ///
     /// let x = Box::new(String::from("Hello"));
@@ -1489,8 +1481,6 @@ impl<T: ?Sized> Box<T> {
     /// ```
     /// Note: This is equivalent to the following:
     /// ```
-    /// #![feature(box_vec_non_null)]
-    ///
     /// let x = Box::new(String::from("Hello"));
     /// let non_null = Box::into_non_null(x);
     /// unsafe {
@@ -1500,9 +1490,13 @@ impl<T: ?Sized> Box<T> {
     ///
     /// [memory layout]: self#memory-layout
     #[must_use = "losing the pointer will leak memory"]
-    #[unstable(feature = "box_vec_non_null", issue = "130364")]
+    #[stable(feature = "box_vec_non_null", since = "CURRENT_RUSTC_VERSION")]
     #[inline]
     pub fn into_non_null(b: Self) -> NonNull<T> {
+        // As of August 2026, we cannot utilize `Box::leak`
+        // because whether or not you can reconstruct the `Box`
+        // later using `Box::from_raw` or `Box::from_non_null` is
+        // an open question.
         // SAFETY: `Box` is guaranteed to be non-null.
         unsafe { NonNull::new_unchecked(Self::into_raw(b)) }
     }
@@ -1617,7 +1611,6 @@ impl<T: ?Sized, A: Allocator> Box<T, A> {
     /// [memory layout]: self#memory-layout
     /// [considerations for unsafe code]: self#considerations-for-unsafe-code
     #[unstable(feature = "allocator_api", issue = "32838")]
-    // #[unstable(feature = "box_vec_non_null", issue = "130364")]
     #[inline]
     pub unsafe fn from_non_null_in(raw: NonNull<T>, alloc: A) -> Self {
         // SAFETY: guaranteed by the caller.
@@ -1733,7 +1726,6 @@ impl<T: ?Sized, A: Allocator> Box<T, A> {
     /// [memory layout]: self#memory-layout
     #[must_use = "losing the pointer will leak memory"]
     #[unstable(feature = "allocator_api", issue = "32838")]
-    // #[unstable(feature = "box_vec_non_null", issue = "130364")]
     #[inline]
     pub fn into_non_null_with_allocator(b: Self) -> (NonNull<T>, A) {
         let (ptr, alloc) = Box::into_raw_with_allocator(b);
@@ -1904,12 +1896,12 @@ impl<T: ?Sized, A: Allocator> Box<T, A> {
     /// has only static references, or none at all, then this may be chosen to be
     /// `'static`.
     ///
-    /// This function is mainly useful for data that lives for the remainder of
-    /// the program's life. Dropping the returned reference will cause a memory
-    /// leak. If this is not acceptable, the reference should first be wrapped
-    /// with the [`Box::from_raw`] function producing a `Box`. This `Box` can
-    /// then be dropped which will properly destroy `T` and release the
-    /// allocated memory.
+    /// This function is mainly useful for data that lives for the remainder of the program's life,
+    /// i.e., memory that is meant to leak. Reconstructing ("unleaking") a `Box` from the mutable
+    /// reference returned here (e.g. via [`Box::from_raw`]) is a grey area (meaning it is possible
+    /// under specific circumstances but many seemingly harmless ways of doing it are undefined
+    /// behavior) and should be avoided. If the memory should eventually be freed, prefer to use
+    /// [`Box::into_raw`] or [`Box::into_non_null`] instead.
     ///
     /// Note: this is an associated function, which means that you have
     /// to call it as `Box::leak(b)` instead of `b.leak()`. This
@@ -2373,8 +2365,27 @@ impl<Args: Tuple, F: AsyncFn<Args> + ?Sized, A: Allocator> AsyncFn<Args> for Box
 #[unstable(feature = "coerce_unsized", issue = "18598")]
 impl<T: ?Sized + Unsize<U>, U: ?Sized, A: Allocator> CoerceUnsized<Box<U, A>> for Box<T, A> {}
 
+// A pointer can only be pin safe if it does not implement certain safe traits
+// maliciously. Since `Box` is fundamental, downstream crates may be able to
+// implement those traits for `Box<LocalType>`, so we must carefully check that
+// this is not a problem for each trait.
+//
+// The `Box` type always implements `Deref` and `DerefMut`, so despite being
+// fundamental, downstream crates cannot implement these traits for
+// `Box<LocalType>`.
+//
+// Conversely, downstream crates are able to implement `Clone`, `Debug`, and
+// `Display` for `Box<LocalType>` as long as `LocalType` does not implement
+// said trait. However, the `Box<T>` type does not treat the existence of an
+// `&Box<T>` as evidence that the `T` is not pinned, so this is not
+// problematic.
+//
+// Finally, even if downstream crates provide their own implementation of
+// `Clone` for `Box<LocalType>`, it is not problematic for the cloned box to be
+// wrapped in `Pin`, since the same conversion could have been carried out
+// safely as `Box::pin((*p).clone())`.
 #[unstable(feature = "pin_coerce_unsized_trait", issue = "150112")]
-unsafe impl<T: ?Sized, A: Allocator> PinCoerceUnsized for Box<T, A> {}
+unsafe impl<T: ?Sized, A: Allocator + 'static> PinSafePointer for Box<T, A> {}
 
 // It is quite crucial that we only allow the `Global` allocator here.
 // Handling arbitrary custom allocators (which can affect the `Box` layout heavily!)

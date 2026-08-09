@@ -7,7 +7,7 @@ use rustc_session::{declare_lint, declare_lint_pass};
 use rustc_span::{Span, sym};
 use rustc_trait_selection::traits::ObligationCtxt;
 
-use crate::lints::{
+use crate::diagnostics::{
     ForLoopsOverFalliblesDiag, ForLoopsOverFalliblesLoopSub, ForLoopsOverFalliblesQuestionMark,
     ForLoopsOverFalliblesSuggestion,
 };
@@ -187,5 +187,5 @@ fn suggest_question_mark<'tcx>(
         into_iterator_did,
     );
 
-    ocx.evaluate_obligations_error_on_ambiguity().is_empty()
+    ocx.evaluate_obligations_error_on_ambiguity().no_errors()
 }
