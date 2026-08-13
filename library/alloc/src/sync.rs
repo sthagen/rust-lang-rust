@@ -55,8 +55,13 @@ use crate::vec::Vec;
 /// See comment in `Arc::clone`.
 const MAX_REFCOUNT: usize = (isize::MAX) as usize;
 
-/// The error in case either counter reaches above `MAX_REFCOUNT`, and we can `panic` safely.
-const INTERNAL_OVERFLOW_ERROR: &str = "Arc counter overflow";
+#[cold]
+#[cfg_attr(not(panic = "immediate-abort"), inline(never))]
+#[cfg_attr(panic = "immediate-abort", inline)]
+#[track_caller]
+fn panic_arc_overflow() -> ! {
+    panic!("Arc counter overflow");
+}
 
 #[cfg(not(sanitize = "thread"))]
 macro_rules! acquire {
@@ -921,7 +926,7 @@ impl<T, A: Allocator> Arc<T, A> {
 
         // Now we can properly initialize the inner value and turn our weak
         // reference into a strong reference.
-        let strong = unsafe {
+        unsafe {
             let inner = init_ptr.as_ptr();
             ptr::write(&raw mut (*inner).data, data);
 
@@ -947,9 +952,7 @@ impl<T, A: Allocator> Arc<T, A> {
             let alloc = weak.into_raw_with_allocator().1;
 
             Arc::from_inner_in(init_ptr, alloc)
-        };
-
-        strong
+        }
     }
 
     /// Constructs a new `Pin<Arc<T, A>>` in the provided allocator. If `T` does not implement `Unpin`,
@@ -1518,14 +1521,12 @@ impl<T: ?Sized + CloneToUninit, A: Allocator> Arc<T, A> {
         let mut in_progress: UniqueArcUninit<T, A> = UniqueArcUninit::new(value, alloc);
 
         // Initialize with clone of value.
-        let initialized_clone = unsafe {
+        unsafe {
             // Clone. If the clone panics, `in_progress` will be dropped and clean up.
             value.clone_to_uninit(in_progress.data_ptr().cast());
             // Cast type of pointer, now that it is initialized.
             in_progress.into_arc()
-        };
-
-        initialized_clone
+        }
     }
 
     /// Constructs a new `Arc<T>` with a clone of `value` in the provided allocator, returning an error if allocation fails
@@ -1954,8 +1955,9 @@ impl<T: ?Sized, A: Allocator> Arc<T, A> {
             }
 
             // We can't allow the refcount to increase much past `MAX_REFCOUNT`.
-            assert!(cur <= MAX_REFCOUNT, "{}", INTERNAL_OVERFLOW_ERROR);
-
+            if cur > MAX_REFCOUNT {
+                panic_arc_overflow();
+            }
             // NOTE: this code currently ignores the possibility of overflow
             // into usize::MAX; in general both Rc and Arc need to be adjusted
             // to deal with overflow.
@@ -3319,7 +3321,9 @@ impl<T: ?Sized, A: Allocator> Weak<T, A> {
                 return None;
             }
             // See comments in `Arc::clone` for why we do this (for `mem::forget`).
-            assert!(n <= MAX_REFCOUNT, "{}", INTERNAL_OVERFLOW_ERROR);
+            if n > MAX_REFCOUNT {
+                panic_arc_overflow();
+            }
             Some(n + 1)
         }
 
