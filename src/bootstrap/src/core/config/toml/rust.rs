@@ -7,12 +7,11 @@ use std::path::PathBuf;
 use build_helper::ci::CiEnv;
 use serde::{Deserialize, Deserializer};
 
+use crate::core::backend::CodegenBackendKind;
+use crate::core::config::macros::define_config;
 use crate::core::config::toml::TomlConfig;
-use crate::core::config::{
-    CompressDebuginfo, DebuginfoLevel, Merge, ReplaceOpt, StringOrBool, TargetSelection,
-};
+use crate::core::config::{CompressDebuginfo, DebuginfoLevel, StringOrBool, TargetSelection};
 use crate::utils::helpers;
-use crate::{CodegenBackendKind, define_config};
 
 define_config! {
     /// TOML representation of how the Rust build is configured.
@@ -431,6 +430,7 @@ pub fn check_incompatible_options_for_ci_rustc(
 
 pub(crate) const BUILTIN_CODEGEN_BACKENDS: &[&str] = &["llvm", "cranelift", "gcc"];
 
+/// FIXME(Zalathar): This is partly redundant with the parsing code in [`CodegenBackendKind`].
 pub(crate) fn parse_codegen_backends(
     backends: Vec<String>,
     section: &str,

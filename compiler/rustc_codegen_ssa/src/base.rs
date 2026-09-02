@@ -30,8 +30,9 @@ use rustc_middle::ty::layout::{HasTyCtxt, HasTypingEnv, LayoutOf, TyAndLayout};
 use rustc_middle::ty::{self, Instance, PatternKind, Ty, TyCtxt, UintTy, Unnormalized};
 use rustc_middle::{bug, span_bug};
 use rustc_session::Session;
-use rustc_session::config::{self, CrateType, EntryFnType};
+use rustc_session::config::{self, EntryFnType};
 use rustc_span::{DUMMY_SP, Symbol};
+use rustc_structures::CrateType;
 use rustc_symbol_mangling::mangle_internal_symbol;
 use rustc_target::spec::{Arch, Os};
 use rustc_trait_selection::infer::{BoundRegionConversionTime, TyCtxtInferExt};
@@ -489,7 +490,7 @@ where
             })
             .collect();
 
-        cx.codegen_global_asm(asm.template, &operands, asm.options, asm.line_spans);
+        cx.codegen_global_asm(asm.template, &operands, asm.options, asm.line_spans, &[]);
     } else {
         span_bug!(item.span, "Mismatch between hir::Item type and MonoItem type")
     }

@@ -14,7 +14,7 @@ use std::sync::LazyLock;
 use std::{cmp, fs, iter, thread};
 
 use externs::{ExternOpt, split_extern_opt};
-use rustc_data_structures::fx::{FxHashSet, FxIndexMap};
+use rustc_data_structures::fx::FxHashSet;
 use rustc_data_structures::stable_hash::{StableHasher, StableOrd};
 use rustc_errors::emitter::HumanReadableErrorType;
 use rustc_errors::{ColorConfig, DiagCtxtFlags};
@@ -26,6 +26,7 @@ use rustc_span::source_map::FilePathMapping;
 use rustc_span::{
     FileName, RealFileName, RemapPathScopeComponents, SourceFileHashAlgorithm, Symbol, sym,
 };
+use rustc_structures::CrateType;
 use rustc_target::spec::{
     FramePointer, LinkSelfContainedComponents, LinkerFeatures, PanicStrategy, SplitDebuginfo,
     Target, TargetTuple,
@@ -34,8 +35,11 @@ use tracing::debug;
 
 pub use crate::config::cfg::{Cfg, CheckCfg, ExpectedValues};
 use crate::config::native_libs::parse_native_libs;
-pub use crate::config::print_request::{PrintKind, PrintRequest};
+pub use crate::config::print_request::{
+    PrintCategory, PrintKind, PrintRequest, collect_print_requests,
+};
 use crate::diagnostics::FileWriteFail;
+use crate::macros::AllVariants;
 pub use crate::options::*;
 use crate::search_paths::SearchPath;
 use crate::utils::CanonicalizedPath;
@@ -1019,13 +1023,25 @@ impl ExternEntry {
     }
 }
 
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, Default)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct NextSolverConfig {
     /// Whether the new trait solver should be enabled in coherence.
     pub coherence: bool = true,
     /// Whether the new trait solver should be enabled everywhere.
     /// This is only `true` if `coherence` is also enabled.
     pub globally: bool = false,
+}
+
+// FIXME(#160895): Using -Znext-solver as default on nightly
+// See https://github.com/rust-lang/compiler-team/issues/1014
+impl Default for NextSolverConfig {
+    fn default() -> Self {
+        if option_env!("CFG_DEFAULT_NEXT_SOLVER_GLOBALLY").is_some() {
+            Self { coherence: true, globally: true }
+        } else {
+            Self { coherence: true, globally: false }
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -1401,12 +1417,11 @@ impl Sysroot {
     }
 }
 
+/// Get the host triple out of the build environment. This ensures that our
+/// idea of the host triple is the same as for the set of libraries we've
+/// actually built. We can't just take LLVM's host triple because they
+/// normalize all ix86 architectures to i386.
 pub fn host_tuple() -> &'static str {
-    // Get the host triple out of the build environment. This ensures that our
-    // idea of the host triple is the same as for the set of libraries we've
-    // actually built. We can't just take LLVM's host triple because they
-    // normalize all ix86 architectures to i386.
-    //
     // Instead of grabbing the host triple (for the current host), we grab (at
     // compile time) the target triple that this rustc is built with and
     // calling that (at runtime) the host triple.
@@ -1486,7 +1501,6 @@ impl Default for Options {
             pretty: None,
             working_dir,
             color: ColorConfig::Auto,
-            logical_env: FxIndexMap::default(),
             verbose: false,
             target_modifiers: BTreeMap::default(),
             mitigation_coverage_map: Default::default(),
@@ -1578,8 +1592,6 @@ pub enum EntryFnType {
         sigpipe: u8,
     },
 }
-
-pub use rustc_attr_ir::CrateType;
 
 #[derive(Clone, Hash, Debug, PartialEq, Eq, Encodable, Decodable)]
 pub enum Passes {
@@ -2110,7 +2122,6 @@ pub fn rustc_optgroups() -> Vec<RustcOptGroup> {
             "Defines which scopes of paths should be remapped by `--remap-path-prefix`",
             "<macro,diagnostics,debuginfo,coverage,object,all>",
         ),
-        opt(Unstable, Multi, "", "env-set", "Inject an environment variable", "<VAR>=<VALUE>"),
         opt(Unstable, Opt, "j", "jobs", "Limit on the number of used parallel jobs", "<N>"),
         opt(
             Unstable,
@@ -2653,23 +2664,6 @@ fn parse_remap_path_prefix(
         .collect()
 }
 
-fn parse_logical_env(
-    early_dcx: &EarlyDiagCtxt,
-    matches: &getopts::Matches,
-) -> FxIndexMap<String, String> {
-    let mut vars = FxIndexMap::default();
-
-    for arg in matches.opt_strs("env-set") {
-        if let Some((name, val)) = arg.split_once('=') {
-            vars.insert(name.to_string(), val.to_string());
-        } else {
-            early_dcx.early_fatal(format!("`--env-set`: specify value for variable `{arg}`"));
-        }
-    }
-
-    vars
-}
-
 // JUSTIFICATION: before wrapper fn is available
 #[allow(rustc::bad_opt_access)]
 pub fn build_session_options(early_dcx: &mut EarlyDiagCtxt, matches: &getopts::Matches) -> Options {
@@ -2763,11 +2757,11 @@ pub fn build_session_options(early_dcx: &mut EarlyDiagCtxt, matches: &getopts::M
         early_dcx.early_fatal("options `-C profile-generate` and `-C profile-use` are exclusive");
     }
 
-    if unstable_opts.profile_sample_use.is_some()
+    if cg.profile_sample_use.is_some()
         && (cg.profile_generate.enabled() || cg.profile_use.is_some())
     {
         early_dcx.early_fatal(
-            "option `-Z profile-sample-use` cannot be used with `-C profile-generate` or `-C profile-use`",
+            "option `-C profile-sample-use` cannot be used with `-C profile-generate` or `-C profile-use`",
         );
     }
 
@@ -2887,7 +2881,13 @@ pub fn build_session_options(early_dcx: &mut EarlyDiagCtxt, matches: &getopts::M
         ));
     }
 
-    let prints = print_request::collect_print_requests(early_dcx, &mut cg, &unstable_opts, matches);
+    let prints = print_request::collect_print_requests(
+        early_dcx,
+        &mut cg,
+        &unstable_opts,
+        matches,
+        PrintCategory::ALL_VARIANTS,
+    );
 
     // -Zretpoline-external-thunk also requires -Zretpoline
     if unstable_opts.retpoline_external_thunk {
@@ -2944,8 +2944,6 @@ pub fn build_session_options(early_dcx: &mut EarlyDiagCtxt, matches: &getopts::M
     if unstable_opts.dump_dep_graph && !unstable_opts.query_dep_graph {
         early_dcx.early_fatal("can't dump dependency graph without `-Z query-dep-graph`");
     }
-
-    let logical_env = parse_logical_env(early_dcx, matches);
 
     let sysroot = Sysroot::new(matches.opt_str("sysroot").map(PathBuf::from));
 
@@ -3061,7 +3059,6 @@ pub fn build_session_options(early_dcx: &mut EarlyDiagCtxt, matches: &getopts::M
         pretty,
         working_dir,
         color,
-        logical_env,
         verbose,
         target_modifiers: collected_options.target_modifiers,
         mitigation_coverage_map: collected_options.mitigations,
@@ -3318,7 +3315,6 @@ pub(crate) mod dep_tracking {
 
     use rustc_abi::Align;
     use rustc_ast::attr::version::RustcVersion;
-    use rustc_attr_ir::CollapseMacroDebuginfo;
     use rustc_data_structures::fx::FxIndexMap;
     use rustc_data_structures::stable_hash::StableHasher;
     use rustc_errors::LanguageIdentifier;
@@ -3326,6 +3322,7 @@ pub(crate) mod dep_tracking {
     use rustc_hashes::Hash64;
     use rustc_span::edition::Edition;
     use rustc_span::{RealFileName, RemapPathScopeComponents};
+    use rustc_structures::CollapseMacroDebuginfo;
     use rustc_target::spec::{
         CodeModel, FramePointer, MergeFunctions, OnBrokenPipe, PanicStrategy, RelocModel,
         RelroLevel, SanitizerSet, SplitDebuginfo, StackProtector, SymbolVisibility, TargetTuple,
@@ -3636,11 +3633,14 @@ pub enum Polonius {
 
 impl Default for Polonius {
     fn default() -> Self {
-        if option_env!("CFG_DEFAULT_POLONIUS_NEXT").is_some() { Self::Next } else { Self::Off }
+        Self::DEFAULT
     }
 }
 
 impl Polonius {
+    pub(crate) const DEFAULT: Self =
+        if option_env!("CFG_DEFAULT_POLONIUS_NEXT").is_some() { Self::Next } else { Self::Off };
+
     /// Returns whether the legacy version of polonius is enabled
     pub fn is_legacy_enabled(&self) -> bool {
         matches!(self, Polonius::Legacy)

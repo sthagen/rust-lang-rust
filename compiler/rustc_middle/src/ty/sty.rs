@@ -333,7 +333,7 @@ impl ParamConst {
 
     #[instrument(level = "debug")]
     pub fn find_const_ty_from_env<'tcx>(self, env: ParamEnv<'tcx>) -> Ty<'tcx> {
-        let mut candidates = env.caller_bounds().iter().filter_map(|clause| {
+        let mut candidates = env.caller_bounds().filter_map(|clause| {
             // `ConstArgHasType` are never desugared to be higher ranked.
             match clause.kind().skip_binder() {
                 ty::ClauseKind::ConstArgHasType(param_ct, ty) => {
@@ -478,22 +478,6 @@ impl<'tcx> Ty<'tcx> {
         is_rigid: ty::IsRigid,
         alias_ty: ty::AliasTy<'tcx>,
     ) -> Ty<'tcx> {
-        if cfg!(debug_assertions) {
-            match alias_ty.kind {
-                ty::AliasTyKind::Projection { def_id } => {
-                    debug_assert_matches!(tcx.def_kind(def_id), DefKind::AssocTy)
-                }
-                ty::AliasTyKind::Inherent { def_id } => {
-                    debug_assert_matches!(tcx.def_kind(def_id), DefKind::AssocTy)
-                }
-                ty::AliasTyKind::Opaque { def_id } => {
-                    debug_assert_matches!(tcx.def_kind(def_id), DefKind::OpaqueTy)
-                }
-                ty::AliasTyKind::Free { def_id } => {
-                    debug_assert_matches!(tcx.def_kind(def_id), DefKind::TyAlias)
-                }
-            }
-        }
         Ty::new(tcx, Alias(is_rigid, alias_ty))
     }
 
@@ -679,7 +663,8 @@ impl<'tcx> Ty<'tcx> {
                 | DefKind::GlobalAsm
                 | DefKind::Impl { .. }
                 | DefKind::Closure
-                | DefKind::SyntheticCoroutineBody => {
+                | DefKind::SyntheticCoroutineBody
+                | DefKind::TestBinderConstraints => {
                     bug!("not an adt: {def:?} ({:?})", tcx.def_kind(def.did()))
                 }
             }

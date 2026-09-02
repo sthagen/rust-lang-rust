@@ -53,6 +53,8 @@ use rustc_arena::TypedArena;
 use rustc_ast as ast;
 use rustc_ast::expand::allocator::AllocatorKind;
 use rustc_ast::tokenstream::TokenStream;
+use rustc_attr_ir::lang_items::{LangItem, LanguageItems};
+use rustc_attr_ir::{CanonicalSymbols, EiiDecl, EiiImpl, StrippedCfgItem};
 use rustc_crate_store::{
     CrateDepKind, CrateSource, ExternCrate, ForeignModule, LinkagePreference, NativeLib,
 };
@@ -63,17 +65,14 @@ use rustc_data_structures::svh::Svh;
 use rustc_data_structures::unord::{UnordMap, UnordSet};
 use rustc_errors::{ErrorGuaranteed, catch_fatal_errors};
 use rustc_hir as hir;
-use rustc_hir::attrs::lang_items::{LangItem, LanguageItems};
-use rustc_hir::attrs::{CanonicalSymbols, EiiDecl, EiiImpl, StrippedCfgItem};
 use rustc_hir::def::{DefKind, DocLinkResMap};
 use rustc_hir::def_id::{CrateNum, DefId, DefIdMap, LocalDefId, LocalDefIdSet, LocalModId};
 use rustc_hir::{ItemLocalId, PreciseCapturingArgKind};
 use rustc_index::IndexVec;
-use rustc_lint_defs::LintId;
+use rustc_lint_defs::{LintId, StableLintExpectationId};
 use rustc_macros::rustc_queries;
 use rustc_session::Limits;
 use rustc_session::config::{EntryFnType, OptLevel, OutputFilenames, SymbolManglingVersion};
-use rustc_session::lint::StableLintExpectationId;
 use rustc_span::def_id::{LOCAL_CRATE, ModId};
 use rustc_span::{DUMMY_SP, LocalExpnId, Span, Spanned, Symbol};
 use rustc_target::spec::PanicStrategy;
@@ -97,14 +96,13 @@ use crate::mir::interpret::{
 use crate::mono::{
     CodegenUnit, CollectionMode, MonoItem, MonoItemPartitions, NormalizationErrorInMono,
 };
-use crate::query::describe_as_module;
-use crate::query::plumbing::{define_callbacks, maybe_into_query_key};
+use crate::query::query_api::{define_query_api, maybe_into_query_key};
 use crate::traits::query::{
     CanonicalAliasGoal, CanonicalDropckOutlivesGoal, CanonicalImpliedOutlivesBoundsGoal,
     CanonicalMethodAutoderefStepsGoal, CanonicalPredicateGoal, CanonicalTypeOpAscribeUserTypeGoal,
     CanonicalTypeOpNormalizeGoal, CanonicalTypeOpProvePredicateGoal, DropckConstraint,
-    DropckOutlivesResult, MethodAutoderefStepsResult, NoSolution, NormalizationResult,
-    OutlivesBound,
+    DropckOutlivesResult, MethodAutoderefStepsResult, MirBorrowckImpliedOutlivesBounds, NoSolution,
+    NormalizationResult, OutlivesBound,
 };
 use crate::traits::{
     CodegenObligationError, DynCompatibilityViolation, EvaluationResult, ImplSource,
@@ -116,9 +114,18 @@ use crate::ty::print::PrintTraitRefExt;
 use crate::ty::util::AlwaysRequiresDrop;
 use crate::ty::{
     self, CrateInherentImpls, GenericArg, GenericArgsRef, LitToConstInput, PseudoCanonicalInput,
-    SizedTraitKind, Ty, TyCtxt, TyCtxtFeed,
+    RequiredDepth, SizedTraitKind, Ty, TyCtxt, TyCtxtFeed,
 };
 use crate::{mir, thir};
+
+fn describe_as_module(def_id: impl Into<LocalDefId>, tcx: TyCtxt<'_>) -> String {
+    let def_id = def_id.into();
+    if def_id.is_top_level_module() {
+        "top-level module".to_string()
+    } else {
+        format!("module `{}`", tcx.def_path_str(def_id))
+    }
+}
 
 // Each of these queries corresponds to a function pointer field in the
 // `Providers` struct for requesting a value of that type, and a method
@@ -422,7 +429,7 @@ rustc_queries! {
     ///
     /// This is almost always *the* predicates/clauses query that you want.
     ///
-    /// **Tip**: You can use `#[rustc_dump_predicates]` on an item to basically print
+    /// **Tip**: You can use `#[rustc_dump_clauses]` on an item to basically print
     /// the result of this query for use in UI tests or for debugging purposes.
     query clauses_of(key: DefId) -> ty::GenericClauses<'tcx> {
         desc { "computing clauses of `{}`", tcx.def_path_str(key) }
@@ -715,6 +722,14 @@ rustc_queries! {
         separate_provide_extern
     }
 
+    /// Returns `true` if this def is a function-like thing that is eligible for
+    /// coverage instrumentation under `-Cinstrument-coverage`.
+    ///
+    /// (Eligible functions might nevertheless be skipped for other reasons.)
+    query is_eligible_for_coverage(key: LocalDefId) -> bool {
+        desc { "checking whether `{}` is eligible for coverage", tcx.def_path_str(key) }
+    }
+
     /// Checks for the nearest `#[coverage(off)]` or `#[coverage(on)]` on
     /// this def and any enclosing defs, up to the crate root.
     ///
@@ -732,13 +747,11 @@ rustc_queries! {
     /// intrinsics, and the expression tables to be embedded in the function's
     /// coverage metadata.
     ///
-    /// FIXME(Zalathar): This query's purpose has drifted a bit and should
-    /// probably be renamed, but that can wait until after the potential
-    /// follow-ups to #136053 have settled down.
-    ///
     /// Returns `None` for functions that were not instrumented.
-    query coverage_ids_info(key: ty::InstanceKind<'tcx>) -> Option<&'tcx mir::coverage::CoverageIdsInfo> {
-        desc { "retrieving coverage IDs info from MIR for `{}`", tcx.def_path_str(key.def_id()) }
+    query coverage_codegen_info(key: ty::InstanceKind<'tcx>)
+        -> Option<&'tcx mir::coverage::CoverageCodegenInfo>
+    {
+        desc { "retrieving coverage codegen info from MIR for `{}`", tcx.def_path_str(key.def_id()) }
         arena_cache
     }
 
@@ -1511,8 +1524,12 @@ rustc_queries! {
 
     /// Returns the attributes on the item at `def_id`.
     ///
-    /// Do not use this directly, use `tcx.get_attrs` instead.
-    query attrs_for_def(def_id: DefId) -> &'tcx [hir::Attribute] {
+    /// <div class="warning">
+    ///
+    /// Do not use this directly, use [`rustc_attr_ir::find_attr`] instead.
+    ///
+    /// </div>
+    query attrs_for_def(def_id: DefId) -> &'tcx [rustc_attr_ir::Attribute] {
         desc { "collecting attributes of `{}`", tcx.def_path_str(def_id) }
         separate_provide_extern
     }
@@ -2027,10 +2044,10 @@ rustc_queries! {
     // The hash should not be calculated before the `analysis` pass is complete, specifically
     // until `tcx.untracked().definitions.freeze()` has been called, otherwise if incremental
     // compilation is enabled calculating this hash can freeze this structure too early in
-    // compilation and cause subsequent crashes when attempting to write to `definitions`
+    // compilation and cause subsequent crashes when attempting to write to `definitions`.
     query crate_hash(_: CrateNum) -> Svh {
         eval_always
-        desc { "looking up the hash a crate" }
+        desc { "looking up the hash of a crate" }
         separate_provide_extern
     }
 
@@ -2532,6 +2549,15 @@ rustc_queries! {
         desc { "computing implied outlives bounds for `{}` (hack disabled = {:?})", key.0.canonical.value.value.ty, key.1 }
     }
 
+    query mir_borrowck_implied_outlives_bounds(
+        mir_def: LocalDefId
+    ) -> Result<
+        &'tcx Canonical<'tcx, canonical::QueryResponse<'tcx, MirBorrowckImpliedOutlivesBounds<'tcx> >>,
+        NoSolution,
+    > {
+        desc { "computing implied outlives bounds for borrowck for `{}`", tcx.def_path_str(mir_def) }
+    }
+
     /// Do not call this query directly:
     /// invoke `DropckOutlives::new(dropped_ty)).fully_perform(typeck.infcx)` instead.
     query dropck_outlives(
@@ -2635,13 +2661,14 @@ rustc_queries! {
     /// Used by `-Znext-solver` to compute proof trees.
     query evaluate_root_goal_for_proof_tree_raw(
         key: (solve::CanonicalInput<'tcx>, usize)
-    ) -> (solve::QueryResult<'tcx>, &'tcx solve::inspect::Probe<TyCtxt<'tcx>>) {
+    ) -> (solve::QueryResult<'tcx>, &'tcx solve::inspect::Probe<TyCtxt<'tcx>>, RequiredDepth) {
         no_hash
         desc { "computing proof tree for `{}` with depth `{}`", key.0.canonical.value.goal.predicate, key.1 }
     }
 
-    /// Returns the Rust target features for the current target. These are not always the same as LLVM target features!
-    query rust_target_features(_: CrateNum) -> &'tcx UnordMap<String, rustc_target::target_features::Stability> {
+    /// Returns a list of all Rust target features for the current target (not just the ones that
+    /// are enabled). These are not always the same as LLVM target features!
+    query all_rust_target_features(_: CrateNum) -> &'tcx UnordMap<String, rustc_target::target_features::Stability> {
         arena_cache
         eval_always
         desc { "looking up Rust target features" }
@@ -2826,4 +2853,4 @@ rustc_queries! {
     non_query Metadata
 }
 
-rustc_with_all_queries! { define_callbacks! }
+rustc_with_all_queries! { define_query_api! }

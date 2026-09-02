@@ -262,7 +262,8 @@ impl<I: Interner> Relate<I> for ty::AliasTerm<I> {
                 | ty::AliasTermKind::FreeConst { .. }
                 | ty::AliasTermKind::FreeTy { .. }
                 | ty::AliasTermKind::InherentTy { .. }
-                | ty::AliasTermKind::InherentConst { .. }
+                | ty::AliasTermKind::InherentConstSelf { .. }
+                | ty::AliasTermKind::InherentConstImpl { .. }
                 | ty::AliasTermKind::AnonConst { .. }
                 | ty::AliasTermKind::ProjectionConst { .. } => {
                     relate_args_invariantly(relation, a.args, b.args)?
@@ -281,8 +282,14 @@ impl<I: Interner> Relate<I> for ty::ExistentialProjection<I> {
     ) -> RelateResult<I, ty::ExistentialProjection<I>> {
         if a.def_id != b.def_id {
             Err(TypeError::ProjectionMismatched(ExpectedFound::new(
-                relation.cx().alias_term_kind_from_def_id(a.def_id.into()),
-                relation.cx().alias_term_kind_from_def_id(b.def_id.into()),
+                relation.cx().alias_term_kind_from_def_id(
+                    a.def_id.into(),
+                    ty::AliasConstInherentArgsKind::WithSelf,
+                ),
+                relation.cx().alias_term_kind_from_def_id(
+                    b.def_id.into(),
+                    ty::AliasConstInherentArgsKind::WithSelf,
+                ),
             )))
         } else {
             let term = relation.relate_with_variance(
@@ -639,16 +646,16 @@ impl<I: Interner, T: Relate<I>> Relate<I> for ty::Binder<I, T> {
     }
 }
 
-impl<I: Interner> Relate<I> for ty::TraitPredicate<I> {
+impl<I: Interner> Relate<I> for ty::TraitClause<I> {
     fn relate<R: TypeRelation<I>>(
         relation: &mut R,
-        a: ty::TraitPredicate<I>,
-        b: ty::TraitPredicate<I>,
-    ) -> RelateResult<I, ty::TraitPredicate<I>> {
+        a: ty::TraitClause<I>,
+        b: ty::TraitClause<I>,
+    ) -> RelateResult<I, ty::TraitClause<I>> {
         let trait_ref = relation.relate(a.trait_ref, b.trait_ref)?;
         if a.polarity != b.polarity {
             return Err(TypeError::PolarityMismatch(ExpectedFound::new(a.polarity, b.polarity)));
         }
-        Ok(ty::TraitPredicate { trait_ref, polarity: a.polarity })
+        Ok(ty::TraitClause { trait_ref, polarity: a.polarity })
     }
 }

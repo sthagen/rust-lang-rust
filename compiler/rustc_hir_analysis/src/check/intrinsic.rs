@@ -95,22 +95,13 @@ fn intrinsic_operation_unsafety(tcx: TyCtxt<'_>, intrinsic_id: LocalDefId) -> hi
         | sym::copysignf32
         | sym::copysignf64
         | sym::copysignf128
-        | sym::cosf16
-        | sym::cosf32
-        | sym::cosf64
-        | sym::cosf128
+        | sym::cos
         | sym::ctlz
         | sym::ctpop
         | sym::cttz
         | sym::discriminant_value
-        | sym::exp2f16
-        | sym::exp2f32
-        | sym::exp2f64
-        | sym::exp2f128
-        | sym::expf16
-        | sym::expf32
-        | sym::expf64
-        | sym::expf128
+        | sym::exp
+        | sym::exp2
         | sym::fabs
         | sym::fadd_algebraic
         | sym::fdiv_algebraic
@@ -135,19 +126,12 @@ fn intrinsic_operation_unsafety(tcx: TyCtxt<'_>, intrinsic_id: LocalDefId) -> hi
         | sym::frem_algebraic
         | sym::fsub_algebraic
         | sym::gpu_launch_sized_workgroup_mem
+        | sym::integer_max
+        | sym::integer_min
         | sym::is_val_statically_known
-        | sym::log2f16
-        | sym::log2f32
-        | sym::log2f64
-        | sym::log2f128
-        | sym::log10f16
-        | sym::log10f32
-        | sym::log10f64
-        | sym::log10f128
-        | sym::logf16
-        | sym::logf32
-        | sym::logf64
-        | sym::logf128
+        | sym::log
+        | sym::log2
+        | sym::log10
         | sym::maximum_number_nsz_f16
         | sym::maximum_number_nsz_f32
         | sym::maximum_number_nsz_f64
@@ -168,6 +152,7 @@ fn intrinsic_operation_unsafety(tcx: TyCtxt<'_>, intrinsic_id: LocalDefId) -> hi
         | sym::needs_drop
         | sym::non_exhaustive
         | sym::offload
+        | sym::offload_get_num_devices
         | sym::offset_of
         | sym::overflow_checks
         | sym::powf16
@@ -200,10 +185,7 @@ fn intrinsic_operation_unsafety(tcx: TyCtxt<'_>, intrinsic_id: LocalDefId) -> hi
         | sym::saturating_add
         | sym::saturating_sub
         | sym::select_unpredictable
-        | sym::sinf16
-        | sym::sinf32
-        | sym::sinf64
-        | sym::sinf128
+        | sym::sin
         | sym::size_of
         | sym::size_of_type_id
         | sym::sqrtf16
@@ -229,6 +211,8 @@ fn intrinsic_operation_unsafety(tcx: TyCtxt<'_>, intrinsic_id: LocalDefId) -> hi
         | sym::ub_checks
         | sym::va_copy
         | sym::variant_count
+        | sym::variant_name
+        | sym::variant_non_exhaustive
         | sym::wrapping_add
         | sym::wrapping_mul
         | sym::wrapping_sub
@@ -335,6 +319,8 @@ pub(crate) fn check_intrinsic_type(
         sym::type_id_fields => (0, 0, vec![type_id_ty(), tcx.types.usize], tcx.types.usize),
         sym::type_id_is_signed => (0, 0, vec![type_id_ty()], tcx.types.bool),
         sym::type_id_variants => (0, 0, vec![type_id_ty()], tcx.types.usize),
+        sym::variant_name => (0, 0, vec![type_id_ty(), tcx.types.usize], Ty::new_static_str(tcx)),
+        sym::variant_non_exhaustive => (0, 0, vec![type_id_ty(), tcx.types.usize], tcx.types.bool),
         sym::type_id_vtable => {
             let dyn_metadata = tcx.require_lang_item(LangItem::DynMetadata, span);
             let dyn_metadata_adt_ref = tcx.adt_def(dyn_metadata);
@@ -380,10 +366,12 @@ pub(crate) fn check_intrinsic_type(
                 Ty::new_array_with_const_len(tcx, tcx.types.u32, Const::from_target_usize(tcx, 3)),
                 Ty::new_array_with_const_len(tcx, tcx.types.u32, Const::from_target_usize(tcx, 3)),
                 tcx.types.u32,
+                tcx.types.i32,
                 param(1),
             ],
             param(2),
         ),
+        sym::offload_get_num_devices => (0, 0, vec![], tcx.types.i32),
         sym::offset => (2, 0, vec![param(0), param(1)], param(0)),
         sym::arith_offset => (
             1,
@@ -432,45 +420,10 @@ pub(crate) fn check_intrinsic_type(
         sym::powif64 => (0, 0, vec![tcx.types.f64, tcx.types.i32], tcx.types.f64),
         sym::powif128 => (0, 0, vec![tcx.types.f128, tcx.types.i32], tcx.types.f128),
 
-        sym::sinf16 => (0, 0, vec![tcx.types.f16], tcx.types.f16),
-        sym::sinf32 => (0, 0, vec![tcx.types.f32], tcx.types.f32),
-        sym::sinf64 => (0, 0, vec![tcx.types.f64], tcx.types.f64),
-        sym::sinf128 => (0, 0, vec![tcx.types.f128], tcx.types.f128),
-
-        sym::cosf16 => (0, 0, vec![tcx.types.f16], tcx.types.f16),
-        sym::cosf32 => (0, 0, vec![tcx.types.f32], tcx.types.f32),
-        sym::cosf64 => (0, 0, vec![tcx.types.f64], tcx.types.f64),
-        sym::cosf128 => (0, 0, vec![tcx.types.f128], tcx.types.f128),
-
         sym::powf16 => (0, 0, vec![tcx.types.f16, tcx.types.f16], tcx.types.f16),
         sym::powf32 => (0, 0, vec![tcx.types.f32, tcx.types.f32], tcx.types.f32),
         sym::powf64 => (0, 0, vec![tcx.types.f64, tcx.types.f64], tcx.types.f64),
         sym::powf128 => (0, 0, vec![tcx.types.f128, tcx.types.f128], tcx.types.f128),
-
-        sym::expf16 => (0, 0, vec![tcx.types.f16], tcx.types.f16),
-        sym::expf32 => (0, 0, vec![tcx.types.f32], tcx.types.f32),
-        sym::expf64 => (0, 0, vec![tcx.types.f64], tcx.types.f64),
-        sym::expf128 => (0, 0, vec![tcx.types.f128], tcx.types.f128),
-
-        sym::exp2f16 => (0, 0, vec![tcx.types.f16], tcx.types.f16),
-        sym::exp2f32 => (0, 0, vec![tcx.types.f32], tcx.types.f32),
-        sym::exp2f64 => (0, 0, vec![tcx.types.f64], tcx.types.f64),
-        sym::exp2f128 => (0, 0, vec![tcx.types.f128], tcx.types.f128),
-
-        sym::logf16 => (0, 0, vec![tcx.types.f16], tcx.types.f16),
-        sym::logf32 => (0, 0, vec![tcx.types.f32], tcx.types.f32),
-        sym::logf64 => (0, 0, vec![tcx.types.f64], tcx.types.f64),
-        sym::logf128 => (0, 0, vec![tcx.types.f128], tcx.types.f128),
-
-        sym::log10f16 => (0, 0, vec![tcx.types.f16], tcx.types.f16),
-        sym::log10f32 => (0, 0, vec![tcx.types.f32], tcx.types.f32),
-        sym::log10f64 => (0, 0, vec![tcx.types.f64], tcx.types.f64),
-        sym::log10f128 => (0, 0, vec![tcx.types.f128], tcx.types.f128),
-
-        sym::log2f16 => (0, 0, vec![tcx.types.f16], tcx.types.f16),
-        sym::log2f32 => (0, 0, vec![tcx.types.f32], tcx.types.f32),
-        sym::log2f64 => (0, 0, vec![tcx.types.f64], tcx.types.f64),
-        sym::log2f128 => (0, 0, vec![tcx.types.f128], tcx.types.f128),
 
         sym::fmaf16 => (0, 0, vec![tcx.types.f16, tcx.types.f16, tcx.types.f16], tcx.types.f16),
         sym::fmaf32 => (0, 0, vec![tcx.types.f32, tcx.types.f32, tcx.types.f32], tcx.types.f32),
@@ -486,7 +439,14 @@ pub(crate) fn check_intrinsic_type(
             (0, 0, vec![tcx.types.f128, tcx.types.f128, tcx.types.f128], tcx.types.f128)
         }
 
-        sym::fabs => (1, 0, vec![param(0)], param(0)),
+        sym::exp
+        | sym::exp2
+        | sym::log
+        | sym::log2
+        | sym::log10
+        | sym::fabs
+        | sym::sin
+        | sym::cos => (1, 0, vec![param(0)], param(0)),
 
         sym::minimum_number_nsz_f16 => (0, 0, vec![tcx.types.f16, tcx.types.f16], tcx.types.f16),
         sym::minimum_number_nsz_f32 => (0, 0, vec![tcx.types.f32, tcx.types.f32], tcx.types.f32),
@@ -595,6 +555,7 @@ pub(crate) fn check_intrinsic_type(
             vec![Ty::new_imm_ptr(tcx, param(0)), Ty::new_imm_ptr(tcx, param(0))],
             tcx.types.usize,
         ),
+        sym::integer_max | sym::integer_min => (1, 0, vec![param(0), param(0)], param(0)),
         sym::unchecked_div | sym::unchecked_rem | sym::exact_div | sym::disjoint_bitor => {
             (1, 0, vec![param(0), param(0)], param(0))
         }
@@ -812,8 +773,8 @@ pub(crate) fn check_intrinsic_type(
             vec![Ty::new_mut_ptr(tcx, param(0)), param(0), param(0)],
             Ty::new_tup(tcx, &[param(0), tcx.types.bool]),
         ),
-        sym::atomic_load => (1, 1, vec![Ty::new_imm_ptr(tcx, param(0))], param(0)),
-        sym::atomic_store => (1, 1, vec![Ty::new_mut_ptr(tcx, param(0)), param(0)], tcx.types.unit),
+        sym::atomic_load => (1, 2, vec![Ty::new_imm_ptr(tcx, param(0))], param(0)),
+        sym::atomic_store => (1, 2, vec![Ty::new_mut_ptr(tcx, param(0)), param(0)], tcx.types.unit),
 
         sym::atomic_xchg
         | sym::atomic_max

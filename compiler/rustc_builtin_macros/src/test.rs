@@ -23,9 +23,6 @@ use crate::util::{check_builtin_macro_attribute, warn_on_duplicate_attribute};
 ///
 /// We mark item with an inert attribute "rustc_test_marker" which the test generation
 /// logic will pick up on.
-///
-/// The test function also gains a `#[rustc_test_entrypoint_marker]` attribute for tools to pick up
-/// on. This behavior is *unstable*.
 pub(crate) fn expand_test_case(
     ecx: &mut ExtCtxt<'_>,
     attr_sp: Span,
@@ -264,7 +261,7 @@ pub(crate) fn expand_test_or_bench(
         &fn_.ident,
     ));
 
-    let location_info = get_location_info(cx, &fn_);
+    let location_info = get_location_info(cx, fn_);
 
     let mut test_const =
         cx.item(
@@ -379,12 +376,6 @@ pub(crate) fn expand_test_or_bench(
     // extern crate test
     let test_extern =
         cx.item(sp, ast::AttrVec::new(), ast::ItemKind::ExternCrate(None, test_ident));
-
-    let item = {
-        let mut item = item;
-        item.attrs.push(cx.attr_word(sym::rustc_test_entrypoint_marker, attr_sp));
-        item
-    };
 
     debug!("synthetic test item:\n{}\n", pprust::item_to_string(&test_const));
 
@@ -537,30 +528,12 @@ fn check_test_signature(
         }));
     }
 
-    if let Some(coroutine_kind) = f.sig.header.coroutine_kind {
-        match coroutine_kind {
-            ast::CoroutineKind::Async { span, .. } => {
-                return Err(dcx.emit_err(diagnostics::TestBadFn {
-                    span: i.span,
-                    cause: span,
-                    kind: "async",
-                }));
-            }
-            ast::CoroutineKind::Gen { span, .. } => {
-                return Err(dcx.emit_err(diagnostics::TestBadFn {
-                    span: i.span,
-                    cause: span,
-                    kind: "gen",
-                }));
-            }
-            ast::CoroutineKind::AsyncGen { span, .. } => {
-                return Err(dcx.emit_err(diagnostics::TestBadFn {
-                    span: i.span,
-                    cause: span,
-                    kind: "async gen",
-                }));
-            }
-        }
+    if let Some(coroutine_marker) = f.sig.header.coroutine_marker {
+        return Err(dcx.emit_err(diagnostics::TestBadFn {
+            span: i.span,
+            cause: coroutine_marker.span,
+            kind: coroutine_marker.kind.as_str(),
+        }));
     }
 
     // If the termination trait is active, the compiler will check that the output

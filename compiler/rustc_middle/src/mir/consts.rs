@@ -154,7 +154,7 @@ impl ConstValue {
                         /* read_provenance */ true,
                     )
                     .ok()?;
-                let ptr = ptr.to_pointer(&tcx).discard_err()?;
+                let ptr = ptr.to_pointer(&tcx);
                 let len = a
                     .read_scalar(
                         &tcx,
@@ -474,7 +474,15 @@ impl<'tcx> UnevaluatedConst<'tcx> {
     #[inline]
     pub fn shrink(self, tcx: TyCtxt<'tcx>) -> ty::AliasConst<'tcx> {
         assert_eq!(self.promoted, None);
-        ty::AliasConst::new(tcx, ty::AliasConstKind::new_from_def_id(tcx, self.def), self.args)
+        ty::AliasConst::new(
+            tcx,
+            ty::AliasConstKind::new_from_def_id(
+                tcx,
+                self.def,
+                ty::AliasConstInherentArgsKind::Impl,
+            ),
+            self.args,
+        )
     }
 }
 

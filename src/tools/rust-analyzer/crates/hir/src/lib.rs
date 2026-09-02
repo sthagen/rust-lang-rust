@@ -2848,8 +2848,9 @@ impl<'db> EvaluatedConst<'db> {
         let ty = self.allocation.ty.kind();
         if let TyKind::Int(_) | TyKind::Uint(_) = ty {
             let b = &self.allocation.memory;
-            let value = u128::from_le_bytes(mir::pad16(b, false));
-            let value_signed = i128::from_le_bytes(mir::pad16(b, matches!(ty, TyKind::Int(_))));
+            let value = u128::from_le_bytes(mir::pad16(b, mir::IsSigned::No));
+            let is_signed = matches!(ty, TyKind::Int(_)).into();
+            let value_signed = i128::from_le_bytes(mir::pad16(b, is_signed));
             let mut result =
                 if let TyKind::Int(_) = ty { value_signed.to_string() } else { value.to_string() };
             if value >= 10 {
@@ -3955,21 +3956,9 @@ impl<'db> GenericSubstitution<'db> {
             TypeOrConstParamData::TypeParamData(param) => Some(param.name.clone()),
             TypeOrConstParamData::ConstParamData(_) => None,
         });
-        let parent_len = self.subst.len()
-            - generics
-                .iter_type_or_consts()
-                .filter(|g| matches!(g.1, TypeOrConstParamData::TypeParamData(..)))
-                .count();
-        let container_params = self.subst.as_slice()[..parent_len]
-            .iter()
-            .filter_map(|param| param.ty())
-            .zip(container_type_params.into_iter().flatten());
-        let self_params = self.subst.as_slice()[parent_len..]
-            .iter()
-            .filter_map(|param| param.ty())
-            .zip(type_params);
-        container_params
-            .chain(self_params)
+        self.subst
+            .types()
+            .zip(container_type_params.into_iter().flatten().chain(type_params))
             .filter_map(|(ty, name)| {
                 Some((
                     name?.symbol().clone(),

@@ -1,6 +1,7 @@
 //! Numeric traits and functions for the built-in numeric types.
 
 #![stable(feature = "rust1", since = "1.0.0")]
+#![expect(clippy::manual_is_ascii_check, reason = "this module implements various is_ascii checks")]
 
 use crate::convert::{BoundedCastFromInt, CheckedCastFromInt};
 use crate::panic::const_panic;
@@ -42,6 +43,7 @@ mod int_macros; // import int_impl!
 #[macro_use]
 mod uint_macros; // import uint_impl!
 
+mod complex;
 mod error;
 #[cfg(not(no_fp_fmt_parse))]
 mod float_parse;
@@ -54,6 +56,8 @@ mod wrapping;
 #[doc(hidden)]
 pub mod niche_types;
 
+#[unstable(feature = "complex_numbers", issue = "154023")]
+pub use complex::Complex;
 #[stable(feature = "int_error_matching", since = "1.55.0")]
 pub use error::IntErrorKind;
 #[stable(feature = "rust1", since = "1.0.0")]
@@ -728,6 +732,7 @@ impl u8 {
     /// ```
     #[stable(feature = "ascii_methods_on_intrinsics", since = "1.23.0")]
     #[rustc_const_stable(feature = "const_ascii_methods_on_intrinsics", since = "1.52.0")]
+    #[expect(clippy::manual_ignore_case_cmp, reason = "implements eq_ignore_ascii_case")]
     #[inline]
     pub const fn eq_ignore_ascii_case(&self, other: &u8) -> bool {
         self.to_ascii_lowercase() == other.to_ascii_lowercase()

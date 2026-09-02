@@ -7,7 +7,7 @@
 //! [LLVM implementation]: https://github.com/llvm/llvm-project/blob/main/llvm/include/llvm/IR/IntrinsicsAMDGPU.td
 
 #[allow(improper_ctypes)]
-unsafe extern "unadjusted" {
+unsafe extern "llvm-intrinsic" {
     #[link_name = "llvm.amdgcn.workitem.id.x"]
     safe fn llvm_workitem_id_x() -> u32;
     #[link_name = "llvm.amdgcn.workitem.id.y"]
@@ -360,6 +360,7 @@ pub unsafe fn sched_barrier<const MASK: u32>() {
 /// sched_group_barrier::<8, 5, 0>();
 /// ```
 ///
+#[doc(cfg(target_arch = "amdgpu"))]
 #[doc = include_str!("intrinsic_is_convergent.md")]
 #[inline]
 #[unstable(feature = "stdarch_amdgpu", issue = "149988")]

@@ -108,16 +108,15 @@ enum DownloadSource {
 
 /// Functions that are only ever called once, but named for clarity and to avoid thousand-line functions.
 impl Config {
-    pub(crate) fn download_clippy(&self) -> PathBuf {
+    pub(crate) fn download_clippy(&self, initial_sysroot: &Path) -> PathBuf {
         self.do_if_verbose(|| println!("downloading stage0 clippy artifacts"));
 
         let date = &self.stage0_metadata.compiler.date;
         let version = &self.stage0_metadata.compiler.version;
         let host = self.host_target;
 
-        let clippy_stamp =
-            BuildStamp::new(&self.initial_sysroot).with_prefix("clippy").add_stamp(date);
-        let cargo_clippy = self.initial_sysroot.join("bin").join(exe("cargo-clippy", host));
+        let clippy_stamp = BuildStamp::new(initial_sysroot).with_prefix("clippy").add_stamp(date);
+        let cargo_clippy = initial_sysroot.join("bin").join(exe("cargo-clippy", host));
         if cargo_clippy.exists() && clippy_stamp.is_up_to_date() {
             return cargo_clippy;
         }
@@ -269,17 +268,15 @@ impl Config {
         download_component(dwn_ctx, &self.out, mode, filename, prefix, key, destination);
     }
 
-    pub(crate) fn maybe_download_ci_llvm(&self) {
+    /// Attempts to download LLVM from CI for the **host target**.
+    /// Returns a path to the downloaded and extracted directory.
+    pub(crate) fn maybe_download_host_ci_llvm(&self) -> Option<PathBuf> {
         // Never try to download CI LLVM during unit tests.
         if cfg!(test) {
-            return;
+            return None;
         }
 
-        if !self.llvm_from_ci {
-            return;
-        }
-
-        let llvm_root = self.ci_llvm_root();
+        let llvm_root = self.out.join(self.host_target).join("ci-llvm");
         let llvm_freshness =
             detect_llvm_freshness(self, self.rust_info.is_managed_git_subrepository());
         self.do_if_verbose(|| {
@@ -299,7 +296,7 @@ impl Config {
         let stamp_key = format!("{}{}", llvm_sha, self.llvm_assertions);
         let llvm_stamp = BuildStamp::new(&llvm_root).with_prefix("llvm").add_stamp(stamp_key);
         if !llvm_stamp.is_up_to_date() && !self.dry_run() {
-            self.download_ci_llvm(&llvm_sha);
+            self.download_ci_llvm(&llvm_root, &llvm_sha);
 
             if self.should_fix_bins_and_dylibs() {
                 for entry in t!(fs::read_dir(llvm_root.join("bin"))) {
@@ -353,9 +350,10 @@ impl Config {
                 }
             };
         };
+        Some(llvm_root)
     }
 
-    fn download_ci_llvm(&self, llvm_sha: &str) {
+    fn download_ci_llvm(&self, llvm_root: &Path, llvm_sha: &str) {
         // For unit tests, downloading should have been blocked by `maybe_download_ci_llvm`.
         assert!(cfg!(not(test)), "unit tests shouldn't be downloading CI LLVM");
 
@@ -390,8 +388,7 @@ impl Config {
     ";
             self.download_file(&format!("{base}/{llvm_sha}/{filename}"), &tarball, help_on_error);
         }
-        let llvm_root = self.ci_llvm_root();
-        self.unpack(&tarball, &llvm_root, "rust-dev");
+        self.unpack(&tarball, llvm_root, "rust-dev");
     }
 
     pub fn download_ci_gcc(&self, gcc_sha: &str, root_dir: &Path) {

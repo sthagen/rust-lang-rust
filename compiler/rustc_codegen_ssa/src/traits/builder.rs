@@ -250,6 +250,7 @@ pub trait BuilderMethods<'a, 'tcx>:
         ty: Self::Type,
         ptr: Self::Value,
         order: AtomicOrdering,
+        volatile: bool,
         size: Size,
     ) -> Self::Value;
     fn load_from_place(&mut self, ty: Self::Type, place: PlaceValue<Self::Value>) -> Self::Value {
@@ -330,6 +331,7 @@ pub trait BuilderMethods<'a, 'tcx>:
         val: Self::Value,
         ptr: Self::Value,
         order: AtomicOrdering,
+        volatile: bool,
         size: Size,
     );
 
@@ -401,10 +403,6 @@ pub trait BuilderMethods<'a, 'tcx>:
             TypeKind::Half | TypeKind::Float | TypeKind::Double | TypeKind::FP128
         );
         assert_eq!(self.cx().type_kind(int_ty), TypeKind::Integer);
-
-        if let Some(false) = self.cx().sess().opts.unstable_opts.saturating_float_casts {
-            return if signed { self.fptosi(x, dest_ty) } else { self.fptoui(x, dest_ty) };
-        }
 
         if signed { self.fptosi_sat(x, dest_ty) } else { self.fptoui_sat(x, dest_ty) }
     }

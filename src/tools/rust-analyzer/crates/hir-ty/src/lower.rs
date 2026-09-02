@@ -788,7 +788,7 @@ impl<'db, 'a> TyLoweringContext<'db, 'a> {
         )
     }
 
-    /// This is only for `generic_predicates_for_param`, where we can't just
+    /// This is only for [`resolve_type_param_assoc_type_shorthand`], where we can't just
     /// lower the self types of the predicates since that could lead to cycles.
     /// So we just check here if the `type_ref` resolves to a generic param, and which.
     fn lower_ty_only_param(&self, type_ref: TypeRefId) -> Option<TypeOrConstParamId> {
@@ -932,7 +932,7 @@ impl<'db, 'a> TyLoweringContext<'db, 'a> {
         bound: &'b TypeBound,
         self_ty: Ty<'db>,
         ignore_bindings: bool,
-    ) -> impl Iterator<Item = (Clause<'db>, GenericPredicateSource)> + use<'b, 'a, 'db> {
+    ) -> impl Iterator<Item = (Clause<'db>, GenericPredicateSource)> + use<'db> {
         let interner = self.interner;
         let meta_sized = self.lang_items.MetaSized;
         let pointee_sized = self.lang_items.PointeeSized;
@@ -1030,7 +1030,17 @@ impl<'db, 'a> TyLoweringContext<'db, 'a> {
 
             for b in bounds {
                 let db = self.db;
-                self.lower_type_bound(b, dummy_self_ty, false).for_each(|(b, _)| {
+                match b {
+                    TypeBound::Path(_, TraitBoundModifier::None) => {
+                        // `dyn Trait<'a>` is an existential predicate that introduces a binder.
+                        self.with_shifted_in(&[], |ctx| {
+                            ctx.lower_type_bound(b, dummy_self_ty, false)
+                        })
+                        .0
+                    }
+                    _ => self.lower_type_bound(b, dummy_self_ty, false),
+                }
+                .for_each(|(b, _)| {
                     match b.kind().skip_binder() {
                         rustc_type_ir::ClauseKind::Trait(t) => {
                             let id = t.def_id();

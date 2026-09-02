@@ -3,19 +3,19 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use rustc_ast::node_id::NodeMap;
+use rustc_ast::visit::{Visitor, walk_expr};
 use rustc_ast::*;
+use rustc_attr_ir::lang_items::LangItem;
+use rustc_attr_ir::target::Target;
 use rustc_errors::msg;
 use rustc_hir as hir;
-use rustc_hir::attrs::lang_items::LangItem;
+use rustc_hir::HirId;
 use rustc_hir::def::{DefKind, Res};
-use rustc_hir::{HirId, Target, find_attr};
 use rustc_middle::span_bug;
 use rustc_middle::ty::TyCtxt;
 use rustc_session::diagnostics::report_lit_error;
 use rustc_span::{ByteSymbol, DUMMY_SP, DesugaringKind, Ident, Span, Spanned, Symbol, respan, sym};
 use thin_vec::{ThinVec, thin_vec};
-use visit::{Visitor, walk_expr};
-
 mod closure;
 
 use crate::diagnostics::{
@@ -339,11 +339,11 @@ impl<'hir> LoweringContext<'_, 'hir> {
                 }
             }
             ExprKind::Use(expr, use_kw_span) => self.lower_expr_use(*use_kw_span, expr),
-            ExprKind::Gen(capture_clause, block, genblock_kind, decl_span) => {
-                let desugaring_kind = match genblock_kind {
-                    GenBlockKind::Async => hir::CoroutineDesugaring::Async,
-                    GenBlockKind::Gen => hir::CoroutineDesugaring::Gen,
-                    GenBlockKind::AsyncGen => hir::CoroutineDesugaring::AsyncGen,
+            ExprKind::Gen(capture_clause, block, coroutine_kind, decl_span) => {
+                let desugaring_kind = match coroutine_kind {
+                    CoroutineKind::Async => hir::CoroutineDesugaring::Async,
+                    CoroutineKind::Gen => hir::CoroutineDesugaring::Gen,
+                    CoroutineKind::AsyncGen => hir::CoroutineDesugaring::AsyncGen,
                 };
                 self.make_desugared_coroutine_expr(
                     *capture_clause,
@@ -882,35 +882,17 @@ impl<'hir> LoweringContext<'_, 'hir> {
 
     /// Forwards a possible `#[track_caller]` annotation from `outer_hir_id` to
     /// `inner_hir_id` in case the `async_fn_track_caller` feature is enabled.
-    pub(super) fn maybe_forward_track_caller(
-        &mut self,
-        span: Span,
-        outer_hir_id: HirId,
-        inner_hir_id: HirId,
-    ) {
+    pub(super) fn maybe_forward_track_caller(&mut self, outer_hir_id: HirId, inner_hir_id: HirId) {
         if self.tcx.features().async_fn_track_caller()
             && let Some(attrs) = self.attrs.get(&outer_hir_id.local_id)
-            && find_attr!(*attrs, TrackCaller(_))
+            && let Some(t) = attrs.iter().find(|a| {
+                matches!(
+                    a,
+                    rustc_attr_ir::Attribute::Parsed(rustc_attr_ir::AttributeKind::TrackCaller(_))
+                )
+            })
         {
-            let unstable_span = self.mark_span_with_reason(
-                DesugaringKind::Async,
-                span,
-                Some(Arc::clone(&self.allow_gen_future)),
-            );
-            self.lower_attrs(
-                inner_hir_id,
-                &[Attribute {
-                    kind: AttrKind::Normal(Box::new(NormalAttr::from_ident(Ident::new(
-                        sym::track_caller,
-                        span,
-                    )))),
-                    id: self.tcx.sess.psess.attr_id_generator.mk_attr_id(),
-                    style: AttrStyle::Outer,
-                    span: unstable_span,
-                }],
-                span,
-                Target::Fn,
-            );
+            self.attrs.insert(inner_hir_id.local_id, std::slice::from_ref(t));
         }
     }
 

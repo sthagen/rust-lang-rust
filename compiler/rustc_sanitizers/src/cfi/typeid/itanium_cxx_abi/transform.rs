@@ -250,6 +250,7 @@ fn trait_object_ty<'tcx>(tcx: TyCtxt<'tcx>, poly_trait_ref: ty::PolyTraitRef<'tc
                             tcx,
                             assoc_item.def_id,
                             super_trait_ref.args,
+                            ty::AliasConstInherentArgsKind::WithSelf,
                         );
                         let term = tcx.normalize_erasing_regions(
                             ty::TypingEnv::fully_monomorphized(),
@@ -262,7 +263,7 @@ fn trait_object_ty<'tcx>(tcx: TyCtxt<'tcx>, poly_trait_ref: ty::PolyTraitRef<'tc
                         ty::ExistentialPredicate::Projection(
                             ty::ExistentialProjection::erase_self_ty(
                                 tcx,
-                                ty::ProjectionPredicate { projection_term, term },
+                                ty::ProjectionClause { projection_term, term },
                             ),
                         )
                     })

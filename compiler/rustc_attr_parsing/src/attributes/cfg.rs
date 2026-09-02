@@ -7,12 +7,12 @@ use rustc_attr_ir::target::Target;
 use rustc_attr_ir::{AttrPath, CfgEntry, RustcVersion};
 use rustc_errors::{Applicability, Diagnostic, PResult, msg};
 use rustc_feature::{Features, GatedCfg, find_gated_cfg};
+use rustc_lint_defs::builtin::UNEXPECTED_CFGS;
 use rustc_parse::parser::{ForceCollect, Parser, Recovery};
 use rustc_parse::{exp, parse_in};
 use rustc_session::Session;
 use rustc_session::config::ExpectedValues;
 use rustc_session::diagnostics::feature_err;
-use rustc_session::lint::builtin::UNEXPECTED_CFGS;
 use rustc_session::parse::ParseSess;
 use rustc_span::{ErrorGuaranteed, Span, Symbol, sym};
 use thin_vec::ThinVec;
@@ -436,7 +436,7 @@ fn parse_cfg_attr_internal<'a>(
 }
 
 fn try_gate_cfg(name: Symbol, span: Span, sess: &Session, features: Option<&Features>) {
-    let gate = find_gated_cfg(|sym| sym == name);
+    let gate = find_gated_cfg(name);
     if let (Some(feats), Some(gated_cfg)) = (features, gate) {
         gate_cfg(gated_cfg, span, sess, feats);
     }

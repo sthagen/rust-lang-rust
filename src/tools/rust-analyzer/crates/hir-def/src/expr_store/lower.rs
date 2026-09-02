@@ -62,6 +62,7 @@ use crate::{
         ArrayType, ConstRef, FnType, LifetimeRef, LifetimeRefId, Mutability, PathId, Rawness,
         RefType, TraitBoundModifier, TraitRef, TypeBound, TypeRef, TypeRefId, UseArgRef,
     },
+    unstable_features::UnstableFeatures,
 };
 
 pub use self::path::hir_segment_to_ast_segment;
@@ -134,7 +135,9 @@ pub(super) fn lower_body(
     }
 
     collector.with_expr_root(|collector| {
-        if let Some(param_list) = parameters {
+        if let DefWithBodyId::FunctionId(func) = owner
+            && let Some(param_list) = parameters
+        {
             if let Some(self_param_syn) =
                 param_list.self_param().filter(|it| collector.check_cfg(it))
             {
@@ -154,23 +157,28 @@ pub(super) fn lower_body(
                     Some(collector.expander.in_file(AstPtr::new(&self_param_syn)));
             }
 
-            let is_extern = matches!(
-                owner,
-                DefWithBodyId::FunctionId(id)
-                    if matches!(id.loc(db).container, ItemContainerId::ExternBlockId(_)),
-            );
+            let params_are_bare_idents = match func.loc(db).container {
+                ItemContainerId::ExternBlockId(_) => true,
+                ItemContainerId::TraitId(_) => body.is_none(),
+                ItemContainerId::ModuleId(_) | ItemContainerId::ImplId(_) => false,
+            };
 
             for param in param_list.params() {
                 if collector.check_cfg(&param) {
-                    let param_pat = if is_extern {
-                        collector.collect_extern_fn_param(param.pat())
-                    } else {
-                        collector.collect_pat_top(param.pat())
+                    let param_pat = match param.pat() {
+                        Some(pat) => {
+                            if params_are_bare_idents {
+                                collector.collect_param_as_ident(pat)
+                            } else {
+                                collector.collect_pat_top(Some(pat))
+                            }
+                        }
+                        None => collector.missing_pat(),
                     };
                     params.push(Param::new(param_pat));
                 }
             }
-        };
+        }
 
         collector.collect(
             &mut self_param,
@@ -1210,13 +1218,36 @@ impl<'db> ExprCollector<'db> {
                     (false, true) => CoroutineKind::Gen,
                     (false, false) => unreachable!(),
                 };
-                this.lower_coroutine_body_with_moved_arguments(
+                let coroutine = this.lower_coroutine_body_with_moved_arguments(
                     self_param,
                     params,
                     body,
                     kind,
                     CoroutineSource::Fn,
-                )
+                );
+                // *All* locals belong to the inner coroutine...
+                this.associate_unowned_bindings_with(0, coroutine);
+                // ...except the formal parameters, which are *not* necessarily what was passed as parameters into `collect()`,
+                // since `lower_coroutine_body_with_moved_arguments()` might have changed them.
+                params
+                    .iter()
+                    .filter_map(|param| {
+                        if let Pat::Bind { id, .. } = this.store.pats[param.formal] {
+                            Some(id)
+                        } else {
+                            never!(
+                                "`lower_coroutine_body_with_moved_arguments()` should make sure \
+                                the coroutine closure only have simple bind args"
+                            );
+                            None
+                        }
+                    })
+                    .chain(self_param.map(|param| param.formal))
+                    .for_each(|param| {
+                        // They are owned by the top-level function, so should not be present in `bindings_owner`.
+                        this.store.binding_owners.remove(&param);
+                    });
+                coroutine
             } else {
                 body
             }
@@ -1806,16 +1837,7 @@ impl<'db> ExprCollector<'db> {
                 let index = self.collect_expr_opt(e.index());
                 self.alloc_expr(Expr::Index { base, index }, syntax_ptr)
             }
-            ast::Expr::RangeExpr(e) => {
-                let lhs = e.start().map(|lhs| self.collect_expr(lhs));
-                let rhs = e.end().map(|rhs| self.collect_expr(rhs));
-                match e.op_kind() {
-                    Some(range_type) => {
-                        self.alloc_expr(Expr::Range { lhs, rhs, range_type }, syntax_ptr)
-                    }
-                    None => self.alloc_expr(Expr::Missing, syntax_ptr),
-                }
-            }
+            ast::Expr::RangeExpr(e) => self.collect_range_expr(e, syntax_ptr),
             ast::Expr::MacroExpr(e) => {
                 let e = e.macro_call()?;
                 let macro_ptr = AstPtr::new(&e);
@@ -1845,6 +1867,87 @@ impl<'db> ExprCollector<'db> {
             ast::Expr::FormatArgsExpr(f) => self.collect_format_args(f, syntax_ptr),
             ast::Expr::IncludeBytesExpr(_) => self.alloc_expr(Expr::IncludeBytes, syntax_ptr)
         })
+    }
+
+    fn collect_range_expr(&mut self, e: ast::RangeExpr, syntax_ptr: AstPtr<ast::Expr>) -> ExprId {
+        let lhs = e.start().map(|lhs| self.collect_expr(lhs));
+        let rhs = e.end().map(|rhs| self.collect_expr(rhs));
+        let kind = e.op_kind().unwrap_or(ast::RangeOp::Exclusive);
+        let new_range = self.features().new_range;
+        let lang_items = self.lang_items();
+        let lang_item = match (lhs, rhs, kind) {
+            (None, None, _) => lang_items.RangeFull,
+            (Some(..), None, ast::RangeOp::Exclusive) => {
+                if new_range {
+                    lang_items.RangeFromCopy
+                } else {
+                    lang_items.RangeFrom
+                }
+            }
+            (None, Some(..), ast::RangeOp::Exclusive) => lang_items.RangeTo,
+            (Some(..), Some(..), ast::RangeOp::Exclusive) => {
+                if new_range {
+                    lang_items.RangeCopy
+                } else {
+                    lang_items.Range
+                }
+            }
+            (None, Some(..), ast::RangeOp::Inclusive) => {
+                if new_range {
+                    lang_items.RangeToInclusiveCopy
+                } else {
+                    lang_items.RangeToInclusive
+                }
+            }
+            (Some(lhs), Some(rhs), ast::RangeOp::Inclusive) => {
+                if new_range {
+                    lang_items.RangeInclusiveCopy
+                } else {
+                    return self.collect_inclusive_range(syntax_ptr, lang_items, lhs, rhs);
+                }
+            }
+            (Some(..), None, ast::RangeOp::Inclusive) => {
+                if new_range {
+                    lang_items.RangeFromCopy
+                } else {
+                    lang_items.RangeFrom
+                }
+            }
+        };
+        let Some(struct_path) = self.lang_path(lang_item) else {
+            return self.alloc_expr(Expr::Missing, syntax_ptr);
+        };
+        let lhs = lhs.map(|lhs| (lhs, sym::start));
+        let rhs = rhs.map(|rhs| {
+            (
+                rhs,
+                if lang_item == lang_items.RangeInclusiveCopy
+                    || lang_item == lang_items.RangeToInclusiveCopy
+                {
+                    sym::last
+                } else {
+                    sym::end
+                },
+            )
+        });
+        let fields = std::iter::chain(lhs, rhs)
+            .map(|(expr, name)| RecordLitField { name: Name::new_symbol_root(name), expr })
+            .collect();
+        self.alloc_expr(
+            Expr::RecordLit { path: struct_path, fields, spread: RecordSpread::None },
+            syntax_ptr,
+        )
+    }
+
+    fn collect_inclusive_range(
+        &mut self,
+        syntax_ptr: AstPtr<ast::Expr>,
+        lang_items: &LangItems,
+        lhs: ExprId,
+        rhs: ExprId,
+    ) -> ExprId {
+        let fn_path = self.alloc_expr_desugared(self.lang_path_expr(lang_items.RangeInclusiveNew));
+        self.alloc_expr(Expr::Call { callee: fn_path, args: Box::new([lhs, rhs]) }, syntax_ptr)
     }
 
     fn collect_expr_path(&mut self, e: ast::PathExpr) -> Option<(Path, HygieneId)> {
@@ -2105,10 +2208,18 @@ impl<'db> ExprCollector<'db> {
     ) -> ExprId {
         let prev_unowned_bindings_len = self.unowned_bindings.len();
         let (bindings_owner, expr_to_return) = create_expr(self);
+        self.associate_unowned_bindings_with(prev_unowned_bindings_len, bindings_owner);
+        expr_to_return
+    }
+
+    fn associate_unowned_bindings_with(
+        &mut self,
+        prev_unowned_bindings_len: usize,
+        bindings_owner: ExprId,
+    ) {
         for binding in self.unowned_bindings.drain(prev_unowned_bindings_len..) {
             self.store.binding_owners.insert(binding, bindings_owner);
         }
-        expr_to_return
     }
 
     fn with_binding_owner(&mut self, create_expr: impl FnOnce(&mut Self) -> ExprId) -> ExprId {
@@ -2688,11 +2799,11 @@ impl<'db> ExprCollector<'db> {
         }
     }
 
-    fn collect_extern_fn_param(&mut self, pat: Option<ast::Pat>) -> PatId {
-        // parameters of functions in `extern` blocks can only be simple identifiers and wildcards.
+    fn collect_param_as_ident(&mut self, pat: ast::Pat) -> PatId {
+        // parameters of functions in `extern` blocks and associated trait functions without a body
+        // can only be simple identifiers and wildcards.
         // Furthermore, the identifiers in their parameters are always interpreted as bindings, even
         // if in a normal function they won't be, because they would refer to a path pattern.
-        let Some(pat) = pat else { return self.missing_pat() };
 
         match &pat {
             ast::Pat::IdentPat(bp) if bp.is_simple_ident() => {
@@ -2708,6 +2819,8 @@ impl<'db> ExprCollector<'db> {
                 pat
             }
             ast::Pat::WildcardPat(_) => self.alloc_pat(Pat::Wild, AstPtr::new(&pat)),
+            ast::Pat::MacroPat(mac) => self
+                .collect_macro_pat_with(mac.clone(), |this, pat| this.collect_param_as_ident(pat)),
             _ => {
                 self.store.diagnostics.push(ExpressionStoreDiagnostics::PatternArgInExternFn {
                     node: self.expander.in_file(AstPtr::new(&pat)),
@@ -2913,19 +3026,11 @@ impl<'db> ExprCollector<'db> {
                     Pat::Missing
                 }
             }
-            ast::Pat::MacroPat(mac) => match mac.macro_call() {
-                Some(call) => {
-                    let macro_ptr = AstPtr::new(&call);
-                    let src = self.expander.in_file(AstPtr::new(&pat));
-                    let pat =
-                        self.collect_macro_call(call, macro_ptr, true, |this, expanded_pat| {
-                            this.collect_pat_opt(expanded_pat, binding_list)
-                        });
-                    self.store.pat_map.insert(src, pat.into());
-                    return pat;
-                }
-                None => Pat::Missing,
-            },
+            ast::Pat::MacroPat(mac) => {
+                return self.collect_macro_pat_with(mac.clone(), |this, expanded_pat| {
+                    this.collect_pat(expanded_pat, binding_list)
+                });
+            }
             ast::Pat::RangePat(p) => {
                 let mut range_part_lower = |p: Option<ast::Pat>| -> Option<ExprId> {
                     p.and_then(|it| {
@@ -2962,6 +3067,28 @@ impl<'db> ExprCollector<'db> {
         };
         let ptr = AstPtr::new(&pat);
         self.alloc_pat(pattern, ptr)
+    }
+
+    fn collect_macro_pat_with(
+        &mut self,
+        mac: ast::MacroPat,
+        callback: impl FnOnce(&mut Self, ast::Pat) -> PatId,
+    ) -> PatId {
+        match mac.macro_call() {
+            Some(call) => {
+                let macro_ptr = AstPtr::new(&call);
+                let src = self.expander.in_file(AstPtr::new(&mac.into()));
+                let pat = self.collect_macro_call(call, macro_ptr, true, |this, expanded_pat| {
+                    match expanded_pat {
+                        Some(pat) => callback(this, pat),
+                        None => this.missing_pat(),
+                    }
+                });
+                self.store.pat_map.insert(src, pat.into());
+                pat
+            }
+            None => self.missing_pat(),
+        }
     }
 
     fn collect_pat_opt(&mut self, pat: Option<ast::Pat>, binding_list: &mut BindingList) -> PatId {
@@ -3068,9 +3195,7 @@ impl<'db> ExprCollector<'db> {
                 )
             }
             ast::Pat::MacroPat(pat) => {
-                let Some(call) = pat.macro_call() else { return self.missing_pat() };
-                let ptr = AstPtr::new(&call);
-                self.collect_macro_call(call, ptr, true, |this, pat| this.collect_ty_pat_opt(pat))
+                self.collect_macro_pat_with(pat, |this, pat| this.collect_ty_pat(pat))
             }
             _ => {
                 // FIXME: Emit an error.
@@ -3296,6 +3421,10 @@ impl<'db> ExprCollector<'db> {
         Some(Path::LangItem(lang?.into(), None))
     }
 
+    fn lang_path_expr(&self, lang: Option<impl Into<LangItemTarget>>) -> Expr {
+        self.lang_path(lang).map_or(Expr::Missing, Expr::Path)
+    }
+
     fn ty_rel_lang_path(
         &self,
         lang: Option<impl Into<LangItemTarget>>,
@@ -3323,6 +3452,10 @@ fn pat_literal_to_hir(lit: &ast::LiteralPat) -> Option<(Literal, ast::Literal)> 
 }
 
 impl<'db> ExprCollector<'db> {
+    fn features(&self) -> &'db UnstableFeatures {
+        self.def_map.features()
+    }
+
     fn with_fresh_binding_expr_root(&mut self, f: impl FnOnce(&mut Self) -> ExprId) -> ExprId {
         self.with_expr_root(|this| this.with_binding_owner(f))
     }

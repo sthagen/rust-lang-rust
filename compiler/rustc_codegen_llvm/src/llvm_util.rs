@@ -48,6 +48,28 @@ unsafe fn configure_llvm(sess: &Session) {
     let mut llvm_c_strs = Vec::with_capacity(n_args + 1);
     let mut llvm_args = Vec::with_capacity(n_args + 1);
 
+    // Check to ensure we're running against the correct LLVM version.
+    unsafe {
+        let mut llvm_major = 0;
+        let mut llvm_minor = 0;
+        let mut llvm_patch = 0;
+        llvm::LLVMGetVersion(&mut llvm_major, &mut llvm_minor, &mut llvm_patch);
+        let expected_version = llvm::LLVMRustVersionMajor();
+        if llvm_major != expected_version {
+            sess.dcx().emit_fatal(diagnostics::LlvmVersionMismatch {
+                expected_version,
+                llvm_major,
+                llvm_minor,
+                llvm_patch,
+                dll_loc: &match rustc_session::filesearch::dll_path(llvm::LLVMGetVersion as *mut _)
+                {
+                    Ok(path) => format!(" at {}", path.display()),
+                    Err(_) => String::new(),
+                },
+            })
+        }
+    }
+
     unsafe {
         llvm::LLVMRustInstallErrorHandlers();
     }
@@ -374,7 +396,8 @@ fn update_target_reliable_float_cfg(sess: &Session, cfg: &mut TargetConfig) {
     cfg.has_reliable_f16 = match (target_arch, target_os) {
         // Unsupported <https://github.com/llvm/llvm-project/issues/94434> (fixed in llvm22)
         (Arch::Arm64EC, _) if major < 22 => false,
-        // MinGW ABI bugs <https://gcc.gnu.org/bugzilla/show_bug.cgi?id=115054>
+        // MinGW ABI bugs <https://gcc.gnu.org/bugzilla/show_bug.cgi?id=115054> resolved in GCC 16
+        // but our toolchain hasn't been updated.
         (Arch::X86_64, Os::Windows) if *target_env == Env::Gnu && *target_abi != CfgAbi::Llvm => {
             false
         }
@@ -401,8 +424,10 @@ fn update_target_reliable_float_cfg(sess: &Session, cfg: &mut TargetConfig) {
         (Arch::PowerPC | Arch::PowerPC64, _) => false,
         // ABI unsupported  <https://github.com/llvm/llvm-project/issues/41838> (fixed in llvm22)
         (Arch::Sparc, _) if major < 22 => false,
-        // MinGW ABI bugs <https://gcc.gnu.org/bugzilla/show_bug.cgi?id=115054>
-        (Arch::X86_64, Os::Windows) if *target_env == Env::Gnu && *target_abi != CfgAbi::Llvm => {
+        // MinGW ABI bugs <https://gcc.gnu.org/bugzilla/show_bug.cgi?id=115054> (fixed in llvm23)
+        (Arch::X86_64, Os::Windows)
+            if *target_env == Env::Gnu && *target_abi != CfgAbi::Llvm && major < 23 =>
+        {
             false
         }
         // There are no known problems on other platforms, so the only requirement is that symbols

@@ -1,6 +1,6 @@
 #![cfg_attr(test, allow(dead_code))]
 
-pub use self::imp::{cleanup, init};
+pub use self::imp::init;
 use self::imp::{drop_handler, make_handler};
 
 pub struct Handler {
@@ -143,6 +143,12 @@ mod imp {
     }
 
     static PAGE_SIZE: Atomic<usize> = AtomicUsize::new(0);
+    // Store a pointer to the allocation for the main thread's altstack so that
+    // tools like valgrind don't complain about a leaked unreachable allocation.
+    //
+    // If the main thread exits, the process will terminate so there's no use in
+    // freeing resources. It also means that the altstack is still installed
+    // while TLS destructors are run on the main thread (c.f. #111272).
     static MAIN_ALTSTACK: Atomic<*mut libc::c_void> = AtomicPtr::new(ptr::null_mut());
     static NEED_ALTSTACK: Atomic<bool> = AtomicBool::new(false);
 
@@ -188,18 +194,6 @@ mod imp {
                 unsafe { sigaction(signal, &action, ptr::null_mut()) };
             }
         }
-    }
-
-    /// # Safety
-    /// Must be called only once
-    #[forbid(unsafe_op_in_unsafe_fn)]
-    pub unsafe fn cleanup() {
-        if cfg!(panic = "immediate-abort") {
-            return;
-        }
-        // FIXME: I probably cause more bugs than I'm worth!
-        // see https://github.com/rust-lang/rust/issues/111272
-        unsafe { drop_handler(MAIN_ALTSTACK.load(Ordering::Relaxed)) };
     }
 
     unsafe fn get_stack() -> libc::stack_t {
@@ -359,28 +353,32 @@ mod imp {
         target_os = "l4re"
     ))]
     unsafe fn get_stack_start() -> Option<*mut libc::c_void> {
+        use crate::pin::pin;
+        use crate::sys::helpers::COpaque;
+
         let mut ret = None;
-        let mut attr: mem::MaybeUninit<libc::pthread_attr_t> = mem::MaybeUninit::uninit();
+        let mut attr: COpaque<libc::pthread_attr_t> = COpaque::uninit();
         if !cfg!(target_os = "freebsd") {
-            attr = mem::MaybeUninit::zeroed();
+            attr = COpaque::zeroed();
         }
+        let attr = pin!(attr);
+        // FIXME(pin-ergonomics): remove the next line.
+        let attr = attr.into_ref();
+
         #[cfg(target_os = "freebsd")]
-        assert_eq!(libc::pthread_attr_init(attr.as_mut_ptr()), 0);
+        assert_eq!(libc::pthread_attr_init(attr.get()), 0);
         #[cfg(target_os = "freebsd")]
-        let e = libc::pthread_attr_get_np(libc::pthread_self(), attr.as_mut_ptr());
+        let e = libc::pthread_attr_get_np(libc::pthread_self(), attr.get());
         #[cfg(not(target_os = "freebsd"))]
-        let e = libc::pthread_getattr_np(libc::pthread_self(), attr.as_mut_ptr());
+        let e = libc::pthread_getattr_np(libc::pthread_self(), attr.get());
         if e == 0 {
             let mut stackaddr = crate::ptr::null_mut();
             let mut stacksize = 0;
-            assert_eq!(
-                libc::pthread_attr_getstack(attr.as_ptr(), &mut stackaddr, &mut stacksize),
-                0
-            );
+            assert_eq!(libc::pthread_attr_getstack(attr.get(), &mut stackaddr, &mut stacksize), 0);
             ret = Some(stackaddr);
         }
         if e == 0 || cfg!(target_os = "freebsd") {
-            assert_eq!(libc::pthread_attr_destroy(attr.as_mut_ptr()), 0);
+            assert_eq!(libc::pthread_attr_destroy(attr.get()), 0);
         }
         ret
     }
@@ -572,21 +570,28 @@ mod imp {
     ))]
     // FIXME: I am probably not unsafe.
     unsafe fn current_guard() -> Option<Range<usize>> {
+        use crate::pin::pin;
+        use crate::sys::helpers::COpaque;
+
         let mut ret = None;
 
-        let mut attr: mem::MaybeUninit<libc::pthread_attr_t> = mem::MaybeUninit::uninit();
+        let mut attr: COpaque<libc::pthread_attr_t> = COpaque::uninit();
         if !cfg!(target_os = "freebsd") {
-            attr = mem::MaybeUninit::zeroed();
+            attr = COpaque::zeroed();
         }
+        let attr = pin!(attr);
+        // FIXME(pin-ergonomics): remove the next line.
+        let attr = attr.into_ref();
+
         #[cfg(target_os = "freebsd")]
-        assert_eq!(libc::pthread_attr_init(attr.as_mut_ptr()), 0);
+        assert_eq!(libc::pthread_attr_init(attr.get()), 0);
         #[cfg(target_os = "freebsd")]
-        let e = libc::pthread_attr_get_np(libc::pthread_self(), attr.as_mut_ptr());
+        let e = libc::pthread_attr_get_np(libc::pthread_self(), attr.get());
         #[cfg(not(target_os = "freebsd"))]
-        let e = libc::pthread_getattr_np(libc::pthread_self(), attr.as_mut_ptr());
+        let e = libc::pthread_getattr_np(libc::pthread_self(), attr.get());
         if e == 0 {
             let mut guardsize = 0;
-            assert_eq!(libc::pthread_attr_getguardsize(attr.as_ptr(), &mut guardsize), 0);
+            assert_eq!(libc::pthread_attr_getguardsize(attr.get(), &mut guardsize), 0);
             if guardsize == 0 {
                 if cfg!(all(target_os = "linux", target_env = "musl")) {
                     // musl versions before 1.1.19 always reported guard
@@ -599,7 +604,7 @@ mod imp {
             }
             let mut stackptr = crate::ptr::null_mut::<libc::c_void>();
             let mut size = 0;
-            assert_eq!(libc::pthread_attr_getstack(attr.as_ptr(), &mut stackptr, &mut size), 0);
+            assert_eq!(libc::pthread_attr_getstack(attr.get(), &mut stackptr, &mut size), 0);
 
             let stackaddr = stackptr.addr();
             ret = if cfg!(any(target_os = "freebsd", target_os = "netbsd", target_os = "hurd")) {
@@ -620,7 +625,7 @@ mod imp {
             };
         }
         if e == 0 || cfg!(target_os = "freebsd") {
-            assert_eq!(libc::pthread_attr_destroy(attr.as_mut_ptr()), 0);
+            assert_eq!(libc::pthread_attr_destroy(attr.get()), 0);
         }
         ret
     }
@@ -650,8 +655,6 @@ mod imp {
 ))]
 mod imp {
     pub unsafe fn init() {}
-
-    pub unsafe fn cleanup() {}
 
     pub unsafe fn make_handler(_main_thread: bool) -> super::Handler {
         super::Handler::null()
@@ -734,8 +737,6 @@ mod imp {
         // Set the thread stack guarantee for the main thread.
         reserve_stack();
     }
-
-    pub unsafe fn cleanup() {}
 
     pub unsafe fn make_handler(main_thread: bool) -> super::Handler {
         if !main_thread {
