@@ -32,8 +32,8 @@ use effective_visibilities::EffectiveVisibilitiesVisitor;
 use hygiene::Macros20NormalizedSyntaxContext;
 use imports::{Import, ImportData, ImportKind, NameResolution, PendingDecl};
 use late::{
-    ForwardGenericParamBanReason, HasGenericParams, PathSource, PatternSource,
-    UnnecessaryQualification,
+    ConstantRequiresType, ForwardGenericParamBanReason, HasGenericParams, PathSource,
+    PatternSource, UnnecessaryQualification,
 };
 pub use macros::registered_lint_tools_ast;
 use macros::{MacroRulesDecl, MacroRulesScope, MacroRulesScopeRef};
@@ -53,22 +53,20 @@ use rustc_expand::base::{DeriveResolution, SyntaxExtension, SyntaxExtensionKind}
 use rustc_feature::{BUILTIN_ATTRIBUTES, Features};
 use rustc_hir::attrs::StrippedCfgItem;
 use rustc_hir::def::Namespace::{self, *};
-use rustc_hir::def::{
-    self, CtorOf, DefKind, DocLinkResMap, MacroKinds, NonMacroAttrKind, PartialRes, PerNS,
-};
+use rustc_hir::def::{self, CtorOf, DefKind, MacroKinds, NonMacroAttrKind, PerNS};
 use rustc_hir::def_id::{CRATE_DEF_ID, CrateNum, DefId, LOCAL_CRATE, LocalDefId, LocalDefIdMap};
 use rustc_hir::definitions::{PerParentDisambiguatorState, PerParentDisambiguatorsMap};
 use rustc_hir::{PrimTy, TraitCandidate, find_attr};
 use rustc_index::bit_set::DenseBitSet;
 use rustc_lint_defs::builtin::PRIVATE_MACRO_USE;
 use rustc_metadata::creader::CStore;
-use rustc_middle::metadata::{AmbigModChild, ModChild, Reexport};
 use rustc_middle::middle::privacy::EffectiveVisibilities;
-use rustc_middle::query::Providers;
-use rustc_middle::ty::{
-    self, DelegationInfo, MainDefinition, PerOwnerResolverData, RegisteredTools,
-    ResolverAstLowering, ResolverGlobalCtxt, TyCtxt, TyCtxtFeed, Visibility,
+use rustc_middle::middle::resolve::{
+    AmbigModChild, DelegationInfo, DelegationInherentFnKind, DocLinkResMap, MainDefinition,
+    ModChild, PartialRes, PerOwnerResolverData, Reexport, ResolverAstLowering, ResolverGlobalCtxt,
 };
+use rustc_middle::query::Providers;
+use rustc_middle::ty::{self, RegisteredTools, TyCtxt, TyCtxtFeed, Visibility};
 use rustc_middle::{bug, span_bug};
 use rustc_span::def_id::{LocalModId, ModId};
 use rustc_span::hygiene::{ExpnId, LocalExpnId, MacroKind, SyntaxContext, Transparency};
@@ -284,6 +282,7 @@ enum ResolutionError<'ra> {
         suggestion: &'static str,
         current: &'static str,
         type_span: Option<Span>,
+        requires_type: ConstantRequiresType,
     },
     /// Error E0530: `X` bindings cannot shadow `Y`s.
     BindingShadowsSomethingUnacceptable {
@@ -1222,10 +1221,7 @@ impl<'ra> DeclData<'ra> {
     }
 
     fn is_assoc_item(&self) -> bool {
-        matches!(
-            self.res(),
-            Res::Def(DefKind::AssocConst { .. } | DefKind::AssocFn | DefKind::AssocTy, _)
-        )
+        matches!(self.res(), Res::Def(DefKind::AssocConst | DefKind::AssocFn | DefKind::AssocTy, _))
     }
 
     fn macro_kinds(&self) -> Option<MacroKinds> {
@@ -1516,6 +1512,7 @@ pub struct Resolver<'ra, 'tcx> {
     item_required_generic_args_suggestions: FxHashMap<LocalDefId, String> = default::fx_hash_map(),
     delegation_fn_sigs: LocalDefIdMap<DelegationFnSig> = Default::default(),
     delegation_infos: FxIndexMap<LocalDefId, DelegationInfo>,
+    delegation_inherent_fn_map: FxIndexMap<LocalDefId, FxIndexMap<Ident, DelegationInherentFnKind>>,
 
     main_def: Option<MainDefinition> = None,
     trait_impls: FxIndexMap<DefId, Vec<LocalDefId>>,
@@ -1888,6 +1885,7 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
             current_crate_outer_attr_insert_span,
             disambiguators: Default::default(),
             delegation_infos: Default::default(),
+            delegation_inherent_fn_map: Default::default(),
             features: tcx.features(),
             ..
         };
@@ -1992,8 +1990,9 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
             all_macro_rules: self.all_macro_rules,
             stripped_cfg_items,
             delegation_infos: self.delegation_infos,
+            delegation_inherent_fn_map: self.delegation_inherent_fn_map,
         };
-        let ast_lowering = ty::ResolverAstLowering {
+        let ast_lowering = ResolverAstLowering {
             partial_res_map: self.partial_res_map,
             next_node_id: self.next_node_id,
             owners: self.owners,

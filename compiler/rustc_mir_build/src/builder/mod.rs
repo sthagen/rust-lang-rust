@@ -556,6 +556,7 @@ fn construct_fn<'tcx>(
             })
             .into_block();
         let source_info = builder.source_info(fn_end);
+        builder.push_coverage_point_for_fn_end(return_block, source_info, fn_id);
         builder.cfg.terminate(return_block, source_info, TerminatorKind::Return);
         builder.build_drop_trees();
         return_block.unit()
@@ -636,8 +637,8 @@ fn construct_error(tcx: TyCtxt<'_>, def_id: LocalDefId, guar: ErrorGuaranteed) -
     let hir_id = tcx.local_def_id_to_hir_id(def_id);
 
     let (inputs, output, coroutine) = match tcx.def_kind(def_id) {
-        DefKind::Const { .. }
-        | DefKind::AssocConst { .. }
+        DefKind::Const
+        | DefKind::AssocConst
         | DefKind::AnonConst
         | DefKind::Static { .. }
         | DefKind::GlobalAsm => {

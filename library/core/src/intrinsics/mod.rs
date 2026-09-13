@@ -862,7 +862,10 @@ pub const fn forget<T: ?Sized>(_: T);
 /// }
 /// ```
 #[stable(feature = "rust1", since = "1.0.0")]
-#[rustc_allowed_through_unstable_modules = "import this function via `std::mem` instead"]
+#[rustc_allowed_through_unstable_modules(
+    message = "import this function via the `mem` module instead",
+    module = "mem"
+)]
 #[rustc_const_stable(feature = "const_transmute", since = "1.56.0")]
 #[rustc_diagnostic_item = "transmute"]
 #[rustc_nounwind]
@@ -3006,6 +3009,22 @@ pub const fn type_id_eq(a: crate::any::TypeId, b: crate::any::TypeId) -> bool {
 #[rustc_comptime]
 pub fn type_id_is_signed(_id: crate::any::TypeId) -> bool;
 
+/// Gets the length of the array represented by this `TypeId`.
+///
+/// The more user-friendly version of this intrinsic is [`core::any::TypeId::array_len`].
+#[rustc_intrinsic]
+#[unstable(feature = "core_intrinsics", issue = "none")]
+#[rustc_comptime]
+pub fn type_id_array_len(_id: crate::any::TypeId) -> usize;
+
+/// Gets the type of each element of the array or slice represented by this `TypeId`.
+///
+/// The more user-friendly version of this intrinsic is [`core::any::TypeId::element_ty`].
+#[rustc_intrinsic]
+#[unstable(feature = "core_intrinsics", issue = "none")]
+#[rustc_comptime]
+pub fn type_id_element_ty(_id: crate::any::TypeId) -> Option<crate::any::TypeId>;
+
 /// Gets the size of the type represented by this `TypeId`.
 ///
 /// The more user-friendly version of this intrinsic is [`core::any::TypeId::size`].
@@ -3098,6 +3117,15 @@ pub fn field_representing_type_name(_frt_type_id: crate::any::TypeId) -> &'stati
 #[rustc_comptime]
 pub fn field_representing_type_offset(_frt_type_id: crate::any::TypeId) -> usize;
 
+/// Given a `TypeId` that represents a function pointer returns an [`core::mem::type_info::FnPtr`].
+/// When called on something else this returns `None`.
+///
+/// The more user-friendly version of this intrinsic is [`core::any::TypeId::function_ptr`].
+#[rustc_intrinsic]
+#[unstable(feature = "core_intrinsics", issue = "none")]
+#[rustc_comptime]
+pub fn type_id_function_ptr(_type_id: crate::any::TypeId) -> Option<crate::mem::type_info::FnPtr>;
+
 /// Checks whether this type is non-exhaustive.
 #[rustc_intrinsic]
 #[unstable(feature = "core_intrinsics", issue = "none")]
@@ -3110,6 +3138,26 @@ pub fn non_exhaustive(_id: crate::any::TypeId) -> bool;
 #[unstable(feature = "core_intrinsics", issue = "none")]
 #[rustc_comptime]
 pub fn type_id_generics(_id: crate::any::TypeId) -> &'static [crate::mem::type_info::Generic];
+
+// FIXME(reflection): Pick a consistent naming scheme for the intrinsics. Right now we got
+// type_id_<something>, <something>_type_id and intrinsics not mentioning type_id at all.
+/// Given a `TypeId` that represents a pointer this returns the `TypeId` which that pointer
+/// points to. When called on anything else this returns None.
+///
+/// The more user-friendly version of this intrinsic is [`core::any::TypeId::points_to`].
+#[rustc_intrinsic]
+#[unstable(feature = "core_intrinsics", issue = "none")]
+#[rustc_comptime]
+pub fn type_id_points_to(_id: crate::any::TypeId) -> Option<crate::any::TypeId>;
+
+/// Given a `TypeId` that represents a pointer returns whether that pointer is mutable.
+/// When called on anything else this returns `false`.
+///
+/// The more user-friendly version of this intrinsic is [`core::any::TypeId::points_mutably`].
+#[rustc_intrinsic]
+#[unstable(feature = "core_intrinsics", issue = "none")]
+#[rustc_comptime]
+pub fn type_id_points_mutably(_id: crate::any::TypeId) -> bool;
 
 /// Lowers in MIR to `Rvalue::Aggregate` with `AggregateKind::RawPtr`.
 ///
@@ -3138,7 +3186,10 @@ pub const fn ptr_metadata<P: ptr::Pointee<Metadata = M> + PointeeSized, M>(ptr: 
 // debug assertions; if you are writing compiler tests or code inside the standard library
 // that wants to avoid those debug assertions, directly call this intrinsic instead.
 #[stable(feature = "rust1", since = "1.0.0")]
-#[rustc_allowed_through_unstable_modules = "import this function via `std::ptr` instead"]
+#[rustc_allowed_through_unstable_modules(
+    message = "import this function via the `ptr` module instead",
+    module = "ptr"
+)]
 #[rustc_const_stable(feature = "const_intrinsic_copy", since = "1.83.0")]
 #[rustc_nounwind]
 #[rustc_intrinsic]
@@ -3149,7 +3200,10 @@ pub const unsafe fn copy_nonoverlapping<T>(src: *const T, dst: *mut T, count: us
 // debug assertions; if you are writing compiler tests or code inside the standard library
 // that wants to avoid those debug assertions, directly call this intrinsic instead.
 #[stable(feature = "rust1", since = "1.0.0")]
-#[rustc_allowed_through_unstable_modules = "import this function via `std::ptr` instead"]
+#[rustc_allowed_through_unstable_modules(
+    message = "import this function via the `ptr` module instead",
+    module = "ptr"
+)]
 #[rustc_const_stable(feature = "const_intrinsic_copy", since = "1.83.0")]
 #[rustc_nounwind]
 #[rustc_intrinsic]
@@ -3160,7 +3214,10 @@ pub const unsafe fn copy<T>(src: *const T, dst: *mut T, count: usize);
 // debug assertions; if you are writing compiler tests or code inside the standard library
 // that wants to avoid those debug assertions, directly call this intrinsic instead.
 #[stable(feature = "rust1", since = "1.0.0")]
-#[rustc_allowed_through_unstable_modules = "import this function via `std::ptr` instead"]
+#[rustc_allowed_through_unstable_modules(
+    message = "import this function via the `ptr` module instead",
+    module = "ptr"
+)]
 #[rustc_const_stable(feature = "const_intrinsic_copy", since = "1.83.0")]
 #[rustc_nounwind]
 #[rustc_intrinsic]

@@ -2361,7 +2361,7 @@ fn test_item_names(tcx: TyCtxt<'_>, module: LocalModId) -> Vec<Symbol> {
         Entry::Vacant(entry) => {
             let mut names = Vec::new();
             for id in tcx.hir_module_free_items(module) {
-                if matches!(tcx.def_kind(id.owner_id), DefKind::Const { .. })
+                if tcx.def_kind(id.owner_id) == DefKind::Const
                     && let item = tcx.hir_item(id)
                     && let ItemKind::Const(ident, _generics, ty, _body) = item.kind
                     && let TyKind::Path(QPath::Resolved(_, path)) = ty.kind
@@ -2791,7 +2791,8 @@ pub fn expr_use_sites<'tcx>(
                 | Node::TyPat(_)
                 | Node::WherePredicate(_)
                 | Node::TestBinderForall(_)
-                | Node::TestBinderExists(_) => {
+                | Node::TestBinderExists(_)
+                | Node::TestBinderBoundTypeConstraint(_) => {
                     // This shouldn't be possible to hit; the inner iterator should have
                     // been moved to the end before we hit any of these nodes.
                     debug_assert!(false, "found {parent:?} which is after the final use node");

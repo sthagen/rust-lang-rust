@@ -6,7 +6,8 @@ use rustc_errors::{
     Diag, DiagCtxtHandle, DiagSymbolList, Diagnostic, EmissionGuarantee, Level, MultiSpan, msg,
 };
 use rustc_macros::{Diagnostic, Subdiagnostic};
-use rustc_middle::ty::{MainDefinition, Ty};
+use rustc_middle::middle::resolve::MainDefinition;
+use rustc_middle::ty::Ty;
 use rustc_span::{DUMMY_SP, Ident, Span, Symbol};
 
 use crate::check_attr::ProcMacroKind;
@@ -46,15 +47,6 @@ pub(crate) struct OuterCrateLevelAttrSuggestion {
 #[derive(Diagnostic)]
 #[diag("crate-level attribute should be in the root module")]
 pub(crate) struct InnerCrateLevelAttr;
-
-#[derive(Diagnostic)]
-#[diag("`#[non_exhaustive]` can't be used to annotate items with default field values")]
-pub(crate) struct NonExhaustiveWithDefaultFieldValues {
-    #[primary_span]
-    pub attr_span: Span,
-    #[label("this struct has default field values")]
-    pub defn_span: Span,
-}
 
 #[derive(Diagnostic)]
 #[diag("`#[doc(alias = \"...\")]` isn't allowed on {$location}")]
@@ -1163,4 +1155,21 @@ pub(crate) struct StaticMutLinkage {
 pub(crate) struct ConstFnLinkage {
     #[primary_span]
     pub span: Span,
+}
+
+#[derive(Diagnostic)]
+#[diag("use of deprecated import through accidentally stabilized module `{$module}`")]
+pub(crate) struct RustcAtumSuggestion {
+    #[primary_span]
+    pub import_span: Span,
+    pub message: Symbol,
+    pub suggestion: Symbol,
+    pub module: Ident,
+    #[suggestion(
+        "{$message}",
+        code = "{suggestion}",
+        style = "verbose",
+        applicability = "machine-applicable"
+    )]
+    pub unstable_mod_span: Span,
 }

@@ -33,7 +33,7 @@ use rustc_hir::attrs::lang_items::LangItem;
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::{CrateNum, DefId, LOCAL_CRATE, LocalDefId};
 use rustc_hir::definitions::{DefPathData, Definitions, PerParentDisambiguatorState};
-use rustc_hir::intravisit::VisitorExt;
+use rustc_hir::intravisit::Visitor;
 use rustc_hir::{self as hir, CRATE_HIR_ID, HirId, Node, TraitCandidate, find_attr};
 use rustc_index::IndexVec;
 use rustc_lint_defs::Lint;
@@ -55,8 +55,8 @@ use crate::hir::{ProjectedMaybeOwner, ProjectedOwnerInfo};
 use crate::ich::StableHashState;
 use crate::infer::canonical::{CanonicalParamEnvCache, CanonicalVarKind};
 use crate::lint::emit_lint_base;
-use crate::metadata::ModChild;
 use crate::middle::codegen_fn_attrs::{CodegenFnAttrs, TargetFeature};
+use crate::middle::resolve::{ModChild, ResolverAstLowering};
 use crate::middle::resolve_bound_vars;
 use crate::mir::interpret::{self, Allocation, ConstAllocation};
 use crate::mir::{Body, Local, Place, PlaceElem, ProjectionKind, Promoted};
@@ -68,7 +68,6 @@ use crate::traits::solve::{
     PredefinedOpaques,
 };
 use crate::ty::predicate::ExistentialPredicateStableCmpExt as _;
-use crate::ty::region::RegionExt;
 use crate::ty::{
     self, AdtDef, AdtDefData, AdtKind, Binder, Clause, ClausePolarity, Clauses, Const, FnSigKind,
     GenericArg, GenericArgs, GenericArgsRef, GenericParamDefKind, List, ListWithCachedTypeInfo,
@@ -859,10 +858,7 @@ impl<'tcx> TyCtxt<'tcx> {
             self.codegen_fn_attrs(def_id)
         } else if matches!(
             def_kind,
-            DefKind::AnonConst
-                | DefKind::AssocConst { .. }
-                | DefKind::Const { .. }
-                | DefKind::GlobalAsm
+            DefKind::AnonConst | DefKind::AssocConst | DefKind::Const | DefKind::GlobalAsm
         ) {
             CodegenFnAttrs::EMPTY
         } else {
@@ -1029,22 +1025,21 @@ impl<'tcx> TyCtxt<'tcx> {
         self.is_lang_item(self.parent(def_id), LangItem::AsyncDropInPlace)
     }
 
-    pub fn type_const_span(self, def_id: DefId) -> Option<Span> {
-        if !self.is_type_const(def_id) {
-            return None;
-        }
-        Some(self.def_span(def_id))
+    /// Returns true if the const is guaranteed to have a directly represented RHS. This is either
+    /// because it has a directly represented RHS, or is a trait definition that is marked as
+    /// requiring its implementation to have a directly represented RHS.
+    ///
+    /// Note: Be very careful with using this method - under `generic_const_args`, a trait can
+    /// declare a regular const, but an `impl` could implement it with a directly represented const
+    /// (a la refinement). This method would return false in such a case.
+    pub fn is_direct_const(self, def_id: DefId) -> bool {
+        debug_assert_matches!(self.def_kind(def_id), DefKind::Const | DefKind::AssocConst);
+        self.is_always_gca(def_id) || self.const_of_item(def_id).is_some()
     }
 
-    /// Check if the given `def_id` is a `type const` (mgca)
-    pub fn is_type_const(self, def_id: impl IntoQueryKey<DefId>) -> bool {
-        let def_id = def_id.into_query_key();
-        match self.def_kind(def_id) {
-            DefKind::Const { is_type_const } | DefKind::AssocConst { is_type_const } => {
-                is_type_const
-            }
-            _ => false,
-        }
+    /// Whether this is a projection const marked with `#[always_gca]`
+    pub fn is_always_gca(self, def_id: DefId) -> bool {
+        find_attr!(self, def_id, AlwaysGca)
     }
 
     /// Returns the movability of the coroutine of `def_id`, or panics
@@ -1272,6 +1267,10 @@ impl<'tcx> TyCtxt<'tcx> {
             Some(value) => value.to_str().ok_or_else(|| VarError::NotUnicode(value.to_os_string())),
             None => Err(VarError::NotPresent),
         }
+    }
+
+    pub fn is_method(self, id: DefId) -> bool {
+        self.opt_associated_item(id).is_some_and(|item| item.is_method())
     }
 }
 
@@ -2265,7 +2264,7 @@ impl<'tcx> TyCtxt<'tcx> {
                 debug_assert_matches!(self.def_kind(def_id), DefKind::AnonConst);
             }
             ty::AliasTermKind::ProjectionConst { def_id } => {
-                debug_assert_matches!(self.def_kind(def_id), DefKind::AssocConst { .. });
+                debug_assert_matches!(self.def_kind(def_id), DefKind::AssocConst);
                 debug_assert_matches!(
                     self.def_kind(self.parent(def_id)),
                     DefKind::Trait | DefKind::Impl { of_trait: true }
@@ -2273,14 +2272,14 @@ impl<'tcx> TyCtxt<'tcx> {
             }
             ty::AliasTermKind::InherentConstSelf { def_id }
             | ty::AliasTermKind::InherentConstImpl { def_id } => {
-                debug_assert_matches!(self.def_kind(def_id), DefKind::AssocConst { .. });
+                debug_assert_matches!(self.def_kind(def_id), DefKind::AssocConst);
                 debug_assert_matches!(
                     self.def_kind(self.parent(def_id)),
                     DefKind::Impl { of_trait: false }
                 );
             }
             ty::AliasTermKind::FreeConst { def_id } => {
-                debug_assert_matches!(self.def_kind(def_id), DefKind::Const { .. });
+                debug_assert_matches!(self.def_kind(def_id), DefKind::Const);
             }
         }
     }
@@ -2878,7 +2877,7 @@ impl<'tcx> TyCtxt<'tcx> {
 
     pub fn resolver_for_lowering(
         self,
-    ) -> (&'tcx Steal<ty::ResolverAstLowering<'tcx>>, &'tcx Steal<ast::Crate>) {
+    ) -> (&'tcx Steal<ResolverAstLowering<'tcx>>, &'tcx Steal<ast::Crate>) {
         let (resolver, krate, _) = self.resolver_for_lowering_raw(());
         (resolver, krate)
     }
