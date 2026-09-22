@@ -1,10 +1,10 @@
-use rustc_ast::token::{self, IdentIsRaw, MetaVarKind, Token, TokenKind};
+use rustc_ast::token::{self, IdentKind, MetaVarKind, Token, TokenKind};
 use rustc_ast::util::case::Case;
 use rustc_ast::{
     self as ast, BoundAsyncness, BoundConstness, BoundPolarity, DUMMY_NODE_ID, FnPtrTy, FnRetTy,
     GenericBound, GenericBounds, GenericParam, Generics, Lifetime, MacCall, MutTy, Mutability,
-    Pinnedness, PolyTraitRef, PreciseCapturingArg, TraitBoundModifiers, TraitObjectSyntax, Ty,
-    TyKind, UnsafeBinderTy,
+    Path, Pinnedness, PolyTraitRef, PreciseCapturingArg, TraitBoundModifiers, TraitObjectSyntax,
+    Ty, TyKind, UnsafeBinderTy,
 };
 use rustc_errors::{Applicability, Diag, E0516, PResult};
 use rustc_span::{ErrorGuaranteed, Ident, Span, kw, sym};
@@ -406,7 +406,23 @@ impl<'a> Parser<'a> {
             let msg = format!("expected type, found {}", super::token_descr(&self.token));
             let mut err = self.dcx().struct_span_err(lo, msg);
             err.span_label(lo, "expected type");
-            return Err(err);
+            if self.may_recover()
+                && (self.eat_keyword_noexpect(kw::True) || self.eat_keyword_noexpect(kw::False))
+            {
+                err.span_suggestion(
+                    self.prev_token.span,
+                    "the type is called",
+                    "bool",
+                    Applicability::MachineApplicable,
+                );
+                err.emit();
+                TyKind::Path(
+                    None,
+                    Path::from_ident(Ident { span: self.prev_token.span, name: sym::bool }),
+                )
+            } else {
+                return Err(err);
+            }
         };
 
         let span = lo.to(self.prev_token.span);
@@ -511,7 +527,7 @@ impl<'a> Parser<'a> {
                 err.span_label(lo, "expected type");
                 return Ok(match self.maybe_recover_ref_ty_no_leading_ampersand(lt, lo, err) {
                     Ok(ref_ty) => ref_ty,
-                    Err(err) => TyKind::Err(err.emit()),
+                    Err(err) => TyKind::Err(err.emit_err()),
                 });
             }
 
@@ -775,7 +791,7 @@ impl<'a> Parser<'a> {
             .struct_span_err(span, "`typeof` is a reserved keyword but unimplemented")
             .with_note("consider replacing `typeof(...)` with an actual type")
             .with_code(E0516)
-            .emit();
+            .emit_err();
         Ok(TyKind::Err(guar))
     }
 
@@ -915,18 +931,15 @@ impl<'a> Parser<'a> {
 
     /// Parses an `impl B0 + ... + Bn` type.
     fn parse_impl_ty(&mut self, impl_dyn_multi: &mut bool) -> PResult<'a, TyKind> {
-        if self.token.is_lifetime() {
-            self.look_ahead(1, |t| {
-                if let token::Ident(sym, _) = t.kind {
-                    // parse pattern with "'a Sized" we're supposed to give suggestion like
-                    // "'a + Sized"
-                    self.dcx().emit_err(diagnostics::MissingPlusBounds {
-                        span: self.token.span,
-                        hi: self.token.span.shrink_to_hi(),
-                        sym,
-                    });
-                }
-            })
+        // If we encounter a type like `impl 'a Sized`, suggest `impl 'a + Sized`.
+        if self.token.is_lifetime()
+            && let Some(ident) = self.look_ahead(1, |t| t.non_reserved_ident())
+        {
+            self.dcx().emit_err(diagnostics::MissingPlusBounds {
+                span: self.token.span,
+                hi: self.token.span.shrink_to_hi(),
+                sym: ident.name,
+            });
         }
 
         // Always parse bounds greedily for better error recovery.
@@ -1142,7 +1155,7 @@ impl<'a> Parser<'a> {
             vec![(lo, String::new()), (hi, String::new())],
             Applicability::MachineApplicable,
         );
-        diag.emit()
+        diag.emit_err()
     }
 
     /// Emits an error if any trait bound modifiers were present.
@@ -1615,8 +1628,8 @@ impl<'a> Parser<'a> {
 
     /// Parses a single lifetime `'a` or panics.
     pub(super) fn expect_lifetime(&mut self) -> Lifetime {
-        if let Some((ident, is_raw)) = self.token.lifetime() {
-            if is_raw == IdentIsRaw::No && ident.without_first_quote().is_reserved_lifetime() {
+        if let Some((ident, kind)) = self.token.lifetime() {
+            if kind == IdentKind::Normal && ident.without_first_quote().is_reserved_lifetime() {
                 self.dcx().emit_err(diagnostics::KeywordLifetime { span: ident.span });
             }
 

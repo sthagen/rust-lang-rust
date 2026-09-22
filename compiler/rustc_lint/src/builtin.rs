@@ -33,14 +33,13 @@ use rustc_hir::{self as hir, Body, FnDecl, ImplItemImplKind, PatKind, PredicateO
 // Lints from rustc_lint_defs
 pub use rustc_lint_defs::builtin::*;
 use rustc_lint_defs::{declare_lint, declare_lint_pass, fcw, impl_lint_pass};
-use rustc_middle::bug;
 use rustc_middle::ty::layout::LayoutOf;
 use rustc_middle::ty::print::with_no_trimmed_paths;
 use rustc_middle::ty::{
     self, AssocContainer, Ty, TyCtxt, TypeVisitableExt, Unnormalized, Upcast, VariantDef,
 };
 use rustc_span::edition::Edition;
-use rustc_span::{DUMMY_SP, Ident, InnerSpan, Span, Spanned, Symbol, kw, sym};
+use rustc_span::{DUMMY_SP, Ident, InnerSpan, Span, Spanned, Symbol, bug, kw, sym};
 use rustc_target::asm::InlineAsmArch;
 use rustc_trait_selection::infer::{InferCtxtExt, TyCtxtInferExt};
 use rustc_trait_selection::traits;
@@ -149,10 +148,7 @@ declare_lint_pass!(NonShorthandFieldPatterns => [NON_SHORTHAND_FIELD_PATTERNS]);
 
 impl<'tcx> LateLintPass<'tcx> for NonShorthandFieldPatterns {
     fn check_pat(&mut self, cx: &LateContext<'_>, pat: &hir::Pat<'_>) {
-        // The result shouldn't be tainted, otherwise it will cause ICE.
-        if let PatKind::Struct(ref qpath, field_pats, _) = pat.kind
-            && cx.typeck_results().tainted_by_errors.is_none()
-        {
+        if let PatKind::Struct(ref qpath, field_pats, _) = pat.kind {
             let variant = cx
                 .typeck_results()
                 .pat_ty(pat)
@@ -196,7 +192,7 @@ impl UnsafeCode {
         &self,
         cx: &EarlyContext<'_>,
         span: Span,
-        decorate: impl for<'a> Diagnostic<'a, ()>,
+        decorate: impl for<'a> Diagnostic<'a>,
     ) {
         // This comes from a macro that has `#[allow_internal_unsafe]`.
         if span.allows_unsafe() {
@@ -1758,11 +1754,11 @@ impl KeywordIdents {
             match tt {
                 // Only report non-raw idents.
                 TokenTree::Token(token, _) => {
-                    if let Some((ident, token::IdentIsRaw::No)) = token.ident() {
+                    if let Some((ident, token::IdentKind::Normal)) = token.ident() {
                         if !prev_dollar {
                             self.check_ident_token(cx, UnderMacro(true), ident, "");
                         }
-                    } else if let Some((ident, token::IdentIsRaw::No)) = token.lifetime() {
+                    } else if let Some((ident, token::IdentKind::Normal)) = token.lifetime() {
                         self.check_ident_token(
                             cx,
                             UnderMacro(true),

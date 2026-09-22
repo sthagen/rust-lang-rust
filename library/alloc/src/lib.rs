@@ -58,7 +58,6 @@
 
 #![allow(unused_features)]
 #![allow(incomplete_features)]
-#![allow(unused_attributes)]
 #![expect(clippy::partialeq_ne_impl, reason = "we need to implement ne for a lot of alloc types")]
 #![stable(feature = "alloc", since = "1.36.0")]
 #![doc(
@@ -149,6 +148,7 @@
 #![feature(legacy_receiver_trait)]
 #![feature(likely_unlikely)]
 #![feature(local_waker)]
+#![feature(marker_trait_attr)]
 #![feature(maybe_uninit_array_assume_init)]
 #![feature(maybe_uninit_fill)]
 #![feature(maybe_uninit_uninit_array_transpose)]

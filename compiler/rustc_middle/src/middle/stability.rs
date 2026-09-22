@@ -7,7 +7,7 @@ use rustc_ast::NodeId;
 use rustc_attr_ir::{
     ConstStability, DefaultBodyStability, DeprecatedSince, Deprecation, Stability, StabilityLevel,
 };
-use rustc_errors::{Applicability, Diag, Diagnostic, EmissionGuarantee, LintBuffer, msg};
+use rustc_errors::{Applicability, Diag, Diagnostic, LintBuffer, msg};
 use rustc_feature::GateIssue;
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_hir::{self as hir, HirId};
@@ -114,12 +114,12 @@ pub(crate) struct Deprecated {
     pub since_kind: DeprecatedSinceKind,
 }
 
-impl<'a, G: EmissionGuarantee> rustc_errors::Diagnostic<'a, G> for Deprecated {
+impl<'a> rustc_errors::Diagnostic<'a> for Deprecated {
     fn into_diag(
         self,
         dcx: rustc_errors::DiagCtxtHandle<'a>,
         level: rustc_errors::Level,
-    ) -> Diag<'a, G> {
+    ) -> Diag<'a> {
         let Self { sub, kind, path, note, since_kind } = self;
         let mut diag = Diag::new(dcx, level, match &since_kind {
             DeprecatedSinceKind::InEffect => msg!(

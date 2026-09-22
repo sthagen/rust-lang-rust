@@ -59,7 +59,6 @@ use rustc_hir::intravisit::Visitor;
 use rustc_hir::{self as hir, find_attr};
 use rustc_infer::infer::DefineOpaqueTypes;
 use rustc_macros::extension;
-use rustc_middle::bug;
 use rustc_middle::traits::PatternOriginExpr;
 use rustc_middle::ty::error::{ExpectedFound, TypeError, TypeErrorToStringExt};
 use rustc_middle::ty::print::{PrintTraitRefExt as _, WrapBinderMode, with_forced_trimmed_paths};
@@ -67,7 +66,7 @@ use rustc_middle::ty::{
     self, List, Mutability, ParamEnv, Region, Ty, TyCtxt, TypeFoldable, TypeSuperVisitable,
     TypeVisitable, TypeVisitableExt, Unnormalized,
 };
-use rustc_span::{BytePos, DUMMY_SP, DesugaringKind, Pos, Span, sym};
+use rustc_span::{BytePos, DUMMY_SP, DesugaringKind, Pos, Span, bug, sym};
 use thin_vec::ThinVec;
 use tracing::{debug, instrument};
 
@@ -414,7 +413,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
                     match scrut_ty {
                         Some(ty) if expected == ty => {
                             let source_map = self.tcx.sess.source_map();
-                            err.span_suggestion(
+                            err.span_suggestion_short(
                                 source_map.end_point(cause.span),
                                 "try removing this `?`",
                                 "",
@@ -453,7 +452,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
                         match scrut_ty {
                             Some(ty) if expected == ty => {
                                 let source_map = self.tcx.sess.source_map();
-                                err.span_suggestion(
+                                err.span_suggestion_short(
                                     source_map.end_point(cause.span),
                                     "try removing this `?`",
                                     "",

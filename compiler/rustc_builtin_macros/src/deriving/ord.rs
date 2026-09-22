@@ -16,7 +16,7 @@ pub(crate) fn expand_deriving_ord(
 ) {
     let trait_def = TraitDef {
         span,
-        path: path_std!(cmp::Ord),
+        path: path_std!(cx, span, cmp::Ord),
         skip_path_as_bound: false,
         needs_copy_as_bound_if_packed: true,
         additional_bounds: SmallVec::new(),
@@ -26,7 +26,7 @@ pub(crate) fn expand_deriving_ord(
             generics: cx.empty_generics(span),
             explicit_self: true,
             nonself_args: smallvec![(self_ref(), sym::other)],
-            ret_ty: Path(path_std!(cmp::Ordering)),
+            ret_ty: Path(path_std!(cx, span, cmp::Ordering)),
             attributes: thin_vec![cx.attr_word(sym::inline, span)],
             fieldless_variants_strategy: FieldlessVariantsStrategy::Unify,
             combine_substructure: combine_substructure(cs_cmp),
@@ -52,29 +52,22 @@ pub(crate) fn cs_cmp(cx: &ExtCtxt<'_>, span: Span, substr: Substructure<'_>) -> 
     //         ::core::cmp::Ord::cmp(&self.y, &other.y),
     //     cmp => cmp,
     // }
-    let expr = cs_fold(
-        // foldr nests the if-elses correctly, leaving the first field
-        // as the outermost one, and the last as the innermost.
-        false,
+    let expr = cs_foldr(
         cx,
         span,
         substr,
-        |cx, fold| match fold {
-            CsFold::Single(field) => {
-                let [other_expr] = &field.other_selflike_exprs[..] else {
-                    cx.dcx().span_bug(field.span, "not exactly 2 arguments in `derive(Ord)`");
-                };
-                let args = thin_vec![field.self_expr.clone(), other_expr.clone()];
-                cx.expr_call_global(field.span, cmp_path.clone(), args)
-            }
-            CsFold::Combine(span, expr1, expr2) => {
-                let eq_arm = cx.arm(span, cx.pat_path(span, equal_path.clone()), expr1);
-                let neq_arm =
-                    cx.arm(span, cx.pat_ident(span, test_id), cx.expr_ident(span, test_id));
-                cx.expr_match(span, expr2, thin_vec![eq_arm, neq_arm])
-            }
-            CsFold::Fieldless => cx.expr_path(equal_path.clone()),
+        |field| {
+            let other_expr =
+                field.other_selflike_expr.expect("not exactly 2 arguments in `derive(Ord)`");
+            let args = thin_vec![field.self_expr, other_expr];
+            cx.expr_call_global(field.span, cmp_path.clone(), args)
         },
+        |span, expr1, expr2| {
+            let eq_arm = cx.arm(span, cx.pat_path(span, equal_path.clone()), expr1);
+            let neq_arm = cx.arm(span, cx.pat_ident(span, test_id), cx.expr_ident(span, test_id));
+            cx.expr_match(span, expr2, thin_vec![eq_arm, neq_arm])
+        },
+        || cx.expr_path(equal_path.clone()),
     );
     BlockOrExpr::new_expr(expr)
 }
