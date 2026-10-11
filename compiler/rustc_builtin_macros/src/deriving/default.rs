@@ -7,8 +7,8 @@ use rustc_span::{ErrorGuaranteed, Ident, Span, kw, sym};
 use smallvec::SmallVec;
 use thin_vec::{ThinVec, thin_vec};
 
-use crate::deriving::generic::ty::*;
 use crate::deriving::generic::*;
+use crate::deriving::new_path;
 use crate::diagnostics;
 
 pub(crate) fn expand_deriving_default(
@@ -22,7 +22,7 @@ pub(crate) fn expand_deriving_default(
 
     let trait_def = TraitDef {
         span,
-        path: new_path(cx, span, &[kw::Default, sym::Default], &[]),
+        path: new_path(cx, span, &[kw::Default, sym::Default], vec![]),
         skip_path_as_bound: has_a_default_variant(item),
         needs_copy_as_bound_if_packed: false,
         additional_bounds: SmallVec::new(),
@@ -32,13 +32,14 @@ pub(crate) fn expand_deriving_default(
             generics: cx.empty_generics(span),
             explicit_self: false,
             nonself_args: SmallVec::new(),
-            ret_ty: Self_,
+            has_other_selflike_arg: false,
+            ret_ty: cx.ty_self(span),
             attributes: thin_vec![cx.attr_word(sym::inline, span)],
             fieldless_variants_strategy: FieldlessVariantsStrategy::Default,
             combine_substructure: combine_substructure(|cx, trait_span, substr| {
-                match substr {
+                match substr.fields {
                     StaticStruct(variant_data) => {
-                        default_struct_substructure(cx, trait_span, variant_data)
+                        default_struct_substructure(cx, trait_span, variant_data, substr.type_ident)
                     }
                     StaticEnum(enum_def) => {
                         default_enum_substructure(cx, trait_span, enum_def, item.span)
@@ -49,7 +50,6 @@ pub(crate) fn expand_deriving_default(
                 }
             }),
         }],
-        associated_types: SmallVec::new(),
         is_const,
         safety: Safety::Default,
         document: true,
@@ -67,15 +67,16 @@ fn default_struct_substructure(
     cx: &ExtCtxt<'_>,
     trait_span: Span,
     variant_data: &VariantData,
+    type_ident: Ident,
 ) -> BlockOrExpr {
     let expr = match variant_data {
-        VariantData::Unit(_) => cx.expr_ident(trait_span, Ident::new(kw::SelfUpper, trait_span)),
+        VariantData::Unit(_) => cx.expr_ident(trait_span, type_ident),
         VariantData::Tuple(fields, _) => {
             let exprs = fields
                 .iter()
                 .map(|field| default_call(cx, field.span.with_ctxt(trait_span.ctxt())))
                 .collect();
-            cx.expr_call_ident(trait_span, Ident::new(kw::SelfUpper, trait_span), exprs)
+            cx.expr_call_ident(trait_span, type_ident, exprs)
         }
         VariantData::Struct { fields, .. } => {
             let default_fields = fields
@@ -95,7 +96,7 @@ fn default_struct_substructure(
                     cx.field_imm(span, field.ident.unwrap(), value)
                 })
                 .collect();
-            cx.expr_struct_ident(trait_span, Ident::new(kw::SelfUpper, trait_span), default_fields)
+            cx.expr_struct_ident(trait_span, type_ident, default_fields)
         }
     };
     BlockOrExpr::new_expr(expr)

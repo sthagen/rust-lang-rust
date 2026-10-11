@@ -68,9 +68,9 @@ fn generic_arg_mismatch_err(
         ) => match path.res {
             Res::Err => {
                 add_braces_suggestion(arg, &mut err);
-                return err
-                    .with_primary_message("unresolved item provided when a constant was expected")
-                    .emit_err();
+                err.primary_message("unresolved item provided when a constant was expected");
+                // A resolve error will already have been emitted pointing at this.
+                return err.delay_as_bug();
             }
             Res::Def(DefKind::TyParam, src_def_id) => {
                 if let Some(param_local_id) = param.def_id.as_local() {
@@ -503,6 +503,7 @@ pub(crate) fn check_generic_arg_count(
             has_self as usize,
             gen_args,
             def_id,
+            cx.item_def_id(),
         ));
 
         Err(reported)
@@ -617,6 +618,7 @@ pub(crate) fn check_generic_arg_count(
                     params_offset,
                     gen_args,
                     def_id,
+                    cx.item_def_id(),
                 ))
                 .emit_err_unless_delay(all_params_are_binded || has_invalid_bound)
         });

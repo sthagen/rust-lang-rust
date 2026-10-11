@@ -96,8 +96,7 @@ fn get_param_type_alignment<'ll, 'tcx>(
             },
             Primitive::Float(float) => match float {
                 Float::F16 | Float::F16B | Float::F32 => unreachable!(),
-                Float::F64 => { /* fall through */ }
-                Float::F128 => return Align::from_bytes(16).unwrap(),
+                Float::F64 | Float::F128 | Float::PpcF128 => { /* fall through */ }
             },
             Primitive::Pointer(_) => { /* fall through */ }
         },
@@ -308,7 +307,7 @@ fn emit_powerpc_va_arg<'ll, 'tcx>(
     let va_list_addr = list.immediate();
 
     // Peel off any newtype wrappers.
-    let layout = layout.peel_transparent_wrappers(bx.cx);
+    let layout = layout.peel_transparent_wrappers_from_non_1zst(bx.cx);
 
     // Rust does not currently support any powerpc softfloat targets.
     let target = &bx.cx.tcx.sess.target;
@@ -471,6 +470,9 @@ fn emit_s390x_va_arg<'ll, 'tcx>(
                 Primitive::Float(Float::F16B) => {
                     bug!("`f16b` use in varadics unsupported on s390x")
                 }
+                Primitive::Float(Float::PpcF128) => {
+                    bug!("`ppcf128` use in varadics unsupported on s390x")
+                }
             },
 
             _ => false,
@@ -561,7 +563,7 @@ fn emit_x86_64_sysv64_va_arg<'ll, 'tcx>(
     // #[repr(C)]
     // struct Foo([Empty; 8], i32);
     // ```
-    let layout = layout.peel_transparent_wrappers(bx.cx);
+    let layout = layout.peel_transparent_wrappers_from_non_1zst(bx.cx);
 
     // AMD64-ABI 3.5.7p5: Step 1. Determine whether type may be passed
     // in the registers. If not go to step 7.
@@ -1061,15 +1063,28 @@ pub(super) fn emit_va_arg<'ll, 'tcx>(
     let stability = target.supports_c_variadic_definitions();
 
     match target.arch {
-        Arch::X86 => emit_ptr_va_arg(
-            bx,
-            addr,
-            layout,
-            PassMode::Direct,
-            SlotSize::Bytes4,
-            if target.is_like_windows { AllowHigherAlign::No } else { AllowHigherAlign::Yes },
-            ForceRightAdjust::No,
-        ),
+        Arch::X86 => {
+            // A small deviation from clang to get the right behavior for f128.
+            //
+            // Note that i64 and f64 have an alignment of only 4 on this architecture.
+            // We need to be careful when adding future types with an alignment bigger
+            // than 4 (e.g. i128), clang has a bunch of custom logic for them.
+            let allow_higher_align = if layout.ty == bx.tcx().types.f128 {
+                AllowHigherAlign::Yes
+            } else {
+                AllowHigherAlign::No
+            };
+
+            emit_ptr_va_arg(
+                bx,
+                addr,
+                layout,
+                PassMode::Direct,
+                SlotSize::Bytes4,
+                allow_higher_align,
+                ForceRightAdjust::No,
+            )
+        }
         Arch::Arm64EC => emit_ptr_va_arg(
             bx,
             addr,

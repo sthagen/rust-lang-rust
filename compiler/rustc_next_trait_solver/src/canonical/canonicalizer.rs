@@ -5,20 +5,25 @@ use rustc_type_ir::inherent::*;
 use rustc_type_ir::solve::{Goal, QueryInput};
 use rustc_type_ir::{
     self as ty, Canonical, CanonicalParamEnvCacheEntry, CanonicalVarKind, CanonicalizerState,
-    Flags, InferCtxtLike, Interner, PlaceholderConst, PlaceholderType, PredicateProxy, Region,
-    TypeFlags, TypeFoldable, TypeFolder, TypeSuperFoldable, TypeVisitableExt,
+    Const, Flags, InferCtxtLike, Interner, PlaceholderConst, PlaceholderType, PredicateProxy,
+    Region, TypeFlags, TypeFoldable, TypeFolder, TypeSuperFoldable, TypeVisitableExt,
 };
 use thin_vec::ThinVec;
 
 use crate::delegate::SolverDelegate;
 
 /// Does this have infer/placeholder/param, free regions or ReErased?
+// We're explicitly checking for fresh types and consts to trigger an
+// assert if they ever leak into the trait solver. They should never
+// exist with the new solver.
 const NEEDS_CANONICAL: TypeFlags = TypeFlags::from_bits(
     TypeFlags::HAS_INFER.bits()
         | TypeFlags::HAS_PLACEHOLDER.bits()
         | TypeFlags::HAS_PARAM.bits()
         | TypeFlags::HAS_FREE_REGIONS.bits()
-        | TypeFlags::HAS_RE_ERASED.bits(),
+        | TypeFlags::HAS_RE_ERASED.bits()
+        | TypeFlags::HAS_TY_FRESH.bits()
+        | TypeFlags::HAS_CT_FRESH.bits(),
 )
 .unwrap();
 
@@ -525,7 +530,7 @@ impl<D: SolverDelegate<Interner = I>, I: Interner> TypeFolder<I> for Canonicaliz
         }
     }
 
-    fn fold_const(&mut self, c: I::Const) -> I::Const {
+    fn fold_const(&mut self, c: Const<I>) -> Const<I> {
         if !c.flags().intersects(NEEDS_CANONICAL) {
             return c;
         }

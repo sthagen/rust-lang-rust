@@ -205,6 +205,7 @@ declare_passes! {
     mod sroa : ScalarReplacementOfAggregates;
     mod strip_debuginfo : StripDebugInfo;
     mod ssa_range_prop: SsaRangePropagation;
+    mod tail_copy_to_move : TailCopyToMove;
     mod unreachable_enum_branching : UnreachableEnumBranching;
     mod unreachable_prop : UnreachablePropagation;
     mod validate : Validator;
@@ -481,6 +482,12 @@ fn mir_promoted(
         &[&promote_pass, &simplify::SimplifyCfg::PromoteConsts, &coverage::InstrumentCoverage],
         Some(MirPhase::Analysis(AnalysisPhase::Initial)),
     );
+
+    // Avoid over-capacity in the vectors of basic blocks, which can take up substantial memory.
+    // This costs a tiny bit of performance to save a lot of memory.
+    for bb in body.basic_blocks.as_mut_preserves_cfg() {
+        bb.statements.shrink_to_fit();
+    }
 
     lint_tail_expr_drop_order::run_lint(tcx, def, &body);
 
@@ -761,6 +768,7 @@ pub(crate) fn run_optimization_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'
             &copy_prop::CopyProp,
             &dead_store_elimination::DeadStoreElimination::Final,
             &dest_prop::DestinationPropagation,
+            &tail_copy_to_move::TailCopyToMove,
             &simplify::SimplifyLocals::Final,
             &multiple_return_terminators::MultipleReturnTerminators,
             // Some cleanup necessary at least for LLVM and potentially other codegen backends.

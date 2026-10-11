@@ -10,7 +10,7 @@ use rustc_hir::def_id::{CRATE_DEF_INDEX, CrateNum, DefId, LOCAL_CRATE};
 use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use rustc_middle::middle::dependency_format::Linkage;
 use rustc_middle::middle::exported_symbols::ExportedSymbol;
-use rustc_middle::ty::layout::{LayoutOf, MaybeResult, TyAndLayout};
+use rustc_middle::ty::layout::{LayoutOf, TyAndLayout};
 use rustc_middle::ty::{self, FnSigKind, IntTy, Ty, TyCtxt, UintTy};
 use rustc_span::{Span, Symbol};
 use rustc_structures::CrateType;
@@ -109,6 +109,8 @@ pub fn resolve_path<'tcx>(
 /// Gets the layout of a type at a path.
 #[track_caller]
 pub fn path_ty_layout<'tcx>(cx: &impl LayoutOf<'tcx>, path: &[&str]) -> TyAndLayout<'tcx> {
+    use rustc_middle::ty::layout::MaybeResult;
+
     let ty = resolve_path(cx.tcx(), path, Namespace::TypeNS).ty(cx.tcx(), cx.typing_env());
     cx.layout_of(ty).to_result().ok().unwrap()
 }
@@ -1085,7 +1087,7 @@ pub(crate) fn windows_check_buffer_size((success, len): (bool, u64)) -> u32 {
 
 /// Check whether the local crate has the `#![no_core]` attribute.
 pub fn is_no_core(tcx: TyCtxt<'_>) -> bool {
-    rustc_hir::find_attr!(tcx, crate, NoCore)
+    rustc_attr_ir::find_attr!(tcx, crate, NoCore)
 }
 
 /// We don't support 16-bit systems, so let's have ergonomic conversion from `u32` to `usize`.

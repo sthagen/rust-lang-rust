@@ -4,7 +4,6 @@ use rustc_session::config::FmtDebug;
 use rustc_span::{Ident, Span, Symbol, sym};
 use thin_vec::{ThinVec, thin_vec};
 
-use crate::deriving::generic::ty::*;
 use crate::deriving::generic::*;
 use crate::deriving::path_std;
 
@@ -16,7 +15,12 @@ pub(crate) fn expand_deriving_debug(
     is_const: bool,
 ) {
     // &mut ::std::fmt::Formatter
-    let fmtr = Ref(Box::new(Path(path_std!(cx, span, fmt::Formatter))), ast::Mutability::Mut);
+    let fmtr = cx.ty_ref(
+        span,
+        cx.ty_path(path_std!(cx, span, fmt::Formatter)),
+        None,
+        ast::Mutability::Mut,
+    );
 
     let trait_def = TraitDef {
         span,
@@ -30,7 +34,8 @@ pub(crate) fn expand_deriving_debug(
             generics: cx.empty_generics(span),
             explicit_self: true,
             nonself_args: smallvec![(fmtr, sym::character('f'))],
-            ret_ty: Path(path_std!(cx, span, fmt::Result)),
+            has_other_selflike_arg: false,
+            ret_ty: cx.ty_path(path_std!(cx, span, fmt::Result)),
             attributes: thin_vec![cx.attr_word(sym::inline, span)],
             fieldless_variants_strategy:
                 FieldlessVariantsStrategy::SpecializeIfAllVariantsFieldless,
@@ -41,7 +46,6 @@ pub(crate) fn expand_deriving_debug(
                 item.kind.ident().unwrap()
             )),
         }],
-        associated_types: SmallVec::new(),
         is_const,
         safety: Safety::Default,
         document: true,
@@ -50,7 +54,7 @@ pub(crate) fn expand_deriving_debug(
 }
 
 fn formatter_ident(cx: &ExtCtxt<'_>, span: Span) -> Box<ast::Expr> {
-    cx.expr_ident(span, Ident::new(sym::character('f'), span))
+    cx.expr_ident_sym(span, sym::character('f'))
 }
 
 fn show_substructure(
@@ -64,7 +68,7 @@ fn show_substructure(
         return BlockOrExpr::new_expr(cx.expr_ok(span, cx.expr_tuple(span, ThinVec::new())));
     }
 
-    let (ident, vdata, fields) = match substr {
+    let (ident, vdata, fields) = match substr.fields {
         Struct(vdata, fields) => (type_ident, vdata, fields),
         EnumMatching(v, fields) => (v.ident, &v.data, fields),
         AllFieldlessEnum(enum_def) => return show_fieldless_enum(cx, span, enum_def, type_ident),
@@ -195,9 +199,9 @@ fn show_substructure(
         args.push(fmt);
         args.push(name);
         if is_struct {
-            args.push(cx.expr_ident(span, Ident::new(sym::names, span)));
+            args.push(cx.expr_ident_sym(span, sym::names));
         }
-        args.push(cx.expr_ident(span, Ident::new(sym::values, span)));
+        args.push(cx.expr_ident_sym(span, sym::values));
         let expr = cx.expr_call_global(span, fn_path_debug_internal, args);
 
         let mut stmts = ThinVec::with_capacity(2);

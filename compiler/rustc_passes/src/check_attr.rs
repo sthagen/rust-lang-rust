@@ -8,25 +8,24 @@
 use std::cell::Cell;
 use std::slice;
 
-use rustc_abi::ExternAbi;
 use rustc_ast::MetaItemKind;
+use rustc_attr_ir::diagnostic::Directive;
+use rustc_attr_ir::lang_items::LangItem;
+use rustc_attr_ir::target::{AssocCtxt, MethodKind, Target};
+use rustc_attr_ir::{
+    Attribute, AttributeKind, DocAttribute, EiiDecl, EiiImpl, EiiImplResolution, InlineAttr,
+    OptimizeAttr, ReprAttr, find_attr,
+};
 use rustc_attr_parsing::AttributeParser;
 use rustc_data_structures::thin_vec::ThinVec;
-use rustc_errors::{DiagCtxtHandle, IntoDiagArg, MultiSpan, msg};
+use rustc_errors::{DiagCtxtHandle, IntoDiagArg};
 use rustc_feature::BUILTIN_ATTRIBUTE_SET;
-use rustc_hir::attrs::diagnostic::Directive;
-use rustc_hir::attrs::lang_items::LangItem;
-use rustc_hir::attrs::{
-    AttributeKind, DocAttribute, DocInline, EiiDecl, EiiImpl, EiiImplResolution, InlineAttr,
-    OptimizeAttr, ReprAttr,
-};
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::LocalModId;
 use rustc_hir::intravisit::{self, Visitor};
 use rustc_hir::{
-    self as hir, AssocCtxt, Attribute, CRATE_HIR_ID, Constness, FnSig, ForeignItem, GenericParam,
-    GenericParamKind, HirId, Item, ItemKind, MethodKind, Mod, Node, ParamName, Target, TraitItem,
-    find_attr,
+    self as hir, CRATE_HIR_ID, Constness, ForeignItem, GenericParam, GenericParamKind, HirId, Item,
+    ItemKind, Mod, Node, ParamName, TraitItem,
 };
 use rustc_lint_defs::builtin::{
     CONFLICTING_REPR_HINTS, INVALID_DOC_ATTRIBUTES, MALFORMED_DIAGNOSTIC_ATTRIBUTES,
@@ -199,22 +198,11 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
             AttributeKind::ProcMacroDerive { .. } => {
                 self.check_proc_macro(hir_id, target, ProcMacroKind::Derive)
             }
-            AttributeKind::Inline(InlineAttr::Force { .. }, ..) => {} // handled separately below
-            AttributeKind::Inline(kind, attr_span) => {
-                self.check_inline(hir_id, *attr_span, kind, target)
-            }
             AttributeKind::RustcAllowConstFnUnstable(_, first_span) => {
                 self.check_rustc_allow_const_fn_unstable(hir_id, *first_span, span, target)
             }
             AttributeKind::Naked(..) => self.check_naked(hir_id, target),
             AttributeKind::MayDangle(attr_span) => self.check_may_dangle(hir_id, *attr_span),
-            AttributeKind::Link(_, attr_span) => self.check_link(hir_id, *attr_span, target),
-            AttributeKind::MacroExport { span, .. } => {
-                self.check_macro_export(hir_id, *span, target)
-            }
-            AttributeKind::RustcLegacyConstGenerics { attr_span, fn_indexes } => {
-                self.check_rustc_legacy_const_generics(item, *attr_span, fn_indexes)
-            }
             AttributeKind::Doc(attr) => self.check_doc_attrs(attr, hir_id, target),
             AttributeKind::EiiImpl(eii_impl) => self.check_eii_impl(eii_impl),
             AttributeKind::RustcMustImplementOneOf { attr_span, fn_names } => {
@@ -268,14 +256,17 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
             AttributeKind::FfiPure(..) => (),
             AttributeKind::Fundamental => (),
             AttributeKind::Ignore { .. } => (),
+            AttributeKind::Inline(..) => (),
             AttributeKind::InstructionSet(..) => (),
             AttributeKind::InstrumentFn(..) => (),
             AttributeKind::Lang(..) => (),
+            AttributeKind::Link(..) => (),
             AttributeKind::LinkName { .. } => (),
             AttributeKind::LinkOrdinal { .. } => (),
             AttributeKind::LinkSection { .. } => (),
             AttributeKind::LoopMatch(..) => (),
             AttributeKind::MacroEscape => (),
+            AttributeKind::MacroExport { .. } => (),
             AttributeKind::MacroUse { .. } => (),
             AttributeKind::Marker => (),
             AttributeKind::MoveSizeLimit { .. } => (),
@@ -361,6 +352,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
             AttributeKind::RustcInsignificantDtor => (),
             AttributeKind::RustcIntrinsic => (),
             AttributeKind::RustcIntrinsicConstStableIndirect => (),
+            AttributeKind::RustcLegacyConstGenerics { .. } => (),
             AttributeKind::RustcLintOptDenyFieldAccess { .. } => (),
             AttributeKind::RustcLintOptTy => (),
             AttributeKind::RustcLintQueryInstability => (),
@@ -740,35 +732,6 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
         }
     }
 
-    /// Checks if an `#[inline]` is applied to a function or a closure.
-    fn check_inline(&self, hir_id: HirId, attr_span: Span, kind: &InlineAttr, target: Target) {
-        match target {
-            Target::Fn
-            | Target::Closure
-            | Target::Method(
-                MethodKind::Trait { body: true } | MethodKind::TraitImpl | MethodKind::Inherent,
-            ) => {
-                // `#[inline]` is ignored if the symbol must be codegened upstream because it's exported.
-                if let Some(did) = hir_id.as_owner()
-                    && self.tcx.def_kind(did).has_codegen_attrs()
-                    && kind != &InlineAttr::Never
-                {
-                    let attrs = self.tcx.codegen_fn_attrs(did);
-                    // Not checking naked as `#[inline]` is forbidden for naked functions anyways.
-                    if attrs.contains_extern_indicator() {
-                        self.tcx.emit_node_span_lint(
-                            UNUSED_ATTRIBUTES,
-                            hir_id,
-                            attr_span,
-                            diagnostics::InlineIgnoredForExported,
-                        );
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
     /// Checks if `#[naked]` is applied to a function definition.
     fn check_naked(&self, hir_id: HirId, target: Target) {
         match target {
@@ -914,52 +877,6 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
         }
     }
 
-    /// Checks `#[doc(inline)]`/`#[doc(no_inline)]` attributes.
-    ///
-    /// A doc inlining attribute is invalid if it is applied to a non-`use` item, or
-    /// if there are conflicting attributes for one item.
-    ///
-    /// `specified_inline` is used to keep track of whether we have
-    /// already seen an inlining attribute for this item.
-    /// If so, `specified_inline` holds the value and the span of
-    /// the first `inline`/`no_inline` attribute.
-    fn check_doc_inline(&self, hir_id: HirId, target: Target, inline: &[(DocInline, Span)]) {
-        let span = match inline {
-            [] => return,
-            [(_, span)] => *span,
-            [(inline, span), rest @ ..] => {
-                for (inline2, span2) in rest {
-                    if inline2 != inline {
-                        let mut spans = MultiSpan::from_spans(vec![*span, *span2]);
-                        spans.push_span_label(*span, msg!("this attribute..."));
-                        spans.push_span_label(
-                            *span2,
-                            msg!("{\".\"}..conflicts with this attribute"),
-                        );
-                        self.dcx().emit_err(diagnostics::DocInlineConflict { spans });
-                        return;
-                    }
-                }
-                *span
-            }
-        };
-
-        match target {
-            Target::Use | Target::ExternCrate => {}
-            _ => {
-                self.tcx.emit_node_span_lint(
-                    INVALID_DOC_ATTRIBUTES,
-                    hir_id,
-                    span,
-                    diagnostics::DocInlineOnlyUse {
-                        attr_span: span,
-                        item_span: self.tcx.hir_span(hir_id),
-                    },
-                );
-            }
-        }
-    }
-
     fn check_doc_masked(&self, span: Span, hir_id: HirId, target: Target) {
         if target != Target::ExternCrate {
             self.tcx.emit_node_span_lint(
@@ -1001,11 +918,6 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
     }
 
     /// Runs various checks on `#[doc]` attributes.
-    ///
-    /// `specified_inline` should be initialized to `None` and kept for the scope
-    /// of one item. Read the documentation of [`check_doc_inline`] for more information.
-    ///
-    /// [`check_doc_inline`]: Self::check_doc_inline
     fn check_doc_attrs(&self, attr: &DocAttribute, hir_id: HirId, target: Target) {
         let DocAttribute {
             first_span: _,
@@ -1013,7 +925,8 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
             // valid pretty much anywhere, not checked here?
             // FIXME: should we?
             hidden: _,
-            inline,
+            // already checked in attr_parsing
+            inline: _,
             // FIXME: currently unchecked
             cfg: _,
             // already checked in attr_parsing
@@ -1066,8 +979,6 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
             self.check_doc_search_unbox(*span, hir_id);
         }
 
-        self.check_doc_inline(hir_id, target, inline);
-
         if let Some(span) = masked {
             self.check_doc_masked(*span, hir_id, target);
         }
@@ -1098,67 +1009,6 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
         }
 
         self.dcx().emit_err(diagnostics::InvalidMayDangle { attr_span });
-    }
-
-    /// Checks if `#[link]` is applied to an item other than a foreign module.
-    fn check_link(&self, hir_id: HirId, attr_span: Span, target: Target) {
-        if target != Target::ForeignMod {
-            return; // Checked by attribute parser
-        }
-
-        if let hir::Node::Item(item) = self.tcx.hir_node(hir_id)
-            && let Item { kind: ItemKind::ForeignMod { abi, .. }, .. } = item
-            && !matches!(abi, ExternAbi::Rust)
-        {
-            return;
-        }
-
-        self.tcx.emit_node_span_lint(UNUSED_ATTRIBUTES, hir_id, attr_span, diagnostics::Link);
-    }
-
-    /// Checks if `#[rustc_legacy_const_generics]` is applied to a function and has a valid argument.
-    fn check_rustc_legacy_const_generics(
-        &self,
-        item: Option<&'tcx Item<'tcx>>,
-        attr_span: Span,
-        index_list: &ThinVec<(usize, Span)>,
-    ) {
-        let Some(Item { kind: ItemKind::Fn { sig: FnSig { decl, .. }, generics, .. }, .. }) = item
-        else {
-            // No error here, since it's already given by the parser
-            return;
-        };
-
-        for param in generics.params {
-            match param.kind {
-                hir::GenericParamKind::Const { .. } => {}
-                _ => {
-                    self.dcx().emit_err(diagnostics::RustcLegacyConstGenericsOnly {
-                        attr_span,
-                        param_span: param.span,
-                    });
-                    return;
-                }
-            }
-        }
-
-        if index_list.len() != generics.params.len() {
-            self.dcx().emit_err(diagnostics::RustcLegacyConstGenericsIndex {
-                attr_span,
-                generics_span: generics.span,
-            });
-            return;
-        }
-
-        let arg_count = decl.inputs.len() + generics.params.len();
-        for (index, span) in index_list {
-            if *index >= arg_count {
-                self.dcx().emit_err(diagnostics::RustcLegacyConstGenericsIndexExceed {
-                    span: *span,
-                    arg_count,
-                });
-            }
-        }
     }
 
     /// Checks if the `#[repr]` attributes on `item` are valid.
@@ -1210,7 +1060,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
         if !reprs.is_empty() {
             let sorted_reprs = {
                 let mut to_sort = reprs.to_owned();
-                to_sort.sort_unstable();
+                to_sort.sort_unstable_by_key(|(attr, span)| (*attr, span.lo_hi()));
                 to_sort
             };
 
@@ -1298,25 +1148,6 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
         }
     }
 
-    fn check_macro_export(&self, hir_id: HirId, attr_span: Span, target: Target) {
-        if target != Target::MacroDef {
-            return;
-        }
-
-        // special case when `#[macro_export]` is applied to a macro 2.0
-        let (_, macro_definition, _) = self.tcx.hir_node(hir_id).expect_item().expect_macro();
-        let is_decl_macro = !macro_definition.macro_rules;
-
-        if is_decl_macro {
-            self.tcx.emit_node_span_lint(
-                UNUSED_ATTRIBUTES,
-                hir_id,
-                attr_span,
-                diagnostics::MacroExport::OnDeclMacro,
-            );
-        }
-    }
-
     fn check_unused_attribute(&self, hir_id: HirId, attr: &Attribute) {
         // Warn on useless empty attributes.
         // FIXME(jdonszelmann): this lint should be moved to attribute parsing, see `AcceptContext::warn_empty_attribute`
@@ -1346,7 +1177,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                 sym::expect,
             ]) && let Some(meta) = attr.meta_item_list()
                 && meta.iter().any(|meta| {
-                    meta.meta_item().map_or(false, |item| {
+                    meta.meta_item().is_some_and(|item| {
                         item.path == sym::linker_messages || item.path == sym::linker_info
                     })
                 })

@@ -13,7 +13,7 @@
 //
 // Library features:
 // tidy-alphabetical-start
-#![feature(allocator_api)]
+#![feature(allocator_ext)]
 #![feature(array_into_iter_constructors)]
 #![feature(char_internals)]
 #![feature(const_alloc_error)]
@@ -50,7 +50,6 @@
 #![feature(trusted_random_access)]
 #![feature(try_reserve_kind)]
 #![feature(try_trait_v2)]
-#![feature(unwrap_infallible)]
 #![feature(wtf8_internals)]
 // tidy-alphabetical-end
 //
@@ -60,7 +59,6 @@
 #![feature(const_trait_impl)]
 #![feature(dropck_eyepatch)]
 #![feature(min_specialization)]
-#![feature(optimize_attribute)]
 #![feature(prelude_import)]
 #![feature(rustc_attrs)]
 #![feature(staged_api)]

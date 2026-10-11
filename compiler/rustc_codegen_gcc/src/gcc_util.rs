@@ -9,7 +9,9 @@ use rustc_codegen_ssa::target_features;
 use rustc_data_structures::smallvec::{SmallVec, smallvec};
 use rustc_session::config::NATIVE_CPU;
 use rustc_session::{EarlySession, Session};
-use rustc_target::spec::{Arch, RelocModel, StackProbeType, StackProtector, Target};
+use rustc_target::spec::{
+    Arch, MergeFunctions, RelocModel, StackProbeType, StackProtector, Target,
+};
 
 fn gcc_features_by_flags(sess: &EarlySession, features: &mut Vec<String>) {
     target_features::retpoline_features_by_flags(sess, features);
@@ -110,6 +112,15 @@ pub fn to_gcc_features<'a>(target: &Target, s: &'a str) -> SmallVec<[&'a str; 2]
         (_, s) => smallvec![s],
     }
     // cSpell:enable
+}
+
+/// Translate a Rust feature name to the name libgccjit reports in its target
+/// info (see gcc/config/aarch64/aarch64-jit.cc and aarch64-option-extensions.def).
+pub fn to_gcc_target_info_feature<'a>(sess: &EarlySession, feature: &'a str) -> &'a str {
+    match (&sess.target.arch, feature) {
+        (&Arch::AArch64, "neon") => "asimd",
+        (_, feature) => feature,
+    }
 }
 
 fn arch_to_gcc(name: &str) -> &str {
@@ -220,10 +231,25 @@ pub fn new_context<'gcc>(sess: &Session) -> Context<'gcc> {
         StackProtector::None => (),
     }
 
+    match sess.merge_functions() {
+        MergeFunctions::Disabled => {
+            context.add_command_line_option("-fno-ipa-icf-functions");
+        }
+        // GCC always merges functions with trampolines rather than aliases, so we don't
+        // need to differentiate MergeFunctions::Trampolines and MergeFunctions::Aliases
+        // as trampolines are allowed either way.
+        MergeFunctions::Trampolines | MergeFunctions::Aliases => {}
+    }
+
     match sess.target.stack_probes {
         StackProbeType::None => (),
         StackProbeType::Inline | StackProbeType::InlineOrCall { .. } => {
-            context.add_command_line_option("-fstack-clash-protection")
+            context.add_command_line_option("-fstack-clash-protection");
+            // GCC assumes a 64 KiB guard on AArch64, so frames up to 63 KiB would skip the
+            // single-page guard of Rust threads.
+            if sess.target.arch == Arch::AArch64 {
+                context.add_command_line_option("--param=stack-clash-protection-guard-size=12");
+            }
         }
         // FIXME(antoyo): We should define the stack probe symbol to be __rust_probestack, but it seems GCC cannot do that.
         StackProbeType::Call => (),

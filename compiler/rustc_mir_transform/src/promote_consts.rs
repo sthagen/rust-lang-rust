@@ -16,13 +16,13 @@ use std::{assert_matches, cmp, iter, mem};
 use either::{Left, Right};
 use rustc_const_eval::check_consts::{ConstCx, qualifs};
 use rustc_data_structures::fx::FxHashSet;
-use rustc_data_structures::thin_vec::ThinVec;
 use rustc_hir as hir;
 use rustc_hir::def::DefKind;
 use rustc_index::{IndexSlice, IndexVec};
 use rustc_middle::mir;
 use rustc_middle::mir::visit::{MutVisitor, MutatingUseContext, PlaceContext, Visitor};
 use rustc_middle::mir::*;
+use rustc_middle::ty::consts::ConstExt;
 use rustc_middle::ty::{self, GenericArgs, List, Ty, TyCtxt, TypeVisitableExt};
 use rustc_span::{Span, Spanned, bug, span_bug};
 use tracing::{debug, instrument};
@@ -610,7 +610,7 @@ impl<'tcx> Validator<'_, 'tcx> {
             safe_blocks.insert(safe_block);
             // Let's see if we can find another safe block.
             safe_block = match body.basic_blocks[safe_block].terminator().kind {
-                TerminatorKind::Goto { target } => target,
+                TerminatorKind::Goto { target, .. } => target,
                 TerminatorKind::Call { target: Some(target), .. }
                 | TerminatorKind::Drop { target, .. } => {
                     // This calls a function or the destructor. `target` does not get executed if
@@ -756,7 +756,6 @@ impl<'a, 'tcx> Promoter<'a, 'tcx> {
             Some(Terminator {
                 source_info: SourceInfo::outermost(span),
                 kind: TerminatorKind::Return,
-                attributes: ThinVec::new(),
             }),
             false,
         ))
@@ -844,8 +843,7 @@ impl<'a, 'tcx> Promoter<'a, 'tcx> {
                 };
                 Terminator {
                     source_info: terminator.source_info,
-                    kind: mem::replace(&mut terminator.kind, TerminatorKind::Goto { target }),
-                    attributes: ThinVec::new(),
+                    kind: mem::replace(&mut terminator.kind, TerminatorKind::goto(target)),
                 }
             };
 
@@ -1098,7 +1096,7 @@ fn promote_candidates<'tcx>(
             && let Some(index) = place.as_local()
         {
             if promoted(index) {
-                terminator.kind = TerminatorKind::Goto { target: *target };
+                terminator.kind = TerminatorKind::goto(*target);
             }
         }
     }

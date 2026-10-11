@@ -7,9 +7,9 @@ use rustc_abi::{
 };
 use rustc_ast as ast;
 use rustc_ast::{InlineAsmOptions, InlineAsmTemplatePiece};
+use rustc_attr_ir::UnrollAttr;
+use rustc_attr_ir::lang_items::LangItem;
 use rustc_data_structures::packed::Pu128;
-use rustc_hir::attrs::AttributeKind;
-use rustc_hir::attrs::lang_items::LangItem;
 use rustc_lint_defs::builtin::TAIL_CALL_TRACK_CALLER;
 use rustc_middle::mir::interpret::{CTFE_ALLOC_SALT, Scalar};
 use rustc_middle::mir::{self, AssertKind, InlineAsmMacro, SwitchTargets, UnwindTerminateReason};
@@ -18,7 +18,7 @@ use rustc_middle::ty::print::{with_no_trimmed_paths, with_no_visible_paths};
 use rustc_middle::ty::{self, Instance, Ty, TypeVisitableExt};
 use rustc_session::config::OptLevel;
 use rustc_span::{Span, Spanned, bug, span_bug};
-use rustc_target::callconv::{ArgAbi, ArgAttributes, CastTarget, FnAbi, PassMode};
+use rustc_target::callconv::{ArgAbi, ArgAttributes, CastTarget, FnAbi, IndirectMode, PassMode};
 use tracing::{debug, info};
 
 use super::operand::OperandRef;
@@ -140,7 +140,7 @@ impl<'a, 'tcx> TerminatorCodegenHelper<'tcx> {
         bx: &mut Bx,
         target: mir::BasicBlock,
         mergeable_succ: bool,
-        attributes: &[AttributeKind],
+        loop_hint_attrs: &[UnrollAttr],
     ) -> MergingSucc {
         let (needs_landing_pad, is_cleanupret) = self.llbb_characteristics(fx, target);
         if mergeable_succ && !needs_landing_pad && !is_cleanupret {
@@ -156,7 +156,7 @@ impl<'a, 'tcx> TerminatorCodegenHelper<'tcx> {
                 // to a trampoline.
                 bx.cleanup_ret(self.funclet(fx).unwrap(), Some(lltarget));
             } else {
-                bx.br_with_attrs(lltarget, attributes);
+                bx.br_with_attrs(lltarget, loop_hint_attrs);
             }
             MergingSucc::False
         }
@@ -199,7 +199,7 @@ impl<'a, 'tcx> TerminatorCodegenHelper<'tcx> {
                     "compiler_builtins call to diverging function {:?} replaced with abort",
                     instance.def_id()
                 );
-                bx.abort();
+                bx.abort_immediate();
                 bx.unreachable();
                 return MergingSucc::False;
             }
@@ -587,7 +587,7 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
             // so we should make sure that we never actually do.
             // We play it safe by using a well-defined `abort`, but we could go for immediate UB
             // if that turns out to be helpful.
-            bx.abort();
+            bx.abort_immediate();
             // `abort` does not terminate the block, so we still need to generate
             // an `unreachable` terminator after it.
             bx.unreachable();
@@ -644,6 +644,7 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
 
                 load_cast(bx, cast_ty, llslot, self.fn_abi.ret.layout.align.abi)
             }
+            PassMode::IndirectUnsized { .. } => bug!("unsized returns are not supported"),
         };
         bx.ret(llval);
     }
@@ -1099,7 +1100,7 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
                                 }
                                 // Also we need to terminate the block to avoid an LLVM assertion,
                                 // even though we're not going to actually use the IR.
-                                bx.abort();
+                                bx.abort_immediate();
                                 return MergingSucc::False;
                             }
                             IntrinsicResult::Fallback(instance) => {
@@ -1257,7 +1258,7 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
             (args, None)
         };
 
-        // Special logic for tail calls with `PassMode::Indirect { on_stack: false, .. }` arguments.
+        // Special logic for tail calls with `PassMode::Indirect { mode: IndirectMode::Pointer, .. }` arguments.
         //
         // Normally an indirect argument that is allocated in the caller's stack frame
         // would be passed as a pointer into the callee's stack frame.
@@ -1282,10 +1283,17 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
         let mut tail_call_temporaries = vec![];
         if kind == CallKind::Tail {
             tail_call_temporaries = vec![None; first_args.len()];
-            // Copy the arguments that use `PassMode::Indirect { on_stack: false , ..}`
+            // Copy the arguments that use `PassMode::Indirect { mode: IndirectMode::Pointer , ..}`
             // to temporary stack allocations. See the comment above.
             for (i, arg) in first_args.iter().enumerate() {
-                if !matches!(fn_abi.args[i].mode, PassMode::Indirect { on_stack: false, .. }) {
+                if matches!(fn_abi.args[i].mode, PassMode::IndirectUnsized { .. }) {
+                    bug!("extern \"tail\" arguments must not be unsized");
+                }
+
+                if !matches!(
+                    fn_abi.args[i].mode,
+                    PassMode::Indirect { mode: IndirectMode::Pointer, .. }
+                ) {
                     continue;
                 }
 
@@ -1353,10 +1361,11 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
                 }
             }
 
-            let by_move = if let PassMode::Indirect { on_stack: false, .. } = fn_abi.args[i].mode
+            let by_move = if let PassMode::Indirect { mode: IndirectMode::Pointer, .. } =
+                fn_abi.args[i].mode
                 && kind == CallKind::Tail
             {
-                // Special logic for tail calls with `PassMode::Indirect { on_stack: false, .. }` arguments.
+                // Special logic for tail calls with `PassMode::Indirect { mode: IndirectMode::Pointer, .. }` arguments.
                 //
                 // Normally an indirect argument that is allocated in the caller's stack frame
                 // would be passed as a pointer into the callee's stack frame.
@@ -1672,8 +1681,8 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
                 MergingSucc::False
             }
 
-            mir::TerminatorKind::Goto { target } => {
-                helper.funclet_br(self, bx, target, mergeable_succ(), &terminator.attributes)
+            mir::TerminatorKind::Goto { target, ref loop_hint_attrs } => {
+                helper.funclet_br(self, bx, target, mergeable_succ(), loop_hint_attrs)
             }
 
             mir::TerminatorKind::SwitchInt { ref discr, ref targets } => {
@@ -1977,7 +1986,7 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
                 }
                 _ => bug!("codegen_argument: {:?} invalid for pair argument", op),
             },
-            PassMode::Indirect { attrs: _, meta_attrs: Some(_), on_stack: _ } => match op.val {
+            PassMode::IndirectUnsized { attrs: _, meta_attrs: _ } => match op.val {
                 Ref(PlaceValue { llval: a, llextra: Some(b), .. }) => {
                     llargs.push(a);
                     llargs.push(b);
@@ -2011,10 +2020,15 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
                     (scratch.val.llval, scratch.val.align, true)
                 }
                 PassMode::Direct(_) => (op.immediate(), arg.layout.align.abi, false),
-                PassMode::Ignore | PassMode::Pair(..) => unreachable!("handled above"),
+                PassMode::Ignore | PassMode::Pair(..) | PassMode::IndirectUnsized { .. } => {
+                    unreachable!("handled above")
+                }
             },
             Ref(op_place_val) => match arg.mode {
-                PassMode::Indirect { attrs, on_stack, .. } => {
+                PassMode::Indirect { attrs, mode, .. } => {
+                    if mode == IndirectMode::AmdgpuKernelArg {
+                        bug!("{op:?} passed as amdgpu kernel argument with abi {arg:?}");
+                    }
                     // For `foo(packed.large_field)`, and types with <4 byte alignment on x86,
                     // alignment requirements may be higher than the type's alignment, so copy
                     // to a higher-aligned alloca.
@@ -2023,7 +2037,9 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
                         None => arg.layout.align.abi,
                     };
                     // Copy to an alloca when the argument is neither by-val nor by-move.
-                    if op_place_val.align < required_align || (!on_stack && !by_move) {
+                    if op_place_val.align < required_align
+                        || (mode == IndirectMode::Pointer && !by_move)
+                    {
                         let scratch = PlaceValue::alloca(bx, arg.layout.size, required_align);
                         bx.lifetime_start(scratch.llval, arg.layout.size);
                         op.store_with_annotation(bx, scratch.with_type(arg.layout));
@@ -2033,11 +2049,15 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
                         (op_place_val.llval, op_place_val.align, true)
                     }
                 }
+                PassMode::IndirectUnsized { .. } => unreachable!("handled above"),
                 _ => (op_place_val.llval, op_place_val.align, true),
             },
             ZeroSized => match arg.mode {
-                PassMode::Indirect { on_stack, .. } => {
-                    if on_stack {
+                PassMode::Indirect { mode, .. } => {
+                    if mode == IndirectMode::AmdgpuKernelArg {
+                        bug!("{op:?} passed as amdgpu kernel argument with abi {arg:?}");
+                    }
+                    if mode == IndirectMode::OnStack {
                         // It doesn't seem like any target can have `byval` ZSTs, so this assert
                         // is here to replace a would-be untested codepath.
                         bug!("ZST {op:?} passed on stack with abi {arg:?}");
@@ -2384,7 +2404,7 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
         let (fn_abi, fn_ptr, instance) =
             common::build_langcall(&bx, self.mir.span, reason.lang_item());
         if is_call_from_compiler_builtins_to_upstream_monomorphization(bx.tcx(), instance) {
-            bx.abort();
+            bx.abort_immediate();
         } else {
             let fn_ty = bx.fn_decl_backend_type(fn_abi);
 

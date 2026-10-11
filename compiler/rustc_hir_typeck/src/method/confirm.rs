@@ -1,9 +1,8 @@
 use std::fmt::Debug;
 use std::ops::Deref;
 
+use rustc_attr_ir::lang_items::LangItem;
 use rustc_hir as hir;
-use rustc_hir::GenericArg;
-use rustc_hir::attrs::lang_items::LangItem;
 use rustc_hir::def_id::DefId;
 use rustc_hir_analysis::hir_ty_lowering::generics::{
     check_generic_arg_count_for_value_path, lower_generic_args,
@@ -14,6 +13,7 @@ use rustc_hir_analysis::hir_ty_lowering::{
 use rustc_infer::infer::{
     BoundRegionConversionTime, DefineOpaqueTypes, InferOk, RegionVariableOrigin,
 };
+use rustc_infer::traits::WellFormedLoc;
 use rustc_lint_defs::builtin::{
     AMBIGUOUS_GLOB_IMPORTED_TRAITS, RESOLVING_TO_ITEMS_SHADOWING_SUPERTRAIT_ITEMS,
 };
@@ -450,23 +450,23 @@ impl<'a, 'tcx> ConfirmContext<'a, 'tcx> {
                 &mut self,
                 preceding_args: &[ty::GenericArg<'tcx>],
                 param: &ty::GenericParamDef,
-                arg: &GenericArg<'_>,
+                arg: &hir::GenericArg<'_>,
             ) -> ty::GenericArg<'tcx> {
                 match (&param.kind, arg) {
-                    (GenericParamDefKind::Lifetime, GenericArg::Lifetime(lt)) => self
+                    (GenericParamDefKind::Lifetime, hir::GenericArg::Lifetime(lt)) => self
                         .cfcx
                         .fcx
                         .lowerer()
                         .lower_lifetime(lt, RegionInferReason::Param(param))
                         .into(),
-                    (GenericParamDefKind::Type { .. }, GenericArg::Type(ty)) => {
+                    (GenericParamDefKind::Type { .. }, hir::GenericArg::Type(ty)) => {
                         // We handle the ambig portions of `Ty` in the match arms below
                         self.cfcx.lower_ty(ty.as_unambig_ty()).raw.into()
                     }
-                    (GenericParamDefKind::Type { .. }, GenericArg::Infer(inf)) => {
+                    (GenericParamDefKind::Type { .. }, hir::GenericArg::Infer(inf)) => {
                         self.cfcx.lower_ty(&inf.to_ty()).raw.into()
                     }
-                    (GenericParamDefKind::Const { .. }, GenericArg::Const(ct)) => self
+                    (GenericParamDefKind::Const { .. }, hir::GenericArg::Const(ct)) => self
                         .cfcx
                         // We handle the ambig portions of `ConstArg` in the match arms below
                         .lower_const_arg(
@@ -478,7 +478,7 @@ impl<'a, 'tcx> ConfirmContext<'a, 'tcx> {
                                 .skip_norm_wip(),
                         )
                         .into(),
-                    (GenericParamDefKind::Const { .. }, GenericArg::Infer(inf)) => {
+                    (GenericParamDefKind::Const { .. }, hir::GenericArg::Infer(inf)) => {
                         self.cfcx.ct_infer(Some(param), inf.span).into()
                     }
                     (kind, arg) => {
@@ -649,7 +649,7 @@ impl<'a, 'tcx> ConfirmContext<'a, 'tcx> {
 
         // this is a projection from a trait reference, so we have to
         // make sure that the trait reference inputs are well-formed.
-        self.add_wf_bounds(all_args, self.call_expr.span);
+        self.add_wf_bounds(all_args, self.call_expr.span, self.call_expr.hir_id);
 
         // the function type must also be well-formed (this is not
         // implied by the args being well-formed because of inherent
@@ -658,7 +658,7 @@ impl<'a, 'tcx> ConfirmContext<'a, 'tcx> {
             self.register_wf_obligation(
                 ty.into(),
                 self.span,
-                ObligationCauseCode::WellFormed(None),
+                ObligationCauseCode::WellFormed(WellFormedLoc::HirId(self.call_expr.hir_id)),
             );
         }
     }

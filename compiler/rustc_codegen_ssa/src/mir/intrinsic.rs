@@ -1,5 +1,6 @@
 use rustc_abi::{Align, FieldIdx, WrappingRange};
 use rustc_middle::mir::SourceInfo;
+use rustc_middle::ty::consts::ConstExt;
 use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_session::config::OptLevel;
 use rustc_span::{ErrorGuaranteed, bug, span_bug, sym};
@@ -120,7 +121,7 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
 
         if args.is_empty() {
             match name {
-                sym::abort
+                sym::abort_immediate
                 | sym::unreachable
                 | sym::cold_path
                 | sym::gpu_launch_sized_workgroup_mem
@@ -151,8 +152,8 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
         }
 
         let op_val: OperandValue<_> = match name {
-            sym::abort => {
-                bx.abort();
+            sym::abort_immediate => {
+                bx.abort_immediate();
                 OperandValue::ZeroSized
             }
 

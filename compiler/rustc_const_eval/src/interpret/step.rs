@@ -532,7 +532,7 @@ impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
                 self.return_from_current_stack_frame(/* unwinding */ false)?
             }
 
-            Goto { target } => self.go_to_block(target),
+            Goto { target, loop_hint_attrs: _ } => self.go_to_block(target),
 
             SwitchInt { ref discr, ref targets } => {
                 let discr = self.read_immediate(&self.eval_operand(discr, None)?)?;
@@ -583,7 +583,7 @@ impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
                     with_caller_location,
                     &dest_place,
                     target,
-                    if fn_abi.map_or(false, |fn_abi| fn_abi.can_unwind) {
+                    if fn_abi.is_some_and(|fn_abi| fn_abi.can_unwind) {
                         unwind
                     } else {
                         mir::UnwindAction::Unreachable

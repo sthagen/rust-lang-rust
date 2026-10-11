@@ -4,6 +4,8 @@ use std::ops::Range;
 use std::str;
 
 use rustc_abi::{FIRST_VARIANT, FieldIdx, ReprOptions, VariantIdx};
+use rustc_attr_ir::find_attr;
+use rustc_attr_ir::lang_items::LangItem;
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::intern::Interned;
@@ -11,10 +13,9 @@ use rustc_data_structures::stable_hash::{
     StableHash, StableHashControls, StableHashCtxt, StableHasher,
 };
 use rustc_errors::ErrorGuaranteed;
-use rustc_hir::attrs::lang_items::LangItem;
+use rustc_hir as hir;
 use rustc_hir::def::{CtorKind, DefKind, Res};
 use rustc_hir::def_id::DefId;
-use rustc_hir::{self as hir, find_attr};
 use rustc_index::{IndexSlice, IndexVec};
 use rustc_macros::{StableHash, TyDecodable, TyEncodable};
 use rustc_session::DataTypeKind;
@@ -383,30 +384,17 @@ impl AdtDefData {
         if find_attr!(tcx, did, Fundamental) {
             flags |= AdtFlags::IS_FUNDAMENTAL;
         }
-        if tcx.is_lang_item(did, LangItem::PhantomData) {
-            flags |= AdtFlags::IS_PHANTOM_DATA;
-        }
-        if tcx.is_lang_item(did, LangItem::OwnedBox) {
-            flags |= AdtFlags::IS_BOX;
-        }
-        if tcx.is_lang_item(did, LangItem::ManuallyDrop) {
-            flags |= AdtFlags::IS_MANUALLY_DROP;
-        }
-        if tcx.is_lang_item(did, LangItem::MaybeDangling) {
-            flags |= AdtFlags::IS_MAYBE_DANGLING;
-        }
-        if tcx.is_lang_item(did, LangItem::UnsafeCell) {
-            flags |= AdtFlags::IS_UNSAFE_CELL;
-        }
-        if tcx.is_lang_item(did, LangItem::UnsafePinned) {
-            flags |= AdtFlags::IS_UNSAFE_PINNED;
-        }
-        if tcx.is_lang_item(did, LangItem::Pin) {
-            flags |= AdtFlags::IS_PIN;
-        }
-        if tcx.is_lang_item(did, LangItem::FieldRepresentingType) {
-            flags |= AdtFlags::IS_FIELD_REPRESENTING_TYPE;
-        }
+        flags |= match tcx.as_lang_item(did) {
+            Some(LangItem::PhantomData) => AdtFlags::IS_PHANTOM_DATA,
+            Some(LangItem::OwnedBox) => AdtFlags::IS_BOX,
+            Some(LangItem::ManuallyDrop) => AdtFlags::IS_MANUALLY_DROP,
+            Some(LangItem::MaybeDangling) => AdtFlags::IS_MAYBE_DANGLING,
+            Some(LangItem::UnsafeCell) => AdtFlags::IS_UNSAFE_CELL,
+            Some(LangItem::UnsafePinned) => AdtFlags::IS_UNSAFE_PINNED,
+            Some(LangItem::Pin) => AdtFlags::IS_PIN,
+            Some(LangItem::FieldRepresentingType) => AdtFlags::IS_FIELD_REPRESENTING_TYPE,
+            _ => AdtFlags::NO_ADT_FLAGS,
+        };
 
         AdtDefData { did, variants, flags, repr }
     }

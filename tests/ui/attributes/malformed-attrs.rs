@@ -5,11 +5,10 @@
 #![feature(allow_internal_unstable)]
 // FIXME(#82232, #143834): temporarily renamed to mitigate `#[align]` nameres ambiguity
 #![feature(fn_align)]
-#![feature(optimize_attribute)]
 #![feature(dropck_eyepatch)]
 #![feature(export_stable)]
 #![allow(incomplete_features)]
-#![feature(min_generic_const_args)]
+#![feature(gca_min_const_items)]
 #![feature(ffi_const, ffi_pure)]
 #![feature(coverage_attribute)]
 #![feature(sanitize)]

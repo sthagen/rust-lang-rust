@@ -1,10 +1,10 @@
 use std::ops::Range;
 
 use rustc_abi::{Align, ExternAbi, HasDataLayout, Primitive, Scalar, Size, WrappingRange};
+use rustc_attr_ir::Linkage;
+use rustc_attr_ir::lang_items::LangItem;
 use rustc_codegen_ssa::common;
 use rustc_codegen_ssa::traits::*;
-use rustc_hir::attrs::Linkage;
-use rustc_hir::attrs::lang_items::LangItem;
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
 use rustc_middle::middle::codegen_fn_attrs::{CodegenFnAttrFlags, CodegenFnAttrs};
@@ -212,7 +212,7 @@ fn check_and_apply_linkage<'ll, 'tcx>(
                 let fn_sig = sig.with(*header);
                 let fn_abi = cx.fn_abi_of_fn_ptr(fn_sig, ty::List::empty());
                 // Decide if the initializer needs to be signed
-                if cx.sess().pointer_authentication()
+                if cx.sess().pointer_authentication_functions().is_some()
                     && matches!(fn_sig.abi(), ExternAbi::C { .. } | ExternAbi::System { .. })
                 {
                     should_sign = true;
@@ -249,13 +249,16 @@ fn check_and_apply_linkage<'ll, 'tcx>(
 
         // Sign the function pointer that is used to initialize the global
         let initializer = if should_sign {
-            let key: u32 = 0;
-            let discriminator: u64 = 0;
+            let schema = cx
+                .tcx
+                .sess
+                .pointer_authentication_functions()
+                .expect("pointer authentication functions must be available when signing");
 
             const_ptr_auth(
                 cx.const_bitcast(g1, llty),
-                key,
-                discriminator,
+                schema.key as u32,
+                schema.constant_discriminator as u64,
                 None, /* address_diversity */
             )
         } else {

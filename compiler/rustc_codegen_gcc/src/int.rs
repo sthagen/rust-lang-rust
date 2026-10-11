@@ -10,7 +10,8 @@ use gccjit::{
 use rustc_abi::{CanonAbi, Endian, ExternAbi};
 use rustc_codegen_ssa::common::{IntPredicate, TypeKind};
 use rustc_codegen_ssa::traits::{BackendTypes, BaseTypeCodegenMethods, BuilderMethods, OverflowOp};
-use rustc_middle::ty::{self, Ty};
+use rustc_middle::ty::Ty;
+use rustc_middle::ty::layout::HasTypingEnv as _;
 use rustc_target::callconv::{ArgAbi, ArgAttributes, FnAbi, PassMode};
 use rustc_type_ir::{Interner, TyKind};
 
@@ -387,10 +388,7 @@ impl<'a, 'gcc, 'tcx> Builder<'a, 'gcc, 'tcx> {
             128 => self.tcx.types.i128,
             _ => unreachable!("unexpected integer size"),
         };
-        let layout = self
-            .tcx
-            .layout_of(ty::TypingEnv::fully_monomorphized().as_query_input(res_ty))
-            .unwrap();
+        let layout = self.tcx.layout_of(self.cx.typing_env().as_query_input(res_ty)).unwrap();
 
         let arg_abi = ArgAbi { layout, mode: PassMode::Direct(ArgAttributes::new()) };
         let mut fn_abi = FnAbi {
@@ -954,6 +952,10 @@ impl<'gcc, 'tcx> CodegenCx<'gcc, 'tcx> {
 
         debug_assert!(value_type.dyncast_array().is_some());
         let name_suffix = match self.type_kind(dest_typ) {
+            TypeKind::Half if dest_typ.is_compatible_with(self.type_f16()) => {
+                let value = self.int_to_float_cast(signed, value, self.float_type);
+                return self.context.new_cast(None, value, dest_typ);
+            }
             // cSpell:disable
             TypeKind::Float => "tisf",
             TypeKind::Double => "tidf",

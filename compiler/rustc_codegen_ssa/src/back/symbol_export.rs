@@ -1,5 +1,6 @@
 use std::collections::hash_map::Entry::*;
 
+use object::pe;
 use rustc_abi::{CanonAbi, X86Call};
 use rustc_ast::expand::allocator::{AllocatorKind, NO_ALLOC_SHIM_IS_UNSTABLE, global_fn_name};
 use rustc_crate_store::CrateDepKind;
@@ -315,7 +316,7 @@ fn exported_generic_symbols_provider_local<'tcx>(
         .any(|o| matches!(o, rustc_session::config::Offload::Device(_)));
 
     if export_generics || is_device_offload {
-        use rustc_hir::attrs::Linkage;
+        use rustc_attr_ir::{InlineAttr, Linkage};
         use rustc_middle::mono::{MonoItem, Visibility};
         use rustc_middle::ty::InstanceKind;
 
@@ -354,9 +355,8 @@ fn exported_generic_symbols_provider_local<'tcx>(
                     .types()
                     .chain(did.into_iter().map(move |did| tcx.type_of(did).skip_binder()))
                     .all(move |arg| {
-                        arg.walk().all(|ty| {
-                            ty.as_type().map_or(true, |ty| !is_local_to_current_crate(ty))
-                        })
+                        arg.walk()
+                            .all(|ty| ty.as_type().is_none_or(|ty| !is_local_to_current_crate(ty)))
                     })
             };
 
@@ -386,9 +386,7 @@ fn exported_generic_symbols_provider_local<'tcx>(
             let item_is_offload = is_offload_instance(mono_item);
 
             if !item_is_offload && !tcx.sess.opts.share_generics() {
-                if tcx.codegen_fn_attrs(mono_item.def_id()).inline
-                    == rustc_hir::attrs::InlineAttr::Never
-                {
+                if tcx.codegen_fn_attrs(mono_item.def_id()).inline == InlineAttr::Never {
                     // this is OK, we explicitly allow sharing inline(never) across crates even
                     // without share-generics.
                 } else {
@@ -814,6 +812,68 @@ pub(crate) fn exporting_symbol_name_for_instance_in_crate<'tcx>(
 ) -> String {
     let undecorated = symbol_name_for_instance_in_crate(tcx, symbol, cnum);
     maybe_emutls_symbol_name(tcx, symbol, &undecorated).unwrap_or(undecorated)
+}
+
+fn strip_numeric_suffix<'a>(base: &'a str, suffix: impl AsRef<str>, fallback: &'a str) -> &'a str {
+    if suffix.as_ref().parse::<u32>().is_ok() { base } else { fallback }
+}
+
+/// COFF `IMAGE_FILE_MACHINE_*` for an arch with decorated symbols, or `None`.
+pub(super) fn coff_machine_for_arch(arch: &Arch) -> Option<u16> {
+    match *arch {
+        Arch::X86 => Some(pe::IMAGE_FILE_MACHINE_I386),
+        Arch::X86_64 => Some(pe::IMAGE_FILE_MACHINE_AMD64),
+        Arch::Arm64EC => Some(pe::IMAGE_FILE_MACHINE_ARM64EC),
+        _ => None,
+    }
+}
+
+/// Undecorated counterpart of [`linking_symbol_name_for_instance_in_crate`].
+pub(super) fn undecorate_coff_symbol<'a>(
+    name: &'a str,
+    machine: u16,
+    kind: SymbolExportKind,
+) -> &'a str {
+    // MSVC C++ mangled names start with '?' and use a completely different
+    // decorating scheme that includes '@@' as structural delimiters.
+    // They must not be subjected to C calling-convention undecoration.
+    if name.starts_with('?') {
+        return name;
+    }
+    match machine {
+        pe::IMAGE_FILE_MACHINE_I386 => {
+            if let Some(rest) = name.strip_prefix('@') {
+                // fastcall: @foo@N -> foo
+                rest.rsplit_once('@')
+                    .map(|(base, suffix)| strip_numeric_suffix(base, suffix, name))
+                    .unwrap_or(name)
+            } else if let Some(stripped) = name.strip_prefix('_') {
+                if let Some((base, suffix)) = stripped.rsplit_once('@') {
+                    // stdcall: _foo@N -> foo
+                    strip_numeric_suffix(base, suffix, stripped)
+                } else {
+                    // cdecl: _foo -> foo
+                    stripped
+                }
+            } else {
+                // vectorcall: foo@@N -> foo
+                name.rsplit_once("@@")
+                    .map(|(base, suffix)| strip_numeric_suffix(base, suffix, name))
+                    .unwrap_or(name)
+            }
+        }
+        pe::IMAGE_FILE_MACHINE_AMD64 => {
+            // vectorcall: foo@@N -> foo
+            name.rsplit_once("@@")
+                .map(|(base, suffix)| strip_numeric_suffix(base, suffix, name))
+                .unwrap_or(name)
+        }
+        pe::IMAGE_FILE_MACHINE_ARM64EC if kind == SymbolExportKind::Text => {
+            // `#` prefix distinguishes ARM64EC text symbols from x64 thunks.
+            name.strip_prefix('#').unwrap_or(name)
+        }
+        _ => name,
+    }
 }
 
 /// On amdhsa, `gpu-kernel` functions have an associated metadata object with a `.kd` suffix.

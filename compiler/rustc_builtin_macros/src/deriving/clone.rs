@@ -4,7 +4,6 @@ use rustc_expand::base::ExtCtxt;
 use rustc_span::{DUMMY_SP, Ident, Span, kw, sym};
 use thin_vec::{ThinVec, thin_vec};
 
-use crate::deriving::generic::ty::*;
 use crate::deriving::generic::*;
 use crate::deriving::path_std;
 
@@ -68,7 +67,6 @@ pub(crate) fn expand_deriving_clone(
             additional_bounds: bounds.clone(),
             supports_unions: true,
             methods: SmallVec::new(),
-            associated_types: SmallVec::new(),
             is_const,
             safety: Safety::Unsafe(DUMMY_SP),
             // `TrivialClone` is not part of an API guarantee, so it shouldn't
@@ -91,12 +89,12 @@ pub(crate) fn expand_deriving_clone(
             generics: cx.empty_generics(span),
             explicit_self: true,
             nonself_args: SmallVec::new(),
-            ret_ty: Self_,
+            has_other_selflike_arg: false,
+            ret_ty: cx.ty_self(span),
             attributes: thin_vec![cx.attr_word(sym::inline, span)],
             fieldless_variants_strategy: FieldlessVariantsStrategy::Default,
             combine_substructure: substructure,
         }],
-        associated_types: SmallVec::new(),
         is_const,
         safety: Safety::Default,
         document: true,
@@ -149,7 +147,7 @@ fn cs_clone_simple(
             &[sym::clone, sym::AssertParamIsCopy],
         );
     } else {
-        match substr {
+        match substr.fields {
             StaticStruct(vdata, ..) => {
                 process_variant(vdata);
             }
@@ -171,18 +169,17 @@ fn cs_clone(cx: &ExtCtxt<'_>, trait_span: Span, substr: Substructure<'_>) -> Blo
         cx.expr_call_global(field.span, fn_path.clone(), args)
     };
 
-    let self_ident = Ident::new(kw::SelfUpper, trait_span);
     let ctor_path;
     let all_fields;
     let vdata;
-    match substr {
+    match substr.fields {
         Struct(vdata_, af) => {
-            ctor_path = cx.path(trait_span, vec![self_ident]);
+            ctor_path = cx.path(trait_span, vec![substr.type_ident]);
             all_fields = af;
             vdata = vdata_;
         }
         EnumMatching(.., variant, af) => {
-            ctor_path = cx.path(trait_span, vec![self_ident, variant.ident]);
+            ctor_path = cx.path(trait_span, vec![substr.type_ident, variant.ident]);
             all_fields = af;
             vdata = &variant.data;
         }

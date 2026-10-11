@@ -19,6 +19,7 @@ use std::{assert_matches, debug_assert_matches, iter};
 
 use rustc_abi::{ExternAbi, Size};
 use rustc_ast::Recovered;
+use rustc_attr_ir::find_attr;
 use rustc_data_structures::fx::{FxHashSet, FxIndexMap};
 use rustc_data_structures::thin_vec::{ThinVec, thin_vec};
 use rustc_errors::{
@@ -27,7 +28,7 @@ use rustc_errors::{
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_hir::intravisit::{InferKind, Visitor};
-use rustc_hir::{self as hir, GenericParamKind, HirId, Node, PreciseCapturingArgKind, find_attr};
+use rustc_hir::{self as hir, GenericParamKind, HirId, Node, PreciseCapturingArgKind};
 use rustc_infer::infer::{InferCtxt, SolverRegionConstraint, TyCtxtInferExt};
 use rustc_infer::traits::{DynCompatibilityViolation, ObligationCause};
 use rustc_lint_defs::builtin::REPR_C_ENUMS_LARGER_THAN_INT;
@@ -239,7 +240,7 @@ fn bad_placeholder<'cx, 'tcx>(
 ) -> Diag<'cx> {
     let kind = if kind.ends_with('s') { format!("{kind}es") } else { format!("{kind}s") };
 
-    spans.sort();
+    spans.sort_by_key(|span| span.lo_hi());
     cx.dcx().create_err(diagnostics::PlaceholderNotAllowedItemSignatures { spans, kind })
 }
 
@@ -371,62 +372,50 @@ impl<'tcx> ItemCtxt<'tcx> {
         TestBinderExists { span: exists.span, binder }
     }
 
-    // FIXME: this is likely too basic, and we'll want to evolve/make this more advanced over time.
-    // For example, right now, if the user writes `forall<'a> where Foo<'a>: 'b`, that's not gonna
-    // work - that should be destructured into `where 'a: 'b`, whether by hand (and checked it was
-    // indeed done so, via compiler) or automatically by the test framework, unsure, but something.
     fn lower_test_binder_assumptions(
         &self,
         predicate: &hir::WherePredicate<'tcx>,
-        type_outlives: &mut Vec<ty::Binder<'tcx, ty::OutlivesClause<'tcx, Ty<'tcx>>>>,
-        region_outlives: &mut Vec<(ty::Region<'tcx>, ty::Region<'tcx>)>,
+        type_outlives: &mut Vec<ty::PolyTypeOutlivesClause<'tcx>>,
+        region_outlives: &mut Vec<ty::RegionOutlivesClause<'tcx>>,
     ) {
+        fn outlives_bounds<'tcx>(
+            dcx: DiagCtxtHandle<'tcx>,
+            bounds: hir::GenericBounds<'tcx>,
+        ) -> impl Iterator<Item = &'tcx hir::Lifetime> {
+            bounds.iter().flat_map(move |bound| match *bound {
+                rustc_hir::GenericBound::Trait(poly_trait_ref) => {
+                    dcx.span_err(
+                        poly_trait_ref.span,
+                        "trait bounds aren't supported in forall where clauses",
+                    );
+                    None
+                }
+                rustc_hir::GenericBound::Outlives(lifetime) => Some(lifetime),
+                rustc_hir::GenericBound::Use(_, span) => {
+                    dcx.span_err(span, "use bounds aren't supported in forall where clauses");
+                    None
+                }
+            })
+        }
         match predicate.kind {
             hir::WherePredicateKind::BoundPredicate(p) => {
                 let bound_vars = self.tcx.late_bound_vars(predicate.hir_id);
                 let ty = self.lower_ty(p.bounded_ty);
-                for bound in p.bounds {
-                    match bound {
-                        hir::GenericBound::Trait(poly_trait_ref) => {
-                            self.dcx()
-                                .span_err(poly_trait_ref.span, "trait bounds aren't supported yet");
-                        }
-                        hir::GenericBound::Outlives(lifetime) => {
-                            let region = self
-                                .lowerer()
-                                .lower_lifetime(lifetime, RegionInferReason::RegionPredicate);
-                            let binder = ty::Binder::bind_with_vars(
-                                ty::OutlivesClause(ty, region),
-                                bound_vars,
-                            );
-                            type_outlives.push(binder);
-                        }
-                        hir::GenericBound::Use(_, span) => {
-                            self.dcx().span_err(*span, "use bounds aren't supported yet");
-                        }
-                    }
+                for lifetime in outlives_bounds(self.dcx(), p.bounds) {
+                    let region =
+                        self.lowerer().lower_lifetime(lifetime, RegionInferReason::RegionPredicate);
+                    let binder =
+                        ty::Binder::bind_with_vars(ty::OutlivesClause(ty, region), bound_vars);
+                    type_outlives.push(binder);
                 }
             }
-            hir::WherePredicateKind::RegionPredicate(predicate) => {
-                let lhs = self
-                    .lowerer()
-                    .lower_lifetime(predicate.lifetime, RegionInferReason::RegionPredicate);
-                for bound in predicate.bounds {
-                    match bound {
-                        hir::GenericBound::Trait(poly_trait_ref) => {
-                            self.dcx()
-                                .span_err(poly_trait_ref.span, "trait bounds aren't supported yet");
-                        }
-                        hir::GenericBound::Outlives(lifetime) => {
-                            let rhs = self
-                                .lowerer()
-                                .lower_lifetime(lifetime, RegionInferReason::RegionPredicate);
-                            region_outlives.push((lhs, rhs));
-                        }
-                        hir::GenericBound::Use(_, span) => {
-                            self.dcx().span_err(*span, "use bounds aren't supported yet");
-                        }
-                    }
+            hir::WherePredicateKind::RegionPredicate(p) => {
+                let lhs =
+                    self.lowerer().lower_lifetime(p.lifetime, RegionInferReason::RegionPredicate);
+                for lifetime in outlives_bounds(self.dcx(), p.bounds) {
+                    let rhs =
+                        self.lowerer().lower_lifetime(lifetime, RegionInferReason::RegionPredicate);
+                    region_outlives.push(ty::OutlivesClause(lhs, rhs));
                 }
             }
         }
@@ -447,6 +436,9 @@ impl<'tcx> ItemCtxt<'tcx> {
                 .map(|item| self.lower_test_binder_constraint(item))
                 .reduce(SolverRegionConstraint::build_or)
                 .unwrap_or(SolverRegionConstraint::new_false()),
+            rustc_hir::TestBinderConstraint::Ambiguity { span } => {
+                SolverRegionConstraint::new_ambig(*span)
+            }
             hir::TestBinderConstraint::Lifetime { lhs, rhs } => {
                 let span = lhs.ident.span.to(rhs.ident.span);
                 let lhs = self.lowerer().lower_lifetime(lhs, RegionInferReason::RegionPredicate);
@@ -1768,28 +1760,27 @@ fn rendered_precise_capturing_args<'tcx>(
 
 fn const_param_default<'tcx>(
     tcx: TyCtxt<'tcx>,
-    local_def_id: LocalDefId,
+    param_def_id: LocalDefId,
 ) -> ty::EarlyBinder<'tcx, Const<'tcx>> {
     let hir::Node::GenericParam(hir::GenericParam {
-        kind: hir::GenericParamKind::Const { default: Some(default_ct), .. },
+        kind: hir::GenericParamKind::Const { default: Some(ct), .. },
         ..
-    }) = tcx.hir_node_by_def_id(local_def_id)
+    }) = tcx.hir_node_by_def_id(param_def_id)
     else {
         span_bug!(
-            tcx.def_span(local_def_id),
-            "`const_param_default` expected a generic parameter with a constant"
+            tcx.def_span(param_def_id),
+            "const_param_default: expected a const parameter with a default value"
         )
     };
 
-    let icx = ItemCtxt::new(tcx, local_def_id);
+    // FIXME: Don't lower in the context of parent. Blocked on the removal of GCE. See comment in
+    //        `type_of.rs` for details (Ctrl+F for `generics_of`).
+    let item_def_id = tcx.local_parent(param_def_id);
+    let icx = ItemCtxt::new(tcx, item_def_id);
 
-    let def_id = local_def_id.to_def_id();
-    let identity_args = ty::GenericArgs::identity_for_item(tcx, tcx.parent(def_id));
-
-    let ct = icx.lowerer().lower_const_arg(
-        default_ct,
-        tcx.type_of(def_id).instantiate(tcx, identity_args).skip_norm_wip(),
-    );
+    let ct = icx
+        .lowerer()
+        .lower_const_arg(ct, tcx.type_of(param_def_id).instantiate_identity().skip_norm_wip());
     ty::EarlyBinder::bind(tcx, ct)
 }
 
@@ -1802,7 +1793,7 @@ fn anon_const_kind<'tcx>(tcx: TyCtxt<'tcx>, def: LocalDefId) -> ty::AnonConstKin
             debug_assert_matches!(const_arg.kind, hir::ConstArgKind::Anon(hir::AnonConst { def_id, .. }) if *def_id == def);
             if tcx.features().generic_const_exprs() {
                 ty::AnonConstKind::GCE
-            } else if tcx.features().min_generic_const_args() {
+            } else if tcx.features().gca() {
                 ty::AnonConstKind::MCG
             } else if let hir::Node::Expr(hir::Expr {
                 kind: hir::ExprKind::Repeat(_, repeat_count),
